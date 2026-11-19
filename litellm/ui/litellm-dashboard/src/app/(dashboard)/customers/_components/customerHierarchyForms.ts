@@ -24,15 +24,18 @@ export type CustomerHierarchyPatch =
   | { kind: "team"; body: components["schemas"]["TeamPatch"] }
   | { kind: "member"; body: components["schemas"]["MemberPatch"] };
 
-export interface CustomerHierarchyFields {
-  alias: string;
-  budgetEnabled: boolean;
+export interface BudgetFields {
   maxBudget: string;
   softBudget: string;
   budgetDuration: string;
   tpm: string;
   rpm: string;
   allowedModels: readonly string[];
+}
+
+export interface CustomerHierarchyFields extends BudgetFields {
+  alias: string;
+  budgetEnabled: boolean;
   templateId: string;
   overrideExpiry: string;
 }
@@ -72,7 +75,7 @@ const localDateTime = (value: string | null | undefined): string => {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 };
 
-const budgetFields = (budget: Budget | null | undefined) => ({
+export const budgetFields = (budget: Budget | null | undefined): BudgetFields => ({
   maxBudget: asText(budget?.max_budget),
   softBudget: asText(budget?.soft_budget),
   budgetDuration: budget?.budget_duration ?? "",
@@ -83,11 +86,16 @@ const budgetFields = (budget: Budget | null | undefined) => ({
 
 export const customerHierarchyFields = (entity: CustomerHierarchyEntity): CustomerHierarchyFields => {
   const storedBudget = entity.kind === "member" ? entity.record.budget_override : entity.record.budget;
+  const monthly =
+    entity.kind === "organization"
+      ? storedBudget?.budget_limits?.find((window) => window.budget_duration === "1mo")
+      : undefined;
   return {
     alias: entity.record.alias ?? "",
     budgetEnabled: storedBudget != null,
     ...budgetFields(storedBudget),
-    templateId: entity.kind === "member" ? entity.record.budget_id ?? "" : "",
+    ...(monthly ? { maxBudget: asText(monthly.max_budget) } : {}),
+    templateId: entity.kind !== "team" ? entity.record.budget_id ?? "" : "",
     overrideExpiry: entity.kind === "member" ? localDateTime(entity.record.budget_override_expires_at) : "",
   };
 };
@@ -115,7 +123,7 @@ const numericLimit = (raw: string, integer = false): number | null | undefined =
   return number;
 };
 
-const parseBudget = (fields: CustomerHierarchyFields): Budget | null => {
+export const parseBudget = (fields: BudgetFields): Budget | null => {
   const max = numericLimit(fields.maxBudget);
   const soft = numericLimit(fields.softBudget);
   const tpm = numericLimit(fields.tpm, true);
@@ -132,7 +140,7 @@ const parseBudget = (fields: CustomerHierarchyFields): Budget | null => {
   };
 };
 
-const BUDGET_FIELDS = ["budgetEnabled", "maxBudget", "softBudget", "budgetDuration", "tpm", "rpm"] as const;
+export const BUDGET_FIELDS = ["budgetEnabled", "maxBudget", "softBudget", "budgetDuration", "tpm", "rpm"] as const;
 
 const budgetChanged = (fields: CustomerHierarchyFields, initial: CustomerHierarchyFields): boolean =>
   BUDGET_FIELDS.some((key) => fields[key] !== initial[key]) ||
@@ -161,19 +169,45 @@ const memberPatch = (
   return { ok: true, patch: { kind: "member", body } };
 };
 
+const organizationBudget = (original: Budget | null | undefined, parsed: Budget, groupChanged: boolean): Budget => {
+  const windows = groupChanged ? null : original?.budget_limits;
+  return {
+    ...original,
+    ...parsed,
+    max_budget: windows?.some((window) => window.budget_duration === "1mo") ? original?.max_budget : parsed.max_budget,
+    budget_limits:
+      windows?.flatMap((window) => {
+        if (window.budget_duration !== "1mo") return [window];
+        return parsed.max_budget != null ? [{ ...window, max_budget: parsed.max_budget }] : [];
+      }) ?? windows,
+  };
+};
+
 export const buildCustomerHierarchyPatch = (
   entity: CustomerHierarchyEntity,
   fields: CustomerHierarchyFields,
 ): PatchResult => {
   const initial = customerHierarchyFields(entity);
   const aliasPatch = aliasChanges(entity.record.alias, fields.alias);
-  const changed = budgetChanged(fields, initial);
-  const budget = fields.budgetEnabled && changed ? parseBudget(fields) : null;
+  const groupChanged = entity.kind === "organization" && fields.templateId !== initial.templateId;
+  if (groupChanged && fields.templateId) {
+    return { ok: true, patch: { kind: "organization", body: { ...aliasPatch, budget_id: fields.templateId } } };
+  }
+  const changed = budgetChanged(fields, initial) || groupChanged;
+  const parsed = fields.budgetEnabled && changed ? parseBudget(fields) : null;
+  const budget =
+    parsed && entity.kind === "organization" ? organizationBudget(entity.record.budget, parsed, groupChanged) : parsed;
   if (fields.budgetEnabled && changed && budget === null) return { ok: false, error: "invalidNumber" };
   if (entity.kind === "organization" || entity.kind === "team") {
     return {
       ok: true,
-      patch: { kind: entity.kind, body: { ...aliasPatch, ...(changed ? { budget } : {}) } },
+      patch: {
+        kind: entity.kind,
+        body: {
+          ...aliasPatch,
+          ...(changed ? { budget } : {}),
+        },
+      },
     };
   }
   return memberPatch(entity.record, fields, budget, changed);

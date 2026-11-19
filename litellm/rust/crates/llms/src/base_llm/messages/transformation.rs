@@ -4,10 +4,10 @@ use litellm_llms_types::formats::messages::{
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{
-    context::{MessagesShapeOptions, MessagesTransformContext},
+    context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
     tools::ToolCustomField,
 };
 
@@ -49,13 +49,51 @@ pub trait BaseMessagesConfig: Sync {
         Ok(request)
     }
 
-    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
-        ToolCustomField::Keep
+    fn clamp_requested_effort(
+        &self,
+        request: MessagesRequest,
+        _capabilities: &MessagesModelCapabilities,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
     }
 
-    /// Whether a param `drop_params` drops because the model lacks it logs Python's warning.
-    fn logs_dropped_params(&self) -> bool {
+    fn native_output_fallback(
+        &self,
+        _request: &MessagesRequest,
+        _context: &MessagesTransformContext,
+    ) -> Option<MessagesTransformContext> {
+        None
+    }
+
+    fn retries_without_native_output(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+        _model: &str,
+    ) -> bool {
         false
+    }
+
+    /// A reply body that did not parse as a message, such as a 200 error envelope, as the caller gets it.
+    fn transform_unchecked_response(
+        &self,
+        body: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Error> {
+        Ok(body)
+    }
+
+    /// The requested params the call logs as its model parameters.
+    fn logged_params(
+        &self,
+        params: MessagesOptionalParams,
+        _context: &MessagesTransformContext,
+    ) -> Result<MessagesOptionalParams, Error> {
+        Ok(params)
+    }
+
+    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
+        ToolCustomField::Keep
     }
 
     fn transform_anthropic_messages_response(
@@ -71,6 +109,11 @@ pub trait BaseMessagesConfig: Sync {
     }
 
     fn secret_names(&self) -> &'static [&'static str];
+
+    /// The model Python's handler logs the call under, once `get_llm_provider` has resolved it.
+    fn logged_model(&self, model: &str) -> String {
+        model.to_string()
+    }
 
     /// Secrets read only on some paths, as Python's lazy `get_secret_str` calls are: resolved
     /// just before `validate_environment`, and only when this call names them. `python_host` is
@@ -149,14 +192,15 @@ pub trait BaseMessagesConfig: Sync {
     }
 
     /// The request steps Python runs once the final `anthropic-beta` header is known, which
-    /// read that header or must not change which betas the request asks for.
+    /// read that header, must not change which betas the request asks for, or rewrite the
+    /// headers that go out with the body.
     fn finalize_request(
         &self,
         request: MessagesRequest,
-        _headers: &Headers,
+        headers: Headers,
         _context: &MessagesTransformContext,
-    ) -> MessagesRequest {
-        request
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        Ok((request, headers))
     }
 
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
@@ -249,7 +293,6 @@ mod tests {
                 MessagesShapeOptions {
                     reasoning_auto_summary,
                     presanitized,
-                    ..MessagesShapeOptions::default()
                 }
             ),
             Ok(request)

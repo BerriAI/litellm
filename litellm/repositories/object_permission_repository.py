@@ -5,9 +5,11 @@ ObjectPermission repository for database operations on LiteLLM_ObjectPermissionT
 from typing import TYPE_CHECKING, Final
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.repositories import rust_database
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.rust_bridge._native import RustObjectPermissionRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -20,17 +22,24 @@ class _ObjectPermissionTable(PrismaTableRepository["prisma_models.LiteLLM_Object
 class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
     """Repository for object permission database operations."""
 
-    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
-        super().__init__(prisma_client)
-        self._use_writer = use_writer
-
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]:
-        return _ObjectPermissionTable(self._prisma_client, use_writer=self._use_writer).table
+        return _ObjectPermissionTable(self._prisma_client).table
 
     @property
     def model_class(self) -> type[LiteLLM_ObjectPermissionTable]:
         return LiteLLM_ObjectPermissionTable
+
+    async def find_by_object_permission_id(
+        self, object_permission_id: str, *, use_writer: bool = False
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        """The object permission, from the writer when ``use_writer`` is set."""
+        return rust_database.decode(
+            LiteLLM_ObjectPermissionTable,
+            await rust_database.required_repository(RustObjectPermissionRepository).find_by_object_permission_id(
+                object_permission_id, use_writer=use_writer
+            ),
+        )
 
     async def find_by_id(
         self, object_permission_id: str, id_field: str = "object_permission_id"

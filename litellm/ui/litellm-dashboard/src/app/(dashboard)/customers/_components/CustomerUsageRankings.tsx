@@ -72,7 +72,6 @@ export default function CustomerUsageRankings({
         </div>
       </div>
       <div>
-        <p className="py-3 text-xs text-muted-foreground">{t("customerPortal.analytics.rankingHint")}</p>
         <Table aria-label={t(DIMENSION_LABELS[dimension])}>
           <TableHeader>
             <TableRow>

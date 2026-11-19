@@ -91,7 +91,7 @@ export interface Series {
 
 const seriesKey = (index: number) => `s${index}`;
 
-const formatDayLabel = (date: string): string => {
+export const formatDayLabel = (date: string): string => {
   const parsed = new Date(`${date}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return date;
   return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric" });

@@ -1392,6 +1392,70 @@ async def test_a_collected_transport_closes_the_session_it_owns():
     assert session.closed, "the owned session outlived the transport that was collected before closing it"
 
 
+class _SelfReferencingHolder:
+    def __init__(self, transport: LiteLLMAiohttpTransport) -> None:
+        self.transport = transport
+        self.itself = self
+
+
+def _transport_handed_an_owned_session() -> LiteLLMAiohttpTransport:
+    return LiteLLMAiohttpTransport(client=aiohttp.ClientSession())
+
+
+def _transport_that_built_its_session_from_a_factory() -> LiteLLMAiohttpTransport:
+    transport: Final = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
+    transport.get_valid_client_session()
+    return transport
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "build_transport",
+    [_transport_handed_an_owned_session, _transport_that_built_its_session_from_a_factory],
+)
+async def test_a_transport_freed_by_the_cycle_collector_closes_its_session_without_an_unclosed_report(
+    build_transport: Callable[[], LiteLLMAiohttpTransport],
+):
+    """OpenAI SDK clients cache resource objects that point back at them, so an evicted client is cyclic garbage."""
+    loop: Final = asyncio.get_running_loop()
+    previous_handler: Final = loop.get_exception_handler()
+    reports: Final[list[object]] = []  # mutable-ok: collects exception handler reports
+    loop.set_exception_handler(lambda _loop, context: reports.append(context))
+    try:
+        holder = _SelfReferencingHolder(build_transport())
+        session = holder.transport.client
+        assert isinstance(session, aiohttp.ClientSession)
+        connector: Final = session.connector
+        assert connector is not None
+        del holder, session
+
+        gc.collect()
+        await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+        gc.collect()
+
+        assert reports == [], reports
+        assert connector.closed, "the session owned by the collected transport was never closed"
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
+@pytest.mark.asyncio
+async def test_a_replaced_session_is_freed_while_its_transport_is_still_alive():
+    transport: Final = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
+    replaced = transport.get_valid_client_session()
+    await replaced.close()
+    current: Final = transport.get_valid_client_session()
+    replaced_ref: Final = weakref.ref(replaced)
+    del replaced
+    try:
+        gc.collect()
+
+        assert transport.client is current
+        assert replaced_ref() is None, "the transport kept a session it already replaced alive"
+    finally:
+        await current.close()
+
+
 @pytest.mark.asyncio
 async def test_a_collected_transport_leaves_a_shared_session_open():
     session = aiohttp.ClientSession()

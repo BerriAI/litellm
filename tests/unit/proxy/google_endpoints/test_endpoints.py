@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request, google_count_tokens
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 
 @pytest.mark.parametrize(
@@ -334,7 +335,7 @@ def _cached_key(key: UserAPIKeyAuth, *teams: LiteLLM_TeamTableCachedObj) -> Iter
     with pytest.MonkeyPatch.context() as key_auth:
         key_auth.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
         key_auth.setattr(proxy_server, "master_key", MASTER_KEY)
-        key_auth.setattr(proxy_server, "prisma_client", "no-db-needed-for-a-cached-key")
+        key_auth.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
         yield f"Bearer {user_key}"
 
 

@@ -30,7 +30,16 @@ class Target(str, Enum):
     MESSAGES = "messages"
     MESSAGES_PASSTHROUGH = "messages_passthrough"
     """A deployment's own /v1/messages, which Python's OpenAI-compatible config forwards untranslated."""
+    BEDROCK_INVOKE = "bedrock_invoke"
+    """Claude on Bedrock InvokeModel, an Anthropic Messages body behind the InvokeModel API."""
+    BEDROCK_MANTLE = "bedrock_mantle"
+    """Bedrock Mantle's Anthropic Messages endpoint, through `bedrock_mantle/` or `bedrock/mantle/`."""
     RESPONSES = "responses"
+
+
+NATIVE_MESSAGES_TARGETS: Final = frozenset(
+    {Target.MESSAGES, Target.MESSAGES_PASSTHROUGH, Target.BEDROCK_INVOKE, Target.BEDROCK_MANTLE}
+)
 
 
 class Feature(str, Enum):
@@ -202,6 +211,18 @@ RULES: Final[Rules] = (
     ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
     RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic", "azure_ai"})),
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.RUST_REQUIRED,
+        providers=frozenset({"bedrock"}),
+        targets=frozenset({Target.BEDROCK_INVOKE}),
+    ),
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.RUST_REQUIRED,
+        providers=frozenset({"bedrock", "bedrock_mantle"}),
+        targets=frozenset({Target.BEDROCK_MANTLE}),
+    ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=RESPONSES_PYTHON_FEATURES),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),

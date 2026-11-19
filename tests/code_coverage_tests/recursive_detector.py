@@ -8,7 +8,11 @@ NON_SDK_SOURCE_DIRS: Final = frozenset(
 )
 
 IGNORE_FUNCTIONS = [
+    "check_opaque_inference_controls",  # DEFAULT_MAX_RECURSE_DEPTH bound, rejects unchecked nesting with HTTP 403.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
+    "_ids_to_walk",  # cache key walker, bounded at _REPR_WALK_MAX_DEPTH (32) with a cycle guard.
+    "_level_holds_large_str",  # cache key walker, bounded at _REPR_WALK_MAX_DEPTH (32) with a cycle guard.
+    "_compact_actor_value",
     "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
     "_format_type",
     "_count_anthropic_content",  # Nested server result mappings are bounded by DEFAULT_MAX_RECURSE_DEPTH.
@@ -90,6 +94,7 @@ IGNORE_FUNCTIONS = [
     "with_id_fields_replaced",  # harness/opencode: bounded by the nesting depth of the JsonValue that validate_json parsed from `opencode export`, which refuses nesting past ~200 levels.
     "completion_cost",  # max depth 1: recursion only fires for mixed-tier Responses WS logging objects, and each split part carries a single service_tier so _split_responses_ws_logging_object_by_service_tier returns None.
     "_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
+    "_compact_actor_value",  # OCSF actors have schema-bounded depth.
     "_replace_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
     "_redacted_client_field",  # bounded by the nesting depth of a JSON-decoded error body (a finite JSON tree, no cycles possible).
     "_sort_processed_sets",  # bounded by the nesting depth of the log-record extra it walks (a finite JSON tree, no cycles possible).
@@ -102,6 +107,7 @@ IGNORE_FUNCTIONS = [
     "_aws_group_members",  # bedrock vector store filters: walks only a pydantic-validated filter, which pydantic-core stops at 255 levels of nesting.
     "_valid_frontmatter_node",  # max depth 32, manifest size capped at 1 MiB, and YAML aliases rejected before traversal.
     "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
+    "_schema_rejection",  # cohere v2 response_format schema check: max depth set (_SCHEMA_DEPTH_CHECKED); returns a rejection at the cap.
 ]
 
 
