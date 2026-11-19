@@ -1082,7 +1082,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
             "request": _with_json_schema_config_in_its_own_column(
                 vertex_request_body,
                 drop_params=drops_unsupported_params(
-                    chat_request_body.get("drop_params", deployment_params.get("drop_params"))
+                    entry_body.get("drop_params", deployment_params.get("drop_params"))
                 ),
             )
         },
