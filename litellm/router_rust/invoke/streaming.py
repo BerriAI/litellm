@@ -1660,6 +1660,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
     async def stream_with_fallbacks() -> AsyncGenerator[object, None]:
         held: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
         response_id_exposed = False  # rebind-ok: set once, before an early-released event is yielded
+        output_started = False  # rebind-ok: set at the first event that is not held
         try:
             async for item in _areported(
                 attempt,
@@ -1674,6 +1675,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 for held_event in held:
                     yield held_event
                 held = ()
+                output_started = True
                 yield item
             for held_event in held:
                 yield held_event
@@ -1692,7 +1694,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 _raise_released_stream_error(attempt, e)
             async with contextlib.aclosing(
                 _responses_recover_stream_error(
-                    attempt, e, source_iterator, wrapper, wrapper.adopt_fallback_headers, held
+                    attempt, e, source_iterator, wrapper, wrapper.adopt_fallback_headers, held, output_started
                 )
             ) as recovered_stream:
                 async for recovered_item in recovered_stream:
@@ -1786,12 +1788,16 @@ def _responses_continuation_request(
 
 
 def _responses_stream_retries(
-    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: "BaseResponsesAPIStreamingIterator"
+    attempt: StreamAttempt,
+    e: MidStreamFallbackError,
+    source_iterator: "BaseResponsesAPIStreamingIterator",
+    output_started: bool,
 ) -> bool:
-    """Whether a broken Responses stream retries in its own group first: it broke before any output and
-    before a tool call, with an error the retry rule takes (408, 409, 429, 5xx, or no status), as a
-    ``/v1/messages`` stream does. After output the continuation fallback takes over instead."""
-    if not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
+    """Whether a broken Responses stream retries in its own group first: it broke before the client
+    received any event and before a tool call, with an error the retry rule takes (408, 409, 429, 5xx,
+    or no status), as a ``/v1/messages`` stream does. After output the continuation fallback takes over
+    instead."""
+    if output_started or not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
         return False
     status_code: Final = _stream_raised_error_status(_mid_stream_retry_trigger(e))
     return status_code is None or attempt.should_retry_status(status_code)
@@ -1804,12 +1810,13 @@ async def _responses_recover_stream_error(
     wrapper: object,
     adopt_headers: Callable[[object], _Prepared],
     held: tuple[object, ...],
+    output_started: bool,
 ) -> AsyncGenerator[object, None]:
     """A Responses stream that broke before any output is retried in its own group, then falls back
     with the newest failure once the retries are spent. The primary's held lifecycle events are dropped
     when a retry or a fallback answers."""
     last_error: MidStreamFallbackError = e  # rebind-ok: the newest failure once a retry also failed
-    if _responses_stream_retries(attempt, e, source_iterator):
+    if _responses_stream_retries(attempt, e, source_iterator, output_started):
         if hasattr(source_iterator, "aclose"):
             with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
                 await source_iterator.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
