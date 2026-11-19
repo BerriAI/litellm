@@ -307,6 +307,7 @@ def test_mlflow_failure_event_records_the_error_text_the_payload_logged(scrubbed
             kwargs={
                 "litellm_call_id": "x",
                 "messages": [{"role": "user", "content": "hi"}],
+                "standard_callback_dynamic_params": {"turn_off_message_logging": True},
                 "exception": ValueError(f"bad input: {secret}"),
                 "standard_logging_object": {
                     "request_tags": [],
@@ -347,6 +348,7 @@ def test_mlflow_failure_event_records_the_exceptions_own_frames_when_no_tracebac
             kwargs={
                 "litellm_call_id": "x",
                 "messages": [{"role": "user", "content": "hi"}],
+                "standard_callback_dynamic_params": {"turn_off_message_logging": True},
                 "exception": raised.value,
                 "standard_logging_object": {
                     "request_tags": [],

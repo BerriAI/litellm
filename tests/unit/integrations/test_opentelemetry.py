@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 import unittest
 import weakref
 from datetime import datetime, timedelta, timezone
@@ -8462,6 +8463,7 @@ def test_record_exception_on_span_records_the_scrubbed_error_text_with_the_same_
             span=span,
             kwargs={
                 "exception": exception,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": True},
                 "standard_logging_object": {
                     "error_information": {
                         "error_class": "ValueError",
@@ -8478,6 +8480,42 @@ def test_record_exception_on_span_records_the_scrubbed_error_text_with_the_same_
     assert event.attributes["exception.stacktrace"] == "frames"
     assert event.attributes["exception.type"] == "ValueError"
     assert event.attributes["exception.escaped"] == "False"
+
+
+def test_record_exception_on_span_records_the_raised_exception_when_redaction_is_off_and_the_error_holds_the_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with pytest.raises(ValueError, match="note") as raised:
+        _raise_provider_error("note redacted-by-litellm here")
+
+    with provider.get_tracer(__name__).start_as_current_span("failure") as span:
+        OpenTelemetry()._record_exception_on_span(
+            span=span,
+            kwargs={
+                "exception": raised.value,
+                "standard_logging_object": {
+                    "error_information": {
+                        "error_class": "ValueError",
+                        "error_message": "note redacted-by-litellm here",
+                        "traceback": "frames",
+                    },
+                },
+            },
+        )
+
+    (event,) = exporter.get_finished_spans()[0].events
+    assert event.attributes["exception.message"] == "note redacted-by-litellm here"
+    assert event.attributes["exception.stacktrace"] == "".join(traceback.format_exception(raised.value))
 
 
 def _raise_provider_error(message: str) -> None:
@@ -8503,6 +8541,7 @@ def test_record_exception_on_span_records_the_exceptions_own_frames_when_no_trac
             span=span,
             kwargs={
                 "exception": raised.value,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": True},
                 "standard_logging_object": {
                     "error_information": {"error_message": "bad input: redacted-by-litellm", "traceback": ""}
                 },
