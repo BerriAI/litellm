@@ -630,7 +630,9 @@ class AppStore:
             return AppMemberBudgetSource.APP_DEFAULT
         return AppMemberBudgetSource.NONE
 
-    async def get_member(self, app_id: str, customer_member_id: str) -> AppMember | AppFailure:
+    async def get_member(
+        self, app_id: str, customer_member_id: str, known_to_app_only: bool = False
+    ) -> AppMember | AppFailure:
         app: Final = await self.get(app_id)
         if isinstance(app, AppFailure):
             return app
@@ -647,6 +649,8 @@ class AppStore:
                 }
             },
         )
+        if known_to_app_only and row is None and organization is None:
+            return AppFailure(404, "Customer member not found.")
         member: Final = (
             AppMember.model_validate(row.model_dump())
             if row is not None

@@ -10,7 +10,6 @@ import { ErrorState } from "@/components/shared/ErrorState";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import useAuthorized from "../../hooks/useAuthorized";
-import { isProxyAdminRole } from "@/utils/roles";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
@@ -24,7 +23,7 @@ import {
 } from "./appForms";
 import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources, loadApps } from "./appApi";
 import { applicationRows, grantedApplicationRows } from "./applications";
-import { useGrantedApps } from "./useGrantedApps";
+import { readsEveryApp, useGrantedApps } from "./useGrantedApps";
 import ApplicationsTable from "./ApplicationsTable";
 import AppBudgetEditor from "./AppBudgetEditor";
 import AppDefinitionSetting from "./AppDefinitionSetting";
@@ -34,8 +33,8 @@ const APPLICATIONS_PAGE_SIZE = 25;
 
 export default function AppsManager() {
   const { t } = useTranslation();
-  const { accessToken, userRole, isLoading } = useAuthorized();
-  const canManage = Boolean(accessToken && isProxyAdminRole(userRole));
+  const { accessToken, userRole, isViewOnly, isLoading } = useAuthorized();
+  const canManage = Boolean(accessToken && readsEveryApp(userRole, isViewOnly));
   const definition = useQuery({ queryKey: appDefinitionKey, queryFn: loadAppDefinition, enabled: canManage });
   const resourceType = definition.data?.resource_type ?? null;
   const resources = useQuery({
@@ -53,6 +52,15 @@ export default function AppsManager() {
   const granted = useGrantedApps();
   if (isLoading || (!canManage && granted.apps.isLoading)) return <p role="status">{t("apps.loading")}</p>;
   if (!canManage && granted.hasGrant) return <GrantedApps apps={granted.apps.data ?? []} />;
+  if (!canManage && granted.failed)
+    return (
+      <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6">
+        <ErrorState
+          message={extractProxyErrorMessage(granted.apps.error)}
+          onRetry={() => void granted.apps.refetch()}
+        />
+      </main>
+    );
   if (!canManage) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
   if (selected && [definition, resources].some((query) => query.isLoading))
     return <p role="status">{t("apps.loading")}</p>;

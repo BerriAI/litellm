@@ -98,6 +98,39 @@ def test_a_grantee_cannot_change_an_app_they_can_read(route: str) -> None:
     assert http.put(f"/management/v1/apps/{chat}/customer_organizations/anyone", json={}).status_code == 403
 
 
+def test_a_grantee_reads_only_customer_members_known_to_their_app() -> None:
+    admin, store = client()
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-a"}))
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-b"}))
+    asyncio.run(store.customers.members.create({"customer_member_id": "ours", "parent_org_id": "org-a"}))
+    asyncio.run(store.customers.members.create({"customer_member_id": "theirs", "parent_org_id": "org-b"}))
+    assert admin.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    chat: Final = admin.post("/management/v1/apps", json={"resource_id": "chat"}).json()["app_id"]
+    assert admin.put(f"/management/v1/apps/{chat}/customer_organizations/org-a", json={}).status_code == 200
+    asyncio.run(grant_apps(cast(AppDatabase, store.db), "user", (chat,)))  # cast-ok: the store wraps this fake
+    grantee: Final = FastAPI()
+    grantee.add_exception_handler(ManagementProblem, lambda request, error: problem_response(error.problem))
+    grantee.include_router(router)
+    grantee.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="admin"
+    )
+    grantee.dependency_overrides[get_app_store] = lambda: store
+    http: Final = TestClient(grantee)
+    members: Final = f"/management/v1/apps/{chat}/customer_members"
+    assert http.get(f"{members}/ours").json()["customer_member_id"] == "ours"
+    unrelated: Final = http.get(f"{members}/theirs")
+    unknown: Final = http.get(f"{members}/nobody")
+    assert (
+        (unrelated.status_code, unrelated.json())
+        == (unknown.status_code, unknown.json())
+        == (
+            404,
+            {"detail": "Customer member not found."},
+        )
+    )
+    assert admin.get(f"{members}/theirs").status_code == 200
+
+
 def test_a_user_without_a_grant_reads_no_apps() -> None:
     http, chat, _ = two_apps(LitellmUserRoles.INTERNAL_USER, None)
     assert http.get("/management/v1/apps").status_code == 403
@@ -111,7 +144,10 @@ def test_a_proxy_admin_reads_every_app_without_a_grant() -> None:
 
 def test_choose_definition_discover_and_configure_existing_resource() -> None:
     http, store = client()
-    assert http.get("/management/v1/apps/definition").json() == {"resource_type": None, "auto_create_customers_without_app": True}
+    assert http.get("/management/v1/apps/definition").json() == {
+        "resource_type": None,
+        "auto_create_customers_without_app": True,
+    }
     assert http.get("/management/v1/apps/resources").json() == []
     preview: Final = http.get("/management/v1/apps/resources", params={"resource_type": "team"})
     assert preview.status_code == 200 and len(preview.json()) == 2
@@ -192,7 +228,6 @@ def test_virtual_key_discovery_never_returns_credentials_or_hashes() -> None:
     assert set(resource) == {"resource_type", "resource_id", "alias", "app_id"}
     assert resource["resource_type"] == "virtual_key" and resource["resource_id"] != "token-a"
     assert "token-a" not in response.text
-
 
 
 def test_list_and_get_apps_return_saved_budgets_and_period_usage() -> None:

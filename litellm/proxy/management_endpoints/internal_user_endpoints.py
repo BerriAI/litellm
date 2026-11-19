@@ -93,8 +93,8 @@ from litellm.proxy.management_helpers.budget_limits_usage import build_budget_li
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    enforce_app_grant_is_admin_only,
     handle_update_object_permission_common,
+    reject_clearing_app_grants,
     set_object_permission,
 )
 from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
@@ -662,10 +662,11 @@ async def new_user(
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
-        if isinstance(user_api_key_dict, UserAPIKeyAuth):
-            enforce_app_grant_is_admin_only(data.object_permission, user_api_key_dict.user_role)
         data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
-            data_json=data_json, prisma_client=prisma_client
+            data_json=data_json,
+            prisma_client=prisma_client,
+            can_grant_apps=isinstance(user_api_key_dict, UserAPIKeyAuth)
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
         data_json.pop("password", None)
         teams = data.teams
@@ -1742,15 +1743,20 @@ async def _update_single_user_helper(
     # Upsert the grants into their own row and link it, mirroring /key/update and /team/update.
     # This also removes object_permission from the payload, which is not a column on the user table.
     if "object_permission" in non_default_values:
-        enforce_app_grant_is_admin_only(user_request.object_permission, user_api_key_dict.user_role)
         object_permission_id: Final = await handle_update_object_permission_common(
             data_json=non_default_values,
             existing_object_permission_id=getattr(existing_user_row, "object_permission_id", None),
             prisma_client=prisma_client,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
         if object_permission_id is not None:
             non_default_values["object_permission_id"] = object_permission_id
     elif _clears_object_permission(user_request):
+        await reject_clearing_app_grants(
+            existing_object_permission_id=getattr(existing_user_row, "object_permission_id", None),
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            prisma_client=prisma_client,
+        )
         # An explicit `{}` or null means "no object permission", which the merge-based upsert cannot
         # express: merging an empty grant set over the existing row leaves every grant in place. So
         # the link is dropped instead, which is what makes the documented clear actually clear.

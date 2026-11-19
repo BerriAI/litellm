@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_endpoints.management_v1.customers import (
     customer_actor,
@@ -161,4 +160,7 @@ async def put_app_member(
 
 @router.get("/{app_id}/customer_members/{customer_member_id}", response_model=AppMember)
 async def get_app_member(app_id: str, customer_member_id: str, store: Store, access: Access) -> AppMember:
-    return await store.with_budget_usage(resolve(await store.get_member(readable(access, app_id), customer_member_id)))
+    member: Final = await store.get_member(
+        readable(access, app_id), customer_member_id, known_to_app_only=not access.unrestricted
+    )
+    return await store.with_budget_usage(resolve(member))

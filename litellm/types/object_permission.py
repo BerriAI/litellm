@@ -8,6 +8,8 @@ can adopt the type without violating the SDK-must-not-import-from-proxy
 layering rule.
 """
 
+from collections.abc import Sequence
+
 from typing_extensions import ReadOnly, TypedDict
 
 
@@ -24,4 +26,4 @@ class ObjectPermissionDict(TypedDict, total=False):
     search_tools: list[str] | None
     mcp_tool_search_enabled: bool | None
     skills: ReadOnly[list[str] | None]
-    apps: list[str] | None
+    apps: ReadOnly[Sequence[str] | None]

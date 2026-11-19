@@ -99,4 +99,6 @@ async def granted_app_ids(db: object, user_id: str | None) -> frozenset[str]:
     permissions: Final = await find_many_in(
         _ObjectPermissionRepository(connection).table, "object_permission_id", permission_ids
     )
-    return frozenset(chain.from_iterable(_Permission.model_validate(row.model_dump()).apps or () for row in permissions))
+    return frozenset(
+        chain.from_iterable(_Permission.model_validate(row.model_dump()).apps or () for row in permissions)
+    )
