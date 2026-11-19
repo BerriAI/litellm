@@ -682,7 +682,11 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
-from litellm.proxy.db.connection_budget import rust_connections
+from litellm.proxy.db.connection_budget import (
+    configure_pool_budget_from_settings,
+    rust_connections,
+    with_configured_connection_budget,
+)
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -1778,7 +1782,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
 
-    enforce_fips_mode(general_settings_view())
+    settings: Final = general_settings_view()
+    enforce_fips_mode(settings)
+    if configure_pool_budget_from_settings.get() and prisma_client is None:
+        resources.enter_context(with_configured_connection_budget(settings.get("database_connection_pool_limit")))
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -1786,7 +1793,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                 master_key_boot_verdict(
                     master_key=master_key,
                     environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
-                    general_settings=general_settings,
+                    general_settings=settings,
                     config_file_path=user_config_file_path,
                     override_env_is_on=get_secret_bool(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR) is True,
                     salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
