@@ -52,6 +52,7 @@ from ...common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    strip_unsignable_thinking_blocks_for_claude,
     tools_without_custom_field,
 )
 from .mid_conversation_system import (
@@ -105,7 +106,6 @@ _MESSAGES_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
-    _workload_identity_eligible: ClassVar[bool] = True
     _report_reasoning_drops: ClassVar[bool] = True
 
     @property
@@ -372,12 +372,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             self._apply_env_auth_header(
                 headers,
                 self._require_auth_header(
-                    AnthropicModelInfo.get_auth_header(
-                        api_key,
-                        api_base=api_base,
-                        litellm_params=litellm_params,
-                        allow_workload_identity=self._allows_workload_identity,
-                    ),
+                    AnthropicModelInfo.get_auth_header(api_key, api_base=api_base),
                     model=model,
                 ),
             )
@@ -412,12 +407,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             self._apply_env_auth_header(
                 oauth_headers,
                 self._require_auth_header(
-                    await AnthropicModelInfo.aget_auth_header(
-                        oauth_api_key,
-                        api_base=api_base,
-                        litellm_params=litellm_params,
-                        allow_workload_identity=self._allows_workload_identity,
-                    ),
+                    await AnthropicModelInfo.aget_auth_header(oauth_api_key, api_base=api_base),
                     model=model,
                 ),
             )
@@ -446,14 +436,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers.update(auth_header)
         if merged_beta:
             headers["anthropic-beta"] = merged_beta
-
-    @property
-    def _allows_workload_identity(self) -> bool:
-        """Subclasses reuse this validate step for their own /v1/messages-compatible providers, so
-        eligibility is declared per class and never inherited."""
-        from litellm.llms.anthropic.common_utils import config_allows_workload_identity
-
-        return config_allows_workload_identity(self)
 
     def finalize_messages_headers(
         self,
@@ -798,12 +780,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             else unstripped_native_request(anthropic_messages_optional_request_params, messages)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types these as bare dicts
         )
         log_beta_gated_strips(gated.stripped, model=model, provider=self._resolved_provider)
+        base_model: Final = getattr(litellm_params, "base_model", None)
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(
-                drop_non_string_tool_result_texts(
-                    _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
-                    getattr(litellm_params, "drop_params", None),
-                )
+            messages=strip_unsignable_thinking_blocks_for_claude(
+                strip_encrypted_reasoning_blocks_from_anthropic_messages(
+                    drop_non_string_tool_result_texts(
+                        _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
+                        getattr(litellm_params, "drop_params", None),
+                    )
+                ),
+                model=model,
+                base_model=base_model if isinstance(base_model, str) else None,
             ),
             max_tokens=max_tokens,
             model=model,

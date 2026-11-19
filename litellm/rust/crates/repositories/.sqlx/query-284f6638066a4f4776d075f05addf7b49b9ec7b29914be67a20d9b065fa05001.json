@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT active_token_id,\n       revoke_at\nFROM \"LiteLLM_DeprecatedVerificationToken\"\nWHERE token = $1\n  AND revoke_at > $2\nLIMIT 1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "active_token_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_DeprecatedVerificationToken\"",
+            "name": "active_token_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "revoke_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_DeprecatedVerificationToken\"",
+            "name": "revoke_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "284f6638066a4f4776d075f05addf7b49b9ec7b29914be67a20d9b065fa05001"
+}

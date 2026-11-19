@@ -2,6 +2,20 @@ import { expect, test } from "@playwright/test";
 import { users } from "../../fixtures/users";
 import { Role } from "../../fixtures/roles";
 
+test("login page shows a loaded LiteLLM logo in both themes", async ({ page }) => {
+  await page.goto("/ui/login");
+  const logo = page.getByRole("img", { name: "LiteLLM", exact: true });
+  await expect(logo).toBeVisible();
+  await expect.poll(() => logo.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+  const lightLogo = await logo.evaluate((image: HTMLImageElement) => image.currentSrc);
+
+  await page.evaluate(() => localStorage.setItem("theme", "dark"));
+  await page.reload();
+  await expect(logo).toBeVisible();
+  await expect.poll(() => logo.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+  expect(await logo.evaluate((image: HTMLImageElement) => image.currentSrc)).not.toBe(lightLogo);
+});
+
 test("user can log in", async ({ page }) => {
   await page.goto("/ui/login");
   await page.getByPlaceholder("Enter your username").fill(users[Role.ProxyAdmin].email);

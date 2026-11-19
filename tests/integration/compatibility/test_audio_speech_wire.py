@@ -40,7 +40,7 @@ def test_audio_speech_forwards_the_full_json_body_and_streams_the_audio(gateway:
         assert request.target == "/v1/audio/speech"
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         body: Final = json.loads(request.body)
-        assert body == _SPEECH_REQUEST
+        assert body == {**_SPEECH_REQUEST, "stream_format": "sse"}
         assert type(body["speed"]) is float
         return Reply(body=_SPEECH_BYTES, content_type="audio/wav")
 

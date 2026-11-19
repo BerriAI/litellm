@@ -39,8 +39,8 @@ from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
-    TagRepository,
 )
+from litellm.repositories.tag_repository import TagRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -168,7 +168,7 @@ async def _get_internal_user_api_keys(
         return []
 
     user_api_keys: Final = set()
-    if user_api_key_dict.api_key:
+    if user_api_key_dict.api_key and user_api_key_dict.impersonated_by is None:
         user_api_keys.add(user_api_key_dict.api_key)
 
     user_id: Final = user_api_key_dict.user_id

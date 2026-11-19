@@ -563,13 +563,37 @@ def test_updating_a_warmed_mapping_deactivates_and_repoints_it_on_both_workers(
         _assert_upstream_requests(upstream, tuple(_expected_chat_request(backend, prompt) for prompt in served_prompts))
 
 
+def test_creating_a_global_mapping_admits_an_issuer_jwt_refused_before_it_on_both_workers(
+    jwt_lifecycle: _JWTLifecycleRuntime,
+) -> None:
+    first: Final = jwt_lifecycle.first
+    second: Final = jwt_lifecycle.second
+    upstream: Final = jwt_lifecycle.upstream
+    model: Final = jwt_lifecycle.model
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    prompts: Final = tuple(f"global mapping creation {index} {uuid.uuid4().hex}" for index in range(4))
+    token: Final = _signed_jwt(jwt_lifecycle.private_key_a, client_id, jwt_lifecycle.issuer_a)
+    upstream.drain()
+
+    with first.scenario() as scenario:
+        key: Final = _create_key(first, model)
+        scenario.cleanups.callback(delete_key_if_present, first, key)
+        key_hash: Final = sha256(key.encode()).hexdigest()
+        _assert_unmapped(_chat(first, model, token, prompts[0]), client_id)
+        _assert_unmapped(_chat(second, model, token, prompts[1]), client_id)
+
+        mapping: Final = _create_mapping(first, key, client_id)
+        scenario.cleanups.callback(_delete_mapping_if_present, first, mapping.id)
+        assert mapping.jwt_issuer is None
+
+        _assert_chat(first, model, token, prompts[2], key_hash)
+        _assert_chat(second, model, token, prompts[3], key_hash)
+        _assert_upstream_requests(upstream, tuple(_expected_chat_request(model, prompt) for prompt in prompts[2:4]))
+
+
 def test_reactivating_a_global_mapping_restores_issuer_jwt_callers_on_both_workers(
     jwt_lifecycle: _JWTLifecycleRuntime,
 ) -> None:
-    pytest.skip(
-        "BUG: reactivating a global JWT key mapping keeps refusing issuer-scoped JWTs with 403 No registered mapping "
-        "because the miss was cached under the issuer key and update evicts only the global key"
-    )
     first: Final = jwt_lifecycle.first
     second: Final = jwt_lifecycle.second
     upstream: Final = jwt_lifecycle.upstream
