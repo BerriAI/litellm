@@ -105,15 +105,10 @@ class AzureAIRerankConfig(CohereRerankConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        base_model: Final = self._get_base_model(rerank_response._hidden_params.get("llm_provider-azureml-model-group"))
-        rerank_response._hidden_params["model"] = base_model
+        azure_model_group: Final = rerank_response.hidden_params.get("llm_provider-azureml-model-group")
+        base_model: Final = self._get_base_model(azure_model_group if isinstance(azure_model_group, str) else None)
+        rerank_response.hidden_params["model"] = base_model
         return rerank_response
 
     def _get_base_model(self, azure_model_group: str | None) -> str | None:
-        if azure_model_group is None:
-            return None
-        if azure_model_group == "offer-cohere-rerank-mul-paygo":
-            return "azure_ai/cohere-rerank-v3-multilingual"
-        if azure_model_group == "offer-cohere-rerank-eng-paygo":
-            return "azure_ai/cohere-rerank-v3-english"
         return azure_model_group

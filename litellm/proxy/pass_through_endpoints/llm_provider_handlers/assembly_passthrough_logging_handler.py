@@ -147,7 +147,7 @@ class AssemblyAIPassthroughLoggingHandler:
         logging_obj.model_call_details["response_cost"] = response_cost
 
         asyncio.run(
-            pass_through_endpoint_logging._handle_logging(
+            pass_through_endpoint_logging.handle_logging(
                 logging_obj=logging_obj,
                 standard_logging_response_object=self._get_response_to_log(transcript_response),
                 result=result,
@@ -216,7 +216,7 @@ class AssemblyAIPassthroughLoggingHandler:
         """
         for _ in range(self.max_polling_attempts):  # 180 attempts * 10s = 30 minutes max
             transcript = self._get_assembly_transcript(
-                request_region=AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(url=url_route),
+                request_region=AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url(url=url_route),
                 transcript_id=transcript_id,
             )
             if transcript is None:
@@ -279,14 +279,16 @@ class AssemblyAIPassthroughLoggingHandler:
             return None
 
     @staticmethod
-    def _should_log_request(request_method: str) -> bool:
+    def should_log_request(request_method: str) -> bool:
         """
         only POST transcription jobs are logged. litellm will POLL assembly to wait for the transcription to complete to log the complete response / cost
         """
         return request_method == "POST"
 
+    _should_log_request = should_log_request
+
     @staticmethod
-    def _get_assembly_region_from_url(url: str | None) -> Literal["eu"] | None:
+    def get_assembly_region_from_url(url: str | None) -> Literal["eu"] | None:
         """
         Get the region from the URL
         """
@@ -296,8 +298,10 @@ class AssemblyAIPassthroughLoggingHandler:
             return "eu"
         return None
 
+    _get_assembly_region_from_url = get_assembly_region_from_url
+
     @staticmethod
-    def _get_assembly_base_url_from_region(region: Literal["eu"] | None) -> str:
+    def get_assembly_base_url_from_region(region: Literal["eu"] | None) -> str:
         """
         Get the base URL for the AssemblyAI API
         if region == "eu", return "https://api.eu.assemblyai.com"
@@ -306,3 +310,5 @@ class AssemblyAIPassthroughLoggingHandler:
         if region == "eu":
             return "https://api.eu.assemblyai.com"
         return "https://api.assemblyai.com"
+
+    _get_assembly_base_url_from_region = get_assembly_base_url_from_region

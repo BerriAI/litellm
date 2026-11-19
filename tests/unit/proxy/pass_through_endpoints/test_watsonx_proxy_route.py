@@ -437,3 +437,116 @@ class TestWatsonxProxyRoute:
                     call_args["target"]
                     == f"https://us-south.ml.cloud.ibm.com/{endpoint_path}"
                 )
+
+
+_WATSONX_ENV = (
+    "WATSONX_API_KEY",
+    "WATSONX_APIKEY",
+    "WX_API_KEY",
+    "WATSONX_API_BASE",
+    "WATSONX_URL",
+    "WX_URL",
+    "WML_URL",
+    "WATSONX_TOKEN",
+    "WATSONX_ZENAPIKEY",
+)
+
+
+def _watsonx_deployment(api_key: str, api_base: str, use_in_pass_through: bool) -> dict:
+    return {
+        "model_name": "granite",
+        "litellm_params": {
+            "model": "watsonx/ibm/granite-3-8b-instruct",
+            "api_key": api_key,
+            "api_base": api_base,
+            "project_id": "proj",
+            "use_in_pass_through": use_in_pass_through,
+        },
+    }
+
+
+def _post_request(body: dict) -> MagicMock:
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"content-type": "application/json"}
+    request.json = AsyncMock(return_value=body)
+    return request
+
+
+def _iam_response(token: str) -> MagicMock:
+    response = MagicMock()
+    response.json.return_value = {"access_token": token, "expires_in": 3600}
+    return response
+
+
+async def _route_target_and_iam_apikey(
+    monkeypatch, llm_router: litellm.Router, env: dict[str, str]
+) -> tuple[str, str, str]:
+    from litellm.llms.watsonx.common_utils import iam_token_cache
+    from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import PassthroughEndpointRouter
+
+    for name in _WATSONX_ENV:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(litellm, "credential_list", [])
+    iam_token_cache.flush_cache()
+    monkeypatch.setattr(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+        PassthroughEndpointRouter(llm_router_getter=lambda: llm_router),
+    )
+    endpoint_func = AsyncMock(return_value={"results": []})
+    with (
+        patch.object(litellm.module_level_client, "post", return_value=_iam_response("iam-token-1")) as iam_post,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=endpoint_func,
+        ) as create_route,
+    ):
+        await watsonx_proxy_route(
+            endpoint="ml/v1/text/generation",
+            request=_post_request({"input": "hi", "project_id": "proj"}),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+    route_kwargs = create_route.call_args.kwargs
+    return (
+        route_kwargs["target"],
+        route_kwargs["custom_headers"]["Authorization"],
+        iam_post.call_args.kwargs["data"]["apikey"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_watsonx_route_uses_the_use_in_pass_through_deployment_key_and_base(monkeypatch):
+    llm_router = litellm.Router(
+        model_list=[_watsonx_deployment("wx-deployment-key", "https://eu-de.ml.cloud.ibm.com", use_in_pass_through=True)]
+    )
+
+    target, authorization, iam_apikey = await _route_target_and_iam_apikey(monkeypatch, llm_router, env={})
+
+    assert target == "https://eu-de.ml.cloud.ibm.com/ml/v1/text/generation"
+    assert authorization == "Bearer iam-token-1"
+    assert iam_apikey == "wx-deployment-key"
+
+
+@pytest.mark.asyncio
+async def test_watsonx_route_falls_back_to_env_when_no_deployment_is_flagged(monkeypatch):
+    llm_router = litellm.Router(
+        model_list=[_watsonx_deployment("wx-deployment-key", "https://eu-de.ml.cloud.ibm.com", use_in_pass_through=False)]
+    )
+
+    target, authorization, iam_apikey = await _route_target_and_iam_apikey(
+        monkeypatch,
+        llm_router,
+        env={
+            "WX_API_KEY": "wx-env-key",
+            "WATSONX_API_KEY": "watsonx-env-key",
+            "WATSONX_API_BASE": "https://us-south.ml.cloud.ibm.com",
+        },
+    )
+
+    assert target == "https://us-south.ml.cloud.ibm.com/ml/v1/text/generation"
+    assert authorization == "Bearer iam-token-1"
+    assert iam_apikey == "wx-env-key"

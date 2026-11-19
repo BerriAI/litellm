@@ -25,7 +25,7 @@ import pytest_asyncio
 
 import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, subclass_overrides_hook
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -84,6 +84,24 @@ def create_model_call_details(
         "standard_logging_object": standard_logging_payload,
         "other_key": "other_value",
     }
+
+
+def test_get_callback_env_vars():
+    env_vars = CustomLogger.get_callback_env_vars("langfuse")
+    assert env_vars == [
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+    ]
+
+    alias_env_vars = CustomLogger.get_callback_env_vars("langfuse_otel")
+    assert alias_env_vars == env_vars
+
+    missing_env_vars = CustomLogger.get_callback_env_vars("does_not_exist")
+    assert missing_env_vars == []
+
+    none_env_vars = CustomLogger.get_callback_env_vars(None)
+    assert none_env_vars == []
 
 
 class TestStandardLoggingPayloadExcludedFields:
@@ -479,3 +497,48 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+class _DefinesPreCallHook(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return data
+
+
+class _InheritsPreCallHookFromBase(_DefinesPreCallHook):
+    pass
+
+
+class _PreCallHookMixin:
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return data
+
+
+class _LoggerBeforeMixin(CustomLogger, _PreCallHookMixin):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("cls", "expected"),
+    [
+        (CustomLogger, False),
+        (_DefinesPreCallHook, True),
+        (_InheritsPreCallHookFromBase, True),
+        (_LoggerBeforeMixin, False),
+    ],
+)
+def test_subclass_overrides_hook_walks_mro_up_to_custom_logger(cls, expected):
+    assert subclass_overrides_hook(cls, "async_pre_call_hook") is expected
+
+
+def test_subclass_overrides_hook_stops_at_the_given_base():
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    class _AppliesGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    class _InheritsApplyGuardrail(_AppliesGuardrail):
+        pass
+
+    assert subclass_overrides_hook(CustomGuardrail, "apply_guardrail", CustomGuardrail) is False
+    assert subclass_overrides_hook(_InheritsApplyGuardrail, "apply_guardrail", CustomGuardrail) is True

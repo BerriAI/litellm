@@ -1,22 +1,35 @@
+import asyncio
+import json
 import os
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from hashlib import sha256
+from pathlib import Path
+from typing import Final, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import httpx
 import psycopg
 import pytest
 import pytest_asyncio
-from integration._support.client import Gateway
+from integration._support.client import Gateway, delete_key_if_present, eventually, object_value, string_value
+from integration._support.database import read_rows
+from integration._support.process import owned_proxy_process
 from prisma import Prisma
 from psycopg import sql
 from psycopg.types.json import Jsonb
 from pydantic import TypeAdapter
 
 from litellm.proxy.auth.authorization import AllRows, OwnedRows, ReadScope
-from litellm.proxy.spend_tracking.spend_management_endpoints import _spend_log_payload_query, read_scope_sql
+from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
+    _spend_log_payload_query,
+    _SpendLogWindow,
+    read_scope_sql,
+)
+from litellm.proxy.utils import query_raw_within_statement_timeout
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +84,37 @@ def _seed_rows(
                     Jsonb({"id": row.request_id}),
                 )
                 for row in rows
+            ),
+        )
+
+
+def _seed_alias_rows(
+    connection: psycopg.Connection,
+    rows: tuple[tuple[str, str, str | None, str], ...],
+    session_id: str,
+    started: datetime,
+) -> None:
+    utc_timestamp: Final = started.astimezone(timezone.utc).replace(tzinfo=None)
+    with connection.cursor() as cursor:
+        cursor.executemany(
+            sql.SQL(
+                'INSERT INTO {} (request_id, api_key, "user", session_id, "startTime", "endTime", '
+                "metadata, messages, response, call_type) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'acompletion')"
+            ).format(sql.Identifier("public", "LiteLLM_SpendLogs")),
+            tuple(
+                (
+                    request_id,
+                    api_key,
+                    user_id,
+                    session_id,
+                    utc_timestamp,
+                    utc_timestamp,
+                    Jsonb({"user_api_key_alias": key_alias}),
+                    Jsonb([{"role": "user", "content": request_id + " payload"}]),
+                    Jsonb({"id": request_id}),
+                )
+                for request_id, api_key, user_id, key_alias in rows
             ),
         )
 
@@ -144,19 +188,123 @@ async def test_ownership_sql_selects_allowed_rows_and_intersects_filters(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("scope", "expected"),
-    [(AllRows(), ("foreign",)), (OwnedRows("caller"), ("own",)), (OwnedRows(None), ())],
+    ("id_column", "scope", "expected"),
+    [
+        ("request_id", AllRows(), ("foreign",)),
+        ("request_id", OwnedRows("caller"), ()),
+        ("litellm_call_id", AllRows(), ("own",)),
+        ("litellm_call_id", OwnedRows("caller"), ("own",)),
+        ("litellm_call_id", OwnedRows(None), ()),
+    ],
 )
-async def test_payload_sql_filters_foreign_collisions_and_prefers_exact_ids_for_admins(
-    spend_database: Prisma, scope: ReadScope, expected: tuple[str, ...]
+async def test_payload_sql_filters_foreign_collisions(
+    spend_database: Prisma,
+    id_column: Literal["request_id", "litellm_call_id"],
+    scope: ReadScope,
+    expected: tuple[str, ...],
 ) -> None:
-    query, params = _spend_log_payload_query("foreign", scope)
+    query, params = _spend_log_payload_query(id_column, "foreign", scope, _SpendLogWindow())
     result: Final = await spend_database.query_raw(query, *params)
     assert tuple(row.request_id for row in REQUEST_IDS.validate_python(result)) == expected
 
 
-def _delete_session(session_id: str) -> None:
-    with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+SEEDED_AT: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [AllRows(), OwnedRows("caller", ("first",))])
+@pytest.mark.parametrize(
+    ("window", "expected"),
+    [
+        (_SpendLogWindow(start=SEEDED_AT - timedelta(seconds=1)), ("own",)),
+        (_SpendLogWindow(start=SEEDED_AT, end=SEEDED_AT), ("own",)),
+        (_SpendLogWindow(start=SEEDED_AT + timedelta(seconds=1)), ()),
+        (_SpendLogWindow(end=SEEDED_AT - timedelta(seconds=1)), ()),
+    ],
+)
+async def test_payload_sql_by_call_id_keeps_to_the_window(
+    spend_database: Prisma, scope: ReadScope, window: _SpendLogWindow, expected: tuple[str, ...]
+) -> None:
+    query, params = _spend_log_payload_query("litellm_call_id", "foreign", scope, window)
+    result: Final = await spend_database.query_raw(query, *params)
+    assert tuple(row.request_id for row in REQUEST_IDS.validate_python(result)) == expected
+
+
+async def _drop_call_id_indexes(spend_database: Prisma) -> None:
+    await spend_database.execute_raw(
+        """
+        DO $$
+        DECLARE index_name text;
+        BEGIN
+            FOR index_name IN
+                SELECT indexname FROM pg_indexes
+                WHERE schemaname = current_schema()
+                AND tablename = 'LiteLLM_SpendLogs'
+                AND indexdef LIKE '%litellm_call_id%'
+            LOOP
+                EXECUTE format('DROP INDEX %I', index_name);
+            END LOOP;
+        END $$
+        """
+    )
+
+
+async def _plan_without_seq_scans(spend_database: Prisma, query: str, params: tuple[object, ...]) -> str:
+    async with spend_database.tx() as transaction:
+        await transaction.execute_raw("SET LOCAL enable_seqscan = off")
+        return json.dumps(await transaction.query_raw(f"EXPLAIN (FORMAT JSON) {query}", *params))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [AllRows(), OwnedRows("caller", ("first",))])
+@pytest.mark.parametrize(
+    ("id_column", "lookup_id", "window"),
+    [
+        ("request_id", "own", _SpendLogWindow()),
+        ("litellm_call_id", "foreign", _SpendLogWindow(start=SEEDED_AT)),
+    ],
+)
+async def test_payload_sql_reads_through_an_index_without_the_call_id_index(
+    spend_database: Prisma,
+    scope: ReadScope,
+    id_column: Literal["request_id", "litellm_call_id"],
+    lookup_id: str,
+    window: _SpendLogWindow,
+) -> None:
+    await _drop_call_id_indexes(spend_database)
+    query, params = _spend_log_payload_query(id_column, lookup_id, scope, window)
+    plan: Final = await _plan_without_seq_scans(spend_database, query, params)
+    assert "Seq Scan" not in plan, plan
+    assert "Index Cond" in plan, plan
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadTarget:
+    read_db: PrismaWrapper
+
+
+@pytest.mark.asyncio
+async def test_statement_timeout_read_waits_for_a_busy_connection() -> None:
+    parsed: Final = urlsplit(os.environ["DATABASE_URL"])
+    one_connection_url: Final = urlunsplit(
+        parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "connection_limit": 1, "pool_timeout": 60}))
+    )
+    database: Final = Prisma(datasource={"url": one_connection_url})
+    await database.connect()
+    try:
+        holder: Final = asyncio.create_task(database.query_raw("SELECT pg_sleep(3)::text AS slept"))
+        await asyncio.sleep(0.5)
+        rows: Final = await query_raw_within_statement_timeout(
+            _ReadTarget(PrismaWrapper(original_prisma=database, iam_token_db_auth=False)), "SELECT 1 AS ready"
+        )
+        await holder
+    finally:
+        await database.disconnect()
+    assert rows == [{"ready": 1}]
+
+
+def _delete_session(session_id: str, database_url: str | None = None) -> None:
+    with psycopg.connect(database_url or os.environ["DATABASE_URL"]) as connection:
         connection.execute('DELETE FROM "LiteLLM_SpendLogs" WHERE session_id = %s', (session_id,))
 
 
@@ -211,10 +359,9 @@ def test_spend_log_routes_preserve_user_and_permitted_team_access(
         assert listed.status_code == 200, listed.text
         assert sorted(row["request_id"] for row in listed.json()["data"]) == list(expected), listed.text
         narrowed: Final = gateway.request("GET", "/spend/logs/ui", key=key, params={**filters, "user_id": other})
-        assert narrowed.status_code == 200, narrowed.text
-        assert [row["request_id"] for row in narrowed.json()["data"]] == (
-            [rows[1].request_id] if team_access else []
-        ), narrowed.text
+        assert narrowed.status_code == (200 if team_access else 403), narrowed.text
+        if team_access:
+            assert [row["request_id"] for row in narrowed.json()["data"]] == [rows[1].request_id], narrowed.text
         refused: Final = gateway.request("GET", f"/spend/logs/ui/{rows[4].request_id}", key=key)
         assert refused.status_code == 403, refused.text
         for caller_key, expected_id in ((key, rows[0].request_id), (other_key, rows[2].request_id)):
@@ -224,3 +371,194 @@ def test_spend_log_routes_preserve_user_and_permitted_team_access(
         admin: Final = gateway.request("GET", f"/spend/logs/ui/{rows[2].request_id}")
         assert admin.status_code == 200, admin.text
         assert admin.json()["messages"] == [{"role": "user", "content": rows[2].request_id + " payload"}], admin.text
+
+
+def _chat_request_id(gateway: Gateway, model: str, key: str) -> str:
+    response: Final = gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "max_tokens": 20, "messages": [{"role": "user", "content": f"scope {uuid.uuid4().hex}"}]},
+        key=key,
+    )
+    assert response.status_code == 200, response.text
+    body: Final = TypeAdapter(dict[str, object]).validate_python(response.json())
+    return str(body["id"])
+
+
+def test_spend_log_key_alias_is_exact_includes_deleted_keys_and_preserves_scope(tmp_path: Path) -> None:
+    with httpx.Client(base_url="http://127.0.0.1:1", timeout=15, trust_env=False) as source_client:
+        source_gateway: Final = Gateway(source_client, "sk-integration-master", "http://127.0.0.1:8190")
+        with owned_proxy_process(source_gateway, tmp_path, {}) as owned:
+            gateway: Final = owned.gateway
+            with gateway.scenario() as scenario:
+                assert gateway.database_url is not None
+                database_url: Final = gateway.database_url
+                owner: Final = scenario.user(user_role="internal_user")
+                other_owner: Final = scenario.user(user_role="internal_user")
+                key_alias: Final = f"prod-key-{uuid.uuid4().hex}"
+                overlapping_key_alias: Final = f"{key_alias}-2"
+                deleted_key_alias: Final = f"deleted-key-{uuid.uuid4().hex}"
+                cli_session_alias: Final = f"cli-session-{uuid.uuid4().hex}"
+                key: Final = scenario.key(user_id=owner, key_alias=key_alias)
+                overlapping_key: Final = scenario.key(
+                    user_id=other_owner,
+                    key_alias=overlapping_key_alias,
+                )
+                deleted_key_response: Final = gateway.post(
+                    "/key/generate",
+                    {"key_alias": deleted_key_alias},
+                )
+                deleted_key: Final = string_value(deleted_key_response["key"])
+                scenario.cleanups.callback(delete_key_if_present, gateway, deleted_key)
+                request_ids: Final = tuple(f"alias-{uuid.uuid4().hex}" for _ in range(4))
+                session_id: Final = f"key-alias-{uuid.uuid4().hex}"
+                started: Final = datetime.now(timezone.utc) - timedelta(hours=1)
+                scenario.cleanups.callback(_delete_session, session_id, database_url)
+                with psycopg.connect(database_url) as connection:
+                    _seed_alias_rows(
+                        connection,
+                        (
+                            (request_ids[0], sha256(key.encode()).hexdigest(), owner, key_alias),
+                            (
+                                request_ids[1],
+                                sha256(overlapping_key.encode()).hexdigest(),
+                                other_owner,
+                                overlapping_key_alias,
+                            ),
+                            (
+                                request_ids[2],
+                                sha256(deleted_key.encode()).hexdigest(),
+                                other_owner,
+                                deleted_key_alias,
+                            ),
+                            (request_ids[3], cli_session_alias, other_owner, cli_session_alias),
+                        ),
+                        session_id,
+                        started,
+                    )
+                gateway.post("/key/delete", {"keys": [deleted_key]})
+                date_filters: Final = {
+                    "start_date": started.strftime("%Y-%m-%d %H:%M:%S"),
+                    "end_date": (started + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+                for path in ("/spend/logs/ui", "/spend/logs/v2"):
+                    exact: Final = gateway.request(
+                        "GET",
+                        path,
+                        params={**date_filters, "key_alias": key_alias},
+                    )
+                    assert exact.status_code == 200, exact.text
+                    assert exact.json()["total"] == 1, exact.text
+                    assert [row["request_id"] for row in exact.json()["data"]] == [request_ids[0]], exact.text
+
+                    deleted: Final = gateway.request(
+                        "GET",
+                        path,
+                        params={**date_filters, "key_alias": deleted_key_alias},
+                    )
+                    assert deleted.status_code == 200, deleted.text
+                    assert deleted.json()["total"] == 1, deleted.text
+                    assert [row["request_id"] for row in deleted.json()["data"]] == [request_ids[2]], deleted.text
+
+                    cli_session: Final = gateway.request(
+                        "GET",
+                        path,
+                        params={**date_filters, "key_alias": cli_session_alias},
+                    )
+                    assert cli_session.status_code == 200, cli_session.text
+                    assert cli_session.json()["total"] == 1, cli_session.text
+                    assert [row["request_id"] for row in cli_session.json()["data"]] == [request_ids[3]], (
+                        cli_session.text
+                    )
+
+                    absent: Final = gateway.request(
+                        "GET",
+                        path,
+                        params={**date_filters, "key_alias": f"absent-{uuid.uuid4().hex}"},
+                    )
+                    assert absent.status_code == 200, absent.text
+                    assert absent.json()["total"] == 0, absent.text
+                    assert absent.json()["data"] == [], absent.text
+
+                foreign_alias: Final = gateway.request(
+                    "GET",
+                    "/spend/logs/ui",
+                    params={**date_filters, "key_alias": overlapping_key_alias},
+                    key=key,
+                )
+                assert foreign_alias.status_code == 200, foreign_alias.text
+                assert foreign_alias.json()["data"] == [], foreign_alias.text
+
+
+def _legacy_spend_rows(gateway: Gateway, key: str, params: dict[str, str]) -> list[dict[str, object]]:
+    response: Final = gateway.request("GET", "/spend/logs", key=key, params=params)
+    assert response.status_code == 200, response.text
+    return TypeAdapter(list[dict[str, object]]).validate_python(response.json())
+
+
+def _legacy_spend_status(gateway: Gateway, key: str, params: dict[str, str]) -> int:
+    return gateway.request("GET", "/spend/logs", key=key, params=params).status_code
+
+
+def test_legacy_spend_logs_refuse_internal_user_filters_outside_their_own_user(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        user_a: Final = scenario.user(user_role="internal_user")
+        user_b: Final = scenario.user(user_role="internal_user")
+        key_a: Final = scenario.key(user_id=user_a, models=[model])
+        key_b: Final = scenario.key(user_id=user_b, models=[model])
+        request_a: Final = _chat_request_id(gateway, model, key_a)
+        request_b: Final = _chat_request_id(gateway, model, key_b)
+        for request_id in (request_a, request_b):
+            eventually(
+                lambda request_id=request_id: read_rows(
+                    'SELECT request_id, "user" FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)
+                ),
+                lambda rows: len(rows) == 1,
+                seconds=70,
+            )
+
+        filtered: Final = _legacy_spend_rows(gateway, key_a, {"user_id": user_a})
+        assert {string_value(object_value(row)["request_id"]) for row in filtered} == {request_a}, filtered
+        hashed_key_b: Final = sha256(key_b.encode()).hexdigest()
+        for foreign_filter in ({"user_id": user_b}, {"api_key": key_b}, {"api_key": hashed_key_b}):
+            assert _legacy_spend_status(gateway, key_a, foreign_filter) == 403, foreign_filter
+
+        by_request: Final = _legacy_spend_rows(gateway, key_a, {"request_id": request_b})
+        assert by_request == [], by_request
+
+        now: Final = datetime.now(timezone.utc)
+        window: Final = {
+            "start_date": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "end_date": (now + timedelta(days=1)).strftime("%Y-%m-%d"),
+        }
+        summarized: Final = _legacy_spend_rows(gateway, key_a, {**window, "summarize": "true"})
+        assert user_b not in {name for row in summarized for name in object_value(object_value(row)["users"])}, (
+            summarized
+        )
+        assert sum(float(str(object_value(row)["spend"])) for row in summarized) == pytest.approx(0.06), summarized
+        unsummarized: Final = _legacy_spend_rows(gateway, key_a, {**window, "summarize": "false"})
+        assert unsummarized != [], unsummarized
+        assert {string_value(object_value(row)["user"]) for row in unsummarized} == {user_a}, unsummarized
+
+        master: Final = _legacy_spend_rows(gateway, gateway.key, {"user_id": user_b, "request_id": request_b})
+        assert [string_value(object_value(row)["request_id"]) for row in master] == [request_b], master
+        for api_key in (key_b, hashed_key_b):
+            admin_by_key = _legacy_spend_rows(gateway, gateway.key, {"api_key": api_key})
+            assert [
+                (string_value(object_value(row)["request_id"]), object_value(row)["user"]) for row in admin_by_key
+            ] == [(request_b, user_b)], admin_by_key
+        assert _legacy_spend_status(gateway, key_a, {**window, "summarize": "true", "api_key": key_b}) == 403
+        admin_summarized: Final = _legacy_spend_rows(
+            gateway, gateway.key, {**window, "summarize": "true", "api_key": key_b}
+        )
+        assert sum(float(str(object_value(row)["spend"])) for row in admin_summarized) == pytest.approx(0.06), (
+            admin_summarized
+        )
+        admin_users: Final = {
+            name: float(str(spend))
+            for row in admin_summarized
+            for name, spend in object_value(object_value(row)["users"]).items()
+        }
+        assert admin_users == pytest.approx({user_b: 0.06}), admin_summarized

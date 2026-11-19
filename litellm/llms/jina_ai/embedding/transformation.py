@@ -8,13 +8,14 @@ Docs - https://jina.ai/embeddings/
 
 import types
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final, Protocol, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm import LlmProviders
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -25,6 +26,14 @@ from litellm.utils import is_base64_encoded
 from ..common_utils import JinaAIError
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
@@ -42,9 +51,10 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -90,6 +100,13 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         )
         return LlmProviders.JINA_AI.value, api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -99,7 +116,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        return f"{api_base}/embeddings" if api_base else "https://api.jina.ai/v1/embeddings"
+        return ensure_api_route(api_base or "https://api.jina.ai/v1", "embeddings")
 
     def transform_embedding_request(
         self,
@@ -135,7 +152,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> EmbeddingResponse:
-        response_json: Final = raw_response.json()
+        response_json: Final = _json_body(raw_response)
         ## LOGGING
         logging_obj.post_call(
             input=input,

@@ -7,7 +7,6 @@ import pytest
 
 import litellm
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.llm_translation.test_rerank import assert_response_shape
 
 
 @pytest.mark.asyncio()
@@ -66,7 +65,8 @@ async def test_infinity_rerank():
         assert response.meta["tokens"]["input_tokens"] == 100
         assert response.meta["tokens"]["output_tokens"] == 50  # total_tokens - prompt_tokens
 
-        assert_response_shape(response, custom_llm_provider="infinity")
+        assert response.id == "cmpl-mockid"
+        assert response.results == [{"index": 0, "relevance_score": 0.95}]
 
 
 @pytest.mark.asyncio()
@@ -99,7 +99,8 @@ async def test_infinity_rerank_with_return_documents():
             api_base="https://api.infinity.ai",
         )
         assert response.results[0]["document"] == {"text": "hello"}
-        assert_response_shape(response, custom_llm_provider="infinity")
+        assert response.id == "cmpl-mockid"
+        assert response.results == [{"index": 0, "relevance_score": 0.95, "document": {"text": "hello"}}]
 
 
 @pytest.mark.asyncio()
@@ -161,7 +162,8 @@ async def test_infinity_rerank_with_env(monkeypatch):
         assert response.meta["tokens"]["input_tokens"] == 100
         assert response.meta["tokens"]["output_tokens"] == 50  # total_tokens - prompt_tokens
 
-        assert_response_shape(response, custom_llm_provider="infinity")
+        assert response.id == "cmpl-mockid"
+        assert response.results == [{"index": 0, "relevance_score": 0.95}]
 
 
 #### Embedding Tests

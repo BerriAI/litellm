@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT token\nFROM \"LiteLLM_JWTKeyMapping\"\nWHERE jwt_claim_name = $1\n  AND jwt_claim_value = $2\n  AND jwt_issuer = $3\n  AND is_active = true\nLIMIT 1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_JWTKeyMapping\"",
+            "name": "token"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cf919fae3c187b6441e84c531526b839312087b23888b1aa5d8c482483c9f581"
+}

@@ -1,16 +1,15 @@
 import io
 import os
 import pathlib
+import traceback
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
-
-import litellm
-from litellm.llms.base_llm.audio_transcription.transformation import (
-    AudioTranscriptionRequestData,
-)
+from litellm.llms.base_llm.audio_transcription.transformation import AudioTranscriptionRequestData
 from litellm.llms.deepgram.audio_transcription.transformation import (
     DeepgramAudioTranscriptionConfig,
 )
@@ -32,7 +31,6 @@ def test_file():
     pwd = os.path.dirname(os.path.realpath(__file__))
     pwd_path = pathlib.Path(pwd)
     test_root = pwd_path.parents[3]
-    print(f"test_root: {test_root}")
     file_path = os.path.join(test_root, "gettysburg.wav")
     f = open(file_path, "rb")
     content = f.read()
@@ -213,9 +211,7 @@ def test_get_complete_url_with_detect_language():
         optional_params={"detect_language": True},
         litellm_params={},
     )
-    expected_url = (
-        "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true"
-    )
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true"
     assert url == expected_url
 
 
@@ -336,9 +332,7 @@ def test_transform_response_with_diarization_and_paragraphs():
 
     assert isinstance(result, TranscriptionResponse)
     # Should use the pre-formatted paragraphs transcript
-    assert (
-        result.text == "\nSpeaker 0: Hello how are you\n\nSpeaker 1: I am fine thanks\n"
-    )
+    assert result.text == "\nSpeaker 0: Hello how are you\n\nSpeaker 1: I am fine thanks\n"
     assert result["task"] == "transcribe"
     assert result["duration"] == 15.0
 
@@ -536,9 +530,7 @@ def _deepgram_payload(alternative: dict[str, object], channel_fields: dict[str, 
 
 
 def _transform_deepgram_response(payload: object) -> TranscriptionResponse:
-    return DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(
-        httpx.Response(200, json=payload)
-    )
+    return DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(httpx.Response(200, json=payload))
 
 
 @pytest.mark.parametrize(
@@ -598,10 +590,33 @@ def test_transform_response_maps_words_to_openai_word_timestamps(words: object, 
         [{"word": "hello", "start": 0.0}],
     ],
 )
-def test_transform_response_wraps_malformed_words_with_the_raw_body(words: object):
+def test_transform_response_keeps_the_transcript_out_of_malformed_words_errors(words: object):
     raw_response = httpx.Response(200, json=_deepgram_payload({"transcript": "hello", "words": words}, {}))
 
     with pytest.raises(ValueError, match="Error transforming Deepgram response: ") as exc_info:
         DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
 
-    assert str(exc_info.value).endswith(f"\nResponse: {raw_response.text}")
+    assert "hello" not in "".join(traceback.format_exception(exc_info.value))
+
+
+@pytest.mark.parametrize(
+    ("payload", "failing_lookup_error"),
+    [
+        ({"results": None}, TypeError),
+        (_deepgram_payload({"transcript": "hello", "words": 5}, {}), TypeError),
+        ({**_deepgram_payload({"transcript": "hello"}, {}), "metadata": None}, TypeError),
+        (_deepgram_payload({"transcript": ["hello"]}, {}), ValidationError),
+    ],
+)
+def test_transform_response_wraps_the_error_of_the_failing_lookup_without_the_body(
+    payload: object, failing_lookup_error: type[Exception]
+):
+    raw_response: Final = httpx.Response(200, json=payload)
+
+    with pytest.raises(ValueError, match="Error transforming Deepgram response: ") as exc_info:
+        DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
+
+    failing_lookup: Final = exc_info.value.__context__
+    assert isinstance(failing_lookup, failing_lookup_error)
+    assert str(exc_info.value) == f"Error transforming Deepgram response: {failing_lookup}"
+    assert "hello" not in "".join(traceback.format_exception(exc_info.value))

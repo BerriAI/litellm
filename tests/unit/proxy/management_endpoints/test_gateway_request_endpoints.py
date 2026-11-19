@@ -1,42 +1,25 @@
-import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
-
-from tests._master_key import MASTER_KEY
-
-# Patching ``litellm.proxy.proxy_server.prisma_client`` imports that module, whose
-# module-level setup reads DATABASE_URL and LITELLM_MASTER_KEY. Tier-zero runners
-# set neither, so pin throwaways first, as test_component_allowlists.py does. The
-# prior values are restored below so a non-postgres URL cannot leak into sibling
-# tests sharing the xdist worker and make them treat a phantom database as live.
-_THROWAWAY_ENV = {
-    "DATABASE_URL": "sqlite:///:memory:",
-    "LITELLM_MASTER_KEY": MASTER_KEY,
-}
-_PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
-for _key, _value in _THROWAWAY_ENV.items():
-    os.environ.setdefault(_key, _value)
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from litellm.models.gateway_activity import GatewayRouteActivity, GatewayStatusCodeActivity
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.deps.repositories import get_gateway_activity_repository
 from litellm.proxy.management_endpoints.gateway_request_endpoints import (
-    _AggregateRow,
     _default_range,
     _fold_by_date,
     _fold_by_route,
+    _fold_by_status_code,
     get_gateway_daily_activity,
     router,
 )
-
-for _key, _previous in _PRE_EXISTING_ENV.items():
-    if _previous is None:
-        os.environ.pop(_key, None)
-    else:
-        os.environ[_key] = _previous
+from litellm.repositories.gateway_activity_repository import GatewayActivityRepository
 
 # The handler stamps "today" from the wall clock, so any assertion that names a
 # date has to pin it. Recomputing the expected range in the assertion instead
@@ -62,8 +45,9 @@ def _row(
     route: str = "/chat/completions",
     successful: int = 0,
     failed: int = 0,
-) -> _AggregateRow:
-    return _AggregateRow(
+) -> GatewayRouteActivity:
+    return GatewayRouteActivity(
+        kind="route",
         date=date,
         category=category,
         route=route,
@@ -76,10 +60,14 @@ def _admin() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
-def _prisma_returning(rows: list) -> MagicMock:
-    client = MagicMock()
+def _prisma_returning(rows: Sequence[Mapping[str, str | int | None]] | None) -> MagicMock:
+    client: Final = MagicMock()
     client.db = MagicMock()
-    client.db.query_raw = AsyncMock(return_value=rows)
+
+    async def query_raw(_query: str, *_args: str) -> Sequence[Mapping[str, str | int | None]] | None:
+        return rows
+
+    client.db.query_raw = AsyncMock(side_effect=query_raw)
     return client
 
 
@@ -155,6 +143,18 @@ class TestFoldByRoute:
         assert [entry.route for entry in _fold_by_route(tuple(reversed(rows)))] == expected
 
 
+class TestFoldByStatusCode:
+    def test_orders_by_failed_count_then_status_code(self):
+        folded: Final = _fold_by_status_code(
+            (
+                GatewayStatusCodeActivity(kind="status", status_code=503, failed_requests=1),
+                GatewayStatusCodeActivity(kind="status", status_code=500, failed_requests=2),
+                GatewayStatusCodeActivity(kind="status", status_code=429, failed_requests=2),
+            )
+        )
+        assert [(entry.status_code, entry.failed_requests) for entry in folded] == [(429, 2), (500, 2), (503, 1)]
+
+
 class TestGatewayDailyActivityEndpoint:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -167,11 +167,11 @@ class TestGatewayDailyActivityEndpoint:
         ],
     )
     async def test_refuses_every_non_admin_role(self, role):
-        with patch("litellm.proxy.proxy_server.prisma_client", _prisma_returning([])):
-            with pytest.raises(HTTPException) as exc:
-                await get_gateway_daily_activity(
-                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=role),
-                )
+        with pytest.raises(HTTPException) as exc:
+            await get_gateway_daily_activity(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=role),
+                activity=None,
+            )
         assert exc.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -180,62 +180,99 @@ class TestGatewayDailyActivityEndpoint:
         [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
     )
     async def test_serves_both_admin_roles(self, role):
-        with patch("litellm.proxy.proxy_server.prisma_client", _prisma_returning([])):
-            response = await get_gateway_daily_activity(
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=role),
-            )
+        response = await get_gateway_daily_activity(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=role),
+            activity=GatewayActivityRepository(_prisma_returning([])),
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+        )
         assert response.total_successful_requests == 0
 
     @pytest.mark.asyncio
     async def test_reports_db_not_connected_rather_than_crashing(self):
-        with patch("litellm.proxy.proxy_server.prisma_client", None):
-            with pytest.raises(HTTPException) as exc:
-                await get_gateway_daily_activity(user_api_key_dict=_admin())
+        with pytest.raises(HTTPException) as exc:
+            await get_gateway_daily_activity(user_api_key_dict=_admin(), activity=None)
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
-    async def test_totals_and_breakdowns_come_from_the_same_rows(self):
-        rows = [
+    async def test_mixed_route_and_status_rows_fold_into_totals_and_breakdowns(self):
+        rows: Final = (
             {
+                "kind": "route",
                 "date": "2026-08-03",
                 "category": "llm",
                 "route": "/chat/completions",
                 "successful_requests": 5,
                 "failed_requests": 1,
+                "status_code": None,
             },
             {
+                "kind": "route",
                 "date": "2026-08-04",
                 "category": "llm",
                 "route": "/chat/completions",
                 "successful_requests": 7,
                 "failed_requests": 3,
+                "status_code": None,
             },
             {
+                "kind": "route",
                 "date": "2026-08-04",
                 "category": "llm",
                 "route": "/embeddings",
                 "successful_requests": 4,
                 "failed_requests": 0,
+                "status_code": None,
             },
-        ]
-        with patch("litellm.proxy.proxy_server.prisma_client", _prisma_returning(rows)):
-            response = await get_gateway_daily_activity(user_api_key_dict=_admin())
+            {
+                "kind": "status",
+                "date": None,
+                "category": None,
+                "route": None,
+                "successful_requests": 0,
+                "failed_requests": 3,
+                "status_code": 429,
+            },
+            {
+                "kind": "status",
+                "date": None,
+                "category": None,
+                "route": None,
+                "successful_requests": 0,
+                "failed_requests": 1,
+                "status_code": 500,
+            },
+        )
+        prisma: Final = _prisma_returning(rows)
+        response: Final = await get_gateway_daily_activity(
+            user_api_key_dict=_admin(),
+            activity=GatewayActivityRepository(prisma),
+            start_date="2026-08-03",
+            end_date="2026-08-04",
+        )
 
         assert response.total_successful_requests == 16
         assert response.total_failed_requests == 4
         assert sum(entry.successful_requests for entry in response.by_date) == 16
         assert sum(entry.successful_requests for entry in response.by_route) == 16
+        assert [(entry.status_code, entry.failed_requests) for entry in response.by_status_code] == [(429, 3), (500, 1)]
         assert [entry.date for entry in response.by_date] == ["2026-08-03", "2026-08-04"]
         assert [entry.route for entry in response.by_route] == ["/chat/completions", "/embeddings"]
 
     @pytest.mark.asyncio
     async def test_a_null_result_set_is_not_an_error(self):
         client = _prisma_returning(None)
-        with patch("litellm.proxy.proxy_server.prisma_client", client):
-            response = await get_gateway_daily_activity(user_api_key_dict=_admin())
+        response = await get_gateway_daily_activity(
+            user_api_key_dict=_admin(),
+            activity=GatewayActivityRepository(client),
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+        )
         assert response.total_successful_requests == 0
         assert response.by_date == ()
         assert response.by_route == ()
+        assert response.by_status_code == ()
+
 
 class TestGatewayDailyActivityRoute:
     """
@@ -252,43 +289,52 @@ class TestGatewayDailyActivityRoute:
         app = FastAPI()
         app.include_router(router)
         app.dependency_overrides[user_api_key_auth] = _admin
-        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-            response = TestClient(app).get(
-                "/gateway/daily/activity",
-                params={"start_date": "2026-01-01", "end_date": "2026-01-31"},
-            )
+        app.dependency_overrides[get_gateway_activity_repository] = lambda: GatewayActivityRepository(prisma)
+        response = TestClient(app).get(
+            "/gateway/daily/activity",
+            params={"start_date": "2026-01-01", "end_date": "2026-01-31"},
+        )
         assert response.status_code == 200
-        _, start, end = prisma.db.query_raw.call_args.args
-        assert (start, end) == ("2026-01-01", "2026-01-31")
+        assert prisma.db.query_raw.call_args_list[0].args[1:] == ("2026-01-01", "2026-01-31")
 
     def test_omitted_dates_fall_back_to_the_default_window(self, frozen_clock):
         prisma = _prisma_returning([])
         app = FastAPI()
         app.include_router(router)
         app.dependency_overrides[user_api_key_auth] = _admin
-        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-            response = TestClient(app).get("/gateway/daily/activity")
+        app.dependency_overrides[get_gateway_activity_repository] = lambda: GatewayActivityRepository(prisma)
+        response = TestClient(app).get("/gateway/daily/activity")
         assert response.status_code == 200
-        _, start, end = prisma.db.query_raw.call_args.args
-        assert (start, end) == _FROZEN_RANGE
+        assert prisma.db.query_raw.call_args_list[0].args[1:] == _FROZEN_RANGE
 
     def test_serialized_response_carries_the_documented_shape(self):
-        prisma = _prisma_returning(
+        prisma: Final = _prisma_returning(
             [
                 {
+                    "kind": "route",
                     "date": "2026-08-04",
                     "category": "llm",
                     "route": "/chat/completions",
                     "successful_requests": 7,
                     "failed_requests": 3,
-                }
+                    "status_code": None,
+                },
+                {
+                    "kind": "status",
+                    "date": None,
+                    "category": None,
+                    "route": None,
+                    "successful_requests": 0,
+                    "failed_requests": 3,
+                    "status_code": 500,
+                },
             ]
         )
-        app = FastAPI()
+        app: Final = FastAPI()
         app.include_router(router)
         app.dependency_overrides[user_api_key_auth] = _admin
-        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-            body = TestClient(app).get("/gateway/daily/activity").json()
+        app.dependency_overrides[get_gateway_activity_repository] = lambda: GatewayActivityRepository(prisma)
+        body: Final = TestClient(app).get("/gateway/daily/activity").json()
 
         assert body == {
             "total_successful_requests": 7,
@@ -302,4 +348,5 @@ class TestGatewayDailyActivityRoute:
                     "failed_requests": 3,
                 }
             ],
+            "by_status_code": [{"status_code": 500, "failed_requests": 3}],
         }

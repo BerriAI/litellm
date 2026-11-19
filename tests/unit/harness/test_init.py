@@ -34,6 +34,7 @@ PUBLIC_NAMES = [
     "ClaudeCodeOptions",
     "CodexOptions",
     "OpenCodeOptions",
+    "PiOptions",
     "DeepAgentsOptions",
     "ToolLoopOptions",
     "HarnessError",

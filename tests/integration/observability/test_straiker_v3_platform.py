@@ -10,9 +10,6 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
-import os
-import signal
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -30,8 +27,11 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
+from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 V3_KEY: Final = "sk_agt_synthetic_integration_key"
 V1_KEY: Final = "synthetic-v1-collection-key"
@@ -54,6 +54,7 @@ LOG_AGENT: Final = "log-agent"
 OPEN_AGENT: Final = "open-agent"
 BLOCK_MESSAGE: Final = "Straiker blocked this turn: prompt-injection"
 DENY_MESSAGE: Final = "Straiker denied this turn"
+BLOCKED_REPLY: Final = (200, "content_filter", BLOCK_MESSAGE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -428,15 +429,14 @@ class Rig:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     root: Final = tmp_path_factory.mktemp("straiker")
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = reserve.getsockname()[1]
-    sink: Final = Sink(port)
+    sink: Final = Sink(allocate_port())
     sink.start()
     with gateway_from_environment() as gateway, wire_server(_provider) as provider:
         config: Final = _rig_config(sink.url, root)
         with (
-            owned_proxy_process(gateway, root, {}, config=config, workers=2) as owned,
+            owned_proxy_process(
+                gateway, root, {}, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT
+            ) as owned,
             owned.gateway.scenario() as scenario,
         ):
             chat: Final = scenario.model(
@@ -467,6 +467,13 @@ def _chat(
         json={"model": rig.chat_model, "messages": _messages(text), **extra},
         headers={"Authorization": f"Bearer {key or rig.proxy.key}", **(headers or {})},
     )
+
+
+def _chat_reply(response: httpx.Response) -> tuple[int, str | None, str | None]:
+    if response.status_code != 200:
+        return response.status_code, None, None
+    choice: Final = response.json()["choices"][0]
+    return response.status_code, choice["finish_reason"], choice["message"]["content"]
 
 
 def _v3_request_calls(rig: Rig, marker: str, agent: str | None = AUDIT_AGENT) -> tuple[Seen, ...]:
@@ -524,14 +531,38 @@ def test_v3_pre_call_allow_relays_provider_body_and_key_identity(rig: Rig) -> No
     assert row["model"] == "openai/gpt-4o-mini", row
 
 
-# H2: v3 block verdict on the request phase blocks with the platform's message
-def test_v3_block_verdict_returns_400_with_block_message_and_no_provider_call(rig: Rig) -> None:
+# H2: v3 block verdict on the request phase is answered with the platform's message, as an answer-side block is
+def test_v3_block_verdict_replies_with_block_message_and_no_provider_call(rig: Rig) -> None:
     marker: Final = rig.marker()
     response: Final = _chat(rig, f"{BLOCK_MARK} {marker}")
+    assert _chat_reply(response) == BLOCKED_REPLY, response.text
+    assert len(_v3_request_calls(rig, marker)) == 1
+    assert rig.provider_calls(marker, rig.provider_drain()) == ()
+
+
+# H2b: /guardrails/apply_guardrail has no reply to send, so a block verdict there is an HTTP 400 with the message
+def test_v3_block_verdict_on_apply_guardrail_is_a_400_with_the_block_message(rig: Rig) -> None:
+    marker: Final = rig.marker()
+    response: Final = rig.proxy.client.post(
+        "/guardrails/apply_guardrail",
+        json={"guardrail_name": "straiker-v3", "text": f"{BLOCK_MARK} {marker}"},
+        headers={"Authorization": f"Bearer {rig.proxy.key}"},
+    )
     assert response.status_code == 400, response.text
     assert response.json()["error"]["message"] == BLOCK_MESSAGE, response.text
     assert len(_v3_request_calls(rig, marker)) == 1
-    assert rig.provider_calls(marker, rig.provider_drain()) == ()
+
+
+# H2c: an answer checked through /guardrails/apply_guardrail is blocked with HTTP 400 too, not 500
+def test_v3_block_verdict_on_an_answer_through_apply_guardrail_is_a_400(rig: Rig) -> None:
+    marker: Final = rig.marker()
+    response: Final = rig.proxy.client.post(
+        "/guardrails/apply_guardrail",
+        json={"guardrail_name": "straiker-v3", "text": f"{BLOCK_MARK} {marker}", "input_type": "response"},
+        headers={"Authorization": f"Bearer {rig.proxy.key}"},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["message"] == BLOCK_MESSAGE, response.text
 
 
 # H3: a resend of a blocked conversation is blocked by the process that saw the block, without a second detect call
@@ -539,13 +570,11 @@ def test_v3_blocked_conversation_replays_block_without_asking_again(rig: Rig) ->
     marker: Final = rig.marker()
     session: Final = {"x-claude-code-session-id": "session-" + marker}
     first: Final = _chat(rig, f"{BLOCK_MARK} {marker}", headers=session)
-    assert first.status_code == 400, first.text
+    assert _chat_reply(first) == BLOCKED_REPLY, first.text
     baseline: Final = len(_v3_request_calls(rig, marker))
     assert baseline == 1
     outcomes: Final = tuple(_chat(rig, f"{BLOCK_MARK} {marker}", headers=session) for _ in range(6))
-    assert all(r.status_code == 400 and r.json()["error"]["message"] == BLOCK_MESSAGE for r in outcomes), [
-        r.text for r in outcomes
-    ]
+    assert all(_chat_reply(r) == BLOCKED_REPLY for r in outcomes), [r.text for r in outcomes]
     later: Final = len(_v3_request_calls(rig, marker))
     # Two workers: only the worker that saw the block replays from memory, the other asks Straiker once
     assert baseline <= later <= 2, later
@@ -558,7 +587,7 @@ def test_v3_blocked_conversation_replays_block_without_asking_again(rig: Rig) ->
         },
         headers={"Authorization": f"Bearer {rig.proxy.key}", **session},
     )
-    assert grown.status_code == 400, grown.text
+    assert _chat_reply(grown) == BLOCKED_REPLY, grown.text
     assert rig.provider_calls(marker, rig.provider_drain()) == ()
 
 
@@ -567,7 +596,7 @@ def test_v3_killswitch_block_is_not_remembered(rig: Rig) -> None:
     marker: Final = rig.marker()
     session: Final = {"x-claude-code-session-id": "session-" + marker}
     outcomes: Final = tuple(_chat(rig, f"{KILL_MARK} {marker}", headers=session) for _ in range(3))
-    assert all(r.status_code == 400 and r.json()["error"]["message"] == BLOCK_MESSAGE for r in outcomes)
+    assert all(_chat_reply(r) == BLOCKED_REPLY for r in outcomes), [r.text for r in outcomes]
     assert len(_v3_request_calls(rig, marker)) == 3
 
 
@@ -575,8 +604,7 @@ def test_v3_killswitch_block_is_not_remembered(rig: Rig) -> None:
 def test_v3_flat_deny_decision_blocks_with_deny_reason(rig: Rig) -> None:
     marker: Final = rig.marker()
     response: Final = _chat(rig, f"{DENY_MARK} {marker}")
-    assert response.status_code == 400, response.text
-    assert response.json()["error"]["message"] == DENY_MESSAGE
+    assert _chat_reply(response) == (200, "content_filter", DENY_MESSAGE), response.text
 
 
 # H5: post_call non-streaming, selected per request, async OpenAI SDK
@@ -768,8 +796,7 @@ def test_v1_key_keeps_webhook_envelope_and_format_header(rig: Rig) -> None:
 def test_v1_block_verdict_still_blocks(rig: Rig) -> None:
     marker: Final = rig.marker()
     response: Final = _chat(rig, f"{V1_BLOCK_MARK} {marker}", guardrails=["straiker-v1"])
-    assert response.status_code == 400, response.text
-    assert response.json()["error"]["message"] == BLOCK_MESSAGE
+    assert _chat_reply(response) == BLOCKED_REPLY, response.text
     assert len(_v1_calls(rig, marker, V1_KEY)) == 1, rig.sink_calls(marker)
     assert rig.provider_calls(marker, rig.provider_drain()) == ()
 
@@ -794,8 +821,7 @@ def test_saved_api_version_v1_with_v3_key_routes_to_v3_not_the_v1_webhook(rig: R
 
     blocked_marker: Final = rig.marker()
     blocked: Final = _chat(rig, f"{STRAY_V3_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v3-as-v1"])
-    assert blocked.status_code == 400, blocked.text
-    assert blocked.json()["error"]["message"] == BLOCK_MESSAGE, blocked.text
+    assert _chat_reply(blocked) == BLOCKED_REPLY, blocked.text
     assert len(_v3_request_calls(rig, blocked_marker, agent=None)) == 1, rig.sink_calls(blocked_marker)
     assert _v1_calls(rig, blocked_marker, V3_KEY) == ()
     assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
@@ -810,8 +836,7 @@ def test_stray_api_version_with_v3_key_still_enforces_on_v3(rig: Rig) -> None:
 
     blocked_marker: Final = rig.marker()
     blocked: Final = _chat(rig, f"{STRAY_V3_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v3-stray-version"])
-    assert blocked.status_code == 400, blocked.text
-    assert blocked.json()["error"]["message"] == BLOCK_MESSAGE, blocked.text
+    assert _chat_reply(blocked) == BLOCKED_REPLY, blocked.text
     assert len(_v3_request_calls(rig, blocked_marker, agent=None)) == 1
     assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
 
@@ -825,8 +850,7 @@ def test_empty_api_version_with_v1_key_still_enforces_on_v1(rig: Rig) -> None:
 
     blocked_marker: Final = rig.marker()
     blocked: Final = _chat(rig, f"{V1_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v1-empty-version"])
-    assert blocked.status_code == 400, blocked.text
-    assert blocked.json()["error"]["message"] == BLOCK_MESSAGE, blocked.text
+    assert _chat_reply(blocked) == BLOCKED_REPLY, blocked.text
     assert len(_v1_calls(rig, blocked_marker, V1_KEY)) == 1
     assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
 
@@ -1070,23 +1094,30 @@ def test_burst_with_platform_outage_recovers_without_duplicate_spend(rig: Rig) -
 
 
 # C2: one proxy worker is killed during a burst; the other keeps serving and detect still runs for each call
-def _is_live_worker(child: psutil.Process, exclude: int) -> bool:
-    if child.pid == exclude:
-        return False
-    try:
-        return child.status() != psutil.STATUS_ZOMBIE and "spawn_main" in " ".join(child.cmdline())
-    except psutil.Error:
-        return False
-
-
-def _uvicorn_workers(parent: psutil.Process, *, exclude: int = 0) -> tuple[psutil.Process, ...]:
-    return tuple(c for c in parent.children() if _is_live_worker(c, exclude))
+def test_an_unreaped_worker_does_not_hide_the_surviving_proxy_worker(rig: Rig) -> None:
+    workers: Final = tuple(sorted(eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2)))
+    victim: Final = workers[0]
+    survivor: Final = workers[1]
+    marker: Final = rig.marker()
+    with rig.owned.replacing_worker(victim) as kill, rig.owned.suspended(rig.owned.process.pid):
+        kill()
+        assert eventually(psutil.Process(victim).status, lambda status: status == psutil.STATUS_ZOMBIE) == (
+            psutil.STATUS_ZOMBIE
+        )
+        assert rig.owned.worker_pids() == frozenset((survivor,))
+        with httpx.Client(base_url=rig._base(), timeout=15, trust_env=False) as client:
+            response: Final = client.post(
+                "/v1/chat/completions",
+                json={"model": rig.chat_model, "messages": _messages(marker)},
+                headers={"Authorization": f"Bearer {rig.proxy.key}"},
+            )
+        assert response.status_code == 200, response.text
+        assert len(_v3_request_calls(rig, marker)) == 1
+    assert len(rig.owned.worker_pids() - frozenset((victim,))) == 2
 
 
 def test_burst_survives_one_worker_kill(rig: Rig) -> None:
-    parent: Final = psutil.Process(rig.owned.process.pid)
-    workers: Final = eventually(lambda: _uvicorn_workers(parent), lambda c: len(c) >= 2)
-    victim: Final = workers[0].pid
+    workers: Final = tuple(sorted(eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2)))
     markers: Final = tuple(rig.marker() for _ in range(24))
 
     def fresh_chat(text: str) -> tuple[int, str]:
@@ -1101,18 +1132,19 @@ def test_burst_survives_one_worker_kill(rig: Rig) -> None:
                 return 0, repr(error)
         return response.status_code, response.text
 
-    def call(index: int) -> tuple[int, str]:
-        if index == 6:
-            os.kill(victim, signal.SIGKILL)
-        return fresh_chat("kill " + markers[index])
+    with rig.owned.replacing_worker(workers[0]) as kill:
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results: Final = tuple(pool.map(call, range(24)))
+        def call(index: int) -> tuple[int, str]:
+            if index == 6:
+                kill()
+            return fresh_chat("kill " + markers[index])
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results: Final = tuple(pool.map(call, range(24)))
     ok: Final = tuple(i for i, (status, _) in enumerate(results) if status == 200)
     assert len(ok) >= 20, results
     for index in ok:
         assert len(_v3_request_calls(rig, markers[index])) >= 1, markers[index]
-    eventually(lambda: _uvicorn_workers(parent, exclude=victim), lambda c: len(c) >= 2)
     after: Final = fresh_chat("after-kill " + rig.marker())
     assert after[0] == 200, after
 
@@ -1128,15 +1160,15 @@ def test_proxy_restart_forgets_blocked_turns_and_asks_platform_again(tmp_path: P
             blocked: Final = first.client.post(
                 "/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {first.key}", **session}
             )
-            assert blocked.status_code == 400, blocked.text
+            assert _chat_reply(blocked) == BLOCKED_REPLY, blocked.text
             replayed: Final = first.client.post(
                 "/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {first.key}", **session}
             )
-            assert replayed.status_code == 400, replayed.text
+            assert _chat_reply(replayed) == BLOCKED_REPLY, replayed.text
             assert len(_v3_request_calls(rig, marker)) == 1, "one worker replays from memory"
         with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as second:
             again: Final = second.client.post(
                 "/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {second.key}", **session}
             )
-            assert again.status_code == 400, again.text
+            assert _chat_reply(again) == BLOCKED_REPLY, again.text
         assert len(_v3_request_calls(rig, marker)) == 2, "a restarted process has no memory and asks once more"

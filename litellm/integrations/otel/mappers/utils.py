@@ -7,10 +7,29 @@ they live in one place.
 
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue
 from litellm.integrations.otel.model.payloads import LLMCallSpanData, ToolDefinition
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+
+@dataclass(frozen=True, slots=True)
+class MessageToolCall:
+    id: str | None
+    type: str
+    name: str | None
+    arguments: str | None
+
+    def to_openai_dict(self) -> Mapping[str, object]:
+        return {
+            "id": self.id,
+            "type": self.type,
+            "function": {"name": self.name, "arguments": self.arguments},
+        }
+
 
 DEFAULT_SPAN_ATTRIBUTE_LIMIT: Final = 128
 """The OTel SDK's default per-span attribute count limit."""
@@ -121,3 +140,51 @@ def message_content(message: object) -> str | None:
 def output_messages(data: LLMCallSpanData) -> list:
     """The ``message`` payload of each response choice."""
     return [c.get("message") for c in data.choices_out if isinstance(c, dict)]
+
+
+def message_tool_calls(message: object) -> tuple[MessageToolCall, ...]:
+    tool_call_values: Final = (
+        *anthropic_server_tool_call_params(message),
+        *parts_of(message_field(message, "tool_calls")),
+    )
+    if not isinstance(message, dict):
+        return ()
+    return tuple(tool_call for value in tool_call_values if (tool_call := _message_tool_call(value)) is not None)
+
+
+def _message_tool_call(value: object) -> MessageToolCall | None:
+    if not isinstance(value, dict):
+        return None
+    function: Final = value.get("function")
+    function_data: Final = function if isinstance(function, dict) else {}
+    raw_type: Final = value.get("type")
+    raw_arguments: Final = function_data.get("arguments")
+    arguments: Final = (
+        raw_arguments
+        if isinstance(raw_arguments, str)
+        else _stringify_tool_arguments(raw_arguments)
+        if raw_arguments is not None
+        else None
+    )
+    name: Final = function_data.get("name")
+    identifier: Final = value.get("id")
+    return MessageToolCall(
+        id=identifier if isinstance(identifier, str) else None,
+        type=raw_type if isinstance(raw_type, str) else "function",
+        name=name if isinstance(name, str) else None,
+        arguments=arguments,
+    )
+
+
+def _stringify_tool_arguments(value: object) -> str:
+    """Serialize non-string tool-call arguments, falling back to ``repr``.
+
+    Arguments normally arrive as already-JSON strings, but provider adapters and
+    ``model_construct`` responses hand over raw Python objects. ``json.dumps``
+    raises on those (tuple-keyed dicts, cycles) and the escaping exception would
+    lose the whole span, so keep a readable ``repr`` instead.
+    """
+    try:
+        return json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        return repr(value)

@@ -72,12 +72,13 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         Also stamps that model onto ``_hidden_params`` so downstream consumers (spend logs,
         response restamping) can read it instead of guessing the route from the model string.
         """
+        from litellm.litellm_core_utils.hidden_params import (
+            get_hidden_params,
+            set_hidden_params,
+        )
         from litellm.llms.azure_ai.common_utils import (
             AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
             AzureFoundryModelInfo,
-        )
-        from litellm.router_utils.add_retry_fallback_headers import (
-            get_hidden_params_dict,
         )
 
         # Get base model for the parent call (strips routing prefixes for API compatibility)
@@ -100,12 +101,14 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         )
         selected_model: Final = transformed_response.model
         if selected_model:
-            # Rebuilt rather than mutated in place: ModelResponseBase declares _hidden_params as a
-            # class-level dict, so an in-place write can bleed into unrelated responses.
-            transformed_response._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
-                **get_hidden_params_dict(transformed_response),
-                AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model,
-            }
+            transformed_hidden_params: Final = get_hidden_params(transformed_response) or {}
+            set_hidden_params(
+                transformed_response,
+                {
+                    **transformed_hidden_params,
+                    AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model,
+                },
+            )
         return transformed_response
 
     def calculate_additional_costs(self, model: str, prompt_tokens: int, completion_tokens: int) -> dict | None:

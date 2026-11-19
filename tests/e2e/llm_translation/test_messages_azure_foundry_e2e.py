@@ -14,6 +14,7 @@ import pytest
 from anthropic.types import RawMessageStreamEvent, ToolParam
 
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -56,6 +57,15 @@ class TestAzureFoundryMessages:
         return model
 
     @pytest.mark.covers("llm.messages.azure_foundry.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_basic_nonstream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
@@ -71,6 +81,15 @@ class TestAzureFoundryMessages:
         assert text.strip(), f"/v1/messages returned no text: {message.content!r}"
 
     @pytest.mark.covers("llm.messages.azure_foundry.basic.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_basic_stream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
@@ -85,6 +104,16 @@ class TestAzureFoundryMessages:
         _assert_streamed_ok([event.type for event in stream])
 
     @pytest.mark.covers("llm.messages.azure_foundry.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_tool_use_nonstream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
@@ -102,6 +131,16 @@ class TestAzureFoundryMessages:
         )
 
     @pytest.mark.covers("llm.messages.azure_foundry.tool_use.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_tool_use_stream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
@@ -122,6 +161,16 @@ class TestAzureFoundryMessages:
         ), "stream carried no tool_use block"
         assert "message_stop" in event_types, "stream never reached message_stop"
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_output_format_returns_schema_json(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:

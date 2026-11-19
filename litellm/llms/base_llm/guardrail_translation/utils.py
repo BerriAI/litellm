@@ -4,10 +4,16 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
-from pydantic import BaseModel
+from openai.types.responses import ResponseFunctionWebSearch
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.types.llms.anthropic import claude_hosted_web_tool_call
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
+from litellm.types.responses.main import with_hosted_web_tool_arguments
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _anthropic_stream_chunk_events(item: object) -> list[dict]:
@@ -22,7 +28,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
 
     events: Final[list[dict]] = []
     for block in chunk.split("\n\n"):
-        for line in block.splitlines():
+        for line in split_sse_lines(block):
             stripped = line.strip()
             if not stripped.startswith("data:"):
                 continue
@@ -30,7 +36,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
             if not payload or payload == "[DONE]":
                 continue
             try:
-                parsed = json.loads(payload)
+                parsed = _DECODED_JSON.validate_python(json.loads(payload))
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict):
@@ -130,6 +136,36 @@ def stream_item_field(item: object, field: str) -> object | None:
     if isinstance(item, dict):
         return item.get(field)
     return getattr(item, field, None)
+
+
+def web_search_call(item: object) -> ResponseFunctionWebSearch | None:
+    if isinstance(item, ResponseFunctionWebSearch):
+        return item
+    if stream_item_field(item, "type") != "web_search_call":
+        return None
+    try:
+        return ResponseFunctionWebSearch.model_validate(item.model_dump() if isinstance(item, BaseModel) else item)
+    except ValidationError:
+        return None
+
+
+def claude_hosted_web_tool_arguments(item: object) -> str | None:
+    search: Final = web_search_call(item)
+    hosted_call: Final = None if search is None else claude_hosted_web_tool_call(search)
+    return None if hosted_call is None else hosted_call[2]
+
+
+def with_web_search_call_arguments(item: object, arguments: str) -> object:
+    search: Final = web_search_call(item)
+    if search is None:
+        return item
+    action: Final = with_hosted_web_tool_arguments(search.action, arguments)
+    if isinstance(item, ResponseFunctionWebSearch):
+        return item.model_copy(update={"action": action})
+    if isinstance(item, BaseModel):
+        return item.model_copy(update={"action": action.model_dump()})
+    fields: Final = cast("Mapping[str, object]", item)  # cast-ok: a validated web_search_call dict is str-keyed JSON
+    return {**fields, "action": action.model_dump()}
 
 
 def stream_item_fingerprint(item: object) -> str:
@@ -290,6 +326,17 @@ def openai_tool_name(tool: object) -> str | None:
         return function_name if isinstance(function_name, str) else None
     flat_name: Final = tool.get("name")
     return flat_name if isinstance(flat_name, str) else None
+
+
+_FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))
+_ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
+
+
+def list_field(data: object, key: str) -> Sequence[object]:
+    try:
+        return _ITEMS.validate_python(_FIELDS.validate_python(data).get(key))
+    except ValidationError:
+        return ()
 
 
 def anthropic_tool_names(tool: object) -> tuple[str, ...]:

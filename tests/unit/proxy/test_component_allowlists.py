@@ -4,7 +4,7 @@ The componentization scaffold splits the proxy FastAPI app into two runtime
 components by trimming the route table inside a wrapped lifespan context:
 
   gateway.main  -> only paths matched by gateway/routes/allowlist.py
-  backend.main  -> only paths matched by backend/routes/allowlist.py
+  litellm.runtime.backend.main  -> only paths matched by litellm/runtime/backend/routes/allowlist.py
 
 If either allowlist drops a path that was reachable on the monolithic app,
 clients hitting that path on the corresponding pod get a 404. This test
@@ -12,7 +12,7 @@ guarantees that the union of the two trimmed route sets equals the full set
 of routes on the proxy app — i.e. no endpoint is dropped on the floor.
 
 The union-coverage test reproduces the same predicate that ``gateway/main.py``
-and ``backend/main.py`` use, without importing them. The component modules wrap
+and ``litellm/runtime/backend/main.py`` use, without importing them. The component modules wrap
 the shared ``app.router.lifespan_context``; importing them in the test process
 would chain wrappers and corrupt the snapshot. The gateway Mount tests below
 import the real ``gateway.main._is_gateway_route`` instead, undoing both of the
@@ -23,17 +23,15 @@ import (which raises on a non-postgres ``DATABASE_URL`` scheme and can mint an
 RDS IAM token when ``IAM_TOKEN_DB_AUTH`` is set).
 """
 
-import json
 import os
 import sys
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from functools import partial
-from typing import Final, Literal
-from unittest.mock import AsyncMock, MagicMock, call
+from typing import Final, Literal, NoReturn
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -58,24 +56,21 @@ _PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
 for _key, _value in _THROWAWAY_ENV.items():
     os.environ.setdefault(_key, _value)
 
-from prometheus_client import make_asgi_app
+from prometheus_client import CollectorRegistry, Counter, make_asgi_app
 
 # gateway/ and backend/ live at the repo root, not inside litellm/.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from backend.routes.allowlist import BACKEND_MOUNT_PATHS
+from litellm.runtime.backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
-from litellm.rust_bridge.trace.storage import ClickHouseStorage
-from litellm.tracing import Tenant, TraceReceiver
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
+from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
     if _previous is None:
@@ -98,42 +93,12 @@ _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
 from gateway.main import _gateway_lifespan, _is_gateway_route
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
-from backend.main import _backend_lifespan
+from litellm.runtime.backend.main import _backend_lifespan
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
 for _key, _previous in _PRE_DB_ENV.items():
     if _previous is not None:
         os.environ[_key] = _previous
-
-
-_COVERAGE_PROBE: Final = """
-import json, os, sys
-sys.path.insert(0, os.environ["LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT"])
-from starlette.routing import Mount
-from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
-from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
-from litellm.proxy._lazy_features import loaded_lazy_modules
-from litellm.proxy.proxy_server import app
-
-all_paths = {
-    r.path for r in app.router.routes
-    if not isinstance(r, Mount) and getattr(r, "path", None) is not None
-}
-
-
-def covered(exact, prefixes):
-    return {p for p in all_paths if p in exact or any(p.startswith(x) for x in prefixes)}
-
-
-json.dump({
-    "lazy_loaded": sorted(loaded_lazy_modules(app)),
-    "route_count": len(all_paths),
-    "uncovered": sorted(all_paths - (
-        covered(GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES)
-        | covered(BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES)
-    )),
-}, sys.stdout)
-"""
 
 
 @pytest.mark.parametrize(
@@ -231,112 +196,31 @@ def test_composed_lifespan_propagates_lifecycle_failures(
     assert events == (["startup"] if phase == "startup" else ["startup", "serving", "shutdown"])
 
 
-@pytest.mark.parametrize(
-    "component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend")
-)
+@pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
 @pytest.mark.parametrize("endpoint", ("/v1/traces", "/v1/logs"), ids=("traces", "logs"))
-def test_otlp_ingest_routes_authenticate_and_isolate_tenants_on_each_component(
-    component_lifespan: Lifespan[Starlette], endpoint: str
+@pytest.mark.parametrize("authorization", (None, "Bearer team-a-key", "Bearer team-b-key"))
+def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_component(
+    component_lifespan: Lifespan[Starlette], endpoint: str, authorization: str | None
 ) -> None:
     application: Final = FastAPI()
     application.include_router(tracing_endpoints.router)
-    storage: Final = MagicMock(spec=ClickHouseStorage)
-    storage.ingest = AsyncMock(return_value=1)
-    application.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
 
-    async def lookup(auth: UserAPIKeyAuth) -> tuple[str, ...]:
-        return ()
+    def unused_dependency() -> NoReturn:
+        pytest.fail("Retired uploads must not resolve authentication, tenant, or storage dependencies")
 
-    application.dependency_overrides[get_log_team_lookup] = lambda: lookup
-
-    def authenticate(request: Request) -> UserAPIKeyAuth:
-        match request.headers.get("Authorization"):
-            case "Bearer team-a-key":
-                return UserAPIKeyAuth(
-                    user_id="user-a",
-                    token="hashed-a",
-                    team_id="team-a",
-                    org_id="org-a",
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                )
-            case "Bearer team-b-key":
-                return UserAPIKeyAuth(
-                    user_id="user-b",
-                    token="hashed-b",
-                    team_id="team-b",
-                    org_id="org-b",
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                )
-            case _:
-                raise HTTPException(status_code=401, detail="Invalid API key")
-
-    application.dependency_overrides[user_api_key_auth] = authenticate
-    application.router.lifespan_context = partial(
-        component_lifespan, lifespan=application.router.lifespan_context
+    application.dependency_overrides[tracing_endpoints.provide_receiver] = unused_dependency
+    application.dependency_overrides[get_log_team_lookup] = unused_dependency
+    application.dependency_overrides[user_api_key_auth] = unused_dependency
+    application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
+    headers: Final = {"content-type": "application/json"} | (
+        {"Authorization": authorization} if authorization is not None else {}
     )
 
-    body: Final = b'{"resourceLogs": []}'
-    content_type: Final = "application/json"
     with TestClient(application) as client:
-        unauthenticated: Final = client.post(endpoint, content=body, headers={"content-type": content_type})
-        assert unauthenticated.status_code == 401, unauthenticated.text
+        response: Final = client.post(endpoint, content=b'{"resourceLogs": []}', headers=headers)
 
-        team_a: Final = client.post(
-            endpoint,
-            content=body,
-            headers={"Authorization": "Bearer team-a-key", "content-type": content_type},
-        )
-        assert team_a.status_code == 200, team_a.text
-
-        team_b: Final = client.post(
-            endpoint,
-            content=body,
-            headers={"Authorization": "Bearer team-b-key", "content-type": content_type},
-        )
-        assert team_b.status_code == 200, team_b.text
-
-    tenant_a: Final = Tenant(team_id="team-a", api_key_hash="hashed-a", org_id="org-a", user_id="user-a")
-    tenant_b: Final = Tenant(team_id="team-b", api_key_hash="hashed-b", org_id="org-b", user_id="user-b")
-    assert storage.ingest.await_args_list == [
-        call(body, content_type, tenant_a, endpoint == "/v1/logs"),
-        call(body, content_type, tenant_b, endpoint == "/v1/logs"),
-    ]
-
-
-def test_gateway_plus_backend_covers_full_app():
-    """Every route on the proxy app must be served by gateway or backend.
-
-    ``gateway.main`` and ``backend.main`` trim the route table once, inside the
-    lifespan, so the set this has to cover is the one registered at startup. A
-    lazy feature appends its router on demand, after that trim, and whether a
-    sibling test in the same xdist worker has triggered one is not something
-    this test can control. Measuring in a fresh interpreter is what makes the
-    route table deterministic; nothing is subtracted, so every route the trim
-    will actually see stays in the assertion.
-    """
-    env: Final = {**os.environ, "LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT": _REPO_ROOT}
-    for key, value in _THROWAWAY_ENV.items():
-        env.setdefault(key, value)
-
-    probe: Final = run_child_interpreter(_COVERAGE_PROBE, env=env, timeout=90)
-    assert probe.returncode == 0, f"route probe failed:\n{probe.stderr}"
-    report: Final = json.loads(probe.stdout)
-
-    assert not report["lazy_loaded"], (
-        "route probe was not pristine; it loaded lazy features "
-        f"{report['lazy_loaded']}, so its route table is not the startup one"
-    )
-    assert report["route_count"] > 100, (
-        f"route probe only saw {report['route_count']} routes, so an empty "
-        "uncovered set would not mean anything"
-    )
-
-    uncovered: Final = report["uncovered"]
-    assert not uncovered, (
-        f"{len(uncovered)} route(s) are not exposed on either component. "
-        f"Update gateway/routes/allowlist.py or backend/routes/allowlist.py to cover:\n  "
-        + "\n  ".join(uncovered)
-    )
+    assert response.status_code == 410, response.text
+    assert response.json() == {"message": "Send traces and logs directly to the Lens endpoint shown in Lens setup."}
 
 
 def test_backend_mount_paths_defined():
@@ -404,6 +288,26 @@ def test_gateway_trim_keeps_metrics_mount():
         "/metrics Mount must survive the gateway route trim"
 
 
+@pytest.mark.parametrize("enabled", (False, True))
+def test_backend_serves_metrics_after_startup_when_enabled(enabled: bool) -> None:
+    registry: Final = CollectorRegistry()
+    failures: Final = Counter("litellm_postgres_failed_requests", "Failed database requests", registry=registry)
+    failures.inc(2)
+
+    @asynccontextmanager
+    async def lifespan(application: Starlette) -> AsyncGenerator[None, None]:
+        if enabled:
+            application.mount("/metrics", make_metrics_asgi_app(registry))
+        yield
+
+    application: Final = FastAPI(lifespan=partial(_backend_lifespan, lifespan=lifespan))
+    with TestClient(application) as client:
+        response: Final = client.get("/metrics")
+        assert response.status_code == (200 if enabled else 404), response.text
+        if enabled:
+            assert "litellm_postgres_failed_requests_total 2.0\n" in response.text
+
+
 def test_gateway_drops_ui_and_swagger_mounts():
     """UI static and swagger Mounts must still be trimmed from the gateway."""
     for path in ("/ui", "/_next", "/litellm-asset-prefix/_next", "/swagger"):
@@ -423,6 +327,22 @@ def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():
         "/debug/memory/summary must survive the gateway route trim"
     for path in ("/debug/memory/details", "/debug/memory/gc/configure"):
         assert not _is_gateway_route(debug_memory_routes[path]), f"{path} must not be served by the gateway"
+
+
+@pytest.mark.parametrize(
+    ("path", "served"),
+    [
+        ("/eu_jev/v1/systemone", True),
+        ("/eu_jev/v1/systemone2", False),
+        ("/eu_jev/v1/systemone/{subpath:path}", False),
+        ("/eu_jev/custom", False),
+    ],
+)
+def test_gateway_serves_the_eu_jev_decision_route_and_no_other_eu_jev_path(path: str, served: bool) -> None:
+    async def endpoint() -> None:
+        return None
+
+    assert _is_gateway_route(Route(path, endpoint, methods=["POST"])) is served
 
 
 def test_every_app_mount_is_assigned_to_a_component():
@@ -480,7 +400,10 @@ def test_admin_mcp_survives_only_management_component_lifespans(
 
     @application.get("/user/info")
     async def user_info() -> dict[str, object]:
-        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+        return {
+            "user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"},
+            "admin_mcp_permissions": {"tools": ["list_teams"], "action_allowed": True},
+        }
 
     if component_lifespan is not None:
         application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)

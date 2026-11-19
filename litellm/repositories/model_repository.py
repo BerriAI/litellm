@@ -9,10 +9,6 @@ from typing import TYPE_CHECKING, Final
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.models.model import LiteLLM_ProxyModelTable
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-    encrypt_value_helper,
-)
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
@@ -44,6 +40,8 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     def _encrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
         """Encrypt sensitive values in litellm_params."""
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
         encrypted: Final = {}
         for key, value in litellm_params.items():
             if isinstance(value, str):
@@ -54,6 +52,8 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     def _decrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
         """Decrypt sensitive values in litellm_params."""
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
         decrypted: Final = {}
         for key, value in litellm_params.items():
             if isinstance(value, str):

@@ -25,15 +25,17 @@ from typing import Final
 
 import pytest
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, OTEL_EXPORTER_ENDPOINT, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
 from models import LiteLLMParamsBody
-from otel_client import CallTraces, JaegerSpan, JaegerTrace, OtelReader
+from otel_client import TTFT_TAG, CallTraces, JaegerSpan, JaegerTrace, OtelReader, one_served_genai_span
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 pytestmark = pytest.mark.e2e
 
 MODEL = CHEAP_ANTHROPIC_MODEL
+FAILING_BACKEND_MODEL: Final = "anthropic/claude-haiku-4-5"
 DB_SPAN_PREFIX = "postgres."
 #: The active OTEL v2 logger's name in /health/readiness/details success_callbacks.
 OTEL_V2_LOGGER_NAME = "OpenTelemetryV2"
@@ -52,7 +54,7 @@ def _assert_otel_destination_configured(client: LoggingClient) -> None:
     details = _ReadinessDetails.model_validate_json(readiness_details_body(client))
     assert OTEL_V2_LOGGER_NAME in details.success_callbacks, (
         f"the proxy must report the {OTEL_V2_LOGGER_NAME} callback active "
-        f"(LITELLM_OTEL_V2 + arize_phoenix preset in the compose config); got: {details.success_callbacks}"
+        f"(LITELLM_OTEL_V2=true + the otel callback in the stack config); got: {details.success_callbacks}"
     )
 
 
@@ -77,7 +79,7 @@ def _chain_reaches(span_id: str, root_id: str, trace: JaegerTrace) -> bool:
     return False
 
 
-def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str) -> None:
+def assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str) -> None:
     """The enforced behavior: the destination holds exactly one call-id-tagged
     trace for the call, rooted at the SERVER span, with auth/db children and
     the gen-AI span all connected into that one tree - no dangling parent
@@ -110,10 +112,9 @@ def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str) -
     roots = [span for span in trace.spans if not span.references]
     assert len(roots) == 1, f"expected exactly one root span, got {[s.operation_name for s in roots]}; spans: {names}"
     root = roots[0]
-    assert root.operation_name == f"POST {route}", (
-        f"the root must be the SERVER span 'POST {route}', got {root.operation_name!r}"
-    )
     assert root.kind == "server", f"the root span must have kind=server, got {root.kind!r}"
+    request_route: Final = root.tag("http.route") or root.tag("url.path") or root.tag("http.target")
+    assert request_route == route, f"the root must identify route {route!r}, got {request_route!r}"
 
     assert f"auth {route}" in names, f"auth phase span 'auth {route}' missing; spans: {names}"
     assert any(name.startswith(DB_SPAN_PREFIX) for name in names), (
@@ -131,50 +132,12 @@ def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str) -
 def _poll(otel_reader: OtelReader, *, call_id: str, route: str, genai_span: str) -> CallTraces:
     return otel_reader.poll_traces_for_call(
         call_id=call_id,
-        settled_names={f"POST {route}", f"auth {route}", genai_span},
+        settled_names={f"auth {route}", genai_span},
         settled_prefixes={DB_SPAN_PREFIX},
     )
 
 
-def _tag(span: JaegerSpan, key: str) -> str | int | float | bool | None:
-    for tag in span.tags:
-        if tag.key == key:
-            return tag.value
-    return None
-
-
-#: The v2 gen-AI span attribute recording time-to-first-token for streamed
-#: calls: seconds from the upstream request being issued to the first streamed
-#: chunk (stamped only for streaming; added in #32236).
-TTFT_TAG = "gen_ai.response.time_to_first_chunk"
-
-#: Jaeger's rendering of a span whose OTEL status is ERROR.
-ERROR_STATUS_TAG = "otel.status_code"
-
-
-def served_genai_spans(trace: JaegerTrace, genai_span: str) -> list[JaegerSpan]:
-    """The gen-AI spans for attempts that actually served the request.
-
-    The proxy opens one gen-AI span per upstream attempt, so a call the router
-    retried carries an error span for every failed attempt beside the one that
-    answered. Only the served attempt streams chunks, so only it records TTFT
-    or a streaming flag; asserting over the raw span list makes every one of
-    these tests fail whenever the upstream 429s, 529s, or hands back a stale
-    credential on the first try."""
-    return [
-        span for span in trace.spans if span.operation_name == genai_span and _tag(span, ERROR_STATUS_TAG) != "ERROR"
-    ]
-
-
-def one_served_genai_span(trace: JaegerTrace, genai_span: str) -> JaegerSpan:
-    served = served_genai_spans(trace, genai_span)
-    assert len(served) == 1, (
-        f"a streamed call must produce exactly ONE served gen-AI span, got {len(served)}; spans: {trace.span_names()}"
-    )
-    return served[0]
-
-
-def _assert_real_ttft(hits: tuple[JaegerTrace, ...], *, genai_span: str) -> None:
+def assert_real_ttft(hits: tuple[JaegerTrace, ...], *, genai_span: str) -> None:
     """The enforced behavior: the gen-AI span for the attempt that served the
     stream records a TTFT that is a real measurement - present, numeric,
     positive, and strictly less than that span's own total duration. A TTFT of
@@ -190,7 +153,7 @@ def _assert_real_ttft(hits: tuple[JaegerTrace, ...], *, genai_span: str) -> None
     trace = hits[0]
     span = one_served_genai_span(trace, genai_span)
 
-    value = _tag(span, TTFT_TAG)
+    value = span.tag(TTFT_TAG)
     assert value is not None, (
         f"the gen-AI span must record {TTFT_TAG} for a streamed call; "
         f"tags present: {sorted(tag.key for tag in span.tags)}"
@@ -247,10 +210,10 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
     error.message whose embedded provider error JSON still parses and whose
     text also rides the span status description."""
     for key, expected in EXPECTED_ERROR_SPAN_ATTRIBUTES.items():
-        actual = _tag(span, key)
+        actual = span.tag(key)
         assert str(actual) == expected, f"error span attribute {key!r} must be {expected!r}, got {actual!r}"
 
-    message = _tag(span, "error.message")
+    message = span.tag("error.message")
     assert isinstance(message, str) and message, "error span must carry a non-empty error.message"
     assert "AnthropicException" in message, (
         f"error.message must carry the upstream provider exception, got: {message[:200]}"
@@ -270,15 +233,24 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
     assert provider_error.error.message.strip(), (
         f"the embedded provider error must carry a non-empty message; parsed: {provider_error}"
     )
-    assert _tag(span, "otel.status_description") == message, (
+    assert span.tag("otel.status_description") == message, (
         "the span status description must carry the same untruncated message as error.message"
     )
-    stack = _tag(span, "litellm.provider.error.stack_trace")
+    stack = span.tag("litellm.provider.error.stack_trace")
     assert isinstance(stack, str) and stack, "the error span must carry a non-empty litellm.provider.error.stack_trace"
 
 
 class TestOtelTraceCompleteness:
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -309,9 +281,17 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=f"chat {MODEL}")
-        _assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
+        assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     @pytest.mark.otel_tls
     def test_otel_export_over_tls_with_internal_ca_reaches_destination(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
@@ -334,16 +314,25 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
         hits: Final = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=f"chat {MODEL}")
-        _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
+        assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_messages_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
         """This test verifies that one successful non-streaming /v1/messages request
         produces exactly one complete OTEL trace.
 
-        The trace must have a single root span named "POST /v1/messages". The
+        The trace must have a single root SERVER span identifying /v1/messages. The
         authentication, database, and model-call spans must all belong to
         the same trace and have valid parent relationships leading back to that root.
 
@@ -363,9 +352,18 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=f"chat {MODEL}")
-        _assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
+        assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -393,9 +391,18 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {CHEAP_OPENAI_MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_chat_completions_stream_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -435,15 +442,24 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         served = one_served_genai_span(traces.hits[0], genai_span)
-        assert _tag(served, "litellm.request.streaming") is True, (
+        assert served.tag("litellm.request.streaming") is True, (
             "the gen-AI span must record litellm.request.streaming=true; its absence means "
             "the stream flag was dropped before the model call"
         )
 
     @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_messages_stream_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -483,15 +499,24 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         served = one_served_genai_span(traces.hits[0], genai_span)
-        assert _tag(served, "litellm.request.streaming") is True, (
+        assert served.tag("litellm.request.streaming") is True, (
             "the gen-AI span must record litellm.request.streaming=true; its absence means "
             "the stream flag was dropped before the model call"
         )
 
     @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_responses_stream_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -531,7 +556,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {CHEAP_OPENAI_MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         one_served_genai_span(traces.hits[0], genai_span)
 
@@ -544,6 +569,15 @@ class TestOtelTraceCompleteness:
         )
 
     @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_chat_completions_stream_records_real_ttft(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -579,9 +613,18 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_real_ttft(traces.hits, genai_span=genai_span)
+        assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_messages_stream_records_real_ttft(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -617,9 +660,18 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_real_ttft(traces.hits, genai_span=genai_span)
+        assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_responses_stream_records_real_ttft(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -655,9 +707,18 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {CHEAP_OPENAI_MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_real_ttft(traces.hits, genai_span=genai_span)
+        assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(FAILING_BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_failed_chat_completions_error_span_attributes(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -677,7 +738,7 @@ class TestOtelTraceCompleteness:
         model_name = f"otel-err-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+            LiteLLMParamsBody(model=FAILING_BACKEND_MODEL, api_key=INVALID_UPSTREAM_API_KEY),
         )
         resources.defer(lambda: client.delete_model(model_id))
         key = client.key_with_alias(f"otel-err-{unique_marker()}", models=[model_name])
@@ -701,16 +762,25 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {model_name}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         root = next(span for span in traces.hits[0].spans if not span.references)
-        assert str(_tag(root, "http.status_code")) == "401", (
-            f"the SERVER span must record the 401 the client received, got {_tag(root, 'http.status_code')!r}"
+        assert str(root.tag("http.status_code")) == "401", (
+            f"the SERVER span must record the 401 the client received, got {root.tag('http.status_code')!r}"
         )
         genai = next(span for span in traces.hits[0].spans if span.operation_name == genai_span)
         _assert_error_span_contract(genai)
 
     @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(FAILING_BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_failed_messages_error_span_attributes(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -729,7 +799,7 @@ class TestOtelTraceCompleteness:
         model_name = f"otel-err-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+            LiteLLMParamsBody(model=FAILING_BACKEND_MODEL, api_key=INVALID_UPSTREAM_API_KEY),
         )
         resources.defer(lambda: client.delete_model(model_id))
         key = client.key_with_alias(f"otel-err-{unique_marker()}", models=[model_name])
@@ -754,11 +824,11 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {model_name}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         root = next(span for span in traces.hits[0].spans if not span.references)
-        assert str(_tag(root, "http.status_code")) == "401", (
-            f"the SERVER span must record the 401 the client received, got {_tag(root, 'http.status_code')!r}"
+        assert str(root.tag("http.status_code")) == "401", (
+            f"the SERVER span must record the 401 the client received, got {root.tag('http.status_code')!r}"
         )
         genai = next(span for span in traces.hits[0].spans if span.operation_name == genai_span)
         _assert_error_span_contract(genai)

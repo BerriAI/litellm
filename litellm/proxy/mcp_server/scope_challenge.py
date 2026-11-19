@@ -1,0 +1,115 @@
+"""Keep upstream scope challenges ahead of Streamable HTTP response headers."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING, Final
+
+from pydantic import TypeAdapter, ValidationError
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.types import Message, Send
+
+from litellm.proxy.mcp_server.exceptions import MCPUpstreamAuthError
+
+if TYPE_CHECKING:
+    from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
+
+SCOPE_RESPONSE_KEY: Final = "litellm.mcp.scope_response"
+_REQUEST: Final = TypeAdapter[dict[str, object]](dict[str, object])
+
+
+LISTING_METHODS: Final = frozenset({"tools/list", "prompts/list", "resources/list", "resources/templates/list"})
+
+
+def _request_method(body: bytes) -> object:
+    try:
+        return _REQUEST.validate_json(body).get("method")
+    except ValidationError:
+        return None
+
+
+def is_tool_call_request(body: bytes) -> bool:
+    return _request_method(body) == "tools/call"
+
+
+def is_listing_request(body: bytes) -> bool:
+    method: Final = _request_method(body)
+    return isinstance(method, str) and method in LISTING_METHODS
+
+
+class OAuthScopeResponse:
+    def __init__(self, send: Send, base_url: str, request_path: str | None, reauthorize_as: str | None = None) -> None:
+        self._send = send
+        self._base_url = base_url
+        self._request_path = request_path
+        self._reauthorize_as = reauthorize_as
+        self._ready = asyncio.Event()
+        self._lock = asyncio.Lock()
+        self._challenge: MCPUpstreamAuthError | None = None
+        self._closed = False
+
+    @property
+    def pending(self) -> bool:
+        return not self._ready.is_set()
+
+    def allow(self) -> None:
+        self._ready.set()
+
+    def deny(self, error: MCPUpstreamAuthError) -> None:
+        if error.status_code == 403 and error.required_scope is not None:
+            self._refuse(error)
+
+    def deny_reauth(self) -> None:
+        if self._reauthorize_as is not None:
+            self._refuse(MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=self._reauthorize_as))
+
+    def _refuse(self, error: MCPUpstreamAuthError) -> None:
+        if self.pending:
+            self._challenge = error
+            self._ready.set()
+
+    async def __call__(self, message: Message) -> None:
+        async with self._lock:
+            if self._closed:
+                return
+            try:
+                if message["type"] == "http.response.start":
+                    if message["status"] != 200:
+                        self.allow()
+                    await self._ready.wait()
+                    if self._challenge is not None:
+                        error: Final = self._challenge.to_http_exception(self._base_url, self._request_path)
+                        response: Final = JSONResponse(
+                            status_code=error.status_code, content={"detail": error.detail}, headers=error.headers
+                        )
+                        self._closed = True
+                        await self._send(
+                            {
+                                "type": "http.response.start",
+                                "status": response.status_code,
+                                "headers": response.raw_headers,
+                            }
+                        )
+                        await self._send({"type": "http.response.body", "body": bytes(response.body)})
+                        return
+                await self._send(message)
+            except BaseException:
+                self._closed = True
+                raise
+
+
+def scope_response_from_request(request: object) -> OAuthScopeResponse | None:
+    if not isinstance(request, Request):
+        return None
+    response: Final = request.scope.get(SCOPE_RESPONSE_KEY)
+    return response if isinstance(response, OAuthScopeResponse) else None
+
+
+async def finish_scope_response(context: ServerRequestContext[object, object], call_next: CallNext) -> HandlerResult:
+    response: Final = scope_response_from_request(context.request)
+    try:
+        return await call_next(context)
+    finally:
+        if response is not None:
+            response.allow()

@@ -1,9 +1,10 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
 
@@ -18,6 +19,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FalAIStableDiffusionConfig(FalAIBaseConfig):
@@ -235,7 +237,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         }
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -268,12 +270,15 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
                     )
 
         # Add additional metadata from Stable Diffusion response
-        if hasattr(model_response, "_hidden_params"):
+        if hasattr(model_response, HIDDEN_PARAMS_ATTR):
+            hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+            )
             if "seed" in response_object:
-                model_response._hidden_params["seed"] = response_object["seed"]
+                hidden_params["seed"] = response_object["seed"]
             if "timings" in response_object:
-                model_response._hidden_params["timings"] = response_object["timings"]
+                hidden_params["timings"] = response_object["timings"]
             if "has_nsfw_concepts" in response_object:
-                model_response._hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
+                hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
 
         return model_response

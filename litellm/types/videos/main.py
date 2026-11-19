@@ -1,4 +1,5 @@
 import builtins
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from openai.types.audio.transcription_create_params import FileTypes
@@ -25,6 +26,14 @@ class VideoObject(LiteLLMBaseModel):
     model: str | None = None
     usage: dict[str, Any] | None = None
     _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -68,6 +77,19 @@ class VideoResponse(LiteLLMBaseModel):
             return self.dict()
 
 
+class VideoImageURL(TypedDict):
+    url: ReadOnly[str]
+
+
+class VideoInputReference(TypedDict):
+    type: ReadOnly[Literal["image_url"]]
+    image_url: ReadOnly[VideoImageURL]
+
+
+class VideoFrameImage(VideoInputReference):
+    frame_type: ReadOnly[Literal["first_frame", "last_frame"]]
+
+
 class VideoCreateOptionalRequestParams(TypedDict, total=False):
     """
     TypedDict for Optional parameters supported by OpenAI's video creation API.
@@ -80,6 +102,12 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     parameters: dict[str, object] | None  # Provider-specific parameters block passed directly to the API
     model: str | None
     resolution: ReadOnly[str | None]
+    duration: ReadOnly[int]
+    aspect_ratio: ReadOnly[str]
+    frame_images: ReadOnly[Sequence[VideoFrameImage]]
+    input_references: ReadOnly[Sequence[VideoInputReference]]
+    generate_audio: ReadOnly[bool]
+    seed: ReadOnly[int]
     seconds: str | None
     size: str | None
     characters: list[dict[str, str]] | None
@@ -104,6 +132,9 @@ class DecodedVideoId(TypedDict, total=False):
     custom_llm_provider: str | None
     model_id: str | None
     video_id: str
+    served_model: ReadOnly[str | None]
+    deployment_id: ReadOnly[str | None]
+    requested_model: ReadOnly[str | None]
 
 
 class CharacterObject(LiteLLMBaseModel):
@@ -114,6 +145,14 @@ class CharacterObject(LiteLLMBaseModel):
     created_at: int
     name: str
     _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)

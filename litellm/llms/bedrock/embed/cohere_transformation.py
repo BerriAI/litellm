@@ -41,3 +41,11 @@ class BedrockCohereEmbeddingConfig:
                 new_transformed_request[k] = transformed_request[k]
 
         return new_transformed_request
+
+    def transform_request(
+        self,
+        model: str,
+        input: list[str],  # mutable-ok: mirrors override contract
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> CohereEmbeddingRequest:
+        return self._transform_request(model, input, inference_params)
