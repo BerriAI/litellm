@@ -662,8 +662,6 @@ async def test_a_registered_strategy_picks_every_deployment_an_endpoint_call_rea
     assert not any("_retry_skipped_deployment_ids" in request for request in seen)
 
 
-# --- a litellm model string several model groups share ------------------------------------------
-
 COLLISION_CHECK_ENV: Final = "LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK"
 SHARED_LITELLM_MODEL_LIST: Final = [
     deployment("chain-a", "a", model="openai/shared"),

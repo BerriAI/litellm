@@ -120,7 +120,6 @@ def _router_init(
     health_check_ignore_transient_errors: bool = False,
     background_health_check_model_groups: Sequence[str] | None = None,
     enable_weighted_failover: bool = False,
-    enable_cross_model_group_collision_check: bool | None = None,
     enable_mid_stream_fallback_continuation: bool = False,
     fallback_access_check: FallbackAccessCheck | None = None,
     fallback_budget_check: FallbackBudgetCheck | None = None,
@@ -128,6 +127,7 @@ def _router_init(
     auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     session_affinity_repin_on_failover: bool = False,
     _host: PythonHost = python_host,
+    enable_cross_model_group_collision_check: bool | None = None,
 ) -> None:
     """
     Initialize the Router class with the given parameters for caching, reliability, and routing strategy.

@@ -286,13 +286,13 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "health_check_ignore_transient_errors",
     "background_health_check_model_groups",
     "enable_weighted_failover",
-    "enable_cross_model_group_collision_check",
     "enable_mid_stream_fallback_continuation",
     "fallback_access_check",
     "fallback_budget_check",
     "fallback_rate_limit_check",
     "auto_router_capability_limit",
     "session_affinity_repin_on_failover",
+    "enable_cross_model_group_collision_check",
 )
 
 

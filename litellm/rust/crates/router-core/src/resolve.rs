@@ -853,7 +853,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn a_teams_internal_names_under_one_public_name_are_one_group() {
         let registry = registry(json!([
             {"model_name": "model_name_T2_1", "litellm_params": {"model": "openai/shared"}, "model_info": {
