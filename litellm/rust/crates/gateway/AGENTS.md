@@ -25,3 +25,8 @@
 - `db::connect` (`src/db.rs`) builds `litellm_db::Pools` from `resolve` in `db-resolve`, which takes `general_settings` and `resources.secrets` the way `redis-resolve`'s `resolve` does. No database configured, or a token auth toggle Rust cannot mint for yet, is `None`
 - The pools are lazy, so boot never waits for Postgres. A handler takes `State<Option<Pools>>` and picks `writer()`, `read()` or `read_after_write()` per query. Don't add an extractor that checks out a connection, because it would hide that choice
 - `/health/readiness` pings the writer for up to 2s and reports `connected`, `disconnected`, or `Not connected` when no database is configured, and always answers 200. The proxy's 503 on `disconnected` without `allow_requests_on_db_unavailable` and its 15s cache of a good answer are not ported
+
+## License
+- `build_license` verifies the license once at boot (`src/license.rs`) and the result never changes while serving. For now the standalone gateway only logs whether it is enterprise
+- The key comes from `LITELLM_LICENSE`, where config `environment_variables` replaces the process environment, and from `general_settings.litellm_license`, which wins unless only the environment's key is enterprise, as in `_use_config_license`
+- Verification itself belongs to `litellm-license`. A key the bundled public key did not sign is asked of the license server, so boot can wait on that request for `NON_LLM_CONNECTION_TIMEOUT` seconds per attempt
