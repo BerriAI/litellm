@@ -2,12 +2,13 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.roi_calculator import ROIBranchAttribution, ROIBranchSpend, ROISpendRecord
 
 
-class ObservedModel(BaseModel):
+class ObservedModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
 
@@ -151,7 +152,7 @@ class ObservedReportResponse(ObservedModel):
     report: ObservedReport | None
 
 
-class ObservedIdentityUpdate(BaseModel):
+class ObservedIdentityUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: str
@@ -186,7 +187,7 @@ class ObservedSettings(ObservedConnection):
     connections: tuple[ObservedConnection, ...] = ()
 
 
-class ObservedSettingsUpdate(BaseModel):
+class ObservedSettingsUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     connection_id: str | None = Field(default=None, max_length=100)

@@ -22,6 +22,12 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+
+
+@pytest.fixture(autouse=True)
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +100,7 @@ async def test_delete_all_tokens_admin_returns_empty_failed_tokens(monkeypatch):
     mock_cache.delete_cache = MagicMock()
 
     monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token_if_needed",
         lambda token: token,
     )
     monkeypatch.setattr(
@@ -132,7 +138,7 @@ async def test_delete_tokens_non_admin_all_succeed_returns_empty_failed_tokens(
     mock_cache.delete_cache = MagicMock()
 
     monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token_if_needed",
         lambda token: token,
     )
     monkeypatch.setattr(
@@ -183,7 +189,7 @@ async def test_delete_tokens_non_admin_token_not_in_db_returns_failed_tokens(
     mock_cache.delete_cache = MagicMock()
 
     monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token_if_needed",
         lambda token: token,
     )
     monkeypatch.setattr(
@@ -234,7 +240,7 @@ async def test_delete_tokens_admin_partial_db_failure_returns_failed_tokens(
     mock_cache.delete_cache = MagicMock()
 
     monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token_if_needed",
         lambda token: token,
     )
     monkeypatch.setattr(

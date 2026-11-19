@@ -2,12 +2,14 @@ from functools import lru_cache
 from importlib.resources import files
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import ConfigDict, Field, StringConstraints
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 ProfileText: TypeAlias = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
 
 
-class FuseModelPreset(BaseModel):
+class FuseModelPreset(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
@@ -17,7 +19,7 @@ class FuseModelPreset(BaseModel):
     model: str
 
 
-class FuseHarnessPreset(BaseModel):
+class FuseHarnessPreset(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
@@ -26,7 +28,7 @@ class FuseHarnessPreset(BaseModel):
     sources: tuple[str, ...] = Field(min_length=1)
 
 
-class FusePresetCatalog(BaseModel):
+class FusePresetCatalog(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: str

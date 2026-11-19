@@ -13,10 +13,10 @@ The suites run against a live proxy, so bring one up first by running the litell
 
 ## Running the tests locally
 
-1. Create a `.env` file in this directory with the provider keys the example models use, plus the master key and the Postgres/Redis coordinates your config reads back:
+1. Generate a master key with `export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"`. Create a `.env` file in this directory with the provider keys the example models use and the Postgres/Redis coordinates your config reads back:
 
    ```bash
-   LITELLM_MASTER_KEY="sk-1234"
+   LITELLM_MASTER_KEY="sk-<your-master-key>"
    DATABASE_URL="postgresql://llmproxy:dbpassword9090@localhost:5432/litellm"
    REDIS_HOST="localhost"
    REDIS_PORT="6379"
@@ -25,7 +25,7 @@ The suites run against a live proxy, so bring one up first by running the litell
    GEMINI_API_KEY="..."
    ```
 
-2. Bring up a Postgres and a Redis for the proxy to use. The repo-root `docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run. Tests that read Redis directly default to the deployed shape (TLS + cluster mode) whenever `REDIS_HOST` is set, so for a local standalone Redis also set `REDIS_CLUSTER=false` and `REDIS_SSL=false` (plus `REDIS_PASSWORD` when your Redis requires auth)
+2. Bring up a Postgres and a Redis for the proxy to use. The `litellm/deploy/compose/docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run. Tests that read Redis directly default to the deployed shape (TLS + cluster mode) whenever `REDIS_HOST` is set, so for a local standalone Redis also set `REDIS_CLUSTER=false` and `REDIS_SSL=false` (plus `REDIS_PASSWORD` when your Redis requires auth)
 
 3. Start the identity provider the JWT API tests authenticate against, then the litellm proxy against your config, and confirm both are live. It is a real Keycloak, running the realm in `tests/e2e/idp_realm.json`, and the proxy trusts it because `JWT_PUBLIC_KEY_URL` points at that realm's JWKS. The proxy caches the JWKS for `public_key_ttl` (600s) and does not refetch on an unknown `kid`, so keep its data volume across restarts; restart the proxy if you deliberately replace that volume:
 
@@ -90,43 +90,7 @@ The suites run against a live proxy, so bring one up first by running the litell
 
    They also need a proxy whose bundled UI contains the change under test, so run the proxy from your branch (an editable install serves the UI your checkout builds)
 
-Some suites need extra services the bare proxy does not start. The `logging/` OTEL trace-completeness tests read spans back from a jaeger query API at `http://localhost:16686` (override with `E2E_OTEL_QUERY_URL`); run a `jaegertracing/all-in-one` and point `PHOENIX_COLLECTOR_HTTP_ENDPOINT` at its OTLP ingest. The `mcp/` suite needs the deterministic upstream MCP server in `mcp_tests/mcp_e2e_upstream_server.py` reachable by the proxy. The presidio guardrail tests need a running Presidio analyzer and anonymizer the proxy can reach, addressed by `PRESIDIO_ANALYZER_API_BASE` / `PRESIDIO_ANONYMIZER_API_BASE`
-
-The Presidio spend-log audit test also requires prompt storage on the proxy, because its assertions inspect the detected entities and their scores. Add the following to the proxy config before starting it:
-
-```yaml
-general_settings:
-  store_prompts_in_spend_logs: true
-```
-
-Alternatively, start the proxy with `STORE_PROMPTS_IN_SPEND_LOGS=true litellm --config <your-e2e-config>.yml --port 4000`. Setting the variable only on the pytest process does not configure the proxy. With prompt storage disabled, the proxy correctly redacts `guardrail_response`, so that configuration cannot exercise this test's entity-detail assertions. Enable this only on a test stack using synthetic prompts
-
-A couple of logging destinations are configured on the proxy rather than by the test. The Weave tests scope their callback to the key they create, but litellm builds the `weave_otel` logger from `WANDB_API_KEY` and `WANDB_PROJECT_ID` before it applies the per-key vars, so the proxy needs both in its own environment or the key-scoped callback never initializes and nothing ships
-
-### Secret manager lanes
-
-`key_management_system` is global to the proxy, so the `secret_manager/` tests run once per backend, each against its own proxy. The backends are `hashicorp_vault` and `cyberark` (CyberArk Conjur). `E2E_SECRET_MANAGER` opts in and names the backend (a key of `secret_backends.BACKENDS`). The proxy boots from `gateway/secret_manager_<system>_ci_config.yml`, and the tests reach the same manager through that backend's `SecretStore`. The managers are enterprise features, so the proxy needs a license. `secret_manager/backend.sh` runs any backend in Docker and writes its env, so every lane runs the same way locally:
-
-```bash
-bash tests/e2e/secret_manager/backend.sh up cyberark
-(set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/proxy.env; set +a; env -u OPENAI_API_KEY LITELLM_LICENSE=... \
-  LITELLM_MASTER_KEY=sk-1234 DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_cyberark_ci_config.yml --port 4000)
-(set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/tests.env; set +a; OPENAI_API_KEY=... \
-  uv run --group e2e-dev pytest tests/e2e/secret_manager/ -v)
-bash tests/e2e/secret_manager/backend.sh down cyberark
-```
-
-`E2E_SECRET_MANAGER_PORT` moves the manager off its usual port (8200 for Vault, 8080 for Conjur), and `E2E_SECRET_MANAGER_DIR` moves the env files. Keep that directory private, because both files hold a working admin credential. Keep `OPENAI_API_KEY` out of the proxy's environment. The tests copy the runner's key into the manager under a fresh name per test, so a passing call proves the key came through the manager rather than the `os.environ` fallback `get_secret` takes when the manager errors
-
-A backend declares what it supports in its `SecretBackend.capabilities`, and a test that needs something not every backend does carries `@pytest.mark.requires_capability(...)`, so it is deselected, not failed or skipped, on the lanes that lack it. CyberArk has no `deletes_stored_keys`, because the proxy's delete answers `not_supported` and Conjur keeps the key, so the delete test runs only on the Vault lane
-
-To add a backend, leave the tests and markers alone and add:
-
-1. `secret_manager/secret_store_<system>.py`: a `SecretStore` (`write`, `read` returning None when absent, idempotent `destroy`) over the manager's own API through `e2e_http`'s external helpers, read from `E2E_<SYSTEM>_*` env vars, and a `SecretBackend` whose `system` is the litellm `KeyManagementSystem` value and whose `capabilities` lists what it supports
-2. its entry in `secret_backends.BACKENDS`
-3. `gateway/secret_manager_<system>_ci_config.yml`, a copy of an existing lane's with only `key_management_system` changed
-4. an `up_<system>` function in `secret_manager/backend.sh` that starts the manager and writes `proxy.env` and `tests.env`
-5. a CI step that runs `backend.sh up <system>` (or the same containers as sidecars), boots the proxy with `proxy.env` and a license, and runs pytest with `tests.env`
+Some suites need extra services the bare proxy does not start. The `logging/` OTEL trace-completeness tests read spans back from a jaeger query API at `http://localhost:16686` (override with `E2E_OTEL_QUERY_URL`); run a `jaegertracing/all-in-one` and start the proxy with `LITELLM_OTEL_V2=true`, the `otel` callback, and `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at its OTLP ingest. The `mcp/` suite needs the deterministic upstream MCP server in `mcp_tests/mcp_e2e_upstream_server.py` reachable by the proxy.
 
 ### Record and replay
 
@@ -195,7 +159,7 @@ If a step is missing, the test is not done. That is the whole pattern
 
 ## Style: lay the pattern down in a class
 
-Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test; each method is one behavior. Think of it as documenting the contract, with the rough intent being
+Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test. Each method is one behavior. Think of it as documenting the contract, with the rough intent being
 
 ```python
 # pseudo-code to convey intent
@@ -211,9 +175,9 @@ class TestPromptCompression:
         assert response.cost == compressed_value  # the cost was actually reduced
 ```
 
-That snippet only conveys intent. What you actually write uses the real harness: the `client` fixture for your suite, the `scoped_key` fixture for an auto-deleted key, typed pydantic bodies from `models.py`, and `unwrap(...)` on the tagged-union result. `tests/e2e/llm_translation/test_custom_pricing_e2e.py` is the reference to copy from; it creates a scoped key, drives a real gemini call, polls `/spend/logs` to a deadline for the cost-breakdown row, then asserts the input and output costs match the configured custom rates and that a sibling deployment kept its own price. Read it before writing yours
+That snippet only conveys intent. What you actually write uses the real harness: the `client` fixture for your suite, the `scoped_key` fixture for an auto-deleted key, typed pydantic bodies from `models.py`, and `unwrap(...)` on the tagged-union result. `tests/e2e/llm_translation/test_custom_pricing_e2e.py` is the reference to copy from. It creates a scoped key, drives a real gemini call, polls `/spend/logs` to a deadline for the cost-breakdown row, then asserts the input and output costs match the configured custom rates and that a sibling deployment kept its own price. Read it before writing yours
 
-## Use the shared transport; never touch requests directly
+## Use the shared transport, never touch requests directly
 
 Every HTTP call goes through the shared transport, never through `requests.*` in a test. `e2e_http.py` is the only module permitted to call `requests.*`, and that is enforced in CI by `tests/code_coverage_tests/check_e2e_no_raw_requests.py`. A test that imports requests will fail the check
 
@@ -227,15 +191,15 @@ The shape is layered so tests stay declarative
 
 Each suite provides its own `client` fixture (see `llm_translation/passthrough_client.py`), a frozen dataclass that holds the shared `ProxyClient` (as `.proxy`) and adds suite-specific routes. Cleanup runs through that same `ProxyClient`, so whatever keys or customers your test creates get torn down by the `resources` fixture
 
-Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
+Request and response bodies are typed pydantic models in `models.py`. Only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
-Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. A test that needs proxy configuration the default stack does not carry goes behind an opt-in marker (`managed_files`, `prompt_caching_stack`, `weekly`), each deselected unless its env var is set; `OPT_IN_MARKERS` in `conftest.py` maps marker to env var, and the coverage collector counts such a cell only where the env var is set. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
+Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself lives in `tests/e2e_harness/` and runs without a proxy (`LITELLM_MASTER_KEY=sk-harness uv run pytest tests/e2e_harness`). A test that needs proxy configuration the default stack does not carry goes behind an opt-in marker (`managed_files`, `prompt_caching_stack`, `weekly`), each deselected unless its env var is set; `OPT_IN_MARKERS` in `conftest.py` maps marker to env var, and the coverage collector counts such a cell only where the env var is set. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
 ## Pre-commit steps
 
 Before you push
 
-1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
+1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py` or `tests/e2e_harness/**/*.py`
 
 2. Add the models your test needs to the config your local proxy loads
 
@@ -260,56 +224,4 @@ The semantic header set is `content-type`, `accept`, `anthropic-version`, `anthr
 
 Excluded transport and telemetry headers are `host`, `content-length`, `connection`, `accept-encoding`, `user-agent`, `traceparent`, `tracestate`, `x-request-id`, `x-client-request-id` and `x-stainless-*`. Inbound transfer-encoding is unsupported; send JSON with content-length framing. The destination represents host identity and the relay carries original body bytes. Replay does not verify credentials, SDK timeout/retry behavior, transport performance, model availability or stateful remote IDs. Live relay uses original request bytes and header values, never the stored identity
 
-Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the existing legacy harness files with `--noconftest -o pythonpath=tests/e2e`; they need only synthetic HTTP providers and temporary fixture storage
-
-
-## MCP OAuth happy path
-
-`test_mcp_oauth_happy_path_e2e.py` runs one shared scenario with four variants:
-aggregate gateway SSO and explicitly configured per-server JWT, each directly
-against Linear and through the live provider edge. The edge forwards to real
-Linear without replay and compares the forwarded bearer to the encrypted
-canonical user/server credential. This observes the forwarding boundary, not
-Linear's internal logs. Direct variants independently exercise discovery
-
-Use the existing database preparation, Prisma generation and Keycloak setup.
-Build and stage the dashboard from the tested checkout as in the UI runner.
-Provide `DATABASE_URL`, `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, `LITELLM_LICENSE`,
-and the `E2E_KEYCLOAK_*` settings. Capture a test-account Linear login using
-`mcp/linear_session_capture.py` and set `E2E_LINEAR_STORAGE_STATE` to that private
-file. The test workspace must contain a team. Do not publish browser state or
-raw test/proxy output
-
-```bash
-E2E_MCP_OAUTH_LIVE=1 E2E_FIXTURE_MODE=live E2E_PROVIDER_CACHE=0 \
-  uv run --no-sync pytest tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py \
-  --rootdir=. --reruns 0
-```
-
-The test starts and restarts its own source-built proxy on a free loopback port,
-retaining its database and SSO client but no Redis or process-local cache. It
-does not restart an existing proxy or clear shared databases. Gateway login,
-consent, immediate list/call and post-restart reconnect must all succeed. The
-aggregate client never injects a gateway header; the explicitly labeled JWT
-variant configures `x-litellm-api-key` for the first consent and reconnects with
-only its gateway JWT after restart
-
-`.github/workflows/test-mcp-oauth-e2e.yml` automatically requests a run for
-same-repository pull requests changing MCP, gateway authentication/SSO, consent
-UI, dependencies or the relevant E2E harness/workflow paths. It retains manual
-`workflow_dispatch` for targeted verification. The four cases run in the
-protected `e2e-changed` environment after its normal deployment approval;
-reviewers should approve and inspect this separate OAuth check when it appears.
-Fork pull requests do not run this credentialed job; use a reviewed
-same-repository branch for their verification. The workflow's path-filtered
-check is not configured here as a globally required branch-protection check.
-Provision `E2E_LINEAR_STORAGE_STATE_B64` as a secret there and retain the existing E2E license/AWS role configuration. A missing or
-expired session fails the job; collection, deselection and skips are not passes.
-No LLM call is needed
-
-Coverage remains limited to authorization-code OAuth over HTTP. M2M, OBO,
-PKCE passthrough, static/BYOK, ID-JAG, forwarding, SigV4 and stdio are outside this
-scenario; consult the registry and LIT-3559 for their existing coverage and gaps.
-LIT-4506 owns broader isolation/failure regressions. LIT-7737 retains ownership
-of dependency/Python compatibility and its matrix; this test reuses its delivered
-environment and does not change dependency constraints or compatibility gates
+Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The `python` job in `.github/workflows/test-linting.yml` runs them alongside the provider-edge and fixture tests at the root of `tests/e2e_harness/` with `--noconftest -o addopts= -o "pythonpath=tests/e2e tests/e2e_harness" -p no:rerunfailures`; they need only synthetic HTTP providers and temporary fixture storage

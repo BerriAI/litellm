@@ -1,8 +1,10 @@
-from collections.abc import Iterable
+import types
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
@@ -29,6 +31,11 @@ else:
     LoggingClass = Any
 
 _TEXTS: Final = TypeAdapter(Iterable[str], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _ReplicatePrediction(TypedDict):
+    urls: ReadOnly[NotRequired[Mapping[str, str]]]
 
 
 class ReplicateConfig(BaseConfig):
@@ -79,7 +86,7 @@ class ReplicateConfig(BaseConfig):
         seed: int | None = None,
         debug: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -167,7 +174,7 @@ class ReplicateConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         ## Load Config
-        config: Final = litellm.ReplicateConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.ReplicateConfig.get_config())
         for k, v in config.items():
             if (
                 k not in optional_params
@@ -250,7 +257,7 @@ class ReplicateConfig(BaseConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        raw_response_json: Final = raw_response.json()
+        raw_response_json: Final = _JSON_DICT.validate_python(raw_response.json())
         if raw_response_json.get("status") != "succeeded":
             raise ReplicateError(
                 status_code=422,
@@ -290,7 +297,7 @@ class ReplicateConfig(BaseConfig):
         "urls":{"cancel":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4/cancel","get":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4","stream":"https://stream-b.svc.rno2.c.replicate.net/v1/streams/eot4gbydowuin4snhncydwxt57dfwgsc3w3snycx5nid7oef7jga"}
         }
         """
-        response_json: Final = response.json()
+        response_json: Final[_ReplicatePrediction] = response.json()
         prediction_url: Final = response_json.get("urls", {}).get("get")
         if prediction_url is None:
             raise ReplicateError(

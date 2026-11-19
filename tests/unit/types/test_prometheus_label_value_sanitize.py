@@ -1,7 +1,7 @@
 import pytest
 
 from litellm.types.integrations.prometheus import (
-    _sanitize_prometheus_label_value,
+    sanitize_prometheus_label_value,
 )
 
 
@@ -30,5 +30,5 @@ from litellm.types.integrations.prometheus import (
     ],
 )
 def test_sanitize_prometheus_label_value_expected_outputs(value, expected):
-    assert _sanitize_prometheus_label_value(value) == expected
+    assert sanitize_prometheus_label_value(value) == expected
 

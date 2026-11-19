@@ -32,7 +32,7 @@ def get_volcengine_base_url(api_base: str | None = None) -> str:
         The base URL to use for API calls
     """
     if api_base:
-        return api_base
+        return api_base.rstrip("/")
     return "https://ark.cn-beijing.volces.com"
 
 

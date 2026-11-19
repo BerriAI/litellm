@@ -2,10 +2,13 @@ import json
 import time
 import traceback
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.url_utils import encode_url_path_segments
@@ -13,8 +16,8 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     version,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -35,6 +38,8 @@ else:
 # 5 minute timeout (models may need to load)
 STREAMING_TIMEOUT: Final = 60 * 5
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 class BytezChatConfig(BaseConfig):
     """
@@ -44,7 +49,7 @@ class BytezChatConfig(BaseConfig):
     def __init__(
         self,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -193,11 +198,11 @@ class BytezChatConfig(BaseConfig):
     ) -> ModelResponse:
         json: Final = raw_response.json()
 
-        error: Final = json.get("error")
+        error: Final = decoded_json_object(_DECODED_JSON.validate_python(json)).get("error")
 
         if error is not None:
             raise BytezError(
-                message=str(json["error"]),
+                message=str(error),
                 status_code=raw_response.status_code,
             )
 
@@ -231,7 +236,7 @@ class BytezChatConfig(BaseConfig):
 
         model_response.usage = usage
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         message.provider_specific_fields = {
             "ratelimit-limit": raw_response.headers.get("ratelimit-limit"),
             "ratelimit-remaining": raw_response.headers.get("ratelimit-remaining"),
@@ -264,7 +269,7 @@ class BytezChatConfig(BaseConfig):
         timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         try:
             response: Final = client.post(

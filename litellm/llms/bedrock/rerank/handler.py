@@ -6,11 +6,12 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.bedrock import BedrockPreparedRequest
 from litellm.types.rerank import RerankRequest
@@ -58,7 +59,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return BedrockRerankConfig()._transform_response(_JSON_DICT.validate_python(response.json()))
+        return BedrockRerankConfig().transform_response(_JSON_DICT.validate_python(response.json()))
 
     def rerank(
         self,
@@ -85,7 +86,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             rank_fields=rank_fields,
             return_documents=return_documents,
         )
-        data: Final = BedrockRerankConfig()._transform_request(request_data)
+        data: Final = BedrockRerankConfig().transform_request(request_data)
 
         prepared_request: Final = self._prepare_request(
             model=model,
@@ -114,7 +115,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
+            client = get_httpx_client()
         try:
             response: Final = client.post(
                 url=prepared_request["endpoint_url"],
@@ -141,7 +142,7 @@ class BedrockRerankHandler(BaseAWSLLM):
 
         response_json: Final = _JSON_DICT.validate_python(response.json())
 
-        return BedrockRerankConfig()._transform_response(response_json)
+        return BedrockRerankConfig().transform_response(response_json)
 
     def _prepare_request(
         self,
@@ -160,7 +161,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
         proxy_endpoint_url = proxy_endpoint_url.replace("bedrock-runtime", "bedrock-agent-runtime")
-        proxy_endpoint_url = f"{proxy_endpoint_url}/rerank"
+        proxy_endpoint_url = join_api_base(proxy_endpoint_url, "rerank")
 
         body: Final = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}

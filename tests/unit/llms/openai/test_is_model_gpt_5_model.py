@@ -35,8 +35,8 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
 # ---------------------------------------------------------------------------

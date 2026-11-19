@@ -1,106 +1,288 @@
+import _hashlib
+from collections.abc import Iterator, Mapping
+from contextlib import nullcontext
+from traceback import walk_tb
+from typing import Final
+from unittest.mock import Mock
+
 import pytest
+from cryptography.exceptions import InternalError
+from cryptography.hazmat.bindings._rust import openssl as rust_openssl
+from cryptography.hazmat.primitives import hashes
 
 from litellm.proxy.common_utils.fips import (
     FipsModeError,
-    FipsModeOff,
-    FipsModeOn,
-    MalformedFipsMode,
-    ProviderDoesNotEnforceFips,
-    TlsVerificationDisabled,
-    enforce_fips_boot_verdict,
-    fips_boot_verdict,
-    is_fips_mode,
-    parse_fips_mode,
+    cryptography_enforces_fips,
+    enforce_fips_mode,
+    fips_mode_active,
+    key_derivation_key,
+    openssl_enforces_fips,
 )
 
-
-def _verdict(
-    raw: str | None,
-    *,
-    enforcing: bool = True,
-    ssl_env: str | None = None,
-    ssl_setting: object = True,
-):
-    return fips_boot_verdict(
-        raw_fips_mode=raw,
-        provider_enforces_fips=lambda: enforcing,
-        ssl_verify_environment=ssl_env,
-        ssl_verify_setting=ssl_setting,
-    )
+_HEX_SALT_KEY: Final = "sk-" + bytes(range(32)).hex()
 
 
-@pytest.mark.parametrize("raw", [None, "false", "0", "no", "off", "", " False "])
-def test_unset_and_false_spellings_leave_fips_mode_off(raw):
-    assert parse_fips_mode(raw) == FipsModeOff()
-    assert is_fips_mode({"LITELLM_FIPS_MODE": raw}.get) is False
+@pytest.fixture(autouse=True)
+def _fips_mode_off_after_each_test() -> Iterator[None]:
+    yield
+    enforce_fips_mode({})
 
 
-@pytest.mark.parametrize("raw", ["true", "1", "yes", "on", " TRUE "])
-def test_true_spellings_turn_fips_mode_on(raw):
-    assert parse_fips_mode(raw) == FipsModeOn()
-    assert is_fips_mode({"LITELLM_FIPS_MODE": raw}.get) is True
-
-
-@pytest.mark.parametrize("raw", ["enforced", "2", "strict", "yes please"])
-def test_anything_else_is_malformed_and_refused_with_the_offending_value(raw):
-    assert parse_fips_mode(raw) == MalformedFipsMode(value=raw)
-    with pytest.raises(FipsModeError) as refused:
-        enforce_fips_boot_verdict(_verdict(raw, enforcing=False), announce=lambda _: None)
-    assert f"LITELLM_FIPS_MODE={raw} is not a boolean" in str(refused.value)
-    assert "true or false" in str(refused.value)
-
-
-def test_off_never_consults_the_provider_or_tls_settings():
-    def explode() -> bool:
-        raise AssertionError("provider probe must not run while FIPS mode is off")
-
-    verdict = fips_boot_verdict(
-        raw_fips_mode=None, provider_enforces_fips=explode, ssl_verify_environment="false", ssl_verify_setting=False
-    )
-    assert verdict == FipsModeOff()
-    enforce_fips_boot_verdict(verdict, announce=lambda _: pytest.fail("nothing to announce when off"))
-
-
-def test_on_with_an_enforcing_provider_and_verified_tls_boots():
-    verdict = _verdict("true", enforcing=True, ssl_env="true", ssl_setting="/etc/ssl/certs/ca.pem")
-    assert verdict == FipsModeOn()
-    enforce_fips_boot_verdict(verdict, announce=lambda _: pytest.fail("nothing to announce when on"))
-
-
-def test_on_with_a_non_enforcing_provider_is_refused_and_names_the_fix():
-    announced = []
-    with pytest.raises(FipsModeError) as refused:
-        enforce_fips_boot_verdict(_verdict("true", enforcing=False), announce=announced.append)
-    message = str(refused.value)
-    assert message.startswith("LiteLLM proxy refused to start")
-    assert "LITELLM_FIPS_MODE is on but this Python does not enforce FIPS" in message
-    assert "FIPS image" in message
-    assert announced == [f"\n{message}\n\n"]
+def _fake_openssl(monkeypatch: pytest.MonkeyPatch, *, fips_flag: int, scrypt_refused: bool) -> None:
+    monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: fips_flag)
+    if scrypt_refused:
+        monkeypatch.setattr(_hashlib, "scrypt", Mock(side_effect=ValueError("[digital envelope routines] unsupported")))
+    else:
+        monkeypatch.setattr(_hashlib, "scrypt", Mock(return_value=b"\0" * 16))
 
 
 @pytest.mark.parametrize(
-    "ssl_env, ssl_setting, sources",
+    "fips_flag, scrypt_refused, enforces",
+    [(1, True, True), (0, True, False), (1, False, False)],
+    ids=["fips", "fips-flag-off", "scrypt-allowed"],
+)
+def test_openssl_enforces_fips_needs_the_fips_flag_and_a_refused_scrypt(
+    monkeypatch: pytest.MonkeyPatch, fips_flag: int, scrypt_refused: bool, enforces: bool
+) -> None:
+    _fake_openssl(monkeypatch, fips_flag=fips_flag, scrypt_refused=scrypt_refused)
+    assert openssl_enforces_fips() is enforces
+
+
+def test_openssl_enforces_fips_while_md5_is_still_served_for_non_security_use(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
+    monkeypatch.setattr(_hashlib, "new", Mock(return_value=Mock()))
+    assert openssl_enforces_fips() is True
+
+
+def test_openssl_without_get_fips_mode_does_not_enforce_fips(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(_hashlib, "get_fips_mode")
+    assert openssl_enforces_fips() is False
+
+
+@pytest.mark.parametrize(
+    "fips_enabled, sha256_broken, enforces",
+    [(True, False, True), (False, False, False), (True, True, False)],
+    ids=["fips", "fips-flag-off", "sha256-broken"],
+)
+def test_cryptography_enforces_fips_needs_the_fips_flag_and_a_working_sha256(
+    monkeypatch: pytest.MonkeyPatch, fips_enabled: bool, sha256_broken: bool, enforces: bool
+) -> None:
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: fips_enabled)
+    if sha256_broken:
+        monkeypatch.setattr(hashes, "Hash", Mock(side_effect=InternalError("Unknown OpenSSL error", [])))
+    assert cryptography_enforces_fips() is enforces
+
+
+def test_cryptography_without_is_fips_enabled_does_not_enforce_fips(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(rust_openssl, "is_fips_enabled")
+    assert cryptography_enforces_fips() is False
+
+
+def test_this_runners_python_openssl_does_not_enforce_fips() -> None:
+    if _hashlib.get_fips_mode() == 1:
+        pytest.skip("this runner's Python OpenSSL is in FIPS mode")
+    assert openssl_enforces_fips() is False
+
+
+def test_this_runners_cryptography_openssl_does_not_enforce_fips() -> None:
+    if rust_openssl.is_fips_enabled():
+        pytest.skip("this runner's cryptography OpenSSL is in FIPS mode")
+    assert cryptography_enforces_fips() is False
+
+
+@pytest.mark.parametrize(
+    "general_settings, openssl_fips, cryptography_fips, refusal",
     [
-        ("false", True, ("SSL_VERIFY",)),
-        (" FALSE ", True, ("SSL_VERIFY",)),
-        (None, False, ("litellm_settings.ssl_verify",)),
-        (None, "False", ("litellm_settings.ssl_verify",)),
-        ("false", False, ("SSL_VERIFY", "litellm_settings.ssl_verify")),
+        ({}, False, False, None),
+        ({"fips_mode": False}, False, False, None),
+        ({"fips_mode": "false"}, False, False, None),
+        ({"fips_mode": True}, True, True, None),
+        ({"fips_mode": "true"}, True, True, None),
+        ({"fips_mode": True}, False, True, "general_settings.fips_mode is on but OpenSSL does not enforce FIPS"),
+        ({"fips_mode": " TRUE "}, False, True, "general_settings.fips_mode is on but OpenSSL does not enforce FIPS"),
+        ({"fips_mode": True}, True, False, "cryptography library's OpenSSL has no working FIPS provider"),
+        ({"fips_mode": "enforced"}, True, True, "general_settings.fips_mode='enforced' is not a boolean"),
+        ({"fips_mode": 1}, True, True, "general_settings.fips_mode=1 is not a boolean"),
+        ({"fips_mode": None}, True, True, "general_settings.fips_mode has no value"),
+    ],
+    ids=[
+        "unset",
+        "false",
+        "false-from-a-string",
+        "fips",
+        "fips-from-a-string",
+        "openssl-not-fips",
+        "openssl-not-fips-from-a-padded-string",
+        "cryptography-not-fips",
+        "not-a-boolean",
+        "a-number",
+        "no-value",
     ],
 )
-def test_disabled_tls_verification_is_refused_naming_every_source(ssl_env, ssl_setting, sources):
-    verdict = _verdict("true", enforcing=True, ssl_env=ssl_env, ssl_setting=ssl_setting)
-    assert verdict == TlsVerificationDisabled(sources=sources)
+def test_enforce_fips_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: Mapping[str, object],
+    openssl_fips: bool,
+    cryptography_fips: bool,
+    refusal: str | None,
+) -> None:
+    _fake_openssl(monkeypatch, fips_flag=int(openssl_fips), scrypt_refused=openssl_fips)
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: cryptography_fips)
+    monkeypatch.setenv("LITELLM_SALT_KEY", _HEX_SALT_KEY)
+
+    with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
+        enforce_fips_mode(general_settings)
+
+
+@pytest.mark.parametrize(
+    "general_settings, active",
+    [({"fips_mode": True}, True), ({"fips_mode": "true"}, True), ({"fips_mode": False}, False), ({}, False)],
+    ids=["on", "on-from-a-string", "off", "unset"],
+)
+def test_fips_mode_active_follows_the_setting_the_gate_accepted(
+    monkeypatch: pytest.MonkeyPatch, general_settings: Mapping[str, object], active: bool
+) -> None:
+    _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", _HEX_SALT_KEY)
+    enforce_fips_mode(general_settings)
+    assert fips_mode_active() is active
+
+
+def test_fips_mode_stays_inactive_on_a_refused_boot(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_openssl(monkeypatch, fips_flag=0, scrypt_refused=False)
+    with pytest.raises(FipsModeError):
+        enforce_fips_mode({"fips_mode": True})
+    assert fips_mode_active() is False
+
+
+def test_a_fips_openssl_alone_does_not_activate_fips_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
+    assert fips_mode_active() is False
+
+
+@pytest.fixture
+def fips_openssl_on_both_sides(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+
+
+_SHORT_SALT_KEYS: Final = ("thirteen-byte", "é" * 6 + "x", "sk-0a1b2c3d4e", "")
+_SHORT_SALT_KEY_IDS: Final = ("13-ascii-bytes", "13-utf8-bytes-in-7-characters", "sk-and-10-hex-digits", "empty")
+
+
+@pytest.mark.parametrize(
+    "salt_key, key",
+    [
+        (_HEX_SALT_KEY, _HEX_SALT_KEY.encode()),
+        ("fourteen-bytes", b"fourteen-bytes"),
+        ("é" * 7, "é".encode() * 7),
+        ("\udcff" * 14, b"\xff" * 14),
+    ],
+    ids=[
+        "hex-is-not-decoded",
+        "14-ascii-bytes",
+        "14-utf8-bytes-in-7-characters",
+        "environment-bytes-that-are-not-utf8",
+    ],
+)
+def test_key_derivation_key_is_the_utf8_bytes_of_the_salt_key(salt_key: str, key: bytes) -> None:
+    assert key_derivation_key(salt_key) == key
+
+
+@pytest.mark.parametrize(
+    "salt_key", (*_SHORT_SALT_KEYS, "\udcff" * 13), ids=(*_SHORT_SALT_KEY_IDS, "13-environment-bytes")
+)
+def test_key_derivation_key_refuses_a_salt_key_under_112_bits(salt_key: str) -> None:
+    assert key_derivation_key(salt_key) is None
+
+
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+@pytest.mark.parametrize(
+    "salt_key",
+    [_HEX_SALT_KEY, "fourteen-bytes", "é" * 7],
+    ids=["openssl-rand-hex-32", "14-ascii-bytes", "14-utf8-bytes-in-7-characters"],
+)
+def test_fips_mode_starts_with_a_salt_key_of_at_least_112_bits(monkeypatch: pytest.MonkeyPatch, salt_key: str) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    enforce_fips_mode({"fips_mode": True})
+    assert fips_mode_active() is True
+
+
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+@pytest.mark.parametrize("salt_key", _SHORT_SALT_KEYS, ids=_SHORT_SALT_KEY_IDS)
+def test_fips_mode_refuses_to_start_with_a_salt_key_under_112_bits(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     with pytest.raises(FipsModeError) as refused:
-        enforce_fips_boot_verdict(verdict, announce=lambda _: None)
-    assert "TLS certificate verification is disabled by " + " and ".join(sources) in str(refused.value)
+        enforce_fips_mode({"fips_mode": True})
+    assert str(refused.value) == (
+        "general_settings.fips_mode is on but LITELLM_SALT_KEY is too short. fips_mode derives its encryption keys "
+        "from it, so it must be at least 112 bits (14 bytes). Set LITELLM_SALT_KEY=sk-$(openssl rand -hex 32), or "
+        "turn general_settings.fips_mode off."
+    )
+    assert fips_mode_active() is False
 
 
-@pytest.mark.parametrize("ssl_setting", [True, "true", "/etc/ssl/certs/ca.pem", None, "", "0", "no"])
-def test_verified_or_custom_bundle_tls_settings_are_not_treated_as_disabled(ssl_setting):
-    assert _verdict("true", enforcing=True, ssl_setting=ssl_setting) == FipsModeOn()
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+def test_fips_mode_refuses_to_start_without_a_salt_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    with pytest.raises(FipsModeError) as refused:
+        enforce_fips_mode({"fips_mode": True})
+    assert str(refused.value) == (
+        "general_settings.fips_mode is on but LITELLM_SALT_KEY is not set. fips_mode derives its encryption keys "
+        "from it and never from the master key, which also signs tokens. Set "
+        "LITELLM_SALT_KEY=sk-$(openssl rand -hex 32), or turn general_settings.fips_mode off."
+    )
+    assert fips_mode_active() is False
 
 
-def test_disabled_tls_is_reported_before_the_provider_so_operators_see_config_mistakes_first():
-    assert _verdict("true", enforcing=False, ssl_env="false") == TlsVerificationDisabled(sources=("SSL_VERIFY",))
-    assert _verdict("true", enforcing=False) == ProviderDoesNotEnforceFips()
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+@pytest.mark.parametrize("salt_key", _SHORT_SALT_KEYS[:3], ids=_SHORT_SALT_KEY_IDS[:3])
+def test_the_fips_mode_salt_key_refusal_does_not_print_the_key(monkeypatch: pytest.MonkeyPatch, salt_key: str) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    with pytest.raises(FipsModeError) as refused:
+        enforce_fips_mode({"fips_mode": True})
+    assert salt_key not in str(refused.value)
+    assert salt_key[3:] not in str(refused.value)
+
+
+_FRAME_SECRET: Final = "frame-secret"
+
+
+@pytest.mark.parametrize(
+    "openssl_fips, cryptography_fips",
+    [(True, True), (False, True), (True, False)],
+    ids=["salt-key-under-112-bits", "openssl-not-fips", "cryptography-not-fips"],
+)
+def test_a_refused_fips_mode_boot_leaves_the_salt_key_in_no_frame_local(
+    monkeypatch: pytest.MonkeyPatch, openssl_fips: bool, cryptography_fips: bool
+) -> None:
+    _fake_openssl(monkeypatch, fips_flag=int(openssl_fips), scrypt_refused=openssl_fips)
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: cryptography_fips)
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FRAME_SECRET)
+    with pytest.raises(FipsModeError) as refused:
+        enforce_fips_mode({"fips_mode": True})
+    held_by: Final = tuple(
+        frame.f_code.co_name for frame, _ in walk_tb(refused.tb) if _FRAME_SECRET in repr(frame.f_locals)
+    )
+    assert held_by == ()
+
+
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+@pytest.mark.parametrize("general_settings", [{}, {"fips_mode": False}], ids=["unset", "off"])
+@pytest.mark.parametrize(
+    "salt_key",
+    [_HEX_SALT_KEY, "thirteen-byte", "", None],
+    ids=["openssl-rand-hex-32", "13-bytes", "empty", "no-key"],
+)
+def test_standard_mode_starts_whatever_the_salt_key_looks_like(
+    monkeypatch: pytest.MonkeyPatch, general_settings: Mapping[str, object], salt_key: str | None
+) -> None:
+    if salt_key is None:
+        monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    enforce_fips_mode(general_settings)
+    assert fips_mode_active() is False

@@ -17,6 +17,7 @@ from integration._support import claude_code as cc
 from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
+from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.wire import Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -26,6 +27,7 @@ _CLAUDE: Final = cc.OPUS
 _OPENAI_KEY: Final = "synthetic-openai-key"
 _AZURE_KEY: Final = "synthetic-azure-key"
 _CACHE_BUST: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache": {"no-cache": True}})
+_RESPONSIVE_FACTOR: Final = 10
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _ITEMS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
@@ -75,7 +77,18 @@ _AZURE_AI_OPENAI_HOST: Final = _Deployment(
     "/openai/v1/responses?api-version=preview",
     strips_message_status=True,
 )
-_DROPPING: Final = (_OPENAI, _AZURE, _AZURE_AI_OPENAI_HOST)
+_BEDROCK_MANTLE: Final = _Deployment(
+    "bedrock_mantle", "bedrock_mantle/openai.gpt-oss-120b", "synthetic-mantle-key", "/v1/responses"
+)
+_BEDROCK: Final = _Deployment(
+    "bedrock",
+    "bedrock/openai.gpt-oss-120b-1:0",
+    "synthetic-bedrock-key",
+    "/openai/v1/responses",
+    MappingProxyType({"aws_region_name": "us-east-1"}),
+    model_info=MappingProxyType({"supported_endpoints": ["/v1/responses"]}),
+)
+_DROPPING: Final = (_OPENAI, _AZURE, _AZURE_AI_OPENAI_HOST, _BEDROCK_MANTLE, _BEDROCK)
 _KEEPING: Final = (
     _Deployment("litellm_proxy", f"litellm_proxy/{_GPT}", "synthetic-proxy-key", "/responses"),
     _Deployment("databricks", "databricks/gpt-5.6", "synthetic-databricks-key", "/responses"),
@@ -92,15 +105,6 @@ _KEEPING: Final = (
         "synthetic-perplexity-key",
         "/v1/responses",
         types_untyped_items_as_messages=True,
-    ),
-    _Deployment("bedrock_mantle", "bedrock_mantle/openai.gpt-oss-120b", "synthetic-mantle-key", "/v1/responses"),
-    _Deployment(
-        "bedrock",
-        "bedrock/openai.gpt-oss-120b-1:0",
-        "synthetic-bedrock-key",
-        "/openai/v1/responses",
-        MappingProxyType({"aws_region_name": "us-east-1"}),
-        model_info=MappingProxyType({"supported_endpoints": ["/v1/responses"]}),
     ),
     *(
         _Deployment(slug, f"{slug}/{model}", f"synthetic-{slug}-key", "/responses")
@@ -564,6 +568,11 @@ def test_a_megabyte_of_minted_thinking_is_dropped_while_the_proxy_stays_responsi
         "id": f"rs_{uuid.uuid4()}",
         "encrypted_content": encrypted,
     }
+    single: Final[dict[str, JsonValue]] = {
+        **minted,
+        "id": f"rs_{uuid.uuid4()}",
+        "encrypted_content": json.dumps([block]),
+    }
     history: Final = rv.agents_sdk_history(marker, minted)
     latencies: Final[deque[float]] = deque()
     done: Final = threading.Event()
@@ -577,16 +586,22 @@ def test_a_megabyte_of_minted_thinking_is_dropped_while_the_proxy_stays_responsi
 
     with wire_server(rv.ResponsesVendor().respond) as wire, gateway.scenario() as scenario:
         model: Final = _OPENAI.register(scenario, wire)
+        same_size: Final[list[dict[str, JsonValue]]] = [
+            {"role": "user", "content": "t" * len(encrypted)},
+            *rv.agents_sdk_history(marker, single),
+        ]
+        control: Final = timed(lambda: _raw(gateway, "/v1/responses", {"model": model, "input": same_size}))
+        assert control.value.status_code == 200, control.value.text[:500]
+        _only_request(wire)
         prober: Final = threading.Thread(target=probe)
         prober.start()
-        started: Final = time.monotonic()
-        response: Final = _raw(gateway, "/v1/responses", {"model": model, "input": history})
-        elapsed: Final = time.monotonic() - started
+        dropped: Final = timed(lambda: _raw(gateway, "/v1/responses", {"model": model, "input": history}))
         done.set()
         prober.join(timeout=35)
-        assert response.status_code == 200, response.text[:500]
-        assert elapsed < 20, elapsed
-        assert latencies and max(latencies) < 5, (max(latencies), len(latencies))
+        assert dropped.value.status_code == 200, dropped.value.text[:500]
+        assert_within_factor_of_control(dropped.seconds, control=control.seconds, factor=_RESPONSIVE_FACTOR)
+        assert latencies, "no liveliness probe completed while the megabyte request was in flight"
+        assert_within_factor_of_control(max(latencies), control=control.seconds, factor=_RESPONSIVE_FACTOR)
         _, body = _only_request(wire)
         assert body["input"] == rv.without(history, (minted,))
 

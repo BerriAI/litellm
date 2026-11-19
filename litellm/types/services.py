@@ -1,8 +1,10 @@
 import enum
 from typing import Final
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class ServiceMetrics(enum.Enum):
@@ -38,6 +40,7 @@ class ServiceTypes(str, enum.Enum):
     REDIS_DAILY_ORG_SPEND_UPDATE_QUEUE = "redis_daily_org_spend_update_queue"
     REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE = "redis_daily_team_spend_update_queue"
     REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE = "redis_daily_agent_spend_update_queue"
+    REDIS_DAILY_CUSTOMER_MEMBER_SPEND_UPDATE_QUEUE = "redis_daily_customer_member_spend_update_queue"
     REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE = "redis_daily_tag_spend_update_queue"
     # spend update queue - current spend of key, user, team
     IN_MEMORY_SPEND_UPDATE_QUEUE = "in_memory_spend_update_queue"
@@ -95,7 +98,7 @@ class ServiceEventMetadata(TypedDict, total=False):
     gauge_value: float | None
 
 
-class ServiceLoggerPayload(BaseModel):
+class ServiceLoggerPayload(LiteLLMBaseModel):
     """
     The payload logged during service success/failure
     """

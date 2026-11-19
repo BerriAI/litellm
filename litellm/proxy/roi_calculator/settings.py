@@ -5,12 +5,13 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 from fastapi import Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.roi_calculator import DEFAULT_PROMPT, ROISettings
 
 _SETTINGS_KEY: Final = "roi_calculator_settings"
@@ -20,7 +21,7 @@ def connection_id(provider: str, api_url: str) -> str:
     return provider + "_" + sha256(api_url.strip().rstrip("/").encode()).hexdigest()[:16]
 
 
-class StoredConnection(BaseModel):
+class StoredConnection(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     source_provider: Literal["github", "gitlab"]
@@ -38,7 +39,7 @@ class StoredConnection(BaseModel):
         return connection_id(self.source_provider, self.api_url)
 
 
-class StoredROISettings(BaseModel):
+class StoredROISettings(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     revision: int = 0

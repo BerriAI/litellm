@@ -64,7 +64,7 @@ def test_responses_api_cache_write_costs_the_same_as_chat(local_model_cost_map):
     cache_write_tokens = 12314
     completion_tokens = 5
 
-    responses_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+    responses_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
         {
             "input_tokens": prompt_tokens,
             "output_tokens": completion_tokens,

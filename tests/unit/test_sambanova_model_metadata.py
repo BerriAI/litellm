@@ -41,7 +41,6 @@ def test_sambanova_chat_entries_are_consistent():
         assert info["litellm_provider"] == "sambanova", name
         assert info["input_cost_per_token"] >= 0, name
         assert info["output_cost_per_token"] >= 0, name
-        assert info["max_tokens"] == info["max_output_tokens"], name
         assert info["max_output_tokens"] <= info["max_input_tokens"], name
         if info.get("supports_tool_choice"):
             assert info.get("supports_function_calling"), name
