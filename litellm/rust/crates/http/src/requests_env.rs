@@ -7,25 +7,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use litellm_env::{Environment, variable};
 use url::Url;
 
 use crate::proxy::EnvironmentProxies;
 
 const CA_BUNDLE_VARIABLES: [&str; 2] = ["REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"];
 
-pub type Environment = [(String, String)];
-
 /// What `requests` raises when the CA bundle its environment names does not exist.
 #[derive(Debug, thiserror::Error)]
 #[error("Could not find a suitable TLS CA certificate bundle, invalid path: {0}")]
 pub struct MissingCaBundle(pub String);
-
-/// The process environment, as `os.environ` holds it.
-pub fn process_environment() -> Vec<(String, String)> {
-    std::env::vars_os()
-        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
-        .collect()
-}
 
 /// `requests`' `merge_environment_settings` and `HTTPAdapter.cert_verify`: the first non-empty CA
 /// bundle variable, or `None` for `requests`' own default bundle. `SSL_CERT_FILE` is never read.
@@ -59,13 +51,6 @@ pub fn requests_proxy(environment: &Environment, url: &Url) -> Option<String> {
         .get(url.scheme())
         .or_else(|| proxies.get("all"))
         .cloned()
-}
-
-fn variable<'a>(environment: &'a Environment, name: &str) -> Option<&'a str> {
-    environment
-        .iter()
-        .find(|(key, _)| key == name)
-        .map(|(_, value)| value.as_str())
 }
 
 /// urllib's `getproxies_environment`: every `*_proxy` variable in any case, then the lowercase

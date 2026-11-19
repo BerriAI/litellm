@@ -9,10 +9,11 @@ use std::{
     time::Duration,
 };
 
+use litellm_env::process_environment;
 use litellm_http::{
     ClientIdentity, ClientVariant, HttpClientPool, HttpSettings, Resolution, Verify,
     media::PublicDnsResolver,
-    requests_env::{ca_bundle, process_environment, proxies_for, requests_proxy},
+    requests_env::{ca_bundle, proxies_for, requests_proxy},
 };
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;

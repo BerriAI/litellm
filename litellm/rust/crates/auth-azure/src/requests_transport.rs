@@ -5,10 +5,9 @@ use azure_core::error::ErrorKind;
 use azure_core::http::headers::{HeaderName, HeaderValue, Headers};
 use azure_core::http::{AsyncRawResponse, Body, HttpClient, Request, Url};
 use futures_util::TryStreamExt;
+use litellm_env::{Environment, process_environment};
 use litellm_http::media::PublicDnsResolver;
-use litellm_http::requests_env::{
-    Environment, ca_bundle, process_environment, proxies_for, requests_proxy,
-};
+use litellm_http::requests_env::{ca_bundle, proxies_for, requests_proxy};
 use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool, Verify};
 
 /// azure-core's `ConnectionConfiguration` defaults, which azure-identity's `requests` transport keeps.
