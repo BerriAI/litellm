@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Final, Literal, TypedDict
+from typing import Final, Literal, TypeAlias, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -836,9 +836,28 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
     return model_param_to_info
 
 
+_ModelInfos: TypeAlias = tuple[Mapping[str, object], ...]
+_MODEL_INFOS_BY_PARAM: Final = TypeAdapter(Mapping[str, _ModelInfos])
+
+
+def _info_model_id(info: Mapping[str, object]) -> str:
+    model_id: Final = info.get("model_id")
+    return str(model_id) if model_id else ""
+
+
+def _model_infos_by_id(model_infos_by_param: Mapping[str, _ModelInfos]) -> Mapping[str, _ModelInfos]:
+    with_ids: Final = sorted(
+        (info for info in chain.from_iterable(model_infos_by_param.values()) if info.get("model_id")),
+        key=_info_model_id,
+    )
+    return MappingProxyType({model_id: tuple(infos) for model_id, infos in groupby(with_ids, key=_info_model_id)})
+
+
 def _model_infos_for_endpoint(
-    model_param_to_info: Mapping[str, list[Mapping[str, str | None]]], endpoint: Mapping[str, object]
-) -> tuple[Mapping[str, str | None], ...]:
+    model_infos_by_param: Mapping[str, _ModelInfos],
+    model_infos_by_id: Mapping[str, _ModelInfos],
+    endpoint: Mapping[str, object],
+) -> _ModelInfos:
     """By ``model_id`` when the endpoint has one, else by model string.
 
     The check rewrites ``litellm_params.model`` in place (it strips ``bedrock/``), so a result read back from the
@@ -846,10 +865,9 @@ def _model_infos_for_endpoint(
     """
     endpoint_model_id: Final = endpoint.get("model_id")
     if endpoint_model_id:
-        all_infos: Final = chain.from_iterable(model_param_to_info.values())
-        return tuple(info for info in all_infos if info["model_id"] == endpoint_model_id)
+        return model_infos_by_id.get(str(endpoint_model_id), ())
     model_param: Final = endpoint.get("model")
-    return tuple(model_param_to_info.get(model_param, [])) if isinstance(model_param, str) else ()
+    return model_infos_by_param.get(model_param, ()) if isinstance(model_param, str) else ()
 
 
 def _aggregate_health_check_results(
@@ -871,10 +889,12 @@ def _aggregate_health_check_results(
         Dictionary mapping (model_id, model_name) to aggregated health check results
     """
     model_results: Final = {}
+    infos_by_param: Final = _MODEL_INFOS_BY_PARAM.validate_python(model_param_to_info)
+    infos_by_id: Final = _model_infos_by_id(infos_by_param)
 
     # Process healthy endpoints
     for endpoint in healthy_endpoints:
-        for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
+        for model_info in _model_infos_for_endpoint(infos_by_param, infos_by_id, endpoint):
             key = (model_info["model_id"], model_info["model_name"])
             if key not in model_results:
                 model_results[key] = {
@@ -889,7 +909,7 @@ def _aggregate_health_check_results(
     # Process unhealthy endpoints
     for endpoint in unhealthy_endpoints:
         error_message = endpoint.get("error")
-        for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
+        for model_info in _model_infos_for_endpoint(infos_by_param, infos_by_id, endpoint):
             key = (model_info["model_id"], model_info["model_name"])
             if key not in model_results:
                 model_results[key] = {
@@ -921,14 +941,22 @@ def _new_health_status(result: _AggregatedHealthResult) -> str:
     return "healthy" if result["healthy_count"] > 0 else "unhealthy"
 
 
+_LatestCheckKey: TypeAlias = tuple[str, str] | str
+
+
+def _latest_check_key(model_id: str | None, model_name: str) -> _LatestCheckKey:
+    """A row is the previous check only for its own model id and name, so names sharing an id never skip each other."""
+    return (model_id, model_name) if model_id else model_name
+
+
 def _should_persist_health_check_result(
-    result: _AggregatedHealthResult, latest_checks_map: Mapping[str, LatestHealthCheckRow]
+    result: _AggregatedHealthResult, latest_checks_map: Mapping[_LatestCheckKey, LatestHealthCheckRow]
 ) -> bool:
     """
     True when this result has to be written: no previous row, the status changed, or the
     previous row is older than one hour (periodic refresh while the status is stable).
     """
-    lookup_key: Final = result["model_id"] if result["model_id"] else result["model_name"]
+    lookup_key: Final = _latest_check_key(result["model_id"], result["model_name"])
     last_check: Final = latest_checks_map.get(lookup_key)
     if last_check is None or last_check.status != _new_health_status(result):
         return True
@@ -959,7 +987,7 @@ async def _save_health_check_results_if_changed(
     Args:
         prisma_client: Database client
         model_results: Dictionary of aggregated health check results per model
-        latest_checks_map: Dictionary mapping model_id/model_name to latest health check
+        latest_checks_map: Latest health check per (model_id, model_name), or per model_name for rows without an id
         start_time: Start time of health check for calculating response time
         checked_by: Identifier for who/what performed the check
 
@@ -1027,8 +1055,7 @@ async def save_background_health_checks_to_db(
         latest_checks: Final = await query_latest_health_checks(prisma_client)
         latest_checks_map: Final = {}
         for check in latest_checks:
-            # Use model_id as primary key, fallback to model_name
-            key = check.model_id if check.model_id else check.model_name
+            key = _latest_check_key(check.model_id, check.model_name)
             if key not in latest_checks_map:
                 latest_checks_map[key] = check
 

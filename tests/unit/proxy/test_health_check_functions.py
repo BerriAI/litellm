@@ -294,7 +294,7 @@ async def test_save_health_check_results_if_changed_status_changed():
 
     # Latest check shows unhealthy, new result is healthy (status changed)
     latest_checks_map = {
-        "model-123": MagicMock(
+        ("model-123", "gpt-3.5-turbo"): MagicMock(
             status="unhealthy",
             checked_at=datetime.now(timezone.utc) - timedelta(minutes=5),
         ),
@@ -336,7 +336,7 @@ async def test_save_health_check_results_if_changed_status_unchanged_recent():
     # Latest check shows healthy, new result is healthy (status unchanged)
     # And checked recently (within 1 hour)
     latest_checks_map = {
-        "model-123": MagicMock(
+        ("model-123", "gpt-3.5-turbo"): MagicMock(
             status="healthy",
             checked_at=datetime.now(timezone.utc) - timedelta(minutes=30),
         ),
@@ -374,7 +374,7 @@ async def test_save_health_check_results_if_changed_status_unchanged_old():
     # Latest check shows healthy, new result is healthy (status unchanged)
     # But checked >1 hour ago
     latest_checks_map = {
-        "model-123": MagicMock(
+        ("model-123", "gpt-3.5-turbo"): MagicMock(
             status="healthy",
             checked_at=datetime.now(timezone.utc) - timedelta(hours=2),
         ),
@@ -525,7 +525,7 @@ async def test_save_health_check_results_if_changed_reports_success_when_nothing
         },
     }
     latest_checks_map = {
-        "model-1": MagicMock(status="healthy", checked_at=datetime.now(timezone.utc) - timedelta(minutes=5)),
+        ("model-1", "gpt-4"): MagicMock(status="healthy", checked_at=datetime.now(timezone.utc) - timedelta(minutes=5)),
     }
 
     persisted = await _save_health_check_results_if_changed(
@@ -1305,14 +1305,17 @@ def test_public_wildcard_children_check_an_alias_target_only_a_wildcard_serves_u
     assert [(c["model_name"], _field(c, "litellm_params")["model"]) for c in children] == [("bedrock/fast", target)]
 
 
-class _NoLatestRows:
+class _LatestRows:
+    def __init__(self, rows: list[object]) -> None:
+        self.rows = rows
+
     async def query_raw(self, *_args: object) -> list[object]:
-        return []
+        return self.rows
 
 
 class _RecordingPrisma:
-    def __init__(self) -> None:
-        self.db = _NoLatestRows()
+    def __init__(self, latest_rows: list[object] | None = None) -> None:
+        self.db = _LatestRows(latest_rows or [])
         self.saved: list[Mapping[str, object]] = []
 
     async def save_health_check_result(self, **row: object) -> Mapping[str, object]:
@@ -1345,6 +1348,25 @@ async def test_alias_and_target_published_together_are_probed_once_and_saved_und
         ("openai/fast", "healthy"),
         ("openai/gpt-5.5", "healthy"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_newly_published_alias_is_saved_although_its_target_has_a_fresh_row_under_the_same_id():
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wc"}}],
+        model_group_alias={"openai/fast": "openai/gpt-5.5"},
+    )
+    children: Final = list(public_wildcard_children(["openai/gpt-5.5", "openai/fast"], router, None))
+    shared_id: Final = str(_field(children[0], "model_info")["id"])
+    prisma_client: Final = _RecordingPrisma(
+        [_raw_latest_row("openai/gpt-5.5", shared_id, datetime.now(timezone.utc) - timedelta(minutes=1))]
+    )
+
+    await save_background_health_checks_to_db(
+        prisma_client, children, [{"model": "openai/gpt-5.5", "model_id": shared_id}], [], time.time(), "pod-1"
+    )
+
+    assert [row["model_name"] for row in prisma_client.saved] == ["openai/fast"]
 
 
 def test_aggregate_health_check_results_matches_by_model_id_when_the_check_rewrote_the_model_string():
