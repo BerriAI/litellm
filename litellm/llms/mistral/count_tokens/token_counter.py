@@ -308,6 +308,7 @@ class MistralTokenCounter(BaseTokenCounter):
                     system=system,
                     tools=tools,
                     output_format=output_format,
+                    preserve_system_instructions=True,
                 )
             case "openai":
                 replayed_turns: Final = _MISTRAL_CHAT_CONFIG.replayed_turns(messages, model_to_use)

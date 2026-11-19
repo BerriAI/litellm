@@ -52,6 +52,69 @@ CHAT_COMPLETIONS_SSE_BODY = (
 )
 
 
+@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
+@pytest.mark.parametrize("nested", [False, True])
+def test_chained_turn_keeps_system_out_of_stored_input(continuation: dict[str, str], nested: bool) -> None:
+    forwarded: Final = {"extra_body": continuation} if nested else continuation
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+    )
+    assert kwargs["instructions"] == "Be brief."
+    assert kwargs["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    ]
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> None:
+    truncation: Final = {"truncation": "auto"}
+    forwarded: Final = {"extra_body": truncation} if nested else truncation
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+    )
+    assert kwargs.get("instructions") == "Be brief."
+    assert kwargs["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    ]
+
+
+@pytest.mark.parametrize(
+    "request_params",
+    [{}, {"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
+)
+@pytest.mark.parametrize("nested", [False, True])
+def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
+    request_params: dict[str, str], nested: bool
+) -> None:
+    caller: Final = {"instructions": "Caller instructions"}
+    forwarded: Final = {"extra_body": caller} if nested else caller
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded, **request_params},
+    )
+    instructions: Final = kwargs["extra_body"]["instructions"] if nested else kwargs["instructions"]
+    assert instructions == ("Be brief.\nCaller instructions" if request_params else "Caller instructions")
+    assert kwargs["input"] == [
+        *(
+            []
+            if request_params
+            else [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]}]
+        ),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+    ]
+
+
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
     responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
@@ -1586,3 +1649,33 @@ async def test_openai_turn_is_not_sent_again_for_other_rejections(
         )
 
     assert upstream.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("store_params", "system_in_input"),
+    [
+        ({}, False),
+        ({"store": True}, False),
+        ({"store": "false"}, False),
+        ({"store": False}, True),
+        ({"store": True, "extra_body": {"store": False}}, True),
+        ({"store": False, "extra_body": {"store": True}}, False),
+        ({"store": False, "extra_body": {"store": None}}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, False),
+        ({"store": False, "additional_drop_params": ["temperature"]}, True),
+    ],
+)
+def test_messages_system_prompt_moves_to_input_only_when_the_sent_store_is_false(
+    store_params: dict[str, object], system_in_input: bool
+) -> None:
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **store_params},
+    )
+    developer: Final = {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]}
+    assert (kwargs["input"][0] == developer) is system_in_input, kwargs
+    assert (kwargs.get("instructions") is None) is system_in_input, kwargs
+
