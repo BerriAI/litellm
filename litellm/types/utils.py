@@ -2873,6 +2873,11 @@ class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     cached_tokens: int = 0
     cached_tokens_details: CachedTokensDetails | None = None
 
+    @field_validator("cached_tokens", mode="before")
+    @classmethod
+    def normalize_null_cached_tokens(cls, value: object) -> object:
+        return 0 if value is None else value
+
 
 class ImageUsage(BaseLiteLLMOpenAIResponseObject):
     input_tokens: int

@@ -8,9 +8,11 @@ use std::{collections::BTreeMap, sync::Arc};
 use parking_lot::Mutex;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
+use litellm_router_types::RoutingStrategy;
+
 use crate::{
     Call, RouterStateSnapshot,
-    config::{Op, RoutingStrategy},
+    config::Op,
     error::Error,
     health_routing::WhenAllUnhealthy,
     host::{RouterHost, RouterRequest, RoutingContext, SelectStage},
@@ -412,13 +414,11 @@ impl<H: RouterHost> Call<'_, H> {
         // A deployment named by its id is served even while it cools down
         // (`get_deployment_by_model_id` returns before the cooldown filter).
         let settings = &snapshot.settings;
-        let cooling = if resolution.kind.is_single() {
+        let cooling = if resolution.kind.is_single() || all.is_empty() {
             Vec::new()
         } else {
-            // `async_get_cooldown_deployments` reads every deployment's, as one throttled batch.
-            self.health()
-                .active_cooldowns(&snapshot.registry.ids())
-                .await?
+            let ids: Vec<String> = all.iter().map(|d| d.id.clone()).collect();
+            self.health().active_cooldowns(&ids).await?
         };
         // Health-check filtering runs before the cooldown filter, except for a deployment named
         // by its id and the healthy count a retry decision reads.

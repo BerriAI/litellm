@@ -344,7 +344,7 @@ class Database:
 
     def has_budget_reference(self, budget_id: str, relation: str) -> bool:
         references: Final = {
-            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_id"),
+            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_template_id"),
             "customer_organizations": (self.litellm_customerorganizationtable, "budget_id"),
             "customer_teams": (self.litellm_customerteamtable, "budget_id"),
             "customer_members": (self.litellm_customermembertable, "budget_id"),
@@ -710,9 +710,10 @@ def test_member_temporary_increase_is_added_to_its_inherited_maximum(expiry: dat
     assert resolved == Budget(max_budget=expected)
 
 
-def test_a_budget_row_without_windows_writes_budget_limits_as_prisma_json_null() -> None:
-    values: Final = budget_row_values({"max_budget": 1.0, "budget_limits": None, "model_tpm_limit": None})
+@pytest.mark.parametrize("column", ("budget_limits", "model_tpm_limit", "model_rpm_limit"))
+def test_null_budget_json_fields_are_encoded_as_prisma_json_null(column: str) -> None:
+    values: Final = budget_row_values({"max_budget": 1.0, column: None})
     assert values["max_budget"] == 1.0
-    assert isinstance(values["budget_limits"], Json)
-    assert values["budget_limits"].data is None
-    assert "model_tpm_limit" not in values
+    encoded: Final = values[column]
+    assert isinstance(encoded, Json)
+    assert encoded.data is None

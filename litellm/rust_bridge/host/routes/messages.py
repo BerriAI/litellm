@@ -109,7 +109,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.rust_bridge import detectors, execution, failures
+from litellm.rust_bridge import _native, detectors, execution, failures
 from litellm.rust_bridge.execution import AsyncStream
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
 from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
@@ -123,34 +123,7 @@ from litellm.utils import clamp_max_tokens
 
 _RaisedT: Final = TypeVar("_RaisedT", bound=Exception)
 _METADATA: Final = TypeAdapter(dict[str, object])
-_BODY_FIELDS: Final = frozenset(
-    {
-        "max_tokens",
-        "metadata",
-        "stop_sequences",
-        "stream",
-        "system",
-        "temperature",
-        "thinking",
-        "tool_choice",
-        "tools",
-        "top_k",
-        "inference_geo",
-        "top_p",
-        "mcp_servers",
-        "context_management",
-        "compaction",
-        "container",
-        "output_format",
-        "speed",
-        "output_config",
-        "cache_control",
-        "reasoning_effort",
-        "safeguards",
-        "service_tier",
-        "thread",
-    }
-)
+_BODY_FIELDS: Final = frozenset(_native.messages_optional_params())
 
 WORKLOAD_IDENTITY_FIELDS: Final = anthropic_wif_litellm_params
 

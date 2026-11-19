@@ -206,7 +206,7 @@ fn group_members(
     let all = |name: &str, team_id: Option<&str>| {
         crate::resolve::all_deployments(registry, name, team_id).unwrap_or_default()
     };
-    let members = |routing_group: &crate::registry::RoutingGroupSpec| {
+    let members = |routing_group: &litellm_router_types::RoutingGroupSpec| {
         crate::routing_groups::members(routing_group, |member| all(member, None))
     };
     let mut rows = all(group, team_id);
@@ -706,7 +706,7 @@ impl<H: RouterHost> Call<'_, H> {
             &kind,
             &target.group,
         );
-        if strategy != crate::config::RoutingStrategy::SimpleShuffle {
+        if strategy != litellm_router_types::RoutingStrategy::SimpleShuffle {
             return Ok(None);
         }
         let Some(failed_id) = failed_id else {
@@ -724,7 +724,7 @@ impl<H: RouterHost> Call<'_, H> {
             .collect();
         let cooling = self
             .health()
-            .active_cooldowns(&snapshot.registry.ids())
+            .active_cooldowns(&ids)
             .await
             .unwrap_or_default();
         let remaining = ids

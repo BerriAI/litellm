@@ -64,7 +64,7 @@ from litellm.types.integrations.custom_logger_v2 import MetadataKind as V2Metada
 from litellm.types.integrations.custom_logger_v2 import Outcome as V2RecordOutcome
 from litellm.types.integrations.custom_logger_v2 import Usage as V2Usage
 from litellm.types.integrations.custom_logger_v2 import UsageRecord as V2UsageRecord
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.otel.logger import OpenTelemetryV2
@@ -213,11 +213,13 @@ class _RateLimitGroupRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.groups: list[object] = []
+        self.exceptions: asyncio.Queue[tuple[Exception, object]] = asyncio.Queue()
 
     async def log_model_group_rate_limit_error(
         self, exception: Exception, original_model_group: object, kwargs: Mapping[str, object]
     ) -> None:
         self.groups.append(original_model_group)
+        self.exceptions.put_nowait((exception, kwargs.get("exception")))
 
 
 @pytest.mark.asyncio
@@ -242,6 +244,40 @@ async def test_rate_limit_hook_preserves_metadata_with_non_string_keys(monkeypat
     )
 
     assert recorder.groups == [123]
+
+
+@pytest.mark.asyncio
+async def test_async_router_rate_limit_callback_gets_the_exception_in_kwargs(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    recorder: Final = _RateLimitGroupRecorder()
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "true")
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "judge",
+                "litellm_params": {
+                    "model": "openai/judge",
+                    "api_key": "fake",
+                    "api_base": "https://failure.example/v1",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    respx_mock.post("https://failure.example/v1/chat/completions").mock(
+        return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion("judge", [{"role": "user", "content": "hello"}])
+
+    exception, callback_exception = await asyncio.wait_for(recorder.exceptions.get(), timeout=5)
+    assert isinstance(exception, litellm.RateLimitError)
+    assert callback_exception is exception
 
 
 @pytest.mark.asyncio
@@ -10850,6 +10886,65 @@ def test_resolve_mantle_region_for_cost(monkeypatch):
         == "us-gov-west-1"
     )
     assert _resolve_mantle_region_for_cost("bedrock_mantle", None) == "us-east-1"
+
+
+@pytest.mark.parametrize(
+    ("model", "region", "pricing_key"),
+    [
+        (
+            "bedrock/mantle/anthropic.claude-sonnet-5-5",
+            "us-gov-west-1",
+            "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5-5",
+        ),
+        (
+            "bedrock/mantle/anthropic.claude-sonnet-5-5",
+            "us-west-2",
+            "anthropic.claude-sonnet-5-5",
+        ),
+        (
+            "bedrock_mantle/anthropic.claude-sonnet-5-5",
+            "us-gov-west-1",
+            "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5-5",
+        ),
+        (
+            "bedrock/mantle/anthropic.claude-sonnet-5-5",
+            None,
+            "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5-5",
+        ),
+    ],
+)
+def test_mantle_response_cost_uses_served_region(
+    model: str, region: str | None, pricing_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_REGION_NAME", "us-gov-west-1")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_region_cost",
+                "type": "message",
+                "role": "assistant",
+                "model": "anthropic.claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1000000, "output_tokens": 1000000},
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        response: Final = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            aws_region_name=region,
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+            client=HTTPHandler(client=client),
+        )
+
+    row: Final = litellm.model_cost[pricing_key]
+    expected_cost: Final[float] = 1000000 * (row["input_cost_per_token"] + row["output_cost_per_token"])
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
 
 
 def test_response_cost_calculator_prices_mantle_calls_on_the_served_region(monkeypatch):

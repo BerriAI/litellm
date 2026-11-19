@@ -639,6 +639,8 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
 def admin_client(client_and_mocks):
     client, mock_prisma, mock_table = client_and_mocks
     mock_table.delete = AsyncMock(return_value={"budget_id": "tpl-1"})
+    mock_table.find_unique = AsyncMock(return_value={"budget_id": "tpl-1"})
+    mock_table.delete_many = AsyncMock(return_value=1)
     mock_prisma.db.litellm_customerorganizationtable = MagicMock(
         find_many=AsyncMock(return_value=[]), count=AsyncMock(return_value=0)
     )
@@ -649,15 +651,29 @@ def admin_client(client_and_mocks):
 
 
 @pytest.mark.parametrize("encoded", (False, True))
-def test_delete_budget_preserves_organization_catalog(admin_client, encoded: bool) -> None:
+@pytest.mark.parametrize(
+    ("catalog", "endpoint"),
+    (
+        ("customer_organization_budget_group_ids", "customer_organization_budget_groups"),
+        ("app_customer_organization_budget_group_ids", "app_customer_organization_budget_groups"),
+    ),
+)
+def test_delete_budget_preserves_catalog(
+    admin_client: tuple[TestClient, MagicMock, MagicMock], encoded: bool, catalog: str, endpoint: str
+) -> None:
     from tests.unit.proxy.management_helpers.test_customer_hierarchy import Record
 
     client, database, table = admin_client
-    database.db.litellm_config.find_unique.return_value = Record.model_validate(
-        {"param_value": json.dumps(["tpl-1"]) if encoded else ["tpl-1"]}
-    )
+
+    def find_catalog(*, where: Mapping[str, object]) -> Record | None:
+        if where["param_name"] != catalog:
+            return None
+        return Record.model_validate({"param_value": json.dumps(["tpl-1"]) if encoded else ["tpl-1"]})
+
+    database.db.litellm_config.find_unique.side_effect = find_catalog
     response: Final = client.post("/budget/delete", json={"id": "tpl-1"})
     assert response.status_code == 409, response.text
+    assert response.json()["detail"]["error"] == f"Remove this group through {endpoint}."
     table.delete.assert_not_awaited()
 
 
@@ -674,11 +690,31 @@ async def test_delete_budget_refuses_customer_organization_default_budget(admin_
 
 
 @pytest.mark.asyncio
-async def test_delete_budget_deletes_budget_no_customer_organization_uses(admin_client):
+@pytest.mark.parametrize("attached", (False, True))
+async def test_delete_budget_deletes_budget_no_customer_organization_uses(admin_client, attached: bool):
     client, mock_prisma, mock_table = admin_client
     mock_prisma.db.litellm_customerorganizationtable.count = AsyncMock(return_value=0)
 
+    mock_table.delete_many.return_value = 0 if attached else 1
     resp: Final = client.post("/budget/delete", json={"id": "tpl-1"})
 
-    assert resp.status_code == 200, resp.text
-    mock_table.delete.assert_awaited_once_with(where={"budget_id": "tpl-1"})
+    assert resp.status_code == (409 if attached else 200), resp.text
+    assert resp.json() == (
+        {"detail": {"error": "Budget is attached to a customer or app. Remove it through the owning entity."}}
+        if attached
+        else {"budget_id": "tpl-1"}
+    )
+    mock_table.delete_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_missing_budget_preserves_prisma_missing_record_error() -> None:
+    from prisma.errors import RecordNotFoundError
+
+    from litellm.proxy.management_helpers.customer_hierarchy import delete_unattached_customer_budget
+
+    table: Final = MagicMock(
+        find_unique=AsyncMock(return_value=None), delete=AsyncMock(side_effect=RecordNotFoundError({}))
+    )
+    with pytest.raises(RecordNotFoundError):
+        await delete_unattached_customer_budget(table, "missing")
