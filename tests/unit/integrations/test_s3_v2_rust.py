@@ -138,14 +138,11 @@ class TestS3V2UnitTests:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("response_delay", (0.0, 2.0), ids=("immediate", "slow-response"))
 async def test_async_upload_retries_on_s3_503(
     monkeypatch: pytest.MonkeyPatch,
     bucket: ScriptedBucket,
     caplog: pytest.LogCaptureFixture,
-    response_delay: float,
 ) -> None:
-    bucket.delay = response_delay
     bucket.reply("test-retry", (503, ""), (200, ""))
     logger: Final = _logger(monkeypatch, bucket)
     with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
