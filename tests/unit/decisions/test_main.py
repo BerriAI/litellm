@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import copy
 import json
 import re
@@ -577,14 +576,84 @@ async def test_litellm_proxy_decisions_never_send_the_openai_key_to_the_proxy(
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
-    with contextlib.suppress(litellm.AuthenticationError):
+    await litellm.adecisions(
+        model=model,
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert [call.request.headers.get("authorization") for call in proxy_route.calls] == [None]
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_decisions_forward_box_questions_audio_and_videos_for_the_proxy_to_judge(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json={
+            **_OPENAI_RESPONSE,
+            "answers": [
+                {
+                    "type": "box",
+                    "name": "crack",
+                    "box": {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6},
+                    "confidence": 0.7,
+                }
+            ],
+        }
+    )
+
+    await litellm.adecisions(
+        model="litellm_proxy/an-alias-only-the-proxy-knows",
+        input="The package arrived broken.",
+        questions=[{"type": "box", "name": "crack", "instructions": "the crack on the screen"}],
+        audio=["data:audio/wav;base64,YQ==", {"content_type": "audio/mpeg", "base64": "Yg=="}],
+        videos=["data:video/mp4;base64,Yw=="],
+    )
+
+    sent: Final[bytes] = route.calls[0].request.content
+    assert json.loads(sent) == {
+        "model": "an-alias-only-the-proxy-knows",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "box", "name": "crack", "instructions": "the crack on the screen"}],
+        "audio": ["data:audio/wav;base64,YQ==", {"content_type": "audio/mpeg", "base64": "Yg=="}],
+        "videos": ["data:video/mp4;base64,Yw=="],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "refused"),
+    [
+        ({"supports_box_questions": False}, "box questions"),
+        ({"supports_audio_input": False}, "audio"),
+        ({"supports_video_input": False}, "videos"),
+    ],
+)
+async def test_litellm_proxy_decisions_refuse_what_the_deployment_turns_off(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model_info: Mapping[str, bool],
+    refused: str,
+) -> None:
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=refused):
         await litellm.adecisions(
-            model=model,
+            model="litellm_proxy/an-alias-only-the-proxy-knows",
             input="The package arrived broken.",
-            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+            questions=[{"type": "box", "name": "crack", "instructions": "the crack on the screen"}],
+            audio=["data:audio/wav;base64,YQ=="],
+            videos=["data:video/mp4;base64,Yw=="],
+            model_info=model_info,
         )
 
-    assert "Bearer openai-key" not in {call.request.headers.get("authorization") for call in proxy_route.calls}
+    assert not route.called
 
 
 @pytest.mark.asyncio
