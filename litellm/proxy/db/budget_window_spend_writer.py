@@ -159,7 +159,7 @@ def _with_charged_reset(
     rows: Sequence[CommittedWindowSpend], transaction: WindowSpendTransaction
 ) -> tuple[CommittedWindowSpend, ...]:
     reset: Final = transaction.get("reset_at")
-    start: Final = datetime.fromisoformat(transaction["window_start"])
+    start: Final = to_naive_utc(datetime.fromisoformat(transaction["window_start"]))
     return tuple(
         row.model_copy(update={"reset_at": datetime.fromisoformat(reset.replace("Z", "+00:00"))})
         if reset and to_naive_utc(row.window_start) == start

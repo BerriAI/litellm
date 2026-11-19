@@ -160,8 +160,9 @@ def _existing(entity_type: str, entity_id: str, window_duration: str) -> dict[st
 @pytest.mark.asyncio
 @pytest.mark.parametrize("capture", (False, True))
 @pytest.mark.parametrize("already_rolled", (False, True))
+@pytest.mark.parametrize("offset", (None, timezone(timedelta(hours=5, minutes=30))))
 async def test_alert_snapshots_keep_each_committed_balance_before_the_next_rollover(
-    capture: bool, already_rolled: bool
+    capture: bool, already_rolled: bool, offset: timezone | None
 ) -> None:
     periods: Final = (
         (datetime(2026, 2, 28, tzinfo=timezone.utc), datetime(2026, 3, 31, tzinfo=timezone.utc), 11.0, 2.0),
@@ -183,11 +184,16 @@ async def test_alert_snapshots_keep_each_committed_balance_before_the_next_rollo
         transactions=WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
             (
                 tuple(
-                    to_wire_payload(
-                        build_window_spend_transaction(
-                            "app", "app", "1mo", start, delta, reset_at=reset.isoformat().replace("+00:00", "Z")
-                        )
-                    )
+                    {
+                        **to_wire_payload(
+                            build_window_spend_transaction(
+                                "app", "app", "1mo", start, delta, reset_at=reset.isoformat().replace("+00:00", "Z")
+                            )
+                        ),
+                        "window_start": (
+                            start.astimezone(offset) if offset else start.replace(tzinfo=None)
+                        ).isoformat(),
+                    }
                     for start, reset, _, delta in periods
                 ),
             )

@@ -312,6 +312,7 @@ def test_projection_carries_windows_and_does_not_reprice_guardrails() -> None:
     assert dict(window.increments) == {"spend": 0.75}
     assert dict(window.values)["window_start"] == _NOW.isoformat()
     assert _window(window)["reset_at"] == _NOW.replace(day=3).isoformat()
+    assert _window(window)["window_start"] == _NOW.replace(tzinfo=None).isoformat(timespec="microseconds")
     assert units == {
         "text": {"units": 3, "cost": 0.3, "untracked_units": 0},
         "images": {"units": 2, "cost": 0.0, "untracked_units": 2},
