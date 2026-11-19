@@ -236,3 +236,22 @@ def test_vertex_ai_claude_messages_has_no_python_fallback(monkeypatch: pytest.Mo
 
     assert catalog.rollout(context) is Rollout.RUST_REQUIRED
     assert catalog.decision(context) is Decision.RUST_REQUIRED
+
+
+@pytest.mark.parametrize(
+    ("provider", "target", "expected"),
+    (
+        ("bedrock_mantle", Target.BEDROCK_MANTLE, Decision.RUST_REQUIRED),
+        ("bedrock", Target.BEDROCK_MANTLE, Decision.RUST_REQUIRED),
+        ("bedrock_mantle", Target.CHAT_COMPLETIONS, Decision.PYTHON),
+        ("bedrock_mantle", Target.RESPONSES, Decision.PYTHON),
+        ("bedrock", Target.MESSAGES, Decision.PYTHON),
+        ("vertex_ai", Target.BEDROCK_MANTLE, Decision.PYTHON),
+    ),
+)
+def test_shipped_rules_require_rust_only_for_bedrock_mantle_messages(
+    provider: str, target: Target, expected: Decision
+) -> None:
+    context: Final = RouteContext(Route.MESSAGES, provider=provider, model="m", target=target)
+
+    assert catalog.decision(context, catalog.RULES) is expected

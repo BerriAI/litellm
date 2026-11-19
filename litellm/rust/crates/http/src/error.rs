@@ -628,13 +628,7 @@ fn at_host(host: Option<&str>) -> String {
 
 impl From<reqwest::Error> for Error {
     fn from(error: reqwest::Error) -> Self {
-        let host = error.url().and_then(|url| {
-            let host = url.host_str()?;
-            Some(match url.port() {
-                Some(port) => format!("{host}:{port}"),
-                None => host.to_owned(),
-            })
-        });
+        let host = error.url().and_then(url_host);
         let error = error.without_url();
         if error.is_timeout() {
             Repr::Timeout(error).into()
@@ -648,6 +642,15 @@ impl From<reqwest::Error> for Error {
             Repr::Network(error).into()
         }
     }
+}
+
+/// The host of `url` with any explicit port, which a connect failure names in place of its URL.
+fn url_host(url: &url::Url) -> Option<String> {
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    })
 }
 
 impl From<tungstenite::Error> for Error {
@@ -678,6 +681,44 @@ mod tests {
         assert!(!error.dispatched());
         assert!(!report.contains("secret"), "{report}");
         assert!(!report.contains("private"), "{report}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_connection_names_only_the_host_it_was_sent_to() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client")
+            .post(format!(
+                "http://{address}/model/private/invoke?api_key=secret"
+            ))
+            .send()
+            .await
+            .expect_err("nothing listens");
+
+        let error = crate::Error::from(error);
+
+        assert!(error.is_connect());
+        assert_eq!(
+            error.to_string(),
+            format!("could not reach the provider at {address}")
+        );
+    }
+
+    #[rstest]
+    #[case::default_https_port(
+        "https://bedrock-mantle.us-east-1.api.aws/v1/messages",
+        "bedrock-mantle.us-east-1.api.aws"
+    )]
+    #[case::explicit_port("http://[::1]:8080/v1?x=1", "[::1]:8080")]
+    fn a_host_keeps_only_the_host_and_an_explicit_port(#[case] url: &str, #[case] host: &str) {
+        assert_eq!(
+            super::url_host(&url::Url::parse(url).unwrap()).as_deref(),
+            Some(host)
+        );
     }
 
     fn root_cause<'a>(

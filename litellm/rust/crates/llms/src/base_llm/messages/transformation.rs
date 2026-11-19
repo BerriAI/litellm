@@ -4,7 +4,7 @@ use litellm_llms_types::formats::messages::{
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{
     context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
@@ -75,6 +75,23 @@ pub trait BaseMessagesConfig: Sync {
         false
     }
 
+    /// A reply body that did not parse as a message, such as a 200 error envelope, as the caller gets it.
+    fn transform_unchecked_response(
+        &self,
+        body: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Error> {
+        Ok(body)
+    }
+
+    /// The requested params the call logs as its model parameters.
+    fn logged_params(
+        &self,
+        params: MessagesOptionalParams,
+        _context: &MessagesTransformContext,
+    ) -> Result<MessagesOptionalParams, Error> {
+        Ok(params)
+    }
+
     fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
         ToolCustomField::Keep
     }
@@ -92,6 +109,11 @@ pub trait BaseMessagesConfig: Sync {
     }
 
     fn secret_names(&self) -> &'static [&'static str];
+
+    /// The model Python's handler logs the call under, once `get_llm_provider` has resolved it.
+    fn logged_model(&self, model: &str) -> String {
+        model.to_string()
+    }
 
     /// Secrets read only on some paths, as Python's lazy `get_secret_str` calls are: resolved
     /// just before `validate_environment`, and only when this call names them. `python_host` is

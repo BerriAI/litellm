@@ -110,7 +110,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
             request,
             &context
                 .keeping_display_updates()
-                .warning_disabled_thinking_drop(),
+                .warning_dropped_disabled_thinking(),
         )?;
         let accepts_effort = supports_effort_param(&context.thinking.capabilities);
         Ok(MessagesRequest {

@@ -24,6 +24,15 @@ from starlette.routing import Route
 
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.repositories import rust_database
+from litellm.rust_bridge._native import RustTeamMembershipRepository
+from tests.unit.proxy.rust_auth_stores import (
+    FakeTeamMembershipStore,
+    FakeTeamStore,
+    GroupBudget,
+    RustAuthStores,
+    install_rust_auth_stores,
+)
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from fastapi import HTTPException, Request, status
 from starlette.datastructures import UploadFile
@@ -98,7 +107,14 @@ from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.types.videos.utils import encode_video_id_with_provider
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
+from tests.unit.proxy.rust_auth_stores import FakeKeyStore
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 JWKS_URL: Final = "https://idp.example/jwks"
@@ -567,7 +583,7 @@ def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     return {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -1153,7 +1169,7 @@ async def test_proxy_admin_expired_key_from_cache():
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     # Mock prisma_client
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = prisma_with_empty_config()
 
     # Mock get_key_object to return expired token from cache
     with (
@@ -1272,7 +1288,7 @@ async def test_scim_deactivated_user_key_is_rejected():
     mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = prisma_with_empty_config()
 
     import litellm.proxy.proxy_server as _proxy_server_mod
 
@@ -1362,7 +1378,7 @@ async def test_cached_proxy_admin_key_sets_via_virtual_key_marker():
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     _attrs_to_set = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -1416,6 +1432,7 @@ async def test_cached_proxy_admin_key_sets_via_virtual_key_marker():
 @pytest.mark.asyncio
 async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
     monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
     default_budget_id: str | None,
     expected_limits: tuple[int | None, int | None],
 ) -> None:
@@ -1441,10 +1458,8 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
         rpm_limit=0,
         tpm_limit=7,
     )
-    mock_prisma_client: Final = MagicMock()
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
-    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget)
+    mock_prisma_client: Final = prisma_with_empty_config()
+    rust_auth_stores.budget.rows[budget.budget_id] = budget.model_dump()
 
     user_api_key_cache: Final = UserApiKeyCache()
 
@@ -1522,7 +1537,7 @@ async def test_master_key_auth_sets_via_virtual_key_marker():
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     _attrs_to_set = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": master_key,
@@ -1590,7 +1605,7 @@ async def test_db_virtual_key_auth_sets_via_virtual_key_marker():
     mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = prisma_with_empty_config()
 
     import litellm.proxy.proxy_server as _proxy_server_mod
 
@@ -1666,7 +1681,7 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     _attrs_to_set = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -1875,7 +1890,7 @@ async def test_jwt_customer_budget_rate_limits_reach_enforcement(
     limits: tuple[int | None, int | None],
 ) -> None:
     cache: Final = UserApiKeyCache()
-    database: Final = MagicMock()
+    database: Final = prisma_with_empty_config()
     cache.set_cache(
         "team_id:rate-limit-team",
         LiteLLM_TeamTable(team_id="rate-limit-team", models=[]),
@@ -2126,8 +2141,8 @@ class TestJWTOAuth2Coexistence:
             patch("litellm.proxy.proxy_server.general_settings", {}),
             patch("litellm.proxy.proxy_server.premium_user", False),
             patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
             patch(
                 "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
                 new_callable=AsyncMock,
@@ -2813,7 +2828,7 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     _attrs = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -2944,7 +2959,7 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     _attrs = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -3046,7 +3061,7 @@ async def test_auth_flow_never_persists_fallback_team_object_lit_4391():
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     _attrs = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -3153,7 +3168,7 @@ async def test_auth_flow_fallback_team_resolves_object_permission_by_id():
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     _attrs = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -3247,7 +3262,7 @@ async def test_auth_flow_fallback_team_object_permission_none_when_unreadable():
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     _attrs = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -3321,7 +3336,7 @@ def _proxy_attrs_for_centralized_checks(user_custom_auth=None, flag=False, maste
     """
     return {
         "prisma_client": None,
-        "user_api_key_cache": DualCache(),
+        "user_api_key_cache": UserApiKeyCache(),
         "proxy_logging_obj": MagicMock(),
         "general_settings": ({"custom_auth_run_common_checks": True} if flag else {}),
         "llm_router": None,
@@ -3467,7 +3482,7 @@ async def _run_checks_for_cached_user(db_user: LiteLLM_UserTable, token: UserAPI
     key_cache.set_cache(key=db_user.user_id, value=db_user)
     attrs = {
         **_proxy_attrs_for_centralized_checks(),
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": key_cache,
         "spend_counter_cache": DualCache(),
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
@@ -3637,6 +3652,7 @@ async def test_centralized_common_checks_routes_header_tags_to_litellm_metadata(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_centralized_common_checks_carries_team_and_user_budget_state_on_the_token():
     """The team and user objects auth resolves are pinned on the token so the
     response path (Prometheus budget gauges) reads them from request metadata
@@ -3662,7 +3678,7 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
     )
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
-    database = MagicMock()
+    database = prisma_with_empty_config()
     database.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     attrs = {
         **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
@@ -3728,7 +3744,7 @@ async def test_centralized_common_checks_carry_the_committed_spend_beside_the_st
     attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
         "llm_router": None,
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": user_api_key_cache,
         "spend_counter_store": spend_counter_store,
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
@@ -3783,14 +3799,17 @@ async def _run_centralized_checks_with_key_end_user_budget(
 
     import litellm.proxy.proxy_server as _proxy_server_mod
 
-    async def _find_budget(where: Mapping[str, str]) -> MagicMock | None:
-        budget_id = where["budget_id"]
-        return _end_user_budget_row(budget_id, budgets[budget_id]) if budget_id in budgets else None
+    stores = RustAuthStores()
+    stores.budget.rows.update(
+        {budget_id: _end_user_budget_row(budget_id, cap).dict() for budget_id, cap in budgets.items()}
+    )
+    if end_user_row is not None:
+        row = end_user_row.dict()
+        stores.end_user.rows[row["user_id"]] = row
+    store_patch = pytest.MonkeyPatch()
+    install_rust_auth_stores(store_patch, stores)
 
-    prisma_client = MagicMock()
-    prisma_client.db.query_raw = AsyncMock(return_value=[])
-    prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
+    prisma_client = prisma_with_empty_config()
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
@@ -3822,6 +3841,7 @@ async def _run_centralized_checks_with_key_end_user_budget(
                 route="/chat/completions",
             )
     finally:
+        store_patch.undo()
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
 
@@ -3979,7 +3999,7 @@ async def test_centralized_common_checks_enforces_team_model_max_budget_from_the
     limiter = _RecordingTeamModelBudgetLimiter()
     attrs = {
         **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": user_api_key_cache,
         "model_max_budget_limiter": limiter,
     }
@@ -4131,7 +4151,7 @@ async def _run_centralized_checks_for_end_user(
         },
         "llm_model_list": router.model_list,
         "llm_router": router,
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": user_api_key_cache,
         "spend_counter_cache": DualCache(),
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
@@ -4444,7 +4464,7 @@ async def test_centralized_common_checks_holds_the_end_user_to_the_model_a_team_
         "general_settings": {"disable_budget_reservation": True},
         "llm_model_list": router.model_list,
         "llm_router": router,
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": user_api_key_cache,
         "spend_counter_cache": DualCache(),
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
@@ -4534,7 +4554,7 @@ async def test_centralized_common_checks_applies_an_end_user_cap_on_the_tokens_t
         "general_settings": {"disable_budget_reservation": True},
         "llm_model_list": router.model_list,
         "llm_router": router,
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": user_api_key_cache,
         "spend_counter_cache": DualCache(),
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
@@ -4612,7 +4632,7 @@ async def test_centralized_common_checks_loads_member_budget_and_exempts_discove
         "llm_model_list": router.model_list,
         "llm_router": router,
         "master_key": "sk-master-key",
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": user_api_key_cache,
         "proxy_logging_obj": MagicMock(),
         "model_max_budget_limiter": limiter,
@@ -4693,6 +4713,7 @@ async def test_centralized_common_checks_loads_member_budget_and_exempts_discove
 )
 @pytest.mark.asyncio
 async def test_centralized_common_checks_skips_default_member_budget_lookup_errors_on_exempt_routes(
+    rust_auth_stores: RustAuthStores,
     route: str,
     path: str,
     must_raise: bool,
@@ -4731,10 +4752,8 @@ async def test_centralized_common_checks_skips_default_member_budget_lookup_erro
         value=LiteLLM_UserTable(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
         model_type=LiteLLM_UserTable,
     )
-    prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
-        side_effect=RuntimeError("budget database unavailable")
-    )
+    prisma_client: Final = prisma_with_empty_config()
+    rust_auth_stores.budget.rows[budget_id] = RuntimeError("budget database unavailable")
     router: Final = litellm.Router(
         model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}],
     )
@@ -4785,7 +4804,7 @@ async def test_centralized_common_checks_skips_default_member_budget_lookup_erro
             )
 
         assert token.team_member_model_max_budget is None
-        prisma_client.db.litellm_budgettable.find_unique.assert_awaited_once_with(where={"budget_id": budget_id})
+        assert rust_auth_stores.budget.lookups == [budget_id]
     finally:
         for attribute, value in originals.items():
             setattr(_proxy_server_mod, attribute, value)
@@ -4799,7 +4818,7 @@ def _team_member_model_budget_load_inputs() -> tuple[
         team_id="team-1",
         metadata={"team_member_budget_id": "default-budget"},
     )
-    prisma_client: Final = MagicMock()
+    prisma_client: Final = prisma_with_empty_config()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock()
     user_api_key_cache: Final = UserApiKeyCache()
     return token, team_object, prisma_client, user_api_key_cache
@@ -4873,7 +4892,7 @@ async def test_member_model_budget_load_reads_current_default_for_plain_team_obj
         team_id="team-1",
         metadata={"team_member_budget_id": "default-budget"},
     )
-    prisma_client: Final = MagicMock()
+    prisma_client: Final = prisma_with_empty_config()
     user_api_key_cache: Final = UserApiKeyCache()
     stale_caps: Final = {"claude-sonnet-4-6": {"max_budget": 3.0, "budget_duration": "1d"}}
     current_caps: Final = {"claude-sonnet-4-6": {"max_budget": 1.0, "budget_duration": "1d"}}
@@ -4977,6 +4996,7 @@ async def test_member_model_budget_load_falls_back_when_override_has_no_model_ca
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_member_model_budget_load_uses_default_without_membership() -> None:
     token, team_object, prisma_client, user_api_key_cache = _team_member_model_budget_load_inputs()
     default_caps: Final = {"claude-sonnet-4-6": {"max_budget": 3.0, "budget_duration": "1d"}}
@@ -5001,12 +5021,12 @@ async def test_member_model_budget_load_uses_default_without_membership() -> Non
 
 
 @pytest.mark.asyncio
-async def test_member_model_budget_load_fails_closed_on_default_lookup_error() -> None:
+async def test_member_model_budget_load_fails_closed_on_default_lookup_error(
+    rust_auth_stores: RustAuthStores,
+) -> None:
     token, team_object, prisma_client, user_api_key_cache = _team_member_model_budget_load_inputs()
     prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
-        side_effect=RuntimeError("budget database unavailable")
-    )
+    rust_auth_stores.budget.rows["default-budget"] = RuntimeError("budget database unavailable")
 
     with pytest.raises(RuntimeError, match="budget database unavailable"):
         await _load_team_member_default_model_budget(
@@ -5020,12 +5040,12 @@ async def test_member_model_budget_load_fails_closed_on_default_lookup_error() -
 
 
 @pytest.mark.asyncio
-async def test_member_model_budget_load_skips_default_lookup_error_when_checks_are_skipped() -> None:
+async def test_member_model_budget_load_skips_default_lookup_error_when_checks_are_skipped(
+    rust_auth_stores: RustAuthStores,
+) -> None:
     token, team_object, prisma_client, user_api_key_cache = _team_member_model_budget_load_inputs()
     prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
-        side_effect=RuntimeError("budget database unavailable")
-    )
+    rust_auth_stores.budget.rows["default-budget"] = RuntimeError("budget database unavailable")
 
     await _load_team_member_default_model_budget(
         user_api_key_auth_obj=token,
@@ -5040,10 +5060,9 @@ async def test_member_model_budget_load_skips_default_lookup_error_when_checks_a
 
 
 @pytest.mark.asyncio
-async def test_member_model_budget_load_allows_missing_default_row() -> None:
+async def test_member_model_budget_load_allows_missing_default_row(rust_auth_stores: RustAuthStores) -> None:
     token, team_object, prisma_client, user_api_key_cache = _team_member_model_budget_load_inputs()
     prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
 
     await _load_team_member_default_model_budget(
         user_api_key_auth_obj=token,
@@ -5092,16 +5111,12 @@ async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
             setattr(_proxy_server_mod, k, v)
 
 
-def _unrestricted_end_user_prisma(spend: float):
+def _unrestricted_end_user_prisma(stores: RustAuthStores, spend: float):
     """Prisma stand-in where "customer-1" exists but restricts nothing: no row matches the
     restricted-registry query, and the row itself carries only spend."""
-    end_user_row = MagicMock()
-    end_user_row.user_id = "customer-1"
-    end_user_row.dict = lambda: {"user_id": "customer-1", "blocked": False, "spend": spend}
+    stores.end_user.rows["customer-1"] = {"user_id": "customer-1", "blocked": False, "spend": spend}
 
-    mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
+    mock_prisma = prisma_with_empty_config()
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
@@ -5146,7 +5161,7 @@ def _chat_request():
 
 
 @pytest.mark.asyncio
-async def test_centralized_checks_enforce_token_end_user_budget_against_row_spend():
+async def test_centralized_checks_enforce_token_end_user_budget_against_row_spend(rust_auth_stores: RustAuthStores):
     """
     Regression: a token-supplied end-user budget must still be checked against the end user's
     recorded spend.
@@ -5156,7 +5171,7 @@ async def test_centralized_checks_enforce_token_end_user_budget_against_row_spen
     load it, because the reservation counter cold-starts from the spend on the loaded row; skipping
     the load admits a customer who is already double their budget.
     """
-    mock_prisma = _unrestricted_end_user_prisma(spend=100.0)
+    mock_prisma = _unrestricted_end_user_prisma(rust_auth_stores, spend=100.0)
     token = UserAPIKeyAuth(
         api_key="sk-test",
         token="hashed-token",
@@ -5192,9 +5207,9 @@ async def test_centralized_checks_enforce_token_end_user_budget_against_row_spen
 
 
 @pytest.mark.asyncio
-async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
+async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget(rust_auth_stores: RustAuthStores):
     """The companion case: with no token budget an unrestricted end user costs zero row reads."""
-    mock_prisma = _unrestricted_end_user_prisma(spend=100.0)
+    mock_prisma = _unrestricted_end_user_prisma(rust_auth_stores, spend=100.0)
     token = UserAPIKeyAuth(
         api_key="sk-test",
         token="hashed-token",
@@ -5223,7 +5238,7 @@ async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
                 route="/chat/completions",
             )
 
-    mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+    assert rust_auth_stores.end_user.lookups == []
 
 
 @pytest.mark.asyncio
@@ -5375,15 +5390,9 @@ async def test_team_key_vector_store_access_when_team_cannot_be_resolved(
     token.via_virtual_key = True
     request: Final = Request(scope={"type": "http"})
     request._url = URL(url="/v1/rag/query")
-    database: Final = MagicMock()
-    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: (
-            LiteLLM_ObjectPermissionTable(
-                object_permission_id=where["object_permission_id"], vector_stores=["KBSTOREA"]
-            )
-            if where["object_permission_id"] == "key-permission"
-            else None
-        )
+    database: Final = prisma_with_empty_config()
+    install_rust_auth_stores(monkeypatch).object_permission.reader["key-permission"] = LiteLLM_ObjectPermissionTable(
+        object_permission_id="key-permission", vector_stores=["KBSTOREA"]
     )
     attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
@@ -5451,23 +5460,26 @@ async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_te
         "team-2-grants-a": ["KBSTOREA"],
         "user-grants-a": ["KBSTOREA"],
     }
-    database: Final = MagicMock()
-    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: LiteLLM_ObjectPermissionTable(
-            object_permission_id=where["object_permission_id"], vector_stores=grants[where["object_permission_id"]]
-        )
-    )
-    database.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
-    if isinstance(team_lookup, Exception):
-        database.db.litellm_teamtable.find_unique = AsyncMock(side_effect=team_lookup)
-    else:
-        database.db.litellm_teamtable.find_unique = AsyncMock(
-            side_effect=lambda where, **_: LiteLLM_TeamTable(
-                team_id=where["team_id"],
-                models=["gpt-4o-mini"],
-                object_permission_id=team_lookup[where["team_id"]],
+    database: Final = prisma_with_empty_config()
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team=FakeTeamStore(
+                rows={
+                    team_id: team_lookup
+                    if isinstance(team_lookup, Exception)
+                    else {"team_id": team_id, "models": ["gpt-4o-mini"], "object_permission_id": team_lookup[team_id]}
+                    for team_id in ("team-1", "team-2")
+                    if isinstance(team_lookup, Exception) or team_id in team_lookup
+                }
             )
-        )
+        ),
+    ).object_permission.reader.update(
+        {
+            permission_id: LiteLLM_ObjectPermissionTable(object_permission_id=permission_id, vector_stores=stores)
+            for permission_id, stores in grants.items()
+        }
+    )
     user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
         key="user-1",
@@ -5522,12 +5534,9 @@ async def test_keyless_proxy_admin_keeps_personal_vector_store_grants_under_deny
     token: Final = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
     request: Final = Request(scope={"type": "http"})
     request._url = URL(url="/v1/rag/query")
-    database: Final = MagicMock()
-    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: SimpleNamespace(
-            dict=lambda: {"object_permission_id": where["object_permission_id"], "vector_stores": ["KBSTOREA"]},
-            vector_stores=["KBSTOREA"],
-        )
+    database: Final = prisma_with_empty_config()
+    install_rust_auth_stores(monkeypatch).object_permission.reader["admin-grants-a"] = LiteLLM_ObjectPermissionTable(
+        object_permission_id="admin-grants-a", vector_stores=["KBSTOREA"]
     )
     attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
@@ -6486,7 +6495,7 @@ async def test_builder_ui_sentinel_team_never_hits_get_team_object():  # test-qu
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     attrs = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": DualCache(),
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -6731,6 +6740,7 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
         ),
     ],
 )
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_centralized_common_checks_inherits_org_identity(
     key_org_id: str | None,
     team_id: str | None,
@@ -6780,7 +6790,7 @@ async def test_centralized_common_checks_inherits_org_identity(
     )
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    attrs["prisma_client"] = MagicMock()
+    attrs["prisma_client"] = prisma_with_empty_config()
     attrs["prisma_client"].db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     attrs["general_settings"] = {"allow_requests_on_db_unavailable": allow_db_unavailable}
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
@@ -7376,7 +7386,7 @@ def _proxy_attrs_for_db_lookup():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
     return {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": DualCache(),
         "proxy_logging_obj": proxy_logging_obj,
         "master_key": "sk-test-master",
@@ -7431,20 +7441,24 @@ async def _run_builder_with_key_lookup(get_key_object_mock):
 
 
 class _StalledKeyLookupPrisma:
-    """A database whose connection answers the readiness ping but whose key lookups
+    """A database whose connection answers the readiness ping, paired with key lookups that
     never return, which is what the incident's locked table looked like."""
 
     def __init__(self) -> None:
         self.health_check = AsyncMock(return_value=True)
-        self.attempt_db_reconnect = AsyncMock(return_value=True)
         self.db = MagicMock()
 
-    async def get_data(self, token: str, table_name: str, parent_otel_span: None, proxy_logging_obj: None) -> None:
+
+class _StalledKeyStore(FakeKeyStore):
+    async def find(self, token: str, *, use_writer: bool = False) -> str | None:
         await asyncio.Event().wait()
+        return None
 
 
 @pytest.mark.asyncio
-async def test_burst_against_a_stalled_db_fails_fast_with_503_and_turns_readiness_red():
+async def test_burst_against_a_stalled_db_fails_fast_with_503_and_turns_readiness_red(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The incident, end to end: N requests into a proxy whose database stalls used to
     park in the pod with readiness green until it OOMed. Now every one of them fails
     within the lookup deadline as a 503, and the next readiness probe takes the pod out
@@ -7465,6 +7479,7 @@ async def test_burst_against_a_stalled_db_fails_fast_with_503_and_turns_readines
     app.include_router(health_endpoints.router)
     app.add_exception_handler(ProxyException, _proxy_server_mod.openai_exception_handler)
 
+    install_rust_auth_stores(monkeypatch, RustAuthStores(key=_StalledKeyStore()))
     attrs = {**_proxy_attrs_for_db_lookup(), "prisma_client": _StalledKeyLookupPrisma()}
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     health_endpoints.db_health_cache = {"status": "unknown", "last_updated": datetime.now() - timedelta(seconds=60)}
@@ -7567,6 +7582,20 @@ async def test_builder_401_for_unknown_key_discloses_nothing_about_the_lookup():
 
 
 @pytest.mark.asyncio
+async def test_builder_raises_the_typed_key_not_found_error_naming_the_hash_it_looked_up():
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+    from litellm.proxy.proxy_server import hash_token
+
+    get_key_object = AsyncMock(side_effect=KeyNotFoundError("the-hash-the-store-read"))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(get_key_object)
+
+    assert type(exc_info.value) is KeyNotFoundError
+    assert exc_info.value.hashed_token == hash_token(token="sk-db-lookup-test")
+
+
+@pytest.mark.asyncio
 async def test_builder_succeeds_when_db_lookup_returns_valid_token():
     """Regression guard: a valid key still authenticates. Proves the 503
     conversion only fires on the failure path and never intercepts success."""
@@ -7639,7 +7668,7 @@ async def test_random_non_sk_token_is_rejected(monkeypatch):
 
     with (
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
     ):
         with pytest.raises(Exception, match="LiteLLM Virtual Key expected\\.") as exc_info:
             await user_api_key_auth(
@@ -7793,8 +7822,12 @@ async def _authenticate_session_token_against_db(
     from starlette.datastructures import URL
 
     attrs = _proxy_attrs_for_db_lookup()
-    attrs["prisma_client"].db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
-    attrs["prisma_client"].db.litellm_teammembership.find_first = AsyncMock(return_value=membership_row)
+    memberships: Final = FakeTeamMembershipStore(
+        rows={}
+        if membership_row is None
+        else {(membership_row.user_id, membership_row.team_id): membership_row.model_dump()}
+    )
+    other_stores: Final = rust_database.repository
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     try:
         for k, v in attrs.items():
@@ -7809,6 +7842,11 @@ async def _authenticate_session_token_against_db(
             patch(  # test-quality-ok: the builder reads its DB row loaders off module globals
                 "litellm.proxy.auth.host.python.get_team_object",
                 AsyncMock(return_value=team_row, side_effect=team_error),
+            ),
+            patch.object(
+                rust_database,
+                "repository",
+                lambda kind: memberships if kind is RustTeamMembershipRepository else other_stores(kind),
             ),
         ):
             return await user_api_key_auth_builder(
@@ -8033,7 +8071,7 @@ async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     attrs = {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": key_cache,
         "proxy_logging_obj": proxy_logging_obj,
         "master_key": "sk-test-master",
@@ -8416,7 +8454,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
             value=LiteLLM_TeamTableCachedObj(team_id="team-1"),
             model_type=LiteLLM_TeamTableCachedObj,
         )
-        prisma_client: Final = MagicMock()
+        prisma_client: Final = prisma_with_empty_config()
         prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
         prisma_client.db.litellm_teammembership.find_first = AsyncMock(return_value=None)
         monkeypatch.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
@@ -8962,7 +9000,9 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         ] == _team_member_model_budget_spend_keys([primary_model])
 
     @pytest.mark.asyncio
-    async def test_fallback_settings_lookup_error_keeps_original_budget_error(self) -> None:
+    async def test_fallback_settings_lookup_error_keeps_original_budget_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import litellm.proxy.proxy_server as proxy_server
 
         valid_token: Final = UserAPIKeyAuth(
@@ -8975,8 +9015,8 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         request_data: Final = {"model": "claude-sonnet-4-6"}
         request: Final = self._request("claude-sonnet-4-6")
         await proxy_server.user_api_key_cache.async_delete_cache(key="team_id:team-1")
-        proxy_server.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-            side_effect=RuntimeError("settings unavailable")
+        stores: Final = install_rust_auth_stores(
+            monkeypatch, RustAuthStores(team=FakeTeamStore(rows={"team-1": RuntimeError("settings unavailable")}))
         )
 
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
@@ -8995,7 +9035,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         assert [
             call.kwargs["key"] for call in redis_cache.async_get_cache.call_args_list
         ] == _team_member_model_budget_spend_keys(["claude-sonnet-4-6"])
-        proxy_server.prisma_client.db.litellm_teamtable.find_unique.assert_awaited_once()
+        assert [team_id for team_id, _ in stores.team.lookups] == ["team-1"]
 
     @pytest.mark.asyncio
     async def test_fallback_skips_candidate_after_budget_check_error(self) -> None:
@@ -9162,7 +9202,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         limiter, _ = await _real_model_budget_limiter(member_spend={"claude-sonnet-4-6": 10.0})
         request_data: Final = {"model": "claude-sonnet-4-6"}
         request: Final = self._request("claude-sonnet-4-6")
-        prisma_client: Final = MagicMock()
+        prisma_client: Final = prisma_with_empty_config()
         access_group_id: Final = "team-group" if grant_source == "team" else "key-group"
         group_row: Final = LiteLLM_AccessGroupTable(
             access_group_id=access_group_id,
@@ -9170,7 +9210,8 @@ class TestCheckTeamMemberModelBudgetWithFallback:
             access_model_names=["claude-haiku-4-5"],
             assigned_team_ids=["team-1"],
         )
-        prisma_client.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group_row)
+        stored_access_groups: Final = install_rust_auth_stores(monkeypatch).access_group
+        stored_access_groups.reader[access_group_id] = group_row
         monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
 
         await _check_team_member_model_budget_with_fallback(
@@ -9188,9 +9229,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         )
 
         assert request_data["model"] == "claude-haiku-4-5"
-        prisma_client.db.litellm_accessgrouptable.find_unique.assert_awaited_once_with(
-            where={"access_group_id": access_group_id}
-        )
+        assert stored_access_groups.lookups == [(access_group_id, False)]
 
     @pytest.mark.asyncio
     async def test_fallback_without_team_or_key_access_group_grants_keeps_budget_error(self) -> None:
@@ -9618,11 +9657,9 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         ] == _team_member_model_budget_spend_keys(["gpt-4o"])
 
     @pytest.mark.asyncio
-    async def test_fallback_checks_candidate_access_group_budget_and_stamps_candidate_groups(self):
-        import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy.common_utils.user_api_key_cache import model_access_group_cache_key
-        from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-
+    async def test_fallback_checks_candidate_access_group_budget_and_stamps_candidate_groups(
+        self, rust_auth_stores: RustAuthStores
+    ) -> None:
         valid_token: Final = UserAPIKeyAuth(
             token="test-key",
             models=["gpt-4o", "gpt-4o-mini", "fallback-group"],
@@ -9636,11 +9673,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         limiter, _ = await _real_model_budget_limiter(member_spend={"gpt-4o": 10.0})
         request_data: Final = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
-        await proxy_server.user_api_key_cache.async_set_cache(
-            key=model_access_group_cache_key("fallback-group"),
-            value=ModelAccessGroupBudget(access_group_name="fallback-group", spend=0.0, max_budget=10.0),
-            model_type=ModelAccessGroupBudget,
-        )
+        rust_auth_stores.model_access_group.groups["fallback-group"] = GroupBudget(spend=0.0, max_budget=10.0)
         router: Final = litellm.Router(
             model_list=[
                 {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
@@ -9668,11 +9701,9 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         assert valid_token.matched_model_access_groups == ["fallback-group"]
 
     @pytest.mark.asyncio
-    async def test_access_group_budget_exhaustion_skips_fallback_candidate(self):
-        import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy.common_utils.user_api_key_cache import model_access_group_cache_key
-        from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-
+    async def test_access_group_budget_exhaustion_skips_fallback_candidate(
+        self, rust_auth_stores: RustAuthStores
+    ) -> None:
         valid_token: Final = UserAPIKeyAuth(
             token="test-key",
             models=["gpt-4o", "gpt-4o-mini", "fallback-group"],
@@ -9686,11 +9717,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         limiter, _ = await _real_model_budget_limiter(member_spend={"gpt-4o": 10.0})
         request_data: Final = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
-        await proxy_server.user_api_key_cache.async_set_cache(
-            key=model_access_group_cache_key("fallback-group"),
-            value=ModelAccessGroupBudget(access_group_name="fallback-group", spend=5.0, max_budget=5.0),
-            model_type=ModelAccessGroupBudget,
-        )
+        rust_auth_stores.model_access_group.groups["fallback-group"] = GroupBudget(spend=5.0, max_budget=5.0)
         router: Final = litellm.Router(
             model_list=[
                 {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
@@ -9733,7 +9760,7 @@ async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
 
     proxy_budget_row = MagicMock()
     proxy_budget_row.spend = 42.5
-    prisma_client = MagicMock()
+    prisma_client = prisma_with_empty_config()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=proxy_budget_row)
     prisma_client.db.query_raw = AsyncMock(
         side_effect=AssertionError("global spend must not be loaded from the fixed-30d MonthlyGlobalSpend view")
@@ -9758,7 +9785,7 @@ async def test_global_proxy_spend_none_when_proxy_budget_row_missing():
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-    prisma_client = MagicMock()
+    prisma_client = prisma_with_empty_config()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     result = await fetch_global_spend_with_event_coordination(
@@ -9822,7 +9849,7 @@ async def test_temp_budget_increase_applied_for_cached_key():
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
         patch(
@@ -9959,7 +9986,9 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
             "litellm.proxy.proxy_server.general_settings", {"disable_budget_reservation": True}
         ),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: module-global proxy state
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: module-global proxy state
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()
+        ),  # test-quality-ok: module-global proxy state
         patch(  # test-quality-ok: seed the cached key, team and membership without a DB
             "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
         ),
@@ -10056,7 +10085,7 @@ async def test_cached_key_budget_preserves_non_spending_access(
         {"disable_budget_reservation": True},
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(litellm.proxy.proxy_server, "spend_counter_cache", cache)
     monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging)
@@ -10166,7 +10195,9 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
             "litellm.proxy.proxy_server.general_settings", {"disable_budget_reservation": True}
         ),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: module-global proxy state
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: module-global proxy state
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()
+        ),  # test-quality-ok: module-global proxy state
         patch(  # test-quality-ok: seed the cached key, team and membership without a DB
             "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
         ),
@@ -10240,7 +10271,7 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
     user_id = "user-alert-thresholds"
     alert_emails = {"50": [], "100": ["finance@example.com"]}
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(
@@ -10303,7 +10334,9 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
             "litellm.proxy.proxy_server.general_settings", {"disable_budget_reservation": True}
         ),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: module-global proxy state
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: module-global proxy state
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()
+        ),  # test-quality-ok: module-global proxy state
         patch(  # test-quality-ok: seed the cached key, team and membership without a DB
             "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
         ),
@@ -10356,7 +10389,7 @@ async def _proxy_exception_for_key(
         patch("litellm.proxy.proxy_server.general_settings", general_settings),
         patch("litellm.proxy.proxy_server.premium_user", premium_user),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
     ):
@@ -10673,7 +10706,7 @@ def _viewer_inference_key(monkeypatch: pytest.MonkeyPatch, team_id: str | None, 
         )
     for name, value in {
         **_proxy_attrs_for_centralized_checks(),
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "user_api_key_cache": cache,
         "spend_counter_cache": DualCache(),
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=cache),
@@ -10779,7 +10812,7 @@ def _alias_token(monkeypatch, level: str, alias: dict, models: list) -> UserAPIK
     team = LiteLLM_TeamTableCachedObj(team_id="team-alias", models=models, router_settings={"model_group_alias": alias})
     cache.set_cache(key="team_id:team-alias", value=team)
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
     return UserAPIKeyAuth(team_id="team-alias", models=models)
 
 
@@ -11225,7 +11258,7 @@ async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_
     store = spend.store()
     attrs = {
         **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_with_empty_config(),
         "spend_counter_store": store,
     }
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
@@ -11346,7 +11379,7 @@ async def test_managed_actor_cannot_access_provider_resource_routes(monkeypatch,
         ),
         object_permission={"models": ["test-model"]},
     )
-    database = MagicMock()
+    database = prisma_with_empty_config()
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
     for name, value in {
         **_proxy_attrs_for_centralized_checks(),
@@ -11417,7 +11450,7 @@ async def test_managed_agent_cannot_bypass_grants_with_server_default(
         ),
         object_permission={"models": ["test-model", "forbidden-model"] if grant_default else ["test-model"]},
     )
-    database = MagicMock()
+    database = prisma_with_empty_config()
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
     for name, value in {
         **_proxy_attrs_for_centralized_checks(),
@@ -11477,7 +11510,7 @@ async def test_managed_jwt_cannot_be_downgraded_into_virtual_key_mapping(
         identity=binding,
         execution_mode="autonomous",
     )
-    client: Final = MagicMock()
+    client: Final = prisma_with_empty_config()
     client.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=binding)
     client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
     token: Final = _signed_jwt(
@@ -11532,7 +11565,7 @@ async def test_virtual_key_cannot_enter_checks_as_an_identity_managed_actor(monk
             revision="current",
         ),
     )
-    client: Final = MagicMock()
+    client: Final = prisma_with_empty_config()
     client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     checks: Final = AsyncMock()
@@ -11554,7 +11587,7 @@ async def test_virtual_key_cannot_enter_checks_as_an_identity_managed_actor(monk
 @pytest.mark.parametrize("credential", ["custom-credential", "sk-custom-credential"])
 @pytest.mark.parametrize("granted", [False, True])
 async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_row(
-    monkeypatch: pytest.MonkeyPatch, enterprise: bool, credential: str, granted: bool
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores, enterprise: bool, credential: str, granted: bool
 ) -> None:
     import importlib
     from typing import Final
@@ -11587,8 +11620,7 @@ async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_ro
         object_permission={"object_permission_id": "custom", "agents": ["target"] if granted else ["other"]},
     )
     custom: Final = AsyncMock(return_value=trusted)
-    database: Final = MagicMock()
-    database.get_data = AsyncMock(return_value=None)
+    database: Final = prisma_with_empty_config()
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
     for name, value in {
         **_proxy_server_attrs_for_custom_auth(user_custom_auth=None if enterprise else custom),
@@ -11610,7 +11642,7 @@ async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_ro
     )
     assert await AgentRequestHandler.is_agent_allowed("target", admitted) is granted
     custom.assert_awaited_once()
-    database.get_data.assert_not_awaited()
+    assert rust_auth_stores.key.lookups == []
 
 
 @pytest.mark.asyncio
@@ -11798,7 +11830,7 @@ async def test_exhausted_key_budget_spares_only_zero_spend_mcp_discovery(
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
     ):
@@ -11832,7 +11864,7 @@ _VIDEO_SPENDING_REQUESTS: Final = (
 async def _authenticate_video_request(
     key: UserAPIKeyAuth, api_key: str, method: str, route: str, request_data: dict[str, object]
 ) -> UserAPIKeyAuth:
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     await cache_key_object(
         hashed_token=key.token or "",
         user_api_key_obj=key,
@@ -11861,7 +11893,7 @@ async def _authenticate_video_request(
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch("litellm.proxy.proxy_server.llm_model_list", []),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
@@ -12012,7 +12044,7 @@ async def test_exhausted_key_budget_is_waived_only_when_the_served_model_is_free
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
         patch("litellm.proxy.proxy_server.llm_router", free_and_paid_router),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
@@ -12091,7 +12123,7 @@ async def _refusal_before_body(
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
         patch("litellm.proxy.proxy_server.open_telemetry_logger", None),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
         pytest.raises(ProxyException) as exc,
@@ -12160,7 +12192,7 @@ async def test_exhausted_cached_key_is_only_refused_before_the_body_where_a_mete
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
     ):
@@ -12244,7 +12276,7 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
     ):
@@ -12352,7 +12384,7 @@ async def test_preflight_rejection_preserves_failure_logging_context(body_mode: 
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
         patch("litellm.proxy.proxy_server.open_telemetry_logger", None),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", logging_obj),
         pytest.raises(ProxyException) as failure,
