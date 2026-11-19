@@ -1,4 +1,4 @@
-use litellm_core_utils::get_llm_provider_logic::LlmProviders;
+use litellm_core_utils::{decline::Decline, get_llm_provider_logic::LlmProviders};
 use litellm_http::request::string_headers as shared_string_headers;
 use litellm_llms::{
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
@@ -10,9 +10,11 @@ use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
 use super::Error;
-use crate::types::{ChatCompletionsCall, ResolvedChatCompletionsRequest};
+use crate::types::{ChatCompletionsCall, OptionalParams, ResolvedChatCompletionsRequest};
 
 const HEADER_CONTEXT: &str = "chat completions";
+
+const CLIENT_SIDE_CREDENTIAL: &str = "client-side credential needs general_settings.allow_client_side_credentials or the deployment's configurable_clientside_auth_params";
 
 pub(super) enum ChatProvider {
     Anthropic,
@@ -47,6 +49,7 @@ pub(super) fn string_headers(
 
 pub(super) fn resolve_request(
     call: ChatCompletionsCall,
+    model: &str,
     config: &'static dyn BaseConfig,
 ) -> Result<ResolvedChatCompletionsRequest, Error> {
     let messages = serde_json::from_value::<Vec<ChatMessage>>(call.messages).map_err(|err| {
@@ -62,12 +65,38 @@ pub(super) fn resolve_request(
             },
         ));
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &call.optional_params) {
+    let optional_params = match call.optional_params {
+        OptionalParams::OpenAi {
+            params,
+            client_side,
+            drop_params,
+        } => {
+            let (call_config, openai): (Map<String, Value>, Map<String, Value>) =
+                params.into_iter().partition(|(name, _)| {
+                    config.config_params().contains(&name.as_str()) && client_side.admits(name)
+                });
+            if openai.iter().any(|(name, value)| {
+                !value.is_null()
+                    && config.config_params().contains(&name.as_str())
+                    && !config.caller_config_params().contains(&name.as_str())
+            }) {
+                return Err(Error::Declined(Decline::new(CLIENT_SIDE_CREDENTIAL)));
+            }
+            config
+                .map_openai_params(model, openai, drop_params)
+                .map_err(Error::Declined)?
+                .into_iter()
+                .chain(call_config)
+                .collect()
+        }
+        OptionalParams::ProviderMapped(params) => params,
+    };
+    if let Some(reason) = config.unsupported_reason(&messages, &optional_params) {
         return Err(Error::Declined(reason));
     }
     Ok(ResolvedChatCompletionsRequest {
         messages,
-        optional_params: call.optional_params,
+        optional_params,
         api_key: call.api_key,
         api_base: call.api_base,
         extra_headers: call.extra_headers,

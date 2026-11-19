@@ -1281,6 +1281,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_continuation": {"type": "boolean"},
             "supports_multimodal": {"type": "boolean"},
             "uses_embed_content": {"type": "boolean"},
+            "supports_logprobs": {"type": "boolean"},
             "supports_reasoning": {"type": "boolean"},
             "supports_minimal_reasoning_effort": {"type": "boolean"},
             "supports_low_reasoning_effort": {"type": "boolean"},
@@ -4653,6 +4654,55 @@ def test_function_setup_lets_other_threads_drop_callbacks_while_it_sets_up_logge
     drops_on_compare.drop_thread.join()
 
     assert drops_on_compare.drop_finished_during_logger_setup
+
+
+class _DynamicCallbacksThatDropFromAnotherThreadWhenRead:
+    def __init__(self, dropped: tuple[object, ...]) -> None:
+        self.dropped: Final = dropped
+        self.drop_thread: threading.Thread | None = None
+
+    def __iter__(self) -> Iterator[object]:
+        if self.drop_thread is None:
+            self.drop_thread = threading.Thread(
+                target=litellm.logging_callback_manager.drop_callbacks, args=(self.dropped,)
+            )
+            self.drop_thread.start()
+            self.drop_thread.join(timeout=0.2)
+        return iter(())
+
+
+def test_function_setup_does_not_re_add_a_callback_another_thread_drops_while_it_reads_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dropped: Final = CustomLogger()
+    dynamic_callbacks: Final = _DynamicCallbacksThatDropFromAnotherThreadWhenRead((dropped,))
+    callback_list_names: Final = (
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "service_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    )
+    monkeypatch.setattr(litellm.utils, "callback_list", ["initialized"])
+    for list_name in callback_list_names:
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "callbacks", [dropped])
+
+    litellm.utils.function_setup(
+        "completion",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="callbacks-read-under-lock",
+        callbacks=dynamic_callbacks,
+    )
+    assert dynamic_callbacks.drop_thread is not None
+    dynamic_callbacks.drop_thread.join()
+
+    assert not any(dropped in getattr(litellm, list_name) for list_name in ("callbacks", *callback_list_names))
 
 
 class TestMetadataNoneHandling:

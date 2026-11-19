@@ -385,6 +385,7 @@ from litellm.constants import (
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -405,6 +406,7 @@ from litellm.litellm_core_utils.core_helpers import (
     json_contains,
     normalize_drop_params,
     require_attributes,
+    without,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -681,7 +683,11 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
-from litellm.proxy.db.connection_budget import RUST_RESERVED_CONNECTIONS
+from litellm.proxy.db.connection_budget import (
+    configure_pool_budget_from_settings,
+    rust_connections,
+    with_configured_connection_budget,
+)
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -855,6 +861,7 @@ from litellm.proxy.management_endpoints.request_error_endpoints import (
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimError, scim_error_response
 from litellm.proxy.management_endpoints.session_endpoints import (
     router as session_management_router,
 )
@@ -1626,11 +1633,13 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
+    connections: Final = rust_connections(os.environ)
     database: Final = await database_runtime.Database.open(
         client,
         os.environ["DATABASE_URL"],
         os.environ.get("DATABASE_URL_READ_REPLICA") or None,
-        RUST_RESERVED_CONNECTIONS,
+        writer_connections=connections.writer,
+        reader_connections=connections.reader,
     )
     resources.push_async_callback(database.aclose)
     return database
@@ -1649,10 +1658,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
 
 
 def register_prompt_cache_alerts(
-    settings: Mapping[str, object], prisma: PrismaClient | None, resources: AsyncExitStack
+    settings: Mapping[str, object],
+    prisma: PrismaClient | None,
+    resources: AsyncExitStack,
 ) -> None:
     """Off unless `general_settings.prompt_cache_alerts` is true and a database and a shared salt exist. The logger
-    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends."""
+    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends.
+    """
     if settings.get("prompt_cache_alerts") is not True or prisma is None:
         return
     from litellm.proxy.common_utils.encrypt_decrypt_utils import get_salt_key
@@ -1687,6 +1699,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         proxy_batch_polling_interval, \
         shared_aiohttp_session
     global ui_login_enabled  # noqa: PLW0603  # read once at startup so auth does not look the secret up per request
+    global database_url_configured  # noqa: PLW0603  # read once at startup so auth does not look the secret up per request
     import json
 
     resources.callback(_forget_prisma_client)
@@ -1770,7 +1783,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
 
-    enforce_fips_mode(general_settings_view())
+    settings: Final = general_settings_view()
+    enforce_fips_mode(settings)
+    if configure_pool_budget_from_settings.get() and prisma_client is None:
+        resources.enter_context(with_configured_connection_budget(settings.get("database_connection_pool_limit")))
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -1778,7 +1794,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                 master_key_boot_verdict(
                     master_key=master_key,
                     environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
-                    general_settings=general_settings,
+                    general_settings=settings,
                     config_file_path=user_config_file_path,
                     override_env_is_on=get_secret_bool(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR) is True,
                     salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
@@ -1794,9 +1810,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Final[str | None] = get_secret("DATABASE_URL", None)
+        database_url_configured = isinstance(_db_url, str) and _db_url.strip() != ""  # rebind-ok: set once at startup
         prisma_client = (  # rebind-ok: pre-existing rebinding on a rename-only line
             await ProxyStartupEvent.setup_prisma_client(
-                database_url=_db_url,
+                database_url=_db_url if database_url_configured else None,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_cache=user_api_key_cache,
             )
@@ -2535,6 +2552,12 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Ex
 async def management_problem_exception_handler(request: Request, exc: ManagementProblem):
     _close_dangling_otel_server_span(request, exc.problem.status, exc=exc)
     return problem_response(exc.problem)
+
+
+@app.exception_handler(ScimError)
+async def scim_error_exception_handler(request: Request, exc: ScimError) -> JSONResponse:
+    _close_dangling_otel_server_span(request, exc.status_code, exc=exc.traced_as or exc)
+    return scim_error_response(exc)
 
 
 class _ConfigParamRow(Protocol):
@@ -3336,6 +3359,7 @@ disable_spend_logs = False
 litellm_jwtauth: LiteLLM_JWTAuth = LiteLLM_JWTAuth()
 jwt_http_handler: Final = JwksHTTPHandler()
 ui_login_enabled: bool = True
+database_url_configured: bool = False  # rebind-ok: set once at startup so auth does not look the secret up per request
 prompt_injection_detection_obj: Final[OPTIONAL_PromptInjectionDetection | None] = None
 store_model_in_db: bool = False
 open_telemetry_logger: OpenTelemetry | None = None
@@ -3844,12 +3868,17 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
 async def customer_accounting_counters(
     ids: CustomerHierarchyIds | None,
     admitted_scopes: tuple[CustomerScopeAuth, ...] | None = None,
+    *,
+    started_at: datetime | None = None,
 ) -> tuple[BudgetCounter, ...]:
     if ids is None:
         return ()
     from itertools import chain
 
-    from litellm.proxy.auth.customer_hierarchy_auth import get_customer_scopes_for_accounting
+    from litellm.proxy.auth.customer_hierarchy_auth import (
+        get_customer_scopes_for_accounting,
+    )
+    from litellm.proxy.management_helpers.customer_hierarchy import utc_datetime
 
     try:
         scopes: Final = (
@@ -3866,7 +3895,7 @@ async def customer_accounting_counters(
             "Unable to load customer budget windows for spend accounting"
         )
         return ()
-    now: Final = datetime.now(timezone.utc)
+    now: Final = utc_datetime(started_at) if started_at is not None else datetime.now(timezone.utc)
     return tuple(
         chain.from_iterable(
             customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in scopes
@@ -3981,7 +4010,8 @@ async def _increment_spend_counters_batched(
     customer_counters: Sequence[BudgetCounter] = (),
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
-    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
+    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments.
+    """
     committed_counter_keys: Final = (
         tuple(counter_key for counter_key in committed_spend_scope.tracked() if has_committed_twin(counter_key))
         if committed_spend_scope is not None and response_cost is not None and response_cost > 0
@@ -4277,7 +4307,8 @@ def _flatten_spend_scopes(
 @dataclass(frozen=True, slots=True)
 class _ReservationCounterUpdate:
     """The reserved counters the direct increment must skip, and the adjustments that settle them on the actual
-    cost, still to be written; both empty when the reservation could not be reconciled and was dropped."""
+    cost, still to be written; both empty when the reservation could not be reconciled and was dropped.
+    """
 
     reserved_counter_keys: frozenset[str] = frozenset()
     pending: tuple[PendingSpendIncrement, ...] = ()
@@ -4740,7 +4771,8 @@ async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncremen
 def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> bool:
     """Post-call increments ride the request's native post-call pipeline with the other counters. Each counter's
     new value lands in memory when the pipeline settles; a failed one is dropped everywhere so no reader trusts a
-    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
+    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does.
+    """
     settlement: Final = spend_counter_store.increment_many_post_call(
         tuple((item.counter_key, item.increment) for item in pending)
     )
@@ -4752,9 +4784,12 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     return True
 
 
-async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+async def increment_spend_counters_pipeline(
+    pending: Sequence[PendingSpendIncrement],
+) -> tuple[float | None, ...]:
     """One INCRBYFLOAT+EXPIRE pipeline for every pending counter, returning each counter's new value in order; on
-    failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch."""
+    failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch.
+    """
     if not spend_counter_store.has_redis:
         return await run_spend_counter_pipeline(pending=pending)
     try:
@@ -4765,9 +4800,12 @@ async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrem
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
-async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+async def run_spend_counter_pipeline(
+    pending: Sequence[PendingSpendIncrement],
+) -> tuple[float | None, ...]:
     """The pipeline behind ``increment_spend_counters_pipeline`` without its invalidation: the caller decides what
-    happens to counters whose increment may or may not have landed when the pipeline fails."""
+    happens to counters whose increment may or may not have landed when the pipeline fails.
+    """
     if not pending:
         return ()
     if not spend_counter_store.has_redis:
@@ -5666,6 +5704,9 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         default_redis_ttl=litellm.default_redis_ttl,
     )
     spend_counter_store.attach_redis(connect(redis_cache))
+    from litellm.vector_stores.fallbacks import vector_store_fallback_cooldowns
+
+    vector_store_fallback_cooldowns.attach_redis_cache(redis_cache)
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
@@ -6170,11 +6211,21 @@ def _registered_callback_entries() -> tuple[tuple[str, object], ...]:
     return tuple(chain.from_iterable(_callback_list_entries(list_name) for list_name in _CALLBACK_LIST_NAMES))
 
 
+def _current_callback(entry: object) -> object:
+    return entry.active_logger() if isinstance(entry, GenericAPILogger) else entry
+
+
+def _current_entries(entries: tuple[tuple[str, object], ...]) -> tuple[tuple[str, object], ...]:
+    return tuple((list_name, _current_callback(entry)) for list_name, entry in entries)
+
+
 def _entries_missing_from(
     entries: tuple[tuple[str, object], ...], others: tuple[tuple[str, object], ...]
 ) -> tuple[tuple[str, object], ...]:
-    other_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in others)
-    return tuple((list_name, entry) for list_name, entry in entries if (list_name, id(entry)) not in other_ids)
+    other_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in _current_entries(others))
+    return tuple(
+        (list_name, entry) for list_name, entry in entries if (list_name, id(_current_callback(entry))) not in other_ids
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -6198,7 +6249,7 @@ def _restore_displaced_callback(list_name: str, entry: object) -> None:
 
 
 def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
-    for list_name, entry in registration.added:
+    for list_name, entry in _current_entries(registration.added):
         litellm.logging_callback_manager.remove_callback_from_list_by_object(
             _UNTYPED_VALUE.validate_python(getattr(litellm, list_name)), entry, require_self=False
         )
@@ -6794,7 +6845,7 @@ class ProxyConfig:
 
     def init_cache(
         self,
-        cache_params: dict,
+        cache_params: Mapping[str, Any],
         enable_redis_auth_cache: bool = False,
     ) -> RedisCache | None:
         """
@@ -6812,7 +6863,7 @@ class ProxyConfig:
         if "default_redis_ttl" in cache_params:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
-        litellm.cache = Cache(**cache_params)
+        litellm.cache = Cache(**without(cache_params, "default_redis_ttl"))
 
         resolved_usage_cache = redis_usage_cache
         cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
@@ -7521,6 +7572,8 @@ class ProxyConfig:
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
                         "access_group_rules",
+                        "customer_org_alias_header",
+                        "customer_member_id_header",
                     )
                     if name in typed_general_settings
                 }
@@ -8489,7 +8542,7 @@ class ProxyConfig:
         )
         after: Final = _registered_callback_entries()
         return _DbCallbackRegistration(
-            added=previous.added + _entries_missing_from(after, before),
+            added=_current_entries(previous.added) + _entries_missing_from(after, before),
             displaced=previous.displaced + _entries_missing_from(before, after),
         )
 
@@ -10180,16 +10233,10 @@ class ProxyConfig:
         config: Final = await self.get_config(config_file_path=user_config_file_path)
         credential_list: Final = self.load_credential_list(config=config)
 
-        ## COMBINED LIST ##
-        combined_list: Final = db_credentials + credential_list
-
-        ## DELETE ##
-        idx_to_delete: Final = []
-        for idx, credential in enumerate(litellm.credential_list):
-            if credential.credential_name not in [cred.credential_name for cred in combined_list]:
-                idx_to_delete.append(idx)
-        for idx in sorted(idx_to_delete, reverse=True):
-            litellm.credential_list.pop(idx)
+        names_to_keep: Final = frozenset(cred.credential_name for cred in db_credentials + credential_list)
+        litellm.credential_list[:] = tuple(
+            cred for cred in litellm.credential_list if cred.credential_name in names_to_keep
+        )
 
     async def get_credentials(self, prisma_client: PrismaClient):
         try:
@@ -14309,13 +14356,23 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
-    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+    responses={
+        200: {
+            "model": TranscriptionResponse,
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 @router.post(
     "/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
-    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+    responses={
+        200: {
+            "model": TranscriptionResponse,
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 async def audio_transcriptions(
     request: Request,
@@ -15575,10 +15632,10 @@ from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTIO
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
-    AccessGroupRepository,
     ConfigOverridesRepository,
     InvitationLinkRepository,
     PromptRepository,
@@ -15721,7 +15778,18 @@ def _deployment_with_request_drop_settings(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
     sent_params: Mapping[str, object],
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    overrides: Final = {name: sent_params[name] for name in _REQUEST_DROP_SETTINGS if sent_params.get(name) is not None}
+    overrides: Final = {
+        name: sent_params[name]
+        for name in (
+            *_REQUEST_DROP_SETTINGS,
+            "store",
+            "extra_body",
+            "previous_response_id",
+            "conversation",
+            "truncation",
+        )
+        if name in sent_params
+    }
     if not overrides:
         return deployment
     resolved_deployment: Final = deployment or {}
@@ -15818,7 +15886,10 @@ async def _try_native_responses_count(
 
 
 async def _provider_token_count(
-    count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
+    count_with: Callable[
+        [str, str | None],
+        Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]],
+    ],
     model_to_use: str,
     request_model: str,
     settings: TokenCountSettings,
@@ -15828,7 +15899,8 @@ async def _provider_token_count(
     """Count with the provider, using the token_count_model in its region when one is set.
 
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
-    estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
+    estimate stands in for it and that failure is the answer if the estimate cannot read the request.
+    """
     count_model: Final = settings.count_model
     counting_model: Final = (
         model_to_use
@@ -16345,6 +16417,12 @@ def _deployment_api_base(
     )
 
 
+def _inference_base_model(deployment: _TokenCountDeployment, responses_request: Mapping[str, object]) -> str | None:
+    return _non_empty_str(
+        _inference_params(deployment.get("litellm_params", {}), responses_request).get("base_model")
+    ) or _non_empty_str(deployment.get("model_info", {}).get("base_model"))
+
+
 def _deployment_provider(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
 ) -> str | None:
@@ -16678,6 +16756,10 @@ async def _count_request_tokens(
             _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
+            base_model=_inference_base_model(deployment_view, routed_request),
+            user_continue_message=_inference_params(deployment_view.get("litellm_params", {}), routed_request).get(
+                "user_continue_message"
+            ),
             deployment_params=deployment_defaults,
         )
     )
@@ -21686,6 +21768,10 @@ def _redact_callback_env_vars(env_vars: dict[str, str | None]) -> dict[str, str 
     }
 
 
+def _configured_callback_row(row: Mapping[str, object], list_key: str) -> Mapping[str, object]:
+    return dict(row, source="config") if proxy_config.litellm_settings.owned_by_config(list_key) else row
+
+
 def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
     if is_full_admin:
         return entries
@@ -22449,13 +22535,25 @@ async def get_config(
         """
 
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "success", environment_variables), "success_callback"
+                )
+            )
 
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "failure", environment_variables), "failure_callback"
+                )
+            )
 
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "success_and_failure", environment_variables), "callbacks"
+                )
+            )
 
         configured_callback_names: Final = frozenset(
             _normalize_callback_alias(callback)
