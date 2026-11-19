@@ -1,12 +1,14 @@
-use litellm_secret_value::SecretValue;
+use litellm_python_compat::lenient::UintOrUnset;
 use serde::Deserialize;
+use serde_with::serde_as;
 
 /// The environment variables the proxy reads outside its config file, as written. Each field is
 /// its variable's name in lower case.
+#[serde_as]
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Environment {
-    pub litellm_license: Option<SecretValue>,
+    #[serde_as(as = "UintOrUnset")]
     pub non_llm_connection_timeout: Option<u64>,
 }
 
@@ -26,20 +28,14 @@ mod tests {
 
     #[rstest]
     fn the_proxy_environment_is_read_by_variable_name() {
-        let environment = from_variables(&[
-            ("LITELLM_LICENSE", "license-key"),
-            ("NON_LLM_CONNECTION_TIMEOUT", "40"),
-        ])
-        .unwrap();
+        let environment = from_variables(&[("NON_LLM_CONNECTION_TIMEOUT", "40")]).unwrap();
 
         assert_eq!(
             environment,
             Environment {
-                litellm_license: Some("license-key".into()),
                 non_llm_connection_timeout: Some(40),
             }
         );
-        assert!(!format!("{environment:?}").contains("license-key"));
     }
 
     #[rstest]
@@ -48,7 +44,19 @@ mod tests {
     }
 
     #[rstest]
-    fn a_timeout_that_is_not_a_number_fails_startup() {
-        assert!(from_variables(&[("NON_LLM_CONNECTION_TIMEOUT", "soon")]).is_err());
+    #[case::blank("", None)]
+    #[case::whitespace("  ", None)]
+    #[case::words("soon", None)]
+    #[case::fraction("15.5", None)]
+    #[case::negative("-1", None)]
+    #[case::padded(" 20 ", Some(20))]
+    #[case::grouped_digits("1_000", Some(1000))]
+    fn a_timeout_is_read_the_way_python_reads_an_integer(
+        #[case] raw: &str,
+        #[case] expected: Option<u64>,
+    ) {
+        let environment = from_variables(&[("NON_LLM_CONNECTION_TIMEOUT", raw)]).unwrap();
+
+        assert_eq!(environment.non_llm_connection_timeout, expected);
     }
 }
