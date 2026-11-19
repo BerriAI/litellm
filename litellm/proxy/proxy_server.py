@@ -4503,9 +4503,9 @@ async def _prepare_spend_counter_increment(
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
-    3. That cached fallback is written with SET NX: requests and pods that
-       all see the counter as absent write the spend once, where an increment
-       from each of them would multiply it.
+    3. That cached fallback only raises the counter to the cached spend:
+       requests and pods that all see the counter as absent leave the largest
+       cached spend in it, where an increment from each would multiply it.
     4. Increment is returned for the caller to apply via pipeline
     """
     with service_target(SPEND_COUNTERS_TARGET):
@@ -4718,12 +4718,12 @@ _increment_spend_counter_cache: Final = increment_spend_counter_cache
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def _seed_spend_counter_cache(counter_key: str, spend: float) -> None:
     try:
-        seeded: Final = await spend_counter_store.seed(counter_key, spend, increment_if_lost=False)
+        seeded: Final = await spend_counter_store.set_max(counter_key, spend)
     except Exception:
         forget_spend_counter(counter_key)
         raise
-    if spend_counter_store.has_redis:
-        record_spend_counter_value(counter_key, float(seeded))
+    if seeded is not None:
+        record_spend_counter_value(counter_key, seeded)
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
