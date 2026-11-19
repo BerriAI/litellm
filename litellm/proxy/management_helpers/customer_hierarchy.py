@@ -1126,6 +1126,7 @@ class CustomerHierarchyStore:
         organization_id: Final = await self.member_organization(payload)
         if isinstance(organization_id, Failure):
             return organization_id
+        await self.lock_organization(organization_id)
         if await self.member_capacity_reached(payload.parent_team_ids) and (
             payload.customer_member_id is None
             or await self.members.find_unique(where={"customer_member_id": payload.customer_member_id}) is None
