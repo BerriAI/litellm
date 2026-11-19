@@ -71,6 +71,7 @@ pub struct GeneralSettings {
     pub max_queued_requests_per_worker: Option<u64>,
     pub admission_queue_timeout_seconds: f64,
     pub master_key: Option<SecretValue>,
+    pub litellm_license: Option<SecretValue>,
     pub database_url: Option<SecretValue>,
     pub tracing: Option<TracingSettings>,
     pub database_connection_pool_limit: Option<u64>,
@@ -78,9 +79,15 @@ pub struct GeneralSettings {
     pub database_connect_timeout: Option<f64>,
     pub database_socket_timeout: Option<f64>,
     pub database_max_idle_connection_lifetime: Option<f64>,
+    pub database_connection_pool_timeout: Option<Spelled<f64>>,
+    pub database_statement_timeout: Option<Spelled<f64>>,
+    pub database_lock_timeout: Option<Spelled<f64>>,
+    pub database_idle_in_transaction_session_timeout: Option<Spelled<f64>>,
+    #[serde_as(as = "StrBool")]
+    pub database_disable_prepared_statements: bool,
     pub max_parallel_requests: Option<u64>,
     pub global_max_parallel_requests: Option<u64>,
-    pub max_request_size_mb: Option<u64>,
+    pub max_request_size_mb: Option<f64>,
     pub max_response_size_mb: Option<u64>,
     pub proxy_config_reload_interval_seconds: u64,
     pub background_health_checks: Option<bool>,
@@ -135,6 +142,7 @@ impl Default for GeneralSettings {
             max_queued_requests_per_worker: None,
             admission_queue_timeout_seconds: 1.0,
             master_key: None,
+            litellm_license: None,
             database_url: None,
             tracing: None,
             database_connection_pool_limit: Some(10),
@@ -142,6 +150,11 @@ impl Default for GeneralSettings {
             database_connect_timeout: None,
             database_socket_timeout: None,
             database_max_idle_connection_lifetime: Some(60.0),
+            database_connection_pool_timeout: None,
+            database_statement_timeout: None,
+            database_lock_timeout: None,
+            database_idle_in_transaction_session_timeout: None,
+            database_disable_prepared_statements: false,
             max_parallel_requests: None,
             global_max_parallel_requests: None,
             max_request_size_mb: None,
@@ -243,6 +256,8 @@ pub struct LiteLlmSettings {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::GeneralSettings;
     use crate::JwtAuthSettings;
 
@@ -262,5 +277,17 @@ mod tests {
     fn unset_text_flags_are_false() {
         let general: GeneralSettings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(!general.allow_requests_on_db_unavailable && !general.enforce_rbac);
+    }
+
+    #[rstest]
+    #[case::int(serde_json::json!(1), 1.0)]
+    #[case::fraction(serde_json::json!(0.5), 0.5)]
+    fn a_request_size_limit_is_an_int_or_a_float(
+        #[case] limit: serde_json::Value,
+        #[case] expected: f64,
+    ) {
+        let settings: GeneralSettings =
+            serde_json::from_value(serde_json::json!({"max_request_size_mb": limit})).unwrap();
+        assert_eq!(settings.max_request_size_mb, Some(expected));
     }
 }

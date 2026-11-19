@@ -14,6 +14,7 @@ from fastapi import HTTPException, status
 from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import ROUTE_CALL_TYPE_METADATA_KEY
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.fallback_utils import without_global_fallbacks_around
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -23,7 +24,6 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     carries_explicit_credentials,
-    get_team_provider_deployment,
     team_deployment_the_caller_may_use,
 )
 from litellm.router import router_arguments
@@ -227,6 +227,19 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acreate_batch": "/batches",
     "aretrieve_batch": "/batches",
 }
+
+GENERATE_CONTENT_SPEND_ENDPOINTS: Final = MappingProxyType(
+    {
+        "agenerate_content": "/models/{model}:generateContent",
+        "agenerate_content_stream": "/models/{model}:streamGenerateContent",
+    }
+)
+_SPEND_ENDPOINT_BY_CALL_TYPE: Final = MappingProxyType({**ROUTE_ENDPOINT_MAPPING, **GENERATE_CONTENT_SPEND_ENDPOINTS})
+
+
+def spend_endpoint(call_type: str, metadata: Mapping[str, object]) -> str | None:
+    route_call_type: Final = metadata.get(ROUTE_CALL_TYPE_METADATA_KEY)
+    return _SPEND_ENDPOINT_BY_CALL_TYPE.get(route_call_type if isinstance(route_call_type, str) else call_type)
 
 
 _AVAILABLE_MODELS_HINT: Final = "Call `/v1/models` to view available models for your key."
@@ -780,9 +793,7 @@ def _model_less_team_vector_store_file_call(
 async def _authorized_team_file_deployment(
     llm_router: LitellmRouter | None, call: _ModelLessTeamFileCall
 ) -> TeamProviderDeployment | None:
-    return await team_deployment_the_caller_may_use(
-        get_team_provider_deployment(llm_router, call.caller, call.custom_llm_provider), llm_router, call.caller
-    )
+    return await team_deployment_the_caller_may_use(llm_router, call.caller, call.custom_llm_provider)
 
 
 def _with_team_deployment_attribution(

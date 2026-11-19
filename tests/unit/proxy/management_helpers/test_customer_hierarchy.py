@@ -309,16 +309,27 @@ class Database:
             else source.litellm_customerorganizationtable
         )
         self.litellm_customerteamtable = (
-            Table("customer_team_id", self, create_error=team_create_error, hydration_limit=hydration_limit)
+            Table(
+                "customer_team_id",
+                self,
+                create_error=team_create_error,
+                hydration_limit=hydration_limit,
+            )
             if source is None
             else source.litellm_customerteamtable
         )
         self.litellm_customermembertable = (
-            Table("customer_member_id", self, hydration_limit=hydration_limit, read_limit=member_read_limit)
+            Table(
+                "customer_member_id",
+                self,
+                hydration_limit=hydration_limit,
+                read_limit=member_read_limit,
+            )
             if source is None
             else source.litellm_customermembertable
         )
         self.litellm_budgettable = Table("budget_id", self) if source is None else source.litellm_budgettable
+        self.litellm_config = Table("param_name", self) if source is None else source.litellm_config
         self.litellm_budgetwindowspend = (
             Table("entity_id", self) if source is None else source.litellm_budgetwindowspend
         )
@@ -469,6 +480,7 @@ class Database:
             self.litellm_customerteamtable,
             self.litellm_customermembertable,
             self.litellm_budgettable,
+            self.litellm_config,
             self.litellm_verificationtoken,
             self.litellm_projecttable,
         )

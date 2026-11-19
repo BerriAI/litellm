@@ -29,10 +29,19 @@ _FULL_USAGE_REPLY: Final[dict[str, JsonValue]] = {
     "output_tokens": 1290,
     "output_tokens_details": {"image_tokens": 1290, "text_tokens": 0},
 }
+_FULL_USAGE_REPLY_WITH_CACHED_TOKENS: Final[dict[str, JsonValue]] = {
+    **_FULL_USAGE_REPLY,
+    "input_tokens_details": {
+        "image_tokens": 258,
+        "text_tokens": 5,
+        "cached_tokens": 0,
+        "cached_tokens_details": None,
+    },
+}
 _COUNTS_ONLY_REPLY: Final[dict[str, JsonValue]] = {
     "total_tokens": 30,
     "input_tokens": 10,
-    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0, "cached_tokens": 0, "cached_tokens_details": None},
     "output_tokens": 20,
     "output_tokens_details": {},
 }
@@ -93,7 +102,7 @@ def test_gemini_image_edit_forwards_only_a_json_object_image_config(
         assert response.status_code == 200, response.text
         payload: Final = _JSON_OBJECT.validate_json(response.content)
         assert [image["b64_json"] for image in payload["data"]] == [base64.b64encode(_PNG).decode()], response.text
-        assert payload["usage"] == _FULL_USAGE_REPLY, response.text
+        assert payload["usage"] == _FULL_USAGE_REPLY_WITH_CACHED_TOKENS, response.text
         requests: Final = wire.drain()
         assert len(requests) == 1, requests
         assert _generation_config(requests[0]) == expected, requests[0].body
@@ -120,7 +129,7 @@ def test_gemini_image_edit_rejects_an_image_config_string_that_is_not_json(
 @pytest.mark.parametrize(
     ("usage", "include_usage", "expected"),
     (
-        pytest.param(_FULL_USAGE, True, _FULL_USAGE_REPLY, id="counts-and-modality-details"),
+        pytest.param(_FULL_USAGE, True, _FULL_USAGE_REPLY_WITH_CACHED_TOKENS, id="counts-and-modality-details"),
         pytest.param(
             {"promptTokenCount": 10, "candidatesTokenCount": 20, "totalTokenCount": 30},
             True,
@@ -153,7 +162,12 @@ def test_gemini_image_edit_rejects_an_image_config_string_that_is_not_json(
             {
                 "total_tokens": 35,
                 "input_tokens": 10,
-                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                    "cached_tokens": 0,
+                    "cached_tokens_details": None,
+                },
                 "output_tokens": 25,
                 "output_tokens_details": {"image_tokens": 20, "text_tokens": 5},
             },
@@ -165,7 +179,12 @@ def test_gemini_image_edit_rejects_an_image_config_string_that_is_not_json(
             {
                 "total_tokens": 0,
                 "input_tokens": 0,
-                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                    "cached_tokens": 0,
+                    "cached_tokens_details": None,
+                },
                 "output_tokens": 0,
                 "output_tokens_details": {},
             },
@@ -177,7 +196,12 @@ def test_gemini_image_edit_rejects_an_image_config_string_that_is_not_json(
             {
                 "total_tokens": 0,
                 "input_tokens": 0,
-                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                    "cached_tokens": 0,
+                    "cached_tokens_details": None,
+                },
                 "output_tokens": 0,
             },
             id="usage-absent",
@@ -236,7 +260,7 @@ def test_gemini_image_generation_reports_the_provider_usage_metadata_as_image_us
         assert response.status_code == 200, response.text
         payload: Final = _JSON_OBJECT.validate_json(response.content)
         assert [image["b64_json"] for image in payload["data"]] == [base64.b64encode(_PNG).decode()], response.text
-        assert payload["usage"] == _FULL_USAGE_REPLY, response.text
+        assert payload["usage"] == _FULL_USAGE_REPLY_WITH_CACHED_TOKENS, response.text
         requests: Final = wire.drain()
         assert len(requests) == 1, requests
         assert _JSON_OBJECT.validate_json(requests[0].body)["contents"] == [

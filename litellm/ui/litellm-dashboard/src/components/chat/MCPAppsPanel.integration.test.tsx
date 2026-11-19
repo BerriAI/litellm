@@ -378,7 +378,9 @@ describe("MCPAppsPanel switches in connect mode", () => {
     expect(
       await screen.findByText("Could not load your MCP servers. Reload the page to try again."),
     ).toBeInTheDocument();
-    expect(onConnectedServers.mock.calls.map(([servers]) => servers)).toEqual(["loading", "failed"]);
+    await waitFor(() =>
+      expect(onConnectedServers.mock.calls.map(([servers]) => servers)).toEqual(["loading", "failed"]),
+    );
   });
 
   it("reports again once a reload succeeds after the list failed to load", async () => {

@@ -78,6 +78,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     model_index: Final = exclusion_index + int(bool(scope.exclude_entity_ids))
     api_keys_index: Final = model_index + int(bool(scope.model))
     team_index: Final = api_keys_index + int(bool(scope.api_keys))
+    app_index: Final = team_index + int(scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None)
     conditions: Final = (
         f"date >= ${start_index}",
         f"date <= ${start_index + 1}",
@@ -117,6 +118,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             else ()
         ),
     )
+    app_conditions: Final = (*conditions, *((f'"app_id" = ${app_index}',) if scope.app_id is not None else ()))
     params: Final = (
         adjusted_start,
         adjusted_end,
@@ -125,8 +127,9 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((scope.model,) if scope.model else ()),
         *((list(scope.api_keys),) if scope.api_keys else ()),
         *((list(scope.team_ids),) if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None else ()),
+        *((scope.app_id,) if scope.app_id is not None else ()),
     )
-    return " AND ".join(conditions), params
+    return " AND ".join(app_conditions), params
 
 
 def _customer_key_teams_sql(scope: DailyActivityScope) -> str:
@@ -212,6 +215,10 @@ def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) 
 
 
 def _rollup_metric_select(table: DailyActivityTable) -> str:
+    cache_cost: Final = "SUM(cache_cost)::float" if table is DailyActivityTable.CUSTOMER_MEMBER else "0::float"
+    priced_cache_tokens: Final = (
+        "SUM(priced_cache_tokens)::bigint" if table is DailyActivityTable.CUSTOMER_MEMBER else "0::bigint"
+    )
     return f"""
             SUM(spend)::float AS spend,
             {_ptu_flat_cost_select(table)},
@@ -219,12 +226,15 @@ def _rollup_metric_select(table: DailyActivityTable) -> str:
             SUM(completion_tokens)::bigint AS completion_tokens,
             SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
             SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
+            {cache_cost} AS cache_cost,
+            {priced_cache_tokens} AS priced_cache_tokens,
             SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
             SUM(compression_savings_spend)::float AS compression_savings_spend,
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
             SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
             SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
             SUM(guardrail_spend)::float AS guardrail_spend,
+            SUM(customer_margin_spend)::float AS customer_margin_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests,

@@ -180,3 +180,22 @@ def test_a_provider_and_target_rule_admits_only_bedrock_invoke(context: RouteCon
     )
 
     assert catalog.decision(context, rules) is expected
+
+
+@pytest.mark.parametrize(
+    ("provider", "target", "expected"),
+    (
+        ("bedrock_mantle", Target.BEDROCK_MANTLE, Decision.RUST_REQUIRED),
+        ("bedrock", Target.BEDROCK_MANTLE, Decision.RUST_REQUIRED),
+        ("bedrock_mantle", Target.CHAT_COMPLETIONS, Decision.PYTHON),
+        ("bedrock_mantle", Target.RESPONSES, Decision.PYTHON),
+        ("bedrock", Target.MESSAGES, Decision.PYTHON),
+        ("vertex_ai", Target.BEDROCK_MANTLE, Decision.PYTHON),
+    ),
+)
+def test_shipped_rules_require_rust_only_for_bedrock_mantle_messages(
+    provider: str, target: Target, expected: Decision
+) -> None:
+    context: Final = RouteContext(Route.MESSAGES, provider=provider, model="m", target=target)
+
+    assert catalog.decision(context, catalog.RULES) is expected

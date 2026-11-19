@@ -7,6 +7,7 @@ import os
 import platform
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -18,7 +19,9 @@ from litellm.types.utils import ProviderSpecificModelInfo
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 _MODEL_ENDPOINTS_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[str, ...]])
-_USER_AGENT_ADAPTER: Final = TypeAdapter(str)
+_MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_MODEL_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bool]])
+_STR_ADAPTER: Final = TypeAdapter(str)
 
 _VERSION_PLACEHOLDER: Final = "{version}"
 _PYTHON_PLACEHOLDER: Final = "{python}"
@@ -29,13 +32,11 @@ class SimpleProviderConfig:
 
     def __init__(self, slug: str, data: dict):
         self.slug = slug
-        self.base_url = data["base_url"]
+        self.base_url: str = _STR_ADAPTER.validate_python(data["base_url"])
         self.api_key_env: str = data["api_key_env"]
         self.api_base_env: str | None = data.get("api_base_env")
         self.base_class: str = data.get("base_class", "openai_gpt")
-        self.user_agent: str | None = (
-            _USER_AGENT_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
-        )
+        self.user_agent: str | None = _STR_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
         self.param_mappings: Mapping[str, str] = data.get("param_mappings", {})
         self.constraints: Mapping[str, float] = data.get("constraints", {})
         self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
@@ -45,9 +46,30 @@ class SimpleProviderConfig:
         self.model_supported_endpoints: Mapping[str, tuple[str, ...]] = _MODEL_ENDPOINTS_ADAPTER.validate_python(
             data.get("model_supported_endpoints", {})
         )
+        self.model_base_urls: Mapping[str, str] = (
+            _MODEL_BASE_URLS_ADAPTER.validate_python(data["model_base_urls"])
+            if "model_base_urls" in data
+            else MappingProxyType({})
+        )
+        self.model_special_handling: Mapping[str, Mapping[str, bool]] = (
+            _MODEL_SPECIAL_HANDLING_ADAPTER.validate_python(data["model_special_handling"])
+            if "model_special_handling" in data
+            else MappingProxyType({})
+        )
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
+
+    def default_base_url(self, model: str | None) -> str:
+        if model is None:
+            return self.base_url
+        return self.model_base_urls.get(model.removeprefix(f"{self.slug}/"), self.base_url)
+
+    def special_handling_for(self, model: str) -> Mapping[str, bool]:
+        model_overrides: Final = self.model_special_handling.get(model.removeprefix(f"{self.slug}/"))
+        if model_overrides is None:
+            return self.special_handling
+        return MappingProxyType({**self.special_handling, **model_overrides})
 
     def get_attribution_headers(self) -> Mapping[str, str]:
         if not self.user_agent:

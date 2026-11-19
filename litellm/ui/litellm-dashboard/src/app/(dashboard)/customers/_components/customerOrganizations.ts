@@ -87,7 +87,7 @@ export async function customerOrganizationsUsageCall({
 export const customerOrganizationRows = (organizations: readonly CustomerOrganization[], monthlyUsage: Activity) => {
   const totals = customerUsageTotals(monthlyUsage.results);
   return organizations.map((organization) => {
-    const monthlySpend = totals[organization.customer_org_id]?.spend ?? 0;
+    const monthlySpend = totals.get(organization.customer_org_id)?.spend ?? 0;
     const budgetEntity = {
       id: organization.customer_org_id,
       label: organization.alias || organization.customer_org_id,

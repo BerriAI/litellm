@@ -1,6 +1,18 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
-from typing import ClassVar, Final, Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
+from typing import (
+    ClassVar,
+    Final,
+    Generic,
+    Literal,
+    Never,
+    NotRequired,
+    Protocol,
+    SupportsIndex,
+    TypedDict,
+    TypeVar,
+    final,
+)
 
 import httpx
 from pydantic import JsonValue
@@ -15,7 +27,7 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_OrganizationTable, Lit
 from litellm.proxy.auth.host.facts import EndUserRow
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
-from litellm.rust_bridge.database import NativeDatabaseEndpoint, NativeDatabaseEvents
+from litellm.rust_bridge.database import NativeClientIdentity, NativeDatabaseEvents
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReservation
@@ -598,8 +610,6 @@ class _KeyFacts(Protocol):
     @property
     def project_id(self) -> str | None: ...
     @property
-    def end_user_id(self) -> str | None: ...
-    @property
     def last_refreshed_at(self) -> float | None: ...
 
 class _TeamFacts(Protocol):
@@ -703,6 +713,12 @@ class RustClaimIdentity:
 
 @final
 class RustMappedClaims:
+    @property
+    def customer_org_alias(self) -> str | None: ...
+    @property
+    def customer_member_id(self) -> str | None: ...
+    @property
+    def customer_team_id(self) -> str | None: ...
     @property
     def user_id(self) -> str | None: ...
     @property
@@ -1059,6 +1075,27 @@ class RustDenial:
         def __new__(cls, team_id: str) -> RustDenial.TeamNotFound: ...
         @property
         def team_id(self) -> str: ...
+
+    @final
+    class KeyNotFound(RustDenial):
+        __match_args__: tuple[Literal["hash"]] = ("hash",)
+        def __new__(cls, hash: str) -> RustDenial.KeyNotFound: ...
+        @property
+        def hash(self) -> str: ...
+
+    @final
+    class NoMatchingJwtPublicKey(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.NoMatchingJwtPublicKey: ...
+        @property
+        def message(self) -> str: ...
+
+    @final
+    class IdJagNotBearer(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.IdJagNotBearer: ...
+        @property
+        def message(self) -> str: ...
 
 @final
 class RustAuthOutcome:
@@ -1810,15 +1847,115 @@ class NativeSpendCounters:
     def snapshot(self) -> dict[str, float]: ...
 
 @final
+class DatabaseEndpoint:
+    @staticmethod
+    def resolve(
+        url: str,
+        max_connections: int,
+        *,
+        replica: bool = False,
+        client_identity: NativeClientIdentity | None = None,
+    ) -> Future[DatabaseEndpoint]: ...
+
+@final
 class NativeDatabase:
     @staticmethod
     def connect(
-        events: NativeDatabaseEvents, writer: NativeDatabaseEndpoint, reader: NativeDatabaseEndpoint | None = None
+        events: NativeDatabaseEvents, writer: DatabaseEndpoint, reader: DatabaseEndpoint | None = None
     ) -> Future[NativeDatabase]: ...
     def set_writer_password(self, password: str) -> None: ...
     def set_reader_password(self, password: str) -> None: ...
     def health_check(self) -> Future[None]: ...
     def close(self) -> Future[None]: ...
+
+@final
+class RustKeyRepository:
+    def __new__(cls, database: NativeDatabase) -> RustKeyRepository: ...
+    def find(self, token: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustJwtKeyMappingRepository:
+    def __new__(cls, database: NativeDatabase) -> RustJwtKeyMappingRepository: ...
+    def mapped_token(
+        self, jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None = None
+    ) -> Future[str | None]: ...
+    def mapped_claims(self, tokens: Sequence[str]) -> Future[list[tuple[str, str, str]]]: ...
+
+@final
+class RustModelAccessGroupRepository:
+    def __new__(cls, database: NativeDatabase) -> RustModelAccessGroupRepository: ...
+    def names(self, limit: int) -> Future[list[str]]: ...
+    def budgets(self, names: Sequence[str]) -> Future[list[tuple[str, float, float | None, bool]]]: ...
+
+@final
+class RustBudgetRepository:
+    def __new__(cls, database: NativeDatabase) -> RustBudgetRepository: ...
+    def find_end_user_default_budget(self, budget_id: str) -> Future[str | None]: ...
+    def find_team_member_default_budget(self, budget_id: str) -> Future[str | None]: ...
+
+@final
+class RustEndUserRepository:
+    def __new__(cls, database: NativeDatabase) -> RustEndUserRepository: ...
+    def find_with_budget_and_object_permission(self, end_user_id: str) -> Future[str | None]: ...
+    def find_restricted_ids(self, limit: int) -> Future[list[str]]: ...
+
+@final
+class RustUserRepository:
+    def __new__(cls, database: NativeDatabase) -> RustUserRepository: ...
+    def resolve(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None = None,
+        user_email: str | None = None,
+        email_verified: bool | None = None,
+        links_any_user: bool,
+        use_writer: bool = False,
+    ) -> Future[str | None]: ...
+    def email_belongs_to_another_user(self, user_email: str, user_id: str) -> Future[bool]: ...
+    def backfill_email(self, user_id: str, user_email: str, *, links_any_user: bool) -> Future[str | None]: ...
+
+@final
+class RustTeamRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTeamRepository: ...
+    def find_with_model_aliases(self, team_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+    def find_up_to_two_by_alias(self, alias: str) -> Future[list[str]]: ...
+
+@final
+class RustTeamMembershipRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTeamMembershipRepository: ...
+    def find_with_budget(self, user_id: str, team_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustOrganizationRepository:
+    def __new__(cls, database: NativeDatabase) -> RustOrganizationRepository: ...
+    def find_with_optional_budget(
+        self, organization_id: str, *, include_budget_table: bool = False
+    ) -> Future[str | None]: ...
+    def find_up_to_two_by_alias(self, alias: str) -> Future[list[str]]: ...
+
+@final
+class RustProjectRepository:
+    def __new__(cls, database: NativeDatabase) -> RustProjectRepository: ...
+    def find_with_budget(self, project_id: str) -> Future[str | None]: ...
+
+@final
+class RustTagRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTagRepository: ...
+    def names(self, limit: int) -> Future[list[str]]: ...
+    def find_many_with_budgets(self, names: Sequence[str]) -> Future[list[str]]: ...
+
+@final
+class RustAccessGroupRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAccessGroupRepository: ...
+    def find_by_access_group_id(self, access_group_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustObjectPermissionRepository:
+    def __new__(cls, database: NativeDatabase) -> RustObjectPermissionRepository: ...
+    def find_by_object_permission_id(
+        self, object_permission_id: str, *, use_writer: bool = False
+    ) -> Future[str | None]: ...
 
 @final
 class NativeTokenRedactor:
@@ -1963,11 +2100,12 @@ class Tokenizer:
     def count(self, text: str, fast: bool = False) -> int: ...
     # tiktoken encodings
     def encode_special(self, text: str, allowed: Sequence[str]) -> list[int]: ...
+    def encode_special_strict(self, text: str, allowed: Sequence[str]) -> list[int]: ...
     def encode_with_unstable(self, text: str, allowed: Sequence[str]) -> tuple[list[int], list[list[int]]]: ...
     def encode_single_token(self, piece: bytes) -> int: ...
     def special_tokens(self) -> dict[str, int]: ...
     def max_token_value(self) -> int: ...
-    def is_special_token(self, token: int) -> bool: ...
+    def is_special_token(self, token: SupportsIndex) -> bool: ...
     def token_byte_values(self) -> list[bytes]: ...
     def decode_bytes(self, ids: Sequence[int]) -> bytes: ...
     # Hugging Face tokenizers
@@ -2053,6 +2191,7 @@ __all__ = [
     "AtomicApplied",
     "AtomicOverLimit",
     "AttemptShape",
+    "DatabaseEndpoint",
     "ForkedAfterNativeRuntimeStarted",
     "GaugeOverLimit",
     "GaugesAcquired",
@@ -2103,20 +2242,33 @@ __all__ = [
     "ResponsesWebSocketConnection",
     "RouterCall",
     "RouterCoreHandle",
+    "RustAccessGroupRepository",
     "RustAuth",
     "RustAuthOutcome",
     "RustAuthSettings",
     "RustAuthStep",
     "RustBridgeDeclined",
+    "RustBudgetRepository",
     "RustClaimIdentity",
     "RustDenial",
+    "RustEndUserRepository",
     "RustIdentity",
+    "RustJwtKeyMappingRepository",
     "RustJwtMapping",
     "RustKeyContext",
+    "RustKeyRepository",
     "RustMappedClaims",
+    "RustModelAccessGroupRepository",
+    "RustObjectPermissionRepository",
+    "RustOrganizationRepository",
     "RustPlan",
+    "RustProjectRepository",
+    "RustTagRepository",
     "RustTeamGrant",
+    "RustTeamMembershipRepository",
+    "RustTeamRepository",
     "RustUpstreamError",
+    "RustUserRepository",
     "SpendRead",
     "TokenCounter",
     "Tokenizer",
