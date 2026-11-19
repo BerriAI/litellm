@@ -144,6 +144,8 @@ class RollupMetricsRow:
     completion_tokens: int | None
     cache_read_input_tokens: int | None
     cache_creation_input_tokens: int | None
+    cache_cost: float | None = field(default=None, kw_only=True)
+    priced_cache_tokens: int | None = field(default=None, kw_only=True)
     compression_saved_tokens: int | None
     compression_savings_spend: float | None
     prompt_caching_savings_spend: float | None
