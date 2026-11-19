@@ -5,20 +5,23 @@ describe("app budget forms", () => {
   it("saves a rate-only budget and preserves zero limits", () => {
     expect(appBudgetValue({ ...appBudgetFields({}), tpm: "50000", rpm: "0" })).toMatchObject({
       ok: true,
-      value: { max_budget: null, budget_limits: null, tpm_limit: 50000, rpm_limit: 0 },
+      value: { tpm_limit: 50000, rpm_limit: 0 },
     });
   });
 
-  it("preserves spend windows and model rules when changing RPM", () => {
+  it.each([false, true])("preserves model rules and clears only selected restrictions %s", (clear) => {
     const original = {
       tpm_limit: 50000,
       rpm_limit: 60,
+      allowed_models: ["test-model"],
       model_tpm_limit: { "test-model": 10000 },
       budget_limits: [{ budget_duration: "1mo", max_budget: 100, reset_at: "2027-01-01T00:00:00Z" }],
     };
-    expect(appBudgetValue({ ...appBudgetFields(original), rpm: "" }, original)).toMatchObject({
+    const clears = clear ? { tpm: "", allowedModels: [], budgetWindows: [] } : {};
+    const clearedLimits = clear ? { tpm_limit: null, allowed_models: null, budget_limits: null } : {};
+    expect(appBudgetValue({ ...appBudgetFields(original), rpm: "", ...clears }, original)).toMatchObject({
       ok: true,
-      value: { ...original, rpm_limit: null },
+      value: { ...original, rpm_limit: null, ...clearedLimits },
     });
   });
 

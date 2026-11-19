@@ -88,7 +88,7 @@ const DELETE_MESSAGES = {
 function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
-  const initial = customerHierarchyFields(entity);
+  const initial = customerHierarchyFields(entity, organization);
   const [fields, setFields] = useState(initial);
   const [pending, setPending] = useState<"save" | "delete" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,7 +107,7 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
     setFields((current) => ({ ...current, [key]: value }));
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const result = buildCustomerHierarchyPatch(entity, fields);
+    const result = buildCustomerHierarchyPatch(entity, fields, organization);
     if (!result.ok) {
       setError(t(CUSTOMER_HIERARCHY_FORM_ERRORS[result.error]));
       return;
