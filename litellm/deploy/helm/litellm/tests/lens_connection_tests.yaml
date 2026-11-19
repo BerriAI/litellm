@@ -90,16 +90,21 @@ tests:
       - failedTemplate:
           errorMessage: lens.url is required when lens.enabled is true
 
-  - it: requires lens.publicUrl when Lens is enabled
-    template: gateway/deployment.yaml
+  - it: falls back to lens.url when lens.publicUrl is unset
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
     set:
       lens.enabled: true
       lens.url: http://lens.lens.svc:4318
       lens.gatewaySecret.name: lens-gateway
       lens.serviceTokenSecret.name: lens-service
     asserts:
-      - failedTemplate:
-          errorMessage: lens.publicUrl is required when lens.enabled is true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: http://lens.lens.svc:4318
 
   - it: requires lens.gatewaySecret.name when Lens is enabled
     template: gateway/deployment.yaml

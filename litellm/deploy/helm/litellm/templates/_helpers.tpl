@@ -744,7 +744,7 @@ shutdown drain window.
 - name: LITELLM_LENS_URL
   value: {{ required "lens.url is required when lens.enabled is true" .url | quote }}
 - name: LITELLM_LENS_PUBLIC_URL
-  value: {{ required "lens.publicUrl is required when lens.enabled is true" .publicUrl | quote }}
+  value: {{ .publicUrl | default .url | quote }}
 - name: LENS_GATEWAY_SECRET
   valueFrom:
     secretKeyRef:

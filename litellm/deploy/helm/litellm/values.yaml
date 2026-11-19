@@ -801,6 +801,7 @@ liteadmin:
 lens:
   enabled: false
   url: ""
+  # The Lens address shown to people setting up tracing. Defaults to `url`.
   publicUrl: ""
   service:
     name: ""
