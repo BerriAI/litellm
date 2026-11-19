@@ -12,6 +12,29 @@ from litellm.types.utils import ImageResponse, ModelResponse
 PROMPT_DETAILS: Final = [{"modality": "TEXT", "tokenCount": 30}, {"modality": "IMAGE", "tokenCount": 5}]
 
 
+@pytest.mark.parametrize(
+    "cached_fields",
+    [{}, {"cachedContentTokenCount": None}, {"cachedContentTokenCount": 0}, {"cachedContentTokenCount": 6}],
+)
+def test_null_cached_content_count_matches_absent(cached_fields: dict[str, int | None]) -> None:
+    usage: Final = transform_gemini_image_usage(
+        {
+            "promptTokenCount": 35,
+            "candidatesTokenCount": 4,
+            "totalTokenCount": 39,
+            "promptTokensDetails": PROMPT_DETAILS,
+            **cached_fields,
+        }
+    )
+    assert usage.input_tokens_details.model_dump() == {
+        "text_tokens": 30,
+        "image_tokens": 5,
+        "cached_tokens": cached_fields.get("cachedContentTokenCount") or 0,
+        "cached_tokens_details": None,
+    }
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (35, 4, 39)
+
+
 @pytest.mark.parametrize("provider", ["gemini", "vertex_ai"])
 @pytest.mark.parametrize("cached_tokens", [0, 600])
 @pytest.mark.parametrize("cache_breakdown", [False, True])

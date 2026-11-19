@@ -677,7 +677,12 @@ def resolve_vertex_location_for_cost(
 def _resolve_mantle_region_for_cost(
     custom_llm_provider: str | None,
     litellm_params: Mapping[str, object] | None,
+    model: str | None = None,
 ) -> str | None:
+    if custom_llm_provider == "bedrock" and model is not None and model.removeprefix("bedrock/").startswith("mantle/"):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        return BaseAWSLLM().get_aws_region_name(dict(litellm_params or MappingProxyType({})), model=model)
     if custom_llm_provider != "bedrock_mantle":
         return None
     from litellm.llms.bedrock_mantle.common_utils import resolve_mantle_region
@@ -2701,6 +2706,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "region_name": _resolve_mantle_region_for_cost(
                     custom_llm_provider=cost_custom_llm_provider,
                     litellm_params=self.model_call_details.get("litellm_params"),
+                    model=model_value,
                 ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
@@ -2853,6 +2859,7 @@ class Logging(LiteLLMLoggingBaseClass):
             region_name=_resolve_mantle_region_for_cost(
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=self.model_call_details.get("litellm_params"),
+                model=model,
             ),
             litellm_logging_obj=self,
         )
@@ -2892,6 +2899,7 @@ class Logging(LiteLLMLoggingBaseClass):
             region_name=_resolve_mantle_region_for_cost(
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=self.model_call_details.get("litellm_params"),
+                model=self.model,
             ),
             litellm_logging_obj=self,
         )
@@ -5547,12 +5555,13 @@ class Logging(LiteLLMLoggingBaseClass):
         ## get original model group ##
 
         model_group: Final = metadata.get("model_group") or None
+        callback_kwargs: Final = {**self._model_call_details_view, "exception": exception}
         for callback in litellm._async_failure_callback:
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.log_model_group_rate_limit_error(
                     exception=exception,
                     original_model_group=model_group,
-                    kwargs=self.model_call_details,
+                    kwargs=callback_kwargs,
                 )
 
     def _is_pass_through_call(self) -> bool:
