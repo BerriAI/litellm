@@ -7,11 +7,13 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+from re import fullmatch
+from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
-from pydantic import AfterValidator, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, field_validator, model_validator
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.duration_parser import get_budget_window_start, normalize_duration
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -21,9 +23,30 @@ if TYPE_CHECKING:
 class BudgetLimit(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
-    budget_duration: Literal["1mo", "12mo"]
+    budget_duration: str = Field(description="Positive duration in s, m, h, d or w, or calendar 1mo / 12mo.")
     max_budget: float = Field(ge=0, allow_inf_nan=False)
     reset_at: datetime | None = None
+
+    @field_validator("budget_duration")
+    @classmethod
+    def valid_duration(cls, value: str) -> str:
+        from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+
+        normalized: Final = normalize_duration(value.strip().lower())
+        match: Final = fullmatch(r"([0-9]+)(mo|[smhdw])", normalized)
+        if match is None:
+            raise ValueError("Use a positive duration such as '1h', '7d', '1mo' or '12mo'")
+        amount, unit = match.groups()
+        canonical: Final = f"{int(amount) * 7}d" if unit == "w" else f"{int(amount)}{unit}"
+        duration: Final = "1mo" if canonical == "30d" else canonical
+        error: Final = budget_duration_error(duration)
+        if error is not None:
+            raise ValueError(error)
+        try:
+            get_budget_window_start(duration, datetime.now(timezone.utc))
+        except (ValueError, OverflowError) as exc:
+            raise ValueError("Budget duration exceeds the supported reset range") from exc
+        return duration
 
 
 def unique_budget_limits(limits: tuple[BudgetLimit, ...]) -> tuple[BudgetLimit, ...]:

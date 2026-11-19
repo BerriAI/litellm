@@ -73,7 +73,7 @@ def customer_budget_limit(budget: Budget | None) -> float | None:
             for limit in limits
             if limit.budget_duration.strip().lower() in ("12mo", "12month", "12months")
         ),
-        None,
+        limits[0].max_budget if limits else None,
     )
 
 

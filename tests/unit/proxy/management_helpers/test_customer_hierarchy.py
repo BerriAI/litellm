@@ -645,23 +645,36 @@ def test_budget_windows_reject_invalid_caps(request_type: type[BaseModel], maxim
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
-def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel]) -> None:
+@pytest.mark.parametrize("first,second", (("1mo", "1mo"), ("monthly", "30d"), ("1w", "7d"), ("hourly", "01h")))
+def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel], first: str, second: str) -> None:
     with pytest.raises(ValidationError):
         request_type.model_validate(
             {
                 "budget_limits": [
-                    {"budget_duration": "1mo", "max_budget": 0},
-                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": first, "max_budget": 0},
+                    {"budget_duration": second, "max_budget": 10},
                 ]
             }
         )
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
-@pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1y", "1h"))
+@pytest.mark.parametrize("duration", ("", "0s", "-1d", "1y", "2mo", "6mo", "6days", "1.5h",
+                                    "999999999999999999999d", "999999999999999999999h", "999999999999999999999s"))
 def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseModel], duration: str) -> None:
-    with pytest.raises(ValidationError, match="literal_error"):
+    with pytest.raises(ValidationError):
         request_type.model_validate({"budget_limits": [{"budget_duration": duration, "max_budget": 0}]})
+
+
+@pytest.mark.parametrize("duration,expected", (("30s", "30s"), ("15m", "15m"), ("2h", "2h"), ("6d", "6d"),
+                                             ("2w", "14d"), (" Monthly ", "1mo"), ("01h", "1h")))
+def test_additional_budget_windows_normalize_without_changing_the_scalar(duration: str, expected: str) -> None:
+    budget: Final = Budget(max_budget=50, budget_duration="daily",
+                          budget_limits=(BudgetLimit(budget_duration=duration, max_budget=0),))
+    assert budget.model_dump(include={"max_budget", "budget_duration", "budget_limits"}) == {
+        "max_budget": 50, "budget_duration": "daily",
+        "budget_limits": ({"budget_duration": expected, "max_budget": 0, "reset_at": None},),
+    }
 
 
 def test_window_override_preserves_other_period_and_scalar_fields() -> None:

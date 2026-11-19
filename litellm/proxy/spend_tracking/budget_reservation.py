@@ -140,10 +140,15 @@ def _customer_window_counter(
         else limit.reset_at
     )
     standard_reset: Final = compute_budget_reset_at(limit.budget_duration, settings, now)
-    reset_at: Final = configured_reset if configured_reset is not None and configured_reset > now else standard_reset
-    start: Final = calendar_budget_window_start(
-        limit.budget_duration, reset_at.astimezone(standard_reset.tzinfo)
-    ).astimezone(timezone.utc)
+    window_zone: Final = (
+        timezone.utc
+        if isinstance(limit, BudgetLimit) and limit.budget_duration.endswith(("s", "m", "h"))
+        else standard_reset.tzinfo
+    )
+    reset_at: Final = _customer_window_reset(limit, configured_reset, standard_reset.astimezone(window_zone), now)
+    start: Final = calendar_budget_window_start(limit.budget_duration, reset_at.astimezone(window_zone)).astimezone(
+        timezone.utc
+    )
     return _BudgetCounter(
         counter_key=customer_window_counter(scope_key, entity_id, limit.budget_duration, start),
         max_budget=limit.max_budget,
@@ -155,6 +160,24 @@ def _customer_window_counter(
         window_start=start,
         reset_at=reset_at.astimezone(timezone.utc),
     )
+
+
+def _customer_window_reset(
+    limit: BudgetLimit | AppDurationLimit,
+    configured: datetime | None,
+    standard: datetime,
+    now: datetime,
+) -> datetime:
+    if configured is None:
+        return standard
+    if configured > now:
+        return configured
+    if not isinstance(limit, BudgetLimit) or limit.budget_duration in ("1mo", "12mo"):
+        return standard
+    anchor: Final = normalize_budget_window_start(configured).astimezone(standard.tzinfo)
+    period: Final = timedelta(seconds=duration_in_seconds(limit.budget_duration))
+    elapsed: Final = now.astimezone(standard.tzinfo) - anchor
+    return anchor + period * (elapsed // period + 1)
 
 
 _CACHED_VALUE: Final = TypeAdapter(object)
