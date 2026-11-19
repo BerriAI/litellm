@@ -9,7 +9,7 @@ from integration.translation.chat_completions.templates import (
     CODING_AGENT_RESPONSE,
 )
 from integration.translation.templates.azure import (
-    AZURE_RESPONSES_BRIDGE_REQUEST_FROM_CHAT_COMPLETIONS,
+    AZURE_RESPONSES_BRIDGE_REQUEST,
     AZURE_RESPONSES_RESPONSE,
 )
 from integration.translation.templates.openai import (
@@ -535,7 +535,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
     expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
     expected_provider_request={
-        **AZURE_RESPONSES_BRIDGE_REQUEST_FROM_CHAT_COMPLETIONS,
+        **AZURE_RESPONSES_BRIDGE_REQUEST,
         "model": "gpt-6-luna",
         "stream": False,
     },
@@ -702,7 +702,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
     expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
     expected_provider_request={
-        **AZURE_RESPONSES_BRIDGE_REQUEST_FROM_CHAT_COMPLETIONS,
+        **AZURE_RESPONSES_BRIDGE_REQUEST,
         "model": "gpt-6.1-sol",
         "stream": False,
     },
@@ -818,7 +818,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
     expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
     expected_provider_request={
-        **AZURE_RESPONSES_BRIDGE_REQUEST_FROM_CHAT_COMPLETIONS,
+        **AZURE_RESPONSES_BRIDGE_REQUEST,
         "model": "gpt-6-astra",
         "stream": False,
     },
@@ -1149,7 +1149,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
     expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
     expected_provider_request={
-        **AZURE_RESPONSES_BRIDGE_REQUEST_FROM_CHAT_COMPLETIONS,
+        **AZURE_RESPONSES_BRIDGE_REQUEST,
         "model": "gpt-5.6-terra",
         "stream": False,
     },
