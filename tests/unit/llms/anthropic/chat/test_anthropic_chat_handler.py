@@ -147,8 +147,8 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     assert "default_api_key_tpm_limit" not in request_body
 
 
-def test_anthropic_completion_adds_extra_body_fields_top_level_without_overriding_the_request():
-    captured_requests: list[httpx.Request] = []
+def test_anthropic_completion_sends_extra_body_fields_top_level_without_replacing_the_conversation() -> None:
+    captured_requests: Final[list[httpx.Request]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         captured_requests.append(request)
@@ -166,7 +166,7 @@ def test_anthropic_completion_adds_extra_body_fields_top_level_without_overridin
             },
         )
 
-    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
     try:
         litellm.completion(
             model="anthropic/claude-sonnet-5-5",
@@ -180,19 +180,44 @@ def test_anthropic_completion_adds_extra_body_fields_top_level_without_overridin
                 "messages": [{"role": "user", "content": "unchecked"}],
                 "system": "unchecked",
                 "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                "stream": True,
                 "max_tokens": 4096,
             },
         )
     finally:
         client.close()
 
-    request_body = json.loads(captured_requests[0].content)
+    request_body: Final = json.loads(captured_requests[0].content)
     assert request_body == {
         "model": "claude-sonnet-5-5",
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
-        "max_tokens": 16,
+        "max_tokens": 4096,
         "fallbacks": [{"model": "claude-opus-5-5"}],
     }, request_body
+
+
+def test_anthropic_completion_rejects_a_non_object_extra_body_before_calling_anthropic() -> None:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(500)
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        with pytest.raises(litellm.BadRequestError, match="Invalid type for 'extra_body': expected an object, got str"):
+            litellm.completion(
+                model="anthropic/claude-sonnet-5-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-key",
+                client=client,
+                max_tokens=16,
+                extra_body='{"top_k": 5}',
+            )
+    finally:
+        client.close()
+
+    assert captured_requests == []
 
 
 def _anthropic_request_with_fallbacks(extra_headers: dict[str, str] | None, drop_params: bool) -> httpx.Request:

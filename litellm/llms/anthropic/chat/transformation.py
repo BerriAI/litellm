@@ -199,7 +199,7 @@ _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools"})
+EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools", "stream"})
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -267,6 +267,23 @@ def _fields_behind(messages: Sequence[object], error: Exception) -> Iterable[tup
             return _assistant_tool_call_ids_failing(messages, partial(_is_non_string_value_behind, error))
         case _:
             return ()
+
+
+def extra_body_without_guarded_keys(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS})
+
+
+def _request_extra_body(extra_body: object) -> Mapping[str, object]:
+    match extra_body:
+        case None:
+            return MappingProxyType({})
+        case Mapping():
+            return _REQUEST_PARAMS_ADAPTER.validate_python(extra_body)
+        case _:
+            raise AnthropicError(
+                status_code=400,
+                message=f"Invalid type for 'extra_body': expected an object, got {type(extra_body).__name__}",
+            )
 
 
 def non_string_message_field_error(messages: Sequence[object], error: Exception) -> AnthropicError | None:
@@ -2742,7 +2759,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
             dict[str, object], optional_params
         )
-        extra_body: Final = _REQUEST_PARAMS_ADAPTER.validate_python(request_params.pop("extra_body", None) or {})
+        extra_body: Final = _request_extra_body(request_params.pop("extra_body", None))
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
@@ -2781,15 +2798,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             **request_params,
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
-        withheld_extra_body_keys: Final = request_body.keys() | _EXTRA_BODY_GUARDED_KEYS
-        data: Final = {
-            **request_body,
-            **{k: v for k, v in extra_body.items() if k not in withheld_extra_body_keys},
-        }
+        data: Final = {**request_body, **extra_body_without_guarded_keys(extra_body)}
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
 
         return data
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body_without_guarded_keys(extra_body)
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data.

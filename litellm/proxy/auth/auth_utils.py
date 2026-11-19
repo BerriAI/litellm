@@ -619,6 +619,7 @@ def _reject_secret_reference_in(params: Mapping[str, object]) -> None:
         )
 
 
+_BANNED_EXTRA_BODY_PARAMS: Final[tuple[str, ...]] = (*_BANNED_REQUEST_BODY_PARAMS, "fallbacks")
 _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
     param for param in _BANNED_REQUEST_BODY_PARAMS if param not in _BANNED_PARAMS_ALLOWED_IN_METADATA
 )
@@ -1047,11 +1048,11 @@ def is_request_body_safe(
                 general_settings,
                 llm_router,
                 manages_deployments=manages_deployments,
+                banned_params=_BANNED_EXTRA_BODY_PARAMS if nested_key == "extra_body" else _BANNED_REQUEST_BODY_PARAMS,
                 opt_in_groups=opt_in_groups,
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
             )
-            _reject_client_chosen_fallbacks(nested_key, nested)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
@@ -1089,7 +1090,16 @@ def is_request_body_safe(
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
             )
-            _reject_client_chosen_fallbacks("extra_body", _coerce_metadata_to_dict(target.get("extra_body")) or {})
+            _check_banned_params(
+                _fallbacks_only(_coerce_metadata_to_dict(target.get("extra_body")) or {}),
+                general_settings,
+                llm_router,
+                manages_deployments=manages_deployments,
+                banned_params=("fallbacks",),
+                opt_in_groups=opt_in_groups,
+                defer_model_checks=defer_model_checks,
+                defer_s3_buckets=defer_s3_buckets,
+            )
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
@@ -1119,12 +1129,8 @@ def is_request_body_safe(
     return True
 
 
-def _reject_client_chosen_fallbacks(nested_key: str, nested: Mapping[str, object]) -> None:
-    if nested_key == "extra_body" and "fallbacks" in nested:
-        raise ValueError(
-            "Rejected Request: fallbacks inside extra_body can't be checked against the key's allowed models. "
-            "Set server-side fallbacks in the deployment's litellm_params instead."
-        )
+def _fallbacks_only(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in extra_body.items() if key == "fallbacks"})
 
 
 def _reject_user_config_secret_references(litellm_params: Mapping[str, object]) -> None:

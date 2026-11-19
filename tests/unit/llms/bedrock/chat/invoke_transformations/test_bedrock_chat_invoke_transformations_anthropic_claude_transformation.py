@@ -2424,3 +2424,55 @@ def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding}
     assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]
+
+
+@pytest.mark.parametrize(("drop_params", "fallbacks_kept"), [(False, True), (True, False)])
+def test_bedrock_invoke_claude_extra_body_keeps_the_conversation_and_gates_fallbacks_on_drop_params(
+    drop_params: bool, fallbacks_kept: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="fake-secret",
+            aws_region_name="us-east-1",
+            client=client,
+            max_tokens=16,
+            drop_params=drop_params,
+            extra_body={
+                "fallbacks": [{"model": "claude-opus-5-5"}],
+                "model": "claude-opus-5-5",
+                "messages": [{"role": "user", "content": "unchecked"}],
+                "system": "unchecked",
+                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                "stop_sequences": ["5"],
+            },
+        )
+    finally:
+        client.close()
+
+    request_body: Final = json.loads(captured_requests[0].content)
+    assert request_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    assert {"model", "system", "tools"}.isdisjoint(request_body)
+    assert request_body["stop_sequences"] == ["5"]
+    assert request_body.get("fallbacks") == ([{"model": "claude-opus-5-5"}] if fallbacks_kept else None)
