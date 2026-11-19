@@ -3,13 +3,12 @@
 //! and the login itself, built on the shared [`crate::GcpAuth`] loader and Google's Rust SDK.
 
 mod adc;
+mod bounded_file_source;
 mod builders;
-mod compat_certificate_source;
-mod compat_external_account_authorized_user;
-mod compat_token;
 mod environment;
 mod explicit_aws;
 mod failure;
+mod legacy;
 mod source;
 
 use std::{
@@ -372,6 +371,9 @@ mod tests {
             body,
         });
         match uri.path() {
+            path if path.ends_with("refused@p.iam.gserviceaccount.com:generateAccessToken") => {
+                (StatusCode::FORBIDDEN, Json(json!({"error": "denied"}))).into_response()
+            }
             path if path.ends_with(":generateAccessToken") => {
                 let expires = time::OffsetDateTime::now_utc() + time::Duration::hours(1);
                 let expire_time = expires
@@ -746,12 +748,27 @@ mod tests {
         )
     }
 
+    fn explicit_aws_impersonating(google: &Google, directory: &Path) -> Value {
+        merged(
+            explicit_aws(google, directory),
+            json!({"service_account_impersonation_url": format!(
+                "{}/v1/projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com:generateAccessToken",
+                google.url
+            )}),
+        )
+    }
+
     #[rstest]
     #[case::file(file_source, "granted", "subject_token=file-subject")]
     #[case::url(url_source, "granted", "subject_token=url-subject")]
     #[case::aws_metadata(aws_metadata_source, "granted", "subject_token=%257B")]
     #[case::impersonated(impersonating_source, "impersonated", "subject_token=file-subject")]
     #[case::explicit_aws(explicit_aws, "granted", "subject_token=%257B%2522headers%2522")]
+    #[case::explicit_aws_impersonated(
+        explicit_aws_impersonating,
+        "impersonated",
+        "subject_token=%257B%2522headers%2522"
+    )]
     #[tokio::test]
     async fn an_external_account_exchanges_its_subject_token_at_sts(
         #[future] google: Google,
@@ -792,8 +809,6 @@ mod tests {
             <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
         )
         .unwrap();
-        // Google's Rust SDK reads this from the process environment; nothing else here does.
-        unsafe { std::env::set_var("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES", "1") };
         let configured = external_account(
             &google,
             json!({"executable": {"command": script, "timeout_millis": 5000}}),
@@ -810,6 +825,62 @@ mod tests {
             google.sent_to("/token")[0]
                 .body
                 .contains("subject_token=executable-subject")
+        );
+    }
+
+    #[rstest]
+    #[case::unset(&[])]
+    #[case::zero(&[("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES", "0")])]
+    #[case::true_word(&[("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES", "true")])]
+    #[tokio::test]
+    async fn an_executable_runs_only_when_allowed_with_1(
+        #[future] google: Google,
+        #[case] env: &[(&'static str, &str)],
+    ) {
+        let google = google.await;
+        let configured = external_account(&google, json!({"executable": {"command": "/bin/true"}}));
+
+        let error = auth(environment(env))
+            .login(Some(configured.to_string()), Some("p".into()))
+            .await
+            .unwrap_err();
+
+        assert_eq!(failure(error).exception, PythonException::Malformed);
+    }
+
+    #[rstest]
+    #[case::default_lifetime(json!({}), "3600s")]
+    #[case::configured_lifetime(json!({"service_account_impersonation": {"token_lifetime_seconds": 1800}}), "1800s")]
+    #[tokio::test]
+    async fn a_custom_impersonation_url_is_called_with_the_sts_token(
+        #[future] google: Google,
+        #[case] extra: Value,
+        #[case] lifetime: &str,
+    ) {
+        let google = google.await;
+        let directory = tempfile::tempdir().unwrap();
+        let configured = merged(impersonating_source(&google, directory.path()), extra);
+
+        let login = auth(at(&google))
+            .login(Some(configured.to_string()), Some("p".into()))
+            .await
+            .unwrap();
+
+        let impersonations = google.sent_to(
+            "/v1/projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com:generateAccessToken",
+        );
+        let body: Value = serde_json::from_str(&impersonations[0].body).unwrap();
+        assert_eq!(
+            (
+                login.token.expose(),
+                impersonations[0].authorization.as_deref(),
+                body
+            ),
+            (
+                "impersonated",
+                Some("Bearer granted"),
+                json!({"delegates": null, "scope": ["https://www.googleapis.com/auth/cloud-platform"], "lifetime": lifetime})
+            )
         );
     }
 
@@ -1047,6 +1118,7 @@ mod tests {
     #[case::refresh_refused(explicit(|_| authorized_user(json!({}))), refused(400, json!({"error": "invalid_grant"})), PythonException::Refresh)]
     #[case::refresh_server_error(explicit(|_| authorized_user(json!({}))), refused(500, json!({"error": "internal"})), PythonException::Refresh)]
     #[case::refresh_answers_no_token(explicit(|_| authorized_user(json!({}))), refused(200, json!({"expires_in": 3600})), PythonException::Refresh)]
+    #[case::custom_impersonation_refused(Box::new(|google: &Google, directory: &Path| (Some(merged(file_source(google, directory), json!({"service_account_impersonation_url": format!("{}/v1/projects/-/serviceAccounts/refused@p.iam.gserviceaccount.com:generateAccessToken", google.url)})).to_string()), at(google))), None, PythonException::Refresh)]
     #[case::exchange_refused(Box::new(|google: &Google, directory: &Path| (Some(file_source(google, directory).to_string()), at(google))), refused(400, json!({"error": "invalid_grant"})), PythonException::OAuth)]
     #[case::workforce_refresh_refused(Box::new(|google: &Google, directory: &Path| adc_file(json!({"type": "external_account_authorized_user", "refresh_token": "r", "token_url": google.token_url(), "client_id": "c", "client_secret": "s"}))(google, directory)), refused(401, json!({"error": "invalid_client"})), PythonException::OAuth)]
     #[case::workforce_user_that_cannot_load(Box::new(adc_file(json!({"type": "external_account_authorized_user"}))), None, PythonException::DefaultCredentials)]

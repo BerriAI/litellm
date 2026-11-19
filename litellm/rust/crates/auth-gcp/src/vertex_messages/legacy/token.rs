@@ -1,7 +1,7 @@
-//! The token exchange the two backwards-compat logins share, [`super::compat_certificate_source`]
-//! and [`super::compat_external_account_authorized_user`]: one form POST through litellm's HTTP
-//! client, the token it answers, and that token kept until shortly before it expires. It exists
-//! only for them and goes when they do.
+//! The token exchange the two backwards-compat logins share, [`super::certificate_source`] and
+//! [`super::external_account_authorized_user`]: one form POST through litellm's HTTP client, the
+//! token it answers, and that token kept until shortly before it expires. It exists only for them:
+//! delete it when both are gone.
 
 use std::{
     sync::Arc,
@@ -17,7 +17,7 @@ use litellm_auth_types::{Error, ErrorDetail};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 
-use super::{
+use crate::vertex_messages::{
     environment::unreachable,
     failure::{GoogleLoginFailure, PythonException},
     source::target_principal,

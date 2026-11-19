@@ -33,6 +33,7 @@ url.workspace = true
 veil.workspace = true
 
 gcp_auth = "0.12.7"
+shlex = "2.0.1"
 google-cloud-auth.workspace = true
 http.workspace = true
 rustls.workspace = true

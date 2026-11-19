@@ -7,9 +7,9 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
 use super::{
-    compat_external_account_authorized_user::ExternalAuthorizedUserInfo,
     explicit_aws::ExplicitAwsKeys,
     failure::{GoogleLoginFailure, PythonException, UnusableFile},
+    legacy::ExternalAuthorizedUserInfo,
 };
 use crate::{config::is_base64_encoded_json, identity::SdkJson};
 
@@ -17,7 +17,7 @@ const INLINE_JSON_LEADING_NOISE: [char; 7] = [' ', '\t', '\r', '\n', '\u{feff}',
 const MAX_CREDENTIALS_FILE_CHARACTERS: usize = 1 << 20;
 /// The most bytes any credentials file is read to: four UTF-8 bytes for each of
 /// [`MAX_CREDENTIALS_FILE_CHARACTERS`].
-const MAX_CREDENTIALS_FILE_BYTES: u64 = 4 * MAX_CREDENTIALS_FILE_CHARACTERS as u64;
+pub(crate) const MAX_CREDENTIALS_FILE_BYTES: u64 = 4 * MAX_CREDENTIALS_FILE_CHARACTERS as u64;
 const NOT_A_JSON_OBJECT: &str = "is JSON but not a JSON object, it may be quoted or encoded twice";
 const PRIVATE_KEY_HINT: &str = "Check for unescaped newlines in private_key.";
 const LEADING_NOISE_HINT: &str = "Remove the quotes or byte-order mark before the opening `{`.";
@@ -80,13 +80,34 @@ pub(crate) struct ImpersonationOptions {
     pub(crate) token_lifetime_seconds: Option<u64>,
 }
 
-/// Where an external account reads its subject token, as far as the login routes it: AWS, an
-/// executable or a certificate. Google's Rust SDK reads the rest of it.
+/// Where an external account reads its subject token, as far as the login routes it: AWS, a URL,
+/// an executable, a certificate or a file. Google's Rust SDK reads the rest of it.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub(crate) struct CredentialSource {
     pub(crate) environment_id: Option<String>,
-    pub(crate) executable: Option<serde::de::IgnoredAny>,
+    pub(crate) url: Option<serde::de::IgnoredAny>,
+    pub(crate) executable: Option<ExecutableSource>,
     pub(crate) certificate: Option<CertificateSource>,
+    pub(crate) file: Option<String>,
+    pub(crate) format: Option<SourceFormat>,
+}
+
+/// How a file source holds its subject token: the whole file, or one field of a JSON object.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct SourceFormat {
+    #[serde(rename = "type")]
+    pub(crate) kind: Option<String>,
+    pub(crate) subject_token_field_name: Option<String>,
+}
+
+/// A credential helper executable: its command line, how long it may run and where it caches its
+/// answer.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct ExecutableSource {
+    pub(crate) command: Option<String>,
+    pub(crate) timeout_millis: Option<u64>,
+    pub(crate) interactive_timeout_millis: Option<u64>,
+    pub(crate) output_file: Option<String>,
 }
 
 /// An x509 workload identity federation source: where its certificate configuration and trust
@@ -289,7 +310,7 @@ fn inline_not_json(detail: &str, hint: &str) -> GoogleLoginFailure {
 
 /// Why [`read_bounded`] gave no contents.
 #[derive(Debug)]
-enum BoundedRead {
+pub(crate) enum BoundedRead {
     /// The file could not be opened or read.
     Unreadable(std::io::Error),
     /// The file holds more than [`MAX_CREDENTIALS_FILE_BYTES`].
@@ -310,6 +331,14 @@ fn read_bounded(path: &str) -> Result<Vec<u8>, BoundedRead> {
         true => Err(BoundedRead::TooLarge),
         false => Ok(bytes),
     }
+}
+
+/// [`read_bounded`] on a blocking thread, for a file read while a token is fetched. A read that
+/// did not finish is unreadable.
+pub(crate) async fn read_bounded_off_runtime(path: String) -> Result<Vec<u8>, BoundedRead> {
+    tokio::task::spawn_blocking(move || read_bounded(&path))
+        .await
+        .unwrap_or_else(|error| Err(BoundedRead::Unreadable(std::io::Error::other(error))))
 }
 
 fn read_json_file(path: &str) -> Result<CredentialsJson, GoogleLoginFailure> {

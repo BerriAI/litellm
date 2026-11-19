@@ -5,19 +5,23 @@
 
 use std::sync::Arc;
 
+use google_cloud_auth::credentials::{
+    external_account::ProgrammaticBuilder, subject_token::SubjectTokenProvider,
+};
 use litellm_auth_aws::AwsAuthService;
 
 use super::{
-    compat_certificate_source,
+    bounded_file_source,
     environment::GoogleEnvironment,
     explicit_aws::explicit_aws_credentials,
-    failure::{GoogleLoginFailure, PythonException},
-    source::{ExternalAccountInfo, ServiceAccountInfo},
+    failure::{GoogleLoginFailure, PythonException, UNLOADABLE_CREDENTIALS},
+    legacy,
+    source::{ExternalAccountInfo, ServiceAccountInfo, target_principal},
 };
 use crate::{GcpTokenSource, identity::SdkCredentials};
 
 const NO_CREDENTIAL_SOURCE: &str = "The external account credentials name no credential_source.";
-const EXECUTABLES_NOT_ALLOWED: &str = "Executables need to be explicitly allowed (set GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES to '1') to run.";
+const NO_PRINCIPAL: &str = "The service account impersonation URL names no service account.";
 
 /// Builds `credentials` with Google's Rust SDK, a failure raised as `exception`.
 pub(crate) fn build(
@@ -26,7 +30,79 @@ pub(crate) fn build(
 ) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
     credentials
         .build()
-        .map_err(|_| GoogleLoginFailure::new(exception, super::failure::UNLOADABLE_CREDENTIALS))
+        .map_err(|_| GoogleLoginFailure::new(exception, UNLOADABLE_CREDENTIALS))
+}
+
+/// The external account `info` names, built as Google's Rust SDK builds it from the file but
+/// with `provider` supplying its subject token, refused as `unusable` without the audience and
+/// subject token type the SDK requires.
+pub(crate) fn programmatic<P>(
+    info: &ExternalAccountInfo,
+    provider: P,
+    unusable: PythonException,
+) -> Result<ProgrammaticBuilder, GoogleLoginFailure>
+where
+    P: SubjectTokenProvider<Error = GoogleLoginFailure> + 'static,
+{
+    let (Some(audience), Some(subject_token_type)) = (&info.audience, &info.subject_token_type)
+    else {
+        return Err(GoogleLoginFailure::new(unusable, UNLOADABLE_CREDENTIALS));
+    };
+    let builder = ProgrammaticBuilder::new(Arc::new(provider))
+        .with_audience(audience)
+        .with_subject_token_type(subject_token_type);
+    let builder = info
+        .token_url
+        .iter()
+        .fold(builder, |builder, url| builder.with_token_url(url));
+    let builder = info
+        .client_id
+        .iter()
+        .fold(builder, |builder, id| builder.with_client_id(id));
+    let builder = info.client_secret.iter().fold(builder, |builder, secret| {
+        builder.with_client_secret(secret)
+    });
+    let builder = info
+        .workforce_pool_user_project
+        .iter()
+        .fold(builder, |builder, project| {
+            builder.with_workforce_pool_user_project(project)
+        });
+    Ok(info
+        .universe_domain
+        .iter()
+        .fold(builder, |builder, domain| {
+            builder.with_universe_domain(domain)
+        }))
+}
+
+/// The STS exchange `builder` makes, then the service account `info` names impersonated: by
+/// Google's Rust SDK on its own host, else at the named URL through [`legacy::impersonated_at`].
+pub(crate) fn exchanged(
+    info: &ExternalAccountInfo,
+    builder: ProgrammaticBuilder,
+    environment: &Arc<dyn GoogleEnvironment>,
+    unusable: PythonException,
+) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
+    let Some(url) = info.service_account_impersonation_url.as_deref() else {
+        return build(SdkCredentials::Programmatic(builder), unusable);
+    };
+    let principal = target_principal(url)
+        .ok_or_else(|| GoogleLoginFailure::new(PythonException::Refresh, NO_PRINCIPAL))?;
+    match legacy::sdk_impersonates_at(url) {
+        true => build(
+            SdkCredentials::Programmatic(builder.with_target_principal(principal)),
+            unusable,
+        ),
+        false => Ok(legacy::impersonated_at(
+            build(SdkCredentials::Programmatic(builder), unusable)?,
+            url,
+            info.service_account_impersonation
+                .as_ref()
+                .and_then(|options| options.token_lifetime_seconds),
+            environment.clone(),
+        )),
+    }
 }
 
 /// google-auth's `service_account.Credentials.from_service_account_info`, which requires a
@@ -63,19 +139,18 @@ pub(crate) fn explicit_aws(
     environment: &Arc<dyn GoogleEnvironment>,
     aws: &AwsAuthService,
 ) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
-    build(
-        SdkCredentials::Programmatic(explicit_aws_credentials(
-            info,
-            environment.clone(),
-            aws.clone(),
-        )?),
+    exchanged(
+        info,
+        explicit_aws_credentials(info, environment.clone(), aws.clone())?,
+        environment,
         PythonException::Malformed,
     )
 }
 
 /// An external account as Python's `_credentials_from_json` builds it from `vertex_credentials`
 /// (`explicit`) or google-auth's `default()` builds it from a file: the backwards-compat
-/// certificate source, else Google's Rust SDK. LiteLLM's explicit AWS login is [`explicit_aws`].
+/// certificate and executable sources, a file source read bounded, else Google's Rust SDK.
+/// LiteLLM's explicit AWS login is [`explicit_aws`].
 pub(crate) fn external_account(
     info: &ExternalAccountInfo,
     environment: &Arc<dyn GoogleEnvironment>,
@@ -95,18 +170,13 @@ pub(crate) fn external_account(
         ));
     };
     if let Some(certificate) = &source.certificate {
-        return compat_certificate_source::load(info, certificate, environment.clone());
+        return legacy::certificate_source(info, certificate, environment.clone());
     }
-    if source.executable.is_some()
-        && environment
-            .os_env("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES")
-            .as_deref()
-            != Some("1")
-    {
-        return Err(GoogleLoginFailure::new(
-            PythonException::Malformed,
-            EXECUTABLES_NOT_ALLOWED,
-        ));
+    if let (None, Some(executable)) = (&source.environment_id, &source.executable) {
+        return legacy::executable_source(info, executable, environment, explicit);
     }
-    build(SdkCredentials::ExternalAccount(info.sdk.clone()), unusable)
+    match bounded_file_source::subject_file(info) {
+        Some(path) => bounded_file_source::load(info, path, environment, unusable),
+        None => build(SdkCredentials::ExternalAccount(info.sdk.clone()), unusable),
+    }
 }

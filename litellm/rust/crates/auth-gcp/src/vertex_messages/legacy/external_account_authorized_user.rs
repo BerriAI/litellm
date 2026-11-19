@@ -1,8 +1,8 @@
 //! Backwards compatibility only, with google-auth's `external_account_authorized_user`
 //! credentials: a workforce identity user's refresh token, exchanged once per token at the STS
 //! endpoint its file names. Google's Rust SDK (`google_cloud_auth` 1.16) has no such credential
-//! type. Delete this module, and [`super::compat_token`] once the certificate source is gone too,
-//! when the SDK adds one.
+//! type. Delete this module, and [`super::token`] once the certificate source is gone too, when
+//! the SDK adds one.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -11,8 +11,8 @@ use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
-use super::{
-    compat_token::{CompatLogin, HeldToken, exchange},
+use super::token::{CompatLogin, HeldToken, exchange};
+use crate::vertex_messages::{
     environment::GoogleEnvironment,
     failure::{GoogleLoginFailure, PythonException},
 };

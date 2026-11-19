@@ -3,8 +3,9 @@
 //! (`google_cloud_auth` 1.16) has no certificate credential source, so this module reads the
 //! certificate configuration, sends the certificate chain as the subject token to the STS
 //! endpoint over mutual TLS as google-auth's `identity_pool.py` does, and hands the STS token to
-//! the SDK's impersonation when the file names a service account. Delete it once the SDK adds a
-//! certificate source.
+//! the SDK's impersonation when the file names a service account, or to [`super::impersonation`]
+//! when that service account is impersonated elsewhere than the SDK's host. Delete it once the SDK
+//! adds a certificate source.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -15,9 +16,12 @@ use rustls::pki_types::{CertificateDer, pem::PemObject};
 use serde::Deserialize;
 
 use super::{
-    compat_token::{Compat, CompatLogin, HeldToken, exchange, impersonating},
+    impersonation,
+    token::{Compat, CompatLogin, Granted, HeldToken, exchange, impersonating},
+};
+use crate::vertex_messages::{
     environment::GoogleEnvironment,
-    failure::{GoogleLoginFailure, PythonException},
+    failure::{GoogleLoginFailure, PythonException, UNLOADABLE_CREDENTIALS},
     source::{CertificateSource, ExternalAccountInfo},
 };
 use crate::{GcpTokenSource, constants::CLOUD_PLATFORM_SCOPE};
@@ -115,22 +119,21 @@ pub(crate) fn load(
             .clone()
             .map(|id| (id, info.client_secret.clone().unwrap_or_default())),
         held: HeldToken::default(),
-        environment,
+        environment: environment.clone(),
     });
+    let lifetime = info
+        .service_account_impersonation
+        .as_ref()
+        .and_then(|options| options.token_lifetime_seconds);
     match &info.service_account_impersonation_url {
-        Some(url) => impersonating(
-            login,
+        Some(url) if !impersonation::sdk_calls(url) => Ok(super::impersonated_at(
+            Arc::new(Compat(login)),
             url,
-            info.service_account_impersonation
-                .as_ref()
-                .and_then(|options| options.token_lifetime_seconds),
-        )?
-        .build()
-        .map_err(|_| {
-            GoogleLoginFailure::new(
-                PythonException::InvalidValue,
-                super::failure::UNLOADABLE_CREDENTIALS,
-            )
+            lifetime,
+            environment,
+        )),
+        Some(url) => impersonating(login, url, lifetime)?.build().map_err(|_| {
+            GoogleLoginFailure::new(PythonException::InvalidValue, UNLOADABLE_CREDENTIALS)
         }),
         None => Ok(Arc::new(Compat(login))),
     }
@@ -192,7 +195,7 @@ impl CertificateLogin {
     }
 
     /// `sts.Client.exchange_token` over mutual TLS with the workload's certificate and key.
-    async fn exchange(&self) -> Result<super::compat_token::Granted, GoogleLoginFailure> {
+    async fn exchange(&self) -> Result<Granted, GoogleLoginFailure> {
         let workload = self.workload()?;
         let subject_token = self.subject_token(&workload)?;
         let request = self

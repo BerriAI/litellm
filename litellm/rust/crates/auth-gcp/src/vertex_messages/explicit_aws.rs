@@ -19,7 +19,7 @@ use serde_json::json;
 use super::{
     environment::GoogleEnvironment,
     failure::{GoogleLoginFailure, PythonException},
-    source::{ExternalAccountInfo, present, target_principal},
+    source::{ExternalAccountInfo, present},
 };
 
 /// LiteLLM's own `aws_*` keys in an external account file. Each is `Some(None)` when null, which
@@ -91,9 +91,9 @@ pub(crate) fn uses_explicit_aws(info: &ExternalAccountInfo) -> bool {
         && info.aws.any_given()
 }
 
-/// The external account Google's Rust SDK exchanges the signed request for at STS, and then
-/// for the service account its impersonation URL names. `aws` resolves the AWS credentials, and
-/// with them an `aws_web_identity_token` reference such as `oidc/...`, as Bedrock's login does.
+/// The external account Google's Rust SDK exchanges the signed request for at STS, before any
+/// impersonation. `aws` resolves the AWS credentials, and with them an `aws_web_identity_token`
+/// reference such as `oidc/...`, as Bedrock's login does.
 pub(crate) fn explicit_aws_credentials(
     info: &ExternalAccountInfo,
     environment: Arc<dyn GoogleEnvironment>,
@@ -104,20 +104,16 @@ pub(crate) fn explicit_aws_credentials(
     let builder = ProgrammaticBuilder::new(Arc::new(subject))
         .with_audience(audience)
         .with_subject_token_type(info.subject_token_type.clone().unwrap_or_default());
-    let builder = match &info.token_url {
-        Some(url) => builder.with_token_url(url),
-        None => builder,
-    };
-    Ok(
-        match info
-            .service_account_impersonation_url
-            .as_deref()
-            .and_then(target_principal)
-        {
-            Some(principal) => builder.with_target_principal(principal),
-            None => builder,
-        },
-    )
+    let builder = info
+        .token_url
+        .iter()
+        .fold(builder, |builder, url| builder.with_token_url(url));
+    Ok(info
+        .universe_domain
+        .iter()
+        .fold(builder, |builder, domain| {
+            builder.with_universe_domain(domain)
+        }))
 }
 
 /// The subject token provider for the file's `aws_*` keys, refused without `aws_region_name`.

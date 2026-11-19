@@ -10,10 +10,9 @@ use serde_json::{Map, Value};
 use super::{
     Login,
     builders::{self, build},
-    compat_external_account_authorized_user,
-    compat_token::{Compat, impersonating},
     environment::GoogleEnvironment,
     failure::{GoogleLoginFailure, PythonException},
+    legacy,
     source::{CredentialsFile, ExternalAccountInfo, ImpersonatedInfo, Unparsed},
 };
 use crate::{GcpTokenSource, identity::SdkCredentials};
@@ -99,13 +98,10 @@ fn impersonated(
             PythonException::DefaultCredentials,
         ),
         Some("external_account_authorized_user") => build(
-            impersonating(
-                compat_external_account_authorized_user::load(
-                    &source.external_authorized_user,
-                    env.clone(),
-                )?,
+            legacy::impersonating_external_account_authorized_user(
+                &source.external_authorized_user,
                 url,
-                None,
+                env.clone(),
             )?,
             PythonException::DefaultCredentials,
         ),
@@ -176,10 +172,7 @@ fn load_credentials_from_file(
         }
         CredentialsFile::ExternalAccountAuthorizedUser(user) => (
             login(
-                Arc::new(Compat(compat_external_account_authorized_user::load(
-                    &user,
-                    env.clone(),
-                )?)),
+                legacy::external_account_authorized_user(&user, env.clone())?,
                 None,
             ),
             Kind::Other,
