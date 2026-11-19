@@ -1,6 +1,8 @@
-from typing import Any, Final, cast
+from collections.abc import Mapping
+from typing import Final, cast
 
 import litellm
+from litellm.llms.base_llm.videos.async_task_utils import OPENROUTER_VIDEO_FIELDS
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.utils import filter_out_litellm_params
@@ -47,7 +49,7 @@ class VideoGenerationRequestUtils:
 
     @staticmethod
     def get_requested_video_generation_optional_param(
-        params: dict[str, Any],
+        params: Mapping[str, object],
     ) -> VideoCreateOptionalRequestParams:
         """
         Filter parameters to only include those defined in VideoCreateOptionalRequestParams.
@@ -60,9 +62,8 @@ class VideoGenerationRequestUtils:
         """
         params = dict(params or {})
 
-        raw_kwargs = params.get("kwargs", {})
-        if not isinstance(raw_kwargs, dict):
-            raw_kwargs = {}
+        nested_kwargs: Final = params.get("kwargs", {})
+        raw_kwargs: Final[dict[str, object]] = nested_kwargs if isinstance(nested_kwargs, dict) else {}
 
         kwargs_extra_body: Final = raw_kwargs.pop("extra_body", None)
         top_level_extra_body: Final = params.get("extra_body")
@@ -92,7 +93,9 @@ class VideoGenerationRequestUtils:
             merged_extra_body = filter_out_litellm_params(kwargs=merged_extra_body)
             if merged_extra_body:
                 optional_params["extra_body"] = merged_extra_body
-                optional_params.update(merged_extra_body)
+                optional_params.update(
+                    {key: value for key, value in merged_extra_body.items() if key not in OPENROUTER_VIDEO_FIELDS}
+                )
 
         optional_params.pop("timeout", None)
 

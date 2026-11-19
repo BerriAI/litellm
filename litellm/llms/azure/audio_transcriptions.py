@@ -1,11 +1,17 @@
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final
 
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncStream, AzureOpenAI, Stream
+from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    acreate_sdk_transcription,
+    create_sdk_transcription,
+    sdk_compatible_transcription_request_data,
+)
 from litellm.types.utils import FileTypes
 from litellm.utils import (
     TranscriptionResponse,
@@ -38,14 +44,19 @@ class AzureAudioTranscription(AzureChatCompletion):
         atranscription: bool = False,
         litellm_params: dict | None = None,
         custom_llm_provider: str = "azure",
-    ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
+    ) -> (
+        TranscriptionResponse
+        | Stream[TranscriptionStreamEvent]
+        | Coroutine[object, object, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+    ):
         data: Final = {"model": model, "file": audio_file, **optional_params}
+        sdk_data: Final = sdk_compatible_transcription_request_data(data)
         deployment_api_version: Final = None if self.is_azure_v1_api_version(api_version) else api_version
 
         if atranscription is True:
             return self.async_audio_transcriptions(
                 audio_file=audio_file,
-                data=data,
+                data=sdk_data,
                 model_response=model_response,
                 timeout=timeout,
                 api_key=api_key,
@@ -86,10 +97,9 @@ class AzureAudioTranscription(AzureChatCompletion):
             },
         )
 
-        response: Final = azure_client.audio.transcriptions.create(
-            **data,
-            timeout=timeout,
-        )
+        _, response = create_sdk_transcription(azure_client, sdk_data, timeout)
+        if isinstance(response, Stream):
+            return response
 
         if isinstance(response, BaseModel):
             stringified_response = response.model_dump()
@@ -116,7 +126,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         self,
         audio_file: FileTypes,
         model: str,
-        data: dict,
+        data: Mapping[str, object],
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: "LiteLLMLoggingObj",
@@ -127,7 +137,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         max_retries=None,
         litellm_params: dict | None = None,
         custom_llm_provider: str = "azure",
-    ) -> TranscriptionResponse:
+    ) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:
         response = None
         try:
             async_azure_client: Final = self.get_azure_openai_client(
@@ -157,12 +167,9 @@ class AzureAudioTranscription(AzureChatCompletion):
                 },
             )
 
-            raw_response: Final = await async_azure_client.audio.transcriptions.with_raw_response.create(
-                **data, timeout=timeout
-            )
-
-            headers: Final = dict(raw_response.headers)
-            response = raw_response.parse()
+            headers, response = await acreate_sdk_transcription(async_azure_client, data, timeout)
+            if isinstance(response, AsyncStream):
+                return response
 
             if isinstance(response, BaseModel):
                 stringified_response = response.model_dump()

@@ -54,6 +54,7 @@ from litellm.llms.bedrock.common_utils import (
     BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
     DROP_DISABLED_REASONING_EFFORT_WARNING,
     BedrockError,
+    bedrock_model_encrypts_agent_messages,
     bedrock_reasoning_effort_disabled,
     bedrock_supports_openai_responses,
 )
@@ -187,10 +188,12 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         fetch_image: "Callable[[str], str]" = convert_url_to_base64,
         async_fetch_image: "Callable[[str], Awaitable[str]]" = async_convert_url_to_base64,
+        encrypted_agent_messages: bool = False,
     ) -> None:
         super().__init__()
         self.fetch_image = fetch_image
         self.async_fetch_image = async_fetch_image
+        self.encrypted_agent_messages = encrypted_agent_messages
 
     @classmethod
     def for_model(cls, model: str | None) -> "BedrockOpenAIResponsesConfig | None":
@@ -207,7 +210,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
             _without_chat_completions_route(model), litellm.model_cost
         ):
             return None
-        return cls()
+        return cls(encrypted_agent_messages=bedrock_model_encrypts_agent_messages(model))
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -244,6 +247,9 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
 
     def supports_native_file_search(self) -> bool:
         return False
+
+    def supports_encrypted_agent_messages(self) -> bool:
+        return self.encrypted_agent_messages
 
     def validate_environment(
         self,
@@ -358,7 +364,9 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: same
     ) -> dict:  # mutable-ok: same
-        normalized_input, rewritten_types = normalize_codex_input_items(input)
+        normalized_input, rewritten_types = normalize_codex_input_items(
+            input, keep_encrypted_agent_messages=self.supports_encrypted_agent_messages()
+        )
         if rewritten_types:
             verbose_logger.warning(
                 "Bedrock Runtime Responses API: rewrote Codex input item type(s) %s that the endpoint rejects.",
