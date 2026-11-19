@@ -1,48 +1,33 @@
-//! google-auth's `default()` for the Vertex AI Messages login: application default credentials
-//! from `GOOGLE_APPLICATION_CREDENTIALS`, the gcloud credentials file or the GCE metadata
-//! server, and the project they resolve.
+//! google-auth's `default()` for the Vertex AI Messages login: where application default
+//! credentials are found (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud credentials file or the
+//! GCE metadata server), which credentials Google's Rust SDK builds from them, and the project
+//! they resolve.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{path::PathBuf, sync::Arc};
 
 use serde_json::{Map, Value};
 
 use super::{
-    authorized_user, aws_wif, builders,
-    credentials::{Loaded, managed},
+    Login,
+    builders::{self, build},
+    compat_external_account_authorized_user,
+    compat_token::{Compat, impersonating},
     environment::GoogleEnvironment,
-    external_account::{self, ExternalAccountInfo, OsEnvironment},
-    external_authorized_user,
     failure::{GoogleLoginFailure, PythonException},
-    source::{CredentialsFile, ImpersonatedInfo, Unparsed},
+    source::{CredentialsFile, ExternalAccountInfo, ImpersonatedInfo, Unparsed},
 };
+use crate::{GcpTokenSource, identity::SdkCredentials};
 
 const MISSING_CREDENTIALS: &str = "No application default credentials were found. Set GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default login`.";
 const VALID_TYPES: &str = "authorized_user, service_account, external_account, external_account_authorized_user, impersonated_service_account";
 const CLOUD_RESOURCE_MANAGER: &str = "https://cloudresourcemanager.{universe_domain}/v1/projects/";
-const AWS_SUBJECT_TOKEN_TYPE: &str = "urn:ietf:params:aws:token-type:aws4_request";
 const DEFAULT_UNIVERSE_DOMAIN: &str = "googleapis.com";
 
-/// What google-auth's `default()` found: the credentials and the project it resolved.
-pub(crate) struct DefaultCredentials {
-    pub(crate) source: Loaded,
-    pub(crate) project: Option<String>,
-}
-
-/// Whether the credentials found are an external account, whose project google-auth looks up
-/// from its audience when nothing else names one.
-enum Kind {
-    ExternalAccount { info: Box<ExternalAccountInfo> },
-    Other,
-}
-
-/// Credentials one of `default()`'s sources found, with the project that source names.
-struct Found {
-    source: Loaded,
-    project: Option<String>,
-    kind: Kind,
+/// An application default credentials file, and whether it is gcloud's own, whose project
+/// `gcloud config` names when the file does not.
+pub(crate) struct AdcFile {
+    pub(crate) path: String,
+    gcloud: bool,
 }
 
 /// A project that names something: google-auth skips an empty one.
@@ -65,103 +50,79 @@ fn gcloud_credentials_path(env: &dyn GoogleEnvironment) -> Option<PathBuf> {
     Some(config.join("application_default_credentials.json"))
 }
 
-fn wrapped(
-    build: Result<Loaded, GoogleLoginFailure>,
-    credential: &str,
-    file: &str,
-) -> Result<Loaded, GoogleLoginFailure> {
-    build.map_err(|cause| {
-        default_failure(format!(
-            "The {credential} credentials in {file} cannot be used: {}",
-            cause.message
-        ))
-    })
-}
-
-fn os_env(env: &dyn GoogleEnvironment) -> OsEnvironment {
-    let variables: Vec<(String, String)> = [
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES",
-    ]
-    .into_iter()
-    .filter_map(|name| Some((name.to_owned(), env.os_env(name)?)))
-    .collect();
-    Arc::new(move |name| {
-        variables
-            .iter()
-            .find(|(known, _)| known == name)
-            .map(|(_, value)| value.clone())
-    })
-}
-
-/// `_default._get_external_account_credentials`: AWS and executable sources raise their own
-/// failure, an identity pool's `ValueError` is named by the file it came from.
-fn external_account(
-    env: &dyn GoogleEnvironment,
-    info: &ExternalAccountInfo,
-    file: &str,
-) -> Result<Loaded, GoogleLoginFailure> {
-    if info.subject_token_type.as_deref() == Some(AWS_SUBJECT_TOKEN_TYPE) {
-        return aws_wif::metadata_aws_credentials(info, os_env(env));
-    }
-    if info
-        .credential_source
-        .as_ref()
-        .is_some_and(|source| source.executable.is_some())
+/// The file `_get_explicit_environ_credentials` or `_get_gcloud_sdk_credentials` loads, `None`
+/// when `default()` would go on to the GCE metadata server.
+pub(crate) fn locate(env: &dyn GoogleEnvironment) -> Option<AdcFile> {
+    let gcloud = gcloud_credentials_path(env);
+    match env
+        .os_env("GOOGLE_APPLICATION_CREDENTIALS")
+        .filter(|path| !path.is_empty())
     {
-        return external_account::pluggable(info, os_env(env));
+        Some(path) => Some(AdcFile {
+            gcloud: gcloud.is_some_and(|gcloud| gcloud == std::path::Path::new(&path)),
+            path,
+        }),
+        None => gcloud.filter(|path| path.is_file()).map(|path| AdcFile {
+            path: path.to_string_lossy().into_owned(),
+            gcloud: true,
+        }),
     }
-    let unloadable = |failure: GoogleLoginFailure| match failure.exception {
-        PythonException::Value
-        | PythonException::Malformed
-        | PythonException::InvalidValue
-        | PythonException::InvalidResource => default_failure(format!(
-            "The external account credentials in {file} cannot be used."
-        )),
-        _ => failure,
-    };
-    match external_account::identity_pool(info).map_err(unloadable)? {
-        Some(loaded) => Ok(loaded),
-        None => builders::external_account(info)
-            .map(managed)
-            .map_err(unloadable),
-    }
+}
+
+/// Whether the credentials found are an external account, whose project google-auth looks up
+/// from its audience when nothing else names one.
+enum Kind {
+    ExternalAccount(Box<ExternalAccountInfo>),
+    Other,
 }
 
 /// Impersonated service account credentials without source credentials of a supported type or
 /// without an impersonation URL cannot be used.
-fn unusable_impersonation(info: &ImpersonatedInfo, file: &str) -> Option<GoogleLoginFailure> {
-    let supported = matches!(
-        info.source_credentials
-            .as_ref()
-            .and_then(|source| source.kind.as_deref()),
-        Some("authorized_user" | "service_account" | "external_account_authorized_user")
-    );
-    (!supported || info.service_account_impersonation_url.is_none()).then(|| {
+fn impersonated(
+    info: &ImpersonatedInfo,
+    env: &Arc<dyn GoogleEnvironment>,
+    file: &str,
+) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
+    let unusable = || {
         default_failure(format!(
             "The impersonated service account credentials in {file} cannot be used."
         ))
-    })
+    };
+    let source = info.source_credentials.as_ref().ok_or_else(unusable)?;
+    let url = info
+        .service_account_impersonation_url
+        .as_deref()
+        .ok_or_else(unusable)?;
+    match source.kind.as_deref() {
+        Some("authorized_user" | "service_account") => build(
+            SdkCredentials::Impersonated(info.sdk.clone()),
+            PythonException::DefaultCredentials,
+        ),
+        Some("external_account_authorized_user") => build(
+            impersonating(
+                compat_external_account_authorized_user::load(
+                    &source.external_authorized_user,
+                    env.clone(),
+                )?,
+                url,
+                None,
+            )?,
+            PythonException::DefaultCredentials,
+        ),
+        _ => Err(unusable()),
+    }
 }
 
-/// `_default.load_credentials_from_file`.
+/// `_default.load_credentials_from_file`: the credentials a file holds and the project it names.
 fn load_credentials_from_file(
-    env: &dyn GoogleEnvironment,
+    env: &Arc<dyn GoogleEnvironment>,
     file: &str,
-) -> Result<Found, GoogleLoginFailure> {
-    if !Path::new(file).exists() {
-        return Err(default_failure(format!(
-            "The credentials file {file} does not exist."
-        )));
-    }
+) -> Result<(Login, Kind), GoogleLoginFailure> {
     let contents = std::fs::read_to_string(file).map_err(|error| {
-        default_failure(format!(
-            "The credentials file {file} cannot be read: {error}"
-        ))
+        default_failure(match error.kind() {
+            std::io::ErrorKind::NotFound => format!("The credentials file {file} does not exist."),
+            _ => format!("The credentials file {file} cannot be read: {error}"),
+        })
     })?;
     let info = match serde_json::from_str::<Value>(&contents) {
         Ok(Value::Object(info)) => info,
@@ -176,55 +137,60 @@ fn load_credentials_from_file(
             )));
         }
     };
-    let found = |source, project, kind| Found {
+    let login = |source, project| Login {
         source,
         project,
-        kind,
+        signs: false,
     };
-    match parse_file(info, file)? {
-        CredentialsFile::AuthorizedUser(user) => Ok(found(
-            wrapped(
-                authorized_user::authorized_user(&user, &env.google_token_endpoint()),
-                "authorized user",
-                file,
-            )?,
-            None,
-            Kind::Other,
-        )),
-        CredentialsFile::ServiceAccount(account) => Ok(found(
-            wrapped(builders::service_account(&account), "service account", file)?,
-            account.project_id,
-            Kind::Other,
-        )),
-        CredentialsFile::ExternalAccount(account) => Ok(found(
-            external_account(env, &account, file)?,
-            None,
-            Kind::ExternalAccount { info: account },
-        )),
-        CredentialsFile::ImpersonatedServiceAccount(account) => {
-            if let Some(unusable) = unusable_impersonation(&account, file) {
-                return Err(unusable);
-            }
-            Ok(found(
-                wrapped(
-                    builders::impersonated_service_account(&account).map(managed),
-                    "impersonated service account",
-                    file,
+    let unusable = PythonException::DefaultCredentials;
+    Ok(match parse_file(info, file)? {
+        CredentialsFile::AuthorizedUser(user) => (
+            login(
+                build(
+                    SdkCredentials::AuthorizedUser {
+                        json: user.sdk,
+                        token_uri: env.google_token_endpoint(),
+                    },
+                    unusable,
                 )?,
                 None,
-                Kind::Other,
-            ))
-        }
-        CredentialsFile::ExternalAccountAuthorizedUser(user) => Ok(found(
-            external_authorized_user::external_account_authorized_user(&user, file)?,
-            None,
+            ),
             Kind::Other,
-        )),
-        CredentialsFile::GdchServiceAccount => Err(default_failure(format!(
-            "The file {file} holds gdch_service_account credentials, which the Rust Vertex AI login does not support."
-        ))),
-        CredentialsFile::Unknown => Err(invalid_type(file)),
-    }
+        ),
+        CredentialsFile::ServiceAccount(account) => (
+            Login {
+                signs: true,
+                ..login(
+                    builders::service_account(&account, unusable)?,
+                    account.project_id,
+                )
+            },
+            Kind::Other,
+        ),
+        CredentialsFile::ExternalAccount(account) => (
+            login(builders::external_account(&account, env, false)?, None),
+            Kind::ExternalAccount(account),
+        ),
+        CredentialsFile::ImpersonatedServiceAccount(account) => {
+            (login(impersonated(&account, env, file)?, None), Kind::Other)
+        }
+        CredentialsFile::ExternalAccountAuthorizedUser(user) => (
+            login(
+                Arc::new(Compat(compat_external_account_authorized_user::load(
+                    &user,
+                    env.clone(),
+                )?)),
+                None,
+            ),
+            Kind::Other,
+        ),
+        CredentialsFile::GdchServiceAccount => {
+            return Err(default_failure(format!(
+                "The file {file} holds gdch_service_account credentials, which the Rust Vertex AI login does not support."
+            )));
+        }
+        CredentialsFile::Unknown => return Err(invalid_type(file)),
+    })
 }
 
 fn invalid_type(file: &str) -> GoogleLoginFailure {
@@ -241,51 +207,6 @@ fn parse_file(info: Map<String, Value>, file: &str) -> Result<CredentialsFile, G
             "The credentials file {file} holds a field of the wrong type: {error}"
         )),
     })
-}
-
-/// `_default._get_gcloud_sdk_credentials`.
-async fn gcloud_sdk_credentials(
-    env: &dyn GoogleEnvironment,
-) -> Result<Option<Found>, GoogleLoginFailure> {
-    let Some(path) = gcloud_credentials_path(env).filter(|path| path.is_file()) else {
-        return Ok(None);
-    };
-    let found = load_credentials_from_file(env, &path.to_string_lossy())?;
-    if named(&found.project) {
-        return Ok(Some(found));
-    }
-    Ok(Some(Found {
-        project: env.gcloud_project().await,
-        ..found
-    }))
-}
-
-/// `_default._get_explicit_environ_credentials`.
-async fn explicit_environ_credentials(
-    env: &dyn GoogleEnvironment,
-) -> Result<Option<Found>, GoogleLoginFailure> {
-    let explicit_file = env
-        .os_env("GOOGLE_APPLICATION_CREDENTIALS")
-        .unwrap_or_default();
-    if explicit_file.is_empty() {
-        return Ok(None);
-    }
-    if gcloud_credentials_path(env).is_some_and(|path| path == Path::new(&explicit_file)) {
-        return gcloud_sdk_credentials(env).await;
-    }
-    load_credentials_from_file(env, &explicit_file).map(Some)
-}
-
-/// `_default._get_gce_credentials`.
-async fn gce_credentials(env: &dyn GoogleEnvironment) -> Result<Option<Found>, GoogleLoginFailure> {
-    if !env.on_gce().await {
-        return Ok(None);
-    }
-    Ok(Some(Found {
-        project: env.gce_project().await,
-        source: managed(env.gce_credentials()?),
-        kind: Kind::Other,
-    }))
 }
 
 /// `external_account.Credentials.project_number`, else the workforce pool user project.
@@ -305,16 +226,20 @@ fn project_number(info: &ExternalAccountInfo) -> Option<String> {
         })
 }
 
-/// `external_account.Credentials.get_project_id`.
+/// `external_account.Credentials.get_project_id`: Cloud Resource Manager asked for the project
+/// the audience numbers, with the credentials' own token.
 async fn external_account_project(
     env: &dyn GoogleEnvironment,
-    source: &Loaded,
+    source: &dyn GcpTokenSource,
     info: &ExternalAccountInfo,
 ) -> Result<Option<String>, GoogleLoginFailure> {
     let Some(number) = project_number(info) else {
         return Ok(None);
     };
-    let token = source.refresh().await?.usable()?;
+    let token = source
+        .token()
+        .await
+        .map_err(|error| GoogleLoginFailure::token(&error, env))?;
     let universe_domain = info
         .universe_domain
         .as_deref()
@@ -326,36 +251,43 @@ async fn external_account_project(
     env.resource_manager_project(url, token).await
 }
 
-/// google-auth's `default()`: `GOOGLE_APPLICATION_CREDENTIALS`, the gcloud credentials file, then
-/// the GCE metadata server, with `GOOGLE_CLOUD_PROJECT` or `GCLOUD_PROJECT` naming the project
-/// ahead of whatever the credentials carry.
+/// google-auth's `default()` from `file`, or the GCE metadata server when there is none, with
+/// `GOOGLE_CLOUD_PROJECT` or `GCLOUD_PROJECT` naming the project ahead of the credentials.
 pub(crate) async fn default_credentials(
-    env: &dyn GoogleEnvironment,
-) -> Result<DefaultCredentials, GoogleLoginFailure> {
+    env: &Arc<dyn GoogleEnvironment>,
+    file: Option<AdcFile>,
+) -> Result<Login, GoogleLoginFailure> {
     let explicit_project = env
         .os_env("GOOGLE_CLOUD_PROJECT")
         .or_else(|| env.os_env("GCLOUD_PROJECT"));
-    let found = match explicit_environ_credentials(env).await? {
-        Some(found) => found,
-        None => match gcloud_sdk_credentials(env).await? {
-            Some(found) => found,
-            None => gce_credentials(env)
-                .await?
-                .ok_or_else(|| default_failure(MISSING_CREDENTIALS.into()))?,
-        },
+    let (found, kind) = match file {
+        Some(AdcFile { path, gcloud }) => {
+            let (found, kind) = load_credentials_from_file(env, &path)?;
+            let project = match gcloud && !named(&found.project) {
+                true => env.gcloud_project().await,
+                false => found.project,
+            };
+            (Login { project, ..found }, kind)
+        }
+        None if env.on_gce().await => (
+            Login {
+                source: env.gce_credentials()?,
+                project: env.gce_project().await,
+                signs: false,
+            },
+            Kind::Other,
+        ),
+        None => return Err(default_failure(MISSING_CREDENTIALS.into())),
     };
     let project = match named(&explicit_project) {
         true => explicit_project,
         false => found.project,
     };
-    let project = match (&found.kind, named(&project)) {
-        (Kind::ExternalAccount { info }, false) => {
-            external_account_project(env, &found.source, info).await?
+    let project = match (&kind, named(&project)) {
+        (Kind::ExternalAccount(info), false) => {
+            external_account_project(&**env, &*found.source, info).await?
         }
         _ => project,
     };
-    Ok(DefaultCredentials {
-        source: found.source,
-        project,
-    })
+    Ok(Login { project, ..found })
 }

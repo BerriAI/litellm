@@ -1,7 +1,13 @@
 //! A Vertex AI Messages login failure: the exception class Python's `VertexBase.load_auth`
 //! raises for it, its text, and the credentials file it is about, whose path only the log names.
+//! Failures of Google's Rust SDK map onto the class google-auth raises for the same category.
 
+use std::error::Error as StdError;
+
+use google_cloud_auth::errors::{CredentialsError, SubjectTokenProviderError};
 use litellm_auth_types::Error;
+
+use super::environment::GoogleEnvironment;
 
 pub(crate) const FILE_FAILURE_MESSAGE: &str =
     "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason.";
@@ -45,9 +51,6 @@ pub struct GoogleLoginFailure {
     pub exception: PythonException,
     pub message: String,
     pub file: Option<UnusableFile>,
-    /// Google's token endpoint refused the grant for good, so loading the credentials again
-    /// (a re-run `gcloud auth application-default login` or a rotated key) may fix it.
-    pub grant_rejected: bool,
 }
 
 impl GoogleLoginFailure {
@@ -56,15 +59,6 @@ impl GoogleLoginFailure {
             exception,
             message: message.into(),
             file: None,
-            grant_rejected: false,
-        }
-    }
-
-    /// The same failure, marked as a grant Google refused for good.
-    pub(crate) fn rejecting_the_grant(self) -> Self {
-        Self {
-            grant_rejected: true,
-            ..self
         }
     }
 
@@ -110,6 +104,96 @@ fn path_for_log(path: &str) -> String {
 impl From<GoogleLoginFailure> for Error {
     fn from(failure: GoogleLoginFailure) -> Self {
         Error::provider(failure)
+    }
+}
+
+impl SubjectTokenProviderError for GoogleLoginFailure {
+    fn is_transient(&self) -> bool {
+        self.exception == PythonException::Transport
+    }
+}
+
+/// A service account key that could not sign its token, which google-auth refuses as a
+/// `ValueError` when it loads the key.
+#[derive(Debug, thiserror::Error)]
+#[error("the service account key cannot sign a token")]
+pub(crate) struct UnsignableKey(#[source] pub(crate) Error);
+
+/// The start of the message Google's Rust SDK gives an STS token exchange that failed, which
+/// google-auth's `sts.Client` raises as an `OAuthError` when STS refuses it.
+const STS_EXCHANGE_FAILED: &str = "failed to exchange token";
+
+const CA_BUNDLE_HINT: &str = "Google's Rust SDK verifies TLS against SSL_CERT_FILE, SSL_CERT_DIR or the system's certificates, never REQUESTS_CA_BUNDLE or CURL_CA_BUNDLE: set SSL_CERT_FILE to the same CA bundle.";
+
+fn causes<'a>(
+    error: &'a (dyn StdError + 'static),
+) -> impl Iterator<Item = &'a (dyn StdError + 'static)> {
+    std::iter::successors(Some(error), |&cause| cause.source())
+}
+
+/// A TLS failure to verify the server's certificate, which reqwest's connector wraps in
+/// `io::Error`s that hide it from `source()`.
+fn rejects_the_certificate(error: &(dyn StdError + 'static)) -> bool {
+    causes(error)
+        .flat_map(|cause| {
+            std::iter::successors(Some(cause), |&wrapped| {
+                wrapped
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::get_ref)
+                    .map(|inner| inner as &(dyn StdError + 'static))
+            })
+        })
+        .any(|cause| {
+            matches!(
+                cause.downcast_ref::<rustls::Error>(),
+                Some(rustls::Error::InvalidCertificate(_))
+            )
+        })
+}
+
+/// Whether `requests` would have trusted a CA bundle the SDK does not read.
+fn names_a_requests_only_bundle(env: &dyn GoogleEnvironment) -> bool {
+    let set = |name: &str| env.os_env(name).is_some_and(|value| !value.is_empty());
+    (set("REQUESTS_CA_BUNDLE") || set("CURL_CA_BUNDLE")) && !set("SSL_CERT_FILE")
+}
+
+impl GoogleLoginFailure {
+    /// The exception google-auth raises when a token request fails: a `TransportError` when the
+    /// endpoint could not be reached, an `OAuthError` when STS refused the exchange, a
+    /// `ValueError` when a service account key cannot sign, else a `RefreshError`.
+    pub(crate) fn token(error: &(dyn StdError + 'static), env: &dyn GoogleEnvironment) -> Self {
+        if let Some(failure) = litellm_error::find::<Self>(error) {
+            return failure.clone();
+        }
+        let report = litellm_error::Report::new(error).to_string();
+        let http = litellm_error::find::<reqwest::Error>(error);
+        if http.is_some_and(|http| http.status().is_none() && !http.is_decode()) {
+            let hint = (rejects_the_certificate(error) && names_a_requests_only_bundle(env))
+                .then_some(CA_BUNDLE_HINT);
+            return Self::new(
+                PythonException::Transport,
+                [Some(report.as_str()), hint]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+        }
+        let exchange_refused = http.is_some_and(|http| http.status().is_some())
+            && causes(error).any(|cause| {
+                cause
+                    .downcast_ref::<CredentialsError>()
+                    .is_some_and(|sdk| sdk.to_string().starts_with(STS_EXCHANGE_FAILED))
+            });
+        let exception = match (
+            exchange_refused,
+            litellm_error::find::<UnsignableKey>(error).is_some(),
+        ) {
+            (true, _) => PythonException::OAuth,
+            (false, true) => PythonException::Value,
+            (false, false) => PythonException::Refresh,
+        };
+        Self::new(exception, report)
     }
 }
 

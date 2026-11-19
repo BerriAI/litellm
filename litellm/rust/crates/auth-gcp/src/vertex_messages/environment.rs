@@ -1,21 +1,25 @@
 //! What the Vertex AI Messages login reads from the machine besides credential files: the
-//! process environment, the gcloud CLI, the GCE metadata server and Cloud Resource Manager.
+//! process environment, the gcloud CLI, the GCE metadata server and Cloud Resource Manager, and
+//! the HTTP client litellm's own Google requests go through.
 
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
-use google_cloud_auth::credentials::mds;
+use litellm_http::{
+    ClientIdentity, ClientVariant, HttpClientPool, HttpSettings, Resolution, Verify,
+    media::PublicDnsResolver,
+    requests_env::{ca_bundle, process_environment, proxies_for, requests_proxy},
+};
 use litellm_secret_value::SecretValue;
-use serde_json::Value;
+use serde::Deserialize;
+use url::Url;
 
-use super::{
-    builders::{TokenSource, token_failure},
-    failure::{GoogleLoginFailure, PythonException},
-    transport::Requests,
-};
-use crate::{
-    constants::{CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT},
-    identity::SdkTokenSource,
-};
+use super::failure::{GoogleLoginFailure, PythonException};
+use crate::{GcpTokenSource, constants::GOOGLE_OAUTH_TOKEN_ENDPOINT, identity::SdkCredentials};
 
 pub type EnvironmentFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -23,9 +27,7 @@ const METADATA_FLAVOR: &str = "Metadata-Flavor";
 const GOOGLE: &str = "Google";
 const DEFAULT_METADATA_IP: &str = "169.254.169.254";
 const DEFAULT_METADATA_HOST: &str = "metadata.google.internal";
-const DEFAULT_METADATA_TIMEOUT_SECONDS: u64 = 3;
-const DEFAULT_METADATA_DETECT_RETRIES: u32 = 3;
-const METADATA_PROJECT_RETRIES: u32 = 5;
+const METADATA_TIMEOUT: Duration = Duration::from_secs(3);
 const GCE_PRODUCT_NAME_FILE: &str = "/sys/class/dmi/id/product_name";
 
 /// What google-auth's `default()` reads from the machine besides credential files: the process
@@ -42,72 +44,75 @@ pub trait GoogleEnvironment: Send + Sync {
     /// `_metadata.get_project_id`, `None` on a transport failure.
     fn gce_project(&self) -> EnvironmentFuture<'_, Option<String>>;
     /// `compute_engine.Credentials`.
-    fn gce_credentials(&self) -> Result<TokenSource, GoogleLoginFailure>;
+    fn gce_credentials(&self) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure>;
     /// The `projectId` Cloud Resource Manager answers for a project number with HTTP 200.
     fn resource_manager_project(
         &self,
         url: String,
         token: SecretValue,
     ) -> EnvironmentFuture<'_, Result<Option<String>, GoogleLoginFailure>>;
-}
-
-/// google-auth's own lookups go through `requests`, which reads its proxy and CA bundle from the
-/// environment for every request.
-pub struct SystemGoogleEnvironment {
-    requests: Requests,
-}
-
-impl Default for SystemGoogleEnvironment {
-    fn default() -> Self {
-        Self {
-            requests: Requests::process(),
-        }
+    /// The client `requests` would send a request for `url` through, with `identity` as its TLS
+    /// client certificate: the proxy and CA bundle the process environment names now.
+    fn http_client(
+        &self,
+        url: &str,
+        identity: Option<ClientIdentity>,
+    ) -> Result<litellm_http::Client, GoogleLoginFailure> {
+        requests_client(&process_environment(), url, identity)
     }
 }
+
+/// The client `requests` would send a request for `url` through under `environment`.
+pub(crate) fn requests_client(
+    environment: &[(String, String)],
+    url: &str,
+    identity: Option<ClientIdentity>,
+) -> Result<litellm_http::Client, GoogleLoginFailure> {
+    static POOL: LazyLock<HttpClientPool> =
+        LazyLock::new(|| HttpClientPool::new(Arc::new(PublicDnsResolver)));
+    let parsed = Url::parse(url).map_err(|_| {
+        GoogleLoginFailure::new(
+            PythonException::Transport,
+            format!("The token endpoint URL {url} has no scheme."),
+        )
+    })?;
+    let mut config = Resolution::from(&HttpSettings::default()).config;
+    config.verify = ca_bundle(environment)
+        .map_err(|missing| GoogleLoginFailure::new(PythonException::OS, missing.to_string()))?
+        .map_or(Verify::BuiltInRoots, Verify::CaBundle);
+    config.proxies = proxies_for(&parsed, requests_proxy(environment, &parsed));
+    config.client_certificate = identity;
+    POOL.client(&config, ClientVariant::Provider)
+        .map_err(|error| GoogleLoginFailure::new(PythonException::Transport, error.to_string()))
+}
+
+/// A failed request to a Google endpoint: a `TransportError`, as google-auth raises it.
+pub(crate) fn unreachable(error: impl std::fmt::Display) -> GoogleLoginFailure {
+    GoogleLoginFailure::new(PythonException::Transport, error.to_string())
+}
+
+/// Cloud Resource Manager's answer for a project.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResourceManagerProject {
+    project_id: Option<String>,
+}
+
+/// The machine this process runs on.
+#[derive(Default)]
+pub struct SystemGoogleEnvironment;
 
 impl SystemGoogleEnvironment {
-    fn client(&self, url: &str) -> Option<litellm_http::Client> {
-        self.requests.client(url).ok()
-    }
-
-    fn numeric_env<T: std::str::FromStr>(&self, name: &str, default: T) -> T {
-        self.os_env(name)
-            .and_then(|value| value.trim().parse().ok())
-            .unwrap_or(default)
-    }
-
-    async fn ping(&self) -> bool {
-        let root = format!(
-            "http://{}",
-            self.os_env("GCE_METADATA_IP")
-                .unwrap_or_else(|| DEFAULT_METADATA_IP.into())
-        );
-        let timeout = Duration::from_secs(
-            self.numeric_env("GCE_METADATA_TIMEOUT", DEFAULT_METADATA_TIMEOUT_SECONDS),
-        );
-        let attempts = self.numeric_env(
-            "GCE_METADATA_DETECT_RETRIES",
-            DEFAULT_METADATA_DETECT_RETRIES,
-        );
-        for _ in 0..attempts {
-            let Some(client) = self.client(&root) else {
-                return false;
-            };
-            let response = client
-                .get(&root)
-                .header(METADATA_FLAVOR, GOOGLE)
-                .timeout(timeout)
-                .send()
-                .await;
-            if let Ok(response) = response {
-                return response.status() == reqwest::StatusCode::OK
-                    && response
-                        .headers()
-                        .get(METADATA_FLAVOR)
-                        .is_some_and(|flavor| flavor == GOOGLE);
-            }
-        }
-        false
+    async fn metadata_get(&self, url: &str) -> Option<reqwest::Response> {
+        self.http_client(url, None)
+            .ok()?
+            .get(url)
+            .header(METADATA_FLAVOR, GOOGLE)
+            .timeout(METADATA_TIMEOUT)
+            .send()
+            .await
+            .ok()
+            .filter(|response| response.status() == reqwest::StatusCode::OK)
     }
 
     fn metadata_host(&self) -> String {
@@ -145,11 +150,20 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
             if self.os_env("NO_GCE_CHECK").as_deref() == Some("true") {
                 return false;
             }
-            if self.ping().await {
-                return true;
-            }
-            std::fs::read_to_string(GCE_PRODUCT_NAME_FILE)
-                .is_ok_and(|product| product.trim().starts_with(GOOGLE))
+            let root = format!(
+                "http://{}",
+                self.os_env("GCE_METADATA_IP")
+                    .unwrap_or_else(|| DEFAULT_METADATA_IP.into())
+            );
+            let pinged = self.metadata_get(&root).await.is_some_and(|response| {
+                response
+                    .headers()
+                    .get(METADATA_FLAVOR)
+                    .is_some_and(|flavor| flavor == GOOGLE)
+            });
+            pinged
+                || std::fs::read_to_string(GCE_PRODUCT_NAME_FILE)
+                    .is_ok_and(|product| product.trim().starts_with(GOOGLE))
         })
     }
 
@@ -159,39 +173,14 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
                 "http://{}/computeMetadata/v1/project/project-id",
                 self.metadata_host()
             );
-            for _ in 0..METADATA_PROJECT_RETRIES {
-                let client = self.client(&url)?;
-                let Ok(response) = client
-                    .get(&url)
-                    .header(METADATA_FLAVOR, GOOGLE)
-                    .timeout(Duration::from_secs(DEFAULT_METADATA_TIMEOUT_SECONDS))
-                    .send()
-                    .await
-                else {
-                    continue;
-                };
-                if response.status() != reqwest::StatusCode::OK {
-                    return None;
-                }
-                return response.text().await.ok();
-            }
-            None
+            self.metadata_get(&url).await?.text().await.ok()
         })
     }
 
-    fn gce_credentials(&self) -> Result<TokenSource, GoogleLoginFailure> {
-        mds::Builder::default()
-            .with_scopes([CLOUD_PLATFORM_SCOPE])
-            .build_access_token_credentials()
-            .map(|credentials| {
-                std::sync::Arc::new(SdkTokenSource {
-                    credentials,
-                    project_id: None,
-                }) as TokenSource
-            })
-            .map_err(|error| {
-                GoogleLoginFailure::new(PythonException::DefaultCredentials, error.to_string())
-            })
+    fn gce_credentials(&self) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
+        SdkCredentials::Metadata.build().map_err(|error| {
+            GoogleLoginFailure::new(PythonException::DefaultCredentials, error.to_string())
+        })
     }
 
     fn resource_manager_project(
@@ -200,24 +189,21 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
         token: SecretValue,
     ) -> EnvironmentFuture<'_, Result<Option<String>, GoogleLoginFailure>> {
         Box::pin(async move {
-            let client = self.requests.client(&url)?;
-            let response = client
+            let response = self
+                .http_client(&url, None)?
                 .get(&url)
                 .bearer_auth(token.expose())
                 .send()
                 .await
-                .map_err(|error| token_failure(&error))?;
+                .map_err(unreachable)?;
             if response.status() != reqwest::StatusCode::OK {
                 return Ok(None);
             }
-            let body: Value = response
-                .json()
+            Ok(response
+                .json::<ResourceManagerProject>()
                 .await
-                .map_err(|error| token_failure(&error))?;
-            Ok(body
-                .get("projectId")
-                .and_then(Value::as_str)
-                .map(str::to_string))
+                .ok()
+                .and_then(|project| project.project_id))
         })
     }
 }
@@ -252,10 +238,10 @@ impl GoogleEnvironment for OnGce {
         Box::pin(async { Some(self.project.to_string()) })
     }
 
-    fn gce_credentials(&self) -> Result<TokenSource, GoogleLoginFailure> {
+    fn gce_credentials(&self) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
         struct Granted(&'static str);
 
-        impl crate::GcpTokenSource for Granted {
+        impl GcpTokenSource for Granted {
             fn project_id(&self) -> crate::GcpAuthFuture<'_, String> {
                 Box::pin(async {
                     unreachable!("a GCE login names its project from the metadata server")
@@ -267,7 +253,7 @@ impl GoogleEnvironment for OnGce {
             }
         }
 
-        Ok(std::sync::Arc::new(Granted(self.token)))
+        Ok(Arc::new(Granted(self.token)))
     }
 
     fn resource_manager_project(

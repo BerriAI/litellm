@@ -133,7 +133,6 @@ pub struct Authenticated {
 /// token in hand and the project the login resolved; any other scheme passes through.
 pub async fn log_in_to_vertex(
     services: &AuthServices,
-    model: &str,
     validated: ValidatedEnvironment,
     secrets: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<(ValidatedEnvironment, Option<String>), litellm_auth::Error> {
@@ -144,7 +143,6 @@ pub async fn log_in_to_vertex(
     let login = services
         .vertex_messages
         .login(
-            model,
             vertex_credentials(&params, secrets),
             vertex_project(&params, secrets),
         )
@@ -219,10 +217,10 @@ pub async fn resolve_auth(
                 subject: "Azure AD token without a Python host",
             },
         )),
-        // `log_in_to_vertex` logs in per model and forwards the token before auth resolves.
+        // `log_in_to_vertex` logs in and forwards the token before auth resolves.
         AuthScheme::GcpAccessToken { .. } => Err(litellm_auth::Error::CredentialAcquisition(
             litellm_auth::ErrorDetail::Unresolved {
-                subject: "Vertex AI token without its per-model login",
+                subject: "Vertex AI token without its login",
             },
         )),
         AuthScheme::AwsSigV4 {
@@ -446,7 +444,6 @@ mod tests {
         };
         log_in_to_vertex(
             &services,
-            "claude-sonnet-5-5@default",
             ValidatedEnvironment {
                 headers: headers(forwarded),
                 auth: AuthScheme::GcpAccessToken {

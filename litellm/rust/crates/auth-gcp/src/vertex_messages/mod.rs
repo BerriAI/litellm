@@ -1,24 +1,20 @@
-//! Python's `VertexBase.load_auth` for Claude on Vertex AI's `/v1/messages`, the only route that
-//! logs in through it. Vertex OCR, cache-gcs, redis-connect and model-catalog-refresh keep the
-//! shared [`crate::GcpAuth`] loader.
+//! Python's `VertexBase.load_auth` for Claude on Vertex AI's `/v1/messages`: which credentials
+//! `vertex_credentials`, `vertex_project` and `vertex_location` name, the region a call goes to,
+//! and the login itself, built on the shared [`crate::GcpAuth`] loader and Google's Rust SDK.
 
 mod adc;
-mod authorized_user;
-mod aws_wif;
 mod builders;
-mod credentials;
+mod compat_certificate_source;
+mod compat_external_account_authorized_user;
+mod compat_token;
 mod environment;
-mod external_account;
-mod external_authorized_user;
+mod explicit_aws;
 mod failure;
-mod logins;
-mod service_account;
 mod source;
-mod transport;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use litellm_auth_types::{Error, VertexParams};
+use litellm_auth_types::{Error, ErrorDetail, VertexParams};
 use litellm_python_compat::truthy::first_truthy;
 use litellm_secret_value::SecretValue;
 
@@ -26,11 +22,12 @@ use litellm_secret_value::SecretValue;
 pub use environment::OnGce;
 pub use environment::{EnvironmentFuture, GoogleEnvironment, SystemGoogleEnvironment};
 pub use failure::{GoogleLoginFailure, PythonException, UnusableFile};
-pub use transport::set_certifi_bundle;
 
-use credentials::{Loaded, managed};
-use external_account::ExternalAccountInfo;
-use logins::{Login, LoginKey, Logins};
+use crate::{
+    GcpAuth, GcpAuthFuture, GcpTokenSource,
+    identity::{CredentialCacheKey, SdkCredentials},
+};
+use failure::UnsignableKey;
 use source::{CredentialsJson, ExplicitCredentials, load_vertex_credentials_source};
 
 /// Python's `VertexBase.safe_get_vertex_ai_credentials`, with the deployment's
@@ -101,23 +98,49 @@ pub struct VertexLogin {
     pub project_id: String,
 }
 
-/// `ProviderConfigManager._get_provider_anthropic_messages_config_cached`'s bound: Python keeps one
-/// Messages config, and so one credential cache, per model for this many models.
-const MAX_CACHED_MODELS: u64 = 64;
+/// How long a token request may take, as `requests` waits for google-auth's token requests.
+const TOKEN_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The Vertex AI Messages login: credentials loaded once per model and key, and tokens served
-/// from them until google-auth would refresh them.
+/// A loaded login: its token source, the project its credentials resolved, and whether its token
+/// is a service account key's own signature.
+struct Login {
+    source: Arc<dyn GcpTokenSource>,
+    project: Option<String>,
+    signs: bool,
+}
+
+impl GcpTokenSource for Login {
+    fn project_id(&self) -> GcpAuthFuture<'_, String> {
+        Box::pin(async {
+            self.project
+                .clone()
+                .ok_or(Error::CredentialAcquisition(ErrorDetail::Unresolved {
+                    subject: "Vertex AI project",
+                }))
+        })
+    }
+
+    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+        Box::pin(async {
+            self.source.token().await.map_err(|error| match self.signs {
+                true => Error::provider(UnsignableKey(error)),
+                false => error,
+            })
+        })
+    }
+}
+
+/// The Vertex AI Messages login: credentials loaded once per credentials text or key file
+/// version through the shared loader, and tokens served by Google's Rust SDK.
 #[derive(Clone)]
 pub struct VertexMessagesAuth {
-    /// Python's credential cache lives on the Messages config, which it caches per model as the
-    /// call names it after the provider prefix, so each model logs in on its own.
-    logins: moka::future::Cache<String, Arc<Logins>>,
+    gcp: GcpAuth,
     environment: Arc<dyn GoogleEnvironment>,
 }
 
 impl Default for VertexMessagesAuth {
     fn default() -> Self {
-        Self::new(Arc::new(SystemGoogleEnvironment::default()))
+        Self::new(Arc::new(SystemGoogleEnvironment))
     }
 }
 
@@ -128,7 +151,7 @@ fn value_failure(message: impl Into<String>) -> GoogleLoginFailure {
 impl VertexMessagesAuth {
     pub fn new(environment: Arc<dyn GoogleEnvironment>) -> Self {
         Self {
-            logins: moka::future::Cache::new(MAX_CACHED_MODELS),
+            gcp: GcpAuth::default(),
             environment,
         }
     }
@@ -137,138 +160,249 @@ impl VertexMessagesAuth {
     /// `safe_get_vertex_ai_credentials` and `safe_get_vertex_ai_project` resolve them.
     pub async fn login(
         &self,
-        model: &str,
         credentials: Option<String>,
         project: Option<String>,
     ) -> Result<VertexLogin, Error> {
-        let application_credentials = self.environment.os_env("GOOGLE_APPLICATION_CREDENTIALS");
-        let key = LoginKey {
-            identity: logins::identity(credentials.as_deref(), application_credentials.as_deref()),
-            project: project.clone(),
+        let adc = match &credentials {
+            Some(_) => None,
+            None => adc::locate(&*self.environment),
         };
-        let logins = self
-            .logins
-            .get_with(model.to_owned(), async { Arc::default() })
-            .await;
-        let (token, project_id) = logins
-            .token(key, || self.load(credentials.clone(), project.clone()))
+        let key = match (&credentials, &adc) {
+            (Some(text), _) => CredentialCacheKey::versioned(text),
+            (None, Some(file)) => CredentialCacheKey::versioned(&file.path),
+            (None, None) => CredentialCacheKey::metadata(),
+        };
+        let source = self
+            .gcp
+            .load_keyed(key.clone(), async {
+                let login = match credentials {
+                    Some(text) => self.explicit(text).await,
+                    None => adc::default_credentials(&self.environment, adc).await,
+                };
+                login
+                    .map(|login| Arc::new(login) as Arc<dyn GcpTokenSource>)
+                    .map_err(Error::from)
+            })
             .await?;
+        let token = tokio::time::timeout(TOKEN_TIMEOUT, self.gcp.token_evicting(&key, &*source))
+            .await
+            .map_err(|_| {
+                GoogleLoginFailure::new(
+                    PythonException::Transport,
+                    "The token request did not finish in time.",
+                )
+            })?
+            .map_err(|error| GoogleLoginFailure::token(&error, &*self.environment))?;
+        let project_id = project
+            .or(source.project_id().await.ok())
+            .filter(|project| !project.is_empty())
+            .ok_or_else(|| value_failure("Could not resolve project_id"))?;
         Ok(VertexLogin { token, project_id })
     }
 
-    fn os_env(&self) -> external_account::OsEnvironment {
-        let environment = self.environment.clone();
-        Arc::new(move |name| environment.os_env(name))
-    }
-
-    /// `_credentials_from_json`'s external account routes: an AWS environment to LiteLLM's
-    /// explicit AWS login or google-auth's metadata one, an executable to `pluggable`, the rest
-    /// to `identity_pool`.
-    fn external_account(&self, info: &ExternalAccountInfo) -> Result<Loaded, GoogleLoginFailure> {
-        if aws_wif::uses_explicit_aws(info) {
-            return aws_wif::explicit_aws_credentials(info, self.os_env());
-        }
-        if aws_wif::names_aws(info) {
-            return aws_wif::metadata_aws_credentials(info, self.os_env());
-        }
-        if info
-            .credential_source
-            .as_ref()
-            .is_some_and(|source| source.executable.is_some())
-        {
-            return external_account::pluggable(info, self.os_env());
-        }
-        match external_account::identity_pool(info)? {
-            Some(loaded) => Ok(loaded),
-            None => builders::external_account(info).map(managed),
-        }
-    }
-
-    fn explicit_source(&self, credentials: &CredentialsJson) -> Result<Loaded, GoogleLoginFailure> {
+    /// `_credentials_from_json`: an authorized user or an external account by type, a service
+    /// account for any other type.
+    fn explicit_source(&self, credentials: &CredentialsJson) -> Result<Login, GoogleLoginFailure> {
         let built = match &credentials.credentials {
-            ExplicitCredentials::ExternalAccount(info) => self.external_account(info),
-            ExplicitCredentials::AuthorizedUser(info) => {
-                authorized_user::authorized_user(info, &self.environment.google_token_endpoint())
+            ExplicitCredentials::ExternalAccount(info) => {
+                builders::external_account(info, &self.environment, true)
             }
-            ExplicitCredentials::ServiceAccount(info) => builders::service_account(info),
+            ExplicitCredentials::AuthorizedUser(user) => builders::build(
+                SdkCredentials::AuthorizedUser {
+                    json: user.sdk.clone(),
+                    token_uri: self.environment.google_token_endpoint(),
+                },
+                PythonException::Value,
+            ),
+            ExplicitCredentials::ServiceAccount(account) => {
+                builders::service_account(account, PythonException::Malformed)
+            }
         };
-        built.map_err(|failure| match &credentials.path {
+        let source = built.map_err(|failure| match &credentials.path {
             Some(path) => GoogleLoginFailure::credentials_file(UnusableFile::Invalid {
                 path: path.clone(),
                 problem: format!("holds credentials that cannot be used: {}", failure.message),
             }),
             None => failure,
+        })?;
+        Ok(Login {
+            source,
+            project: credentials.credentials.project(),
+            signs: matches!(
+                credentials.credentials,
+                ExplicitCredentials::ServiceAccount(_)
+            ),
         })
     }
 
-    async fn load(
-        &self,
-        credentials: Option<String>,
-        project: Option<String>,
-    ) -> Result<Arc<Login>, GoogleLoginFailure> {
-        let (source, credential_project) = match credentials {
-            Some(text) => {
-                // The source may be a file to read, which must not block the runtime. The blocking
-                // thread logs the file's path and problem through this call's logger and span.
-                let dispatch = tracing::dispatcher::get_default(Clone::clone);
-                let span = tracing::Span::current();
-                let json = tokio::task::spawn_blocking(move || {
-                    tracing::dispatcher::with_default(&dispatch, || {
-                        span.in_scope(|| load_vertex_credentials_source(&text))
-                    })
-                })
-                .await
-                .map_err(|_| {
-                    value_failure("The `vertex_credentials` file read did not finish")
-                })??;
-                (self.explicit_source(&json)?, json.credentials.project())
-            }
-            None => {
-                let found = adc::default_credentials(&*self.environment).await?;
-                (found.source, found.project)
-            }
-        };
-        let project = project.or(credential_project);
-        let token = source.refresh().await?;
-        let project_id = project
-            .filter(|project| !project.is_empty())
-            .ok_or_else(|| value_failure("Could not resolve project_id"))?;
-        Ok(Login::new(source, project_id, token))
+    async fn explicit(&self, text: String) -> Result<Login, GoogleLoginFailure> {
+        // The source may be a file to read, which must not block the runtime. The blocking
+        // thread logs the file's path and problem through this call's logger and span.
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        let span = tracing::Span::current();
+        let json = tokio::task::spawn_blocking(move || {
+            tracing::dispatcher::with_default(&dispatch, || {
+                span.in_scope(|| load_vertex_credentials_source(&text))
+            })
+        })
+        .await
+        .map_err(|_| value_failure("The `vertex_credentials` file read did not finish"))??;
+        self.explicit_source(&json)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    const MODEL: &str = "claude-sonnet-5-5@default";
-
     use std::{
-        collections::BTreeMap,
-        sync::atomic::{AtomicUsize, Ordering},
+        collections::{BTreeMap, VecDeque},
+        path::Path,
+        sync::Mutex,
     };
 
-    use axum::{Json, Router, routing::post};
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{HeaderMap, StatusCode, Uri},
+        response::{IntoResponse, Response},
+    };
+    use base64::{
+        Engine,
+        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    };
     use rstest::{fixture, rstest};
-    use serde_json::{Map, Value, json};
+    use serde_json::{Value, json};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
-    use crate::vertex_messages::builders::TokenSource;
-    use crate::{
-        CredentialSource, GcpAuth, VertexAuth, VertexConfig,
-        identity::{GcpAuthFuture, GcpTokenSource},
-    };
+    use crate::{CredentialSource, VertexAuth, VertexConfig};
 
-    struct FixedToken;
+    const PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDGRPkmZkzek9X0\nGGxUpS00yBkTR9RHh1yXLK0SIoIT9SgyZaP5+gETM7Mo3oT4/q1EUnx+9WgvqZPn\nkgMP+/P2vNc07tgYn+DZqkn+M4ys2sGZnK+VQTpcw2AE+4zaSlJJztpGxyMkDAcg\ntHJeKHc0aWxw52d1K+SLzLeIz9Niy3uL5t7iZlFpUDA4LAfTCXlzYW+f+zcXXbof\nTyHRlfl6kvYoOa7ss+9YVXVhp4GOfhLOT4tsYfO3gbNSVrkxzdF6iLG2Wqh9GHMD\n7TdI3aSUXHj7qpwRx6PBY8eH74oHlUlSpi6BHgDGeTK/HdxbrI7WK6hT+9FIP55h\n1Tbk4twjAgMBAAECggEADPgIaNyalplXW2B/MlVp//o+uaYiWo0EhdbxEy7/dzK7\nO5Phn/S2CuPmcJWHLFcfgK9fxiYwET4N/XQgwydMRycFcXu8b6mCWa24qh03f6I0\nTuOS3WtA2ArnkvipUMLS+YT2sVga3yOL3wKVBvFHd6QvT0tNPYeh3j5SNJ7ASV8m\nH2RgRpz9LmOr6CCgOmr/52ldidQiBW3GtqEo8WilF7z+q9tQ6KDFZmcXU+4T2Xzs\nR5ZPIIkZni4X5vDhw7F6NSrbNMbUREDtVStdcwRqmMLoMs9DI6SxEKRnjsV0HxRm\nL0SIs+AiptJPIbVVzWHkMI+L/8J9qiTjl4nozWlZAQKBgQDn0fshqf6yD2SSUf7h\nmpJbkcyw54szZPfJRLftyo0KvKCIGjys+I0+cBsCHPafbOHB70aV9/7pzil3a1uw\nU0C7WOYeTdw9lxm5TVnaAYPJl/iqCfTm+eZkTPnDZRDOeJimoheLN2UB52yKx+78\nXl1AYn/VsnlWd+Kt3sfcng6sQQKBgQDa8yAAHgeDJ1LvfHebzZeJU1QAYw9mO/QJ\nrCMvMTJY2azGJdo61SohDzsWYaFMT/QdlCMYu8W7V2keDZVaJbV2PTulp/XQyOB2\nCOW2899644FMtCkcIv9gDYoVt/xY64TcX5uofq2wdr96pnzlarU8MueUR1qM+mU+\ngJLi1UJ/YwKBgAWihAEweaFoYGByH8jqEe6p35jZN/f6108MHZBpIP6G0TwdryXh\nMMW4wd9ORuxfICmvoD6a9ZZHTZi6glMJ4wPqyEUqTVUt7BEmAS4cZVCsIf44GbzX\njDMZ7+RA+6SZJ9S9EedvZEQklO3WqEd4H7ol6seN/AcPCPKC/MavDNpBAoGBANVc\nRrrWiIuOLouhxwzU8+6mfR1DayY9Fjq2vDKoxl8+/9a33EmooD1HElVlHkG3SDPq\nv6jCkpVVQOJAamJGjOaEFTQA0NJ8bf+X/AKk9ApU2RNeHRGGKUX4667uc8JTAE2f\n/ZfcmnVzwnRK+Tq3GZVoJbOhNORcvXyC3qCdIQfxAoGBAMipsn9l6sqMgNddwtzp\n2n7CuvycTgNQgS+wzy2e3JgQaJYlXTe8J5IVwRbq3MbICm+8gsfMc4cBCvRtmWOZ\nA9P2N1liNx1TYJ2D31nC1FgAt5z+X8ODDqgZjCXvCSVS+AbA0ivkQtzXm7zwLVD7\nKR6kOMrEoPsqjSaI14o9qNFx\n-----END PRIVATE KEY-----\n";
+    /// [`PRIVATE_KEY`] in PKCS#1 `RSA PRIVATE KEY` form.
+    const PKCS1_PRIVATE_KEY: &str = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAxkT5JmZM3pPV9BhsVKUtNMgZE0fUR4dclyytEiKCE/UoMmWj\n+foBEzOzKN6E+P6tRFJ8fvVoL6mT55IDD/vz9rzXNO7YGJ/g2apJ/jOMrNrBmZyv\nlUE6XMNgBPuM2kpSSc7aRscjJAwHILRyXih3NGlscOdndSvki8y3iM/TYst7i+be\n4mZRaVAwOCwH0wl5c2Fvn/s3F126H08h0ZX5epL2KDmu7LPvWFV1YaeBjn4Szk+L\nbGHzt4GzUla5Mc3ReoixtlqofRhzA+03SN2klFx4+6qcEcejwWPHh++KB5VJUqYu\ngR4Axnkyvx3cW6yO1iuoU/vRSD+eYdU25OLcIwIDAQABAoIBAAz4CGjcmpaZV1tg\nfzJVaf/6PrmmIlqNBIXW8RMu/3cyuzuT4Z/0tgrj5nCVhyxXH4CvX8YmMBE+Df10\nIMMnTEcnBXF7vG+pglmtuKodN3+iNE7jkt1rQNgK55L4qVDC0vmE9rFYGt8ji98C\nlQbxR3ekL09LTT2Hod4+UjSewElfJh9kYEac/S5jq+ggoDpq/+dpXYnUIgVtxrah\nKPFopRe8/qvbUOigxWZnF1PuE9l87EeWTyCJGZ4uF+bw4cOxejUq2zTG1ERA7VUr\nXXMEapjC6DLPQyOksRCkZ47FdB8UZi9EiLPgIqbSTyG1Vc1h5DCPi//Cfaok45eJ\n6M1pWQECgYEA59H7Ian+sg9kklH+4ZqSW5HMsOeLM2T3yUS37cqNCrygiBo8rPiN\nPnAbAhz2n2zhwe9Glff+6c4pd2tbsFNAu1jmHk3cPZcZuU1Z2gGDyZf4qgn05vnm\nZEz5w2UQzniYpqIXizdlAedsisfu/F5dQGJ/1bJ5Vnfird7H3J4OrEECgYEA2vMg\nAB4HgydS73x3m82XiVNUAGMPZjv0CawjLzEyWNmsxiXaOtUqIQ87FmGhTE/0HZQj\nGLvFu1dpHg2VWiW1dj07paf10MjgdgjltvPfeuOBTLQpHCL/YA2KFbf8WOuE3F+b\nqH6tsHa/eqZ85Wq1PDLnlEdajPplPoCS4tVCf2MCgYAFooQBMHmhaGBgch/I6hHu\nqd+Y2Tf3+tdPDB2QaSD+htE8Ha8l4TDFuMHfTkbsXyApr6A+mvWWR02YuoJTCeMD\n6shFKk1VLewRJgEuHGVQrCH+OBm814wzGe/kQPukmSfUvRHnb2REJJTt1qhHeB+6\nJerHjfwHDwjygvzGrwzaQQKBgQDVXEa61oiLji6LoccM1PPupn0dQ2smPRY6trwy\nqMZfPv/Wt9xJqKA9RxJVZR5Bt0gz6r+owpKVVUDiQGpiRozmhBU0ANDSfG3/l/wC\npPQKVNkTXh0RhilF+Ouu7nPCUwBNn/2X3Jp1c8J0Svk6txmVaCWzoTTkXL18gt6g\nnSEH8QKBgQDIqbJ/ZerKjIDXXcLc6dp+wrr8nE4DUIEvsM8tntyYEGiWJV03vCeS\nFcEW6tzGyApvvILHzHOHAQr0bZljmQPT9jdZYjcdU2Cdg99ZwtRYALec/l/Dgw6o\nGYwl7wklUvgGwNIr5ELc15u88C1Q+ykepDjKxKD7Ko0miNeKPajRcQ==\n-----END RSA PRIVATE KEY-----\n";
+    const CLIENT_EMAIL: &str = "vertex@key-project.iam.gserviceaccount.com";
+    const STS_JWT: &str = "urn:ietf:params:oauth:token-type:jwt";
+    const POOL_AUDIENCE: &str =
+        "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/p/providers/q";
 
-    impl GcpTokenSource for FixedToken {
-        fn project_id(&self) -> GcpAuthFuture<'_, String> {
-            Box::pin(async { unreachable!("the login never asks a token source for its project") })
-        }
+    /// A request one of Google's endpoints played by [`Google`] was sent.
+    #[derive(Clone, Debug)]
+    struct Seen {
+        path: String,
+        authorization: Option<String>,
+        body: String,
+    }
 
-        fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
-            Box::pin(async { Ok(SecretValue::new("metadata-token")) })
+    #[derive(Clone, Default)]
+    struct Recorded {
+        seen: Arc<Mutex<Vec<Seen>>>,
+        answers: Arc<Mutex<VecDeque<(u16, Value)>>>,
+    }
+
+    fn granted() -> Value {
+        json!({
+            "access_token": "granted", "expires_in": 3600, "token_type": "Bearer",
+            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+        })
+    }
+
+    async fn answer(
+        State(recorded): State<Recorded>,
+        uri: Uri,
+        headers: HeaderMap,
+        body: String,
+    ) -> Response {
+        recorded.seen.lock().unwrap().push(Seen {
+            path: uri.path().to_owned(),
+            authorization: headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned),
+            body,
+        });
+        match uri.path() {
+            path if path.ends_with(":generateAccessToken") => {
+                let expires = time::OffsetDateTime::now_utc() + time::Duration::hours(1);
+                let expire_time = expires
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap();
+                Json(json!({"accessToken": "impersonated", "expireTime": expire_time}))
+                    .into_response()
+            }
+            "/subject" => "url-subject".into_response(),
+            "/aws/region" => "us-east-1a".into_response(),
+            "/aws/credentials" => "role".into_response(),
+            "/aws/credentials/role" => Json(json!({
+                "AccessKeyId": "AKIDMETADATA", "SecretAccessKey": "metadata-secret", "Token": "session",
+            }))
+            .into_response(),
+            _ => {
+                let (status, body) = recorded
+                    .answers
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_else(|| (200, granted()));
+                (StatusCode::from_u16(status).unwrap(), Json(body)).into_response()
+            }
         }
     }
 
+    /// Google's token, STS, IAM and AWS metadata endpoints played by one local server, which
+    /// answers a token request with the next queued answer or else grants `granted`.
+    struct Google {
+        url: String,
+        recorded: Recorded,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for Google {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    impl Google {
+        fn token_url(&self) -> String {
+            format!("{}/token", self.url)
+        }
+
+        fn queue(&self, status: u16, body: Value) {
+            self.recorded
+                .answers
+                .lock()
+                .unwrap()
+                .push_back((status, body));
+        }
+
+        fn sent_to(&self, path: &str) -> Vec<Seen> {
+            self.recorded
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|seen| seen.path == path)
+                .cloned()
+                .collect()
+        }
+    }
+
+    #[fixture]
+    async fn google() -> Google {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let recorded = Recorded::default();
+        let app = Router::new().fallback(answer).with_state(recorded.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Google {
+            url: format!("http://{address}"),
+            recorded,
+            server,
+        }
+    }
+
+    /// The machine a test login runs on: its environment, gcloud, the metadata server and Cloud
+    /// Resource Manager, with litellm's own requests made under `env` alone.
     #[derive(Default)]
     struct FakeEnvironment {
         token_endpoint: String,
@@ -277,7 +411,7 @@ mod tests {
         on_gce: bool,
         gce_project: Option<&'static str>,
         resource_manager_project: Option<&'static str>,
-        resource_manager_urls: std::sync::Mutex<Vec<String>>,
+        resource_manager_urls: Mutex<Vec<String>>,
     }
 
     impl GoogleEnvironment for FakeEnvironment {
@@ -301,8 +435,12 @@ mod tests {
             Box::pin(async { self.gce_project.map(str::to_string) })
         }
 
-        fn gce_credentials(&self) -> Result<TokenSource, GoogleLoginFailure> {
-            Ok(Arc::new(FixedToken))
+        fn gce_credentials(&self) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
+            OnGce {
+                project: "unused",
+                token: "metadata-token",
+            }
+            .gce_credentials()
         }
 
         fn resource_manager_project(
@@ -313,67 +451,35 @@ mod tests {
             self.resource_manager_urls.lock().unwrap().push(url);
             Box::pin(async { Ok(self.resource_manager_project.map(str::to_string)) })
         }
-    }
 
-    struct TokenServer {
-        url: String,
-        requests: Arc<AtomicUsize>,
-        server: tokio::task::JoinHandle<()>,
-    }
-
-    impl Drop for TokenServer {
-        fn drop(&mut self) {
-            self.server.abort();
+        fn http_client(
+            &self,
+            url: &str,
+            identity: Option<litellm_http::ClientIdentity>,
+        ) -> Result<litellm_http::Client, GoogleLoginFailure> {
+            let env: Vec<(String, String)> = self
+                .env
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), value.clone()))
+                .collect();
+            environment::requests_client(&env, url, identity)
         }
     }
 
-    #[fixture]
-    async fn token_server() -> TokenServer {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let requests = Arc::new(AtomicUsize::new(0));
-        let recorded = requests.clone();
-        let app = Router::new().route(
-            "/token",
-            post(move || {
-                let recorded = recorded.clone();
-                async move {
-                    recorded.fetch_add(1, Ordering::SeqCst);
-                    Json(json!({
-                        "access_token": "user-token", "expires_in": 3600, "token_type": "Bearer",
-                        "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
-                    }))
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        TokenServer {
-            url: format!("http://{address}/token"),
-            requests,
-            server,
-        }
-    }
-
-    fn authorized_user(server: &TokenServer, extra: Value) -> Value {
-        let base = json!({
-            "type": "authorized_user", "client_id": "client", "client_secret": "secret",
-            "refresh_token": "refresh", "token_uri": server.url,
-        });
-        Value::Object(
-            base.as_object()
-                .unwrap()
-                .clone()
-                .into_iter()
-                .chain(extra.as_object().unwrap().clone())
-                .collect(),
-        )
-    }
-
-    /// Google's token endpoint played by the token server.
-    fn at(server: &TokenServer) -> FakeEnvironment {
+    fn environment(env: &[(&'static str, &str)]) -> FakeEnvironment {
         FakeEnvironment {
-            token_endpoint: server.url.clone(),
+            env: env
+                .iter()
+                .map(|(name, value)| (*name, value.to_string()))
+                .collect(),
+            ..FakeEnvironment::default()
+        }
+    }
+
+    /// Google's OAuth token endpoint played by `google`.
+    fn at(google: &Google) -> FakeEnvironment {
+        FakeEnvironment {
+            token_endpoint: google.token_url(),
             ..FakeEnvironment::default()
         }
     }
@@ -394,434 +500,56 @@ mod tests {
         file
     }
 
-    #[rstest]
-    #[case::configured_project_wins(json!({"quota_project_id": "quota"}), Some("configured"), "configured")]
-    #[case::authorized_user_quota_project(json!({"quota_project_id": "quota"}), None, "quota")]
-    #[tokio::test]
-    async fn explicit_credentials_name_the_project_as_load_auth_does(
-        #[future] token_server: TokenServer,
-        #[case] extra: Value,
-        #[case] configured: Option<&str>,
-        #[case] expected: &str,
-    ) {
-        let server = token_server.await;
-        let login = auth(at(&server))
-            .login(
-                MODEL,
-                Some(authorized_user(&server, extra).to_string()),
-                configured.map(str::to_string),
-            )
-            .await
-            .unwrap();
-        assert_eq!(login.project_id, expected);
-        assert_eq!(login.token.expose(), "user-token");
-    }
-
-    #[rstest]
-    #[case::no_quota_project(json!({}), PythonException::Value, "Could not resolve project_id")]
-    #[case::null_quota_project(json!({"quota_project_id": null}), PythonException::Value, "Could not resolve project_id")]
-    #[tokio::test]
-    async fn an_unresolvable_project_fails_after_the_token_is_minted(
-        #[future] token_server: TokenServer,
-        #[case] extra: Value,
-        #[case] exception: PythonException,
-        #[case] message: &str,
-    ) {
-        let server = token_server.await;
-        let error = auth(at(&server))
-            .login(
-                MODEL,
-                Some(authorized_user(&server, extra).to_string()),
-                None,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(failure(error), GoogleLoginFailure::new(exception, message));
-        assert_eq!(server.requests.load(Ordering::SeqCst), 1);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn an_authorized_user_refreshes_at_google_whatever_token_uri_it_names(
-        #[future] token_server: TokenServer,
-    ) {
-        let server = token_server.await;
-        let error = auth(FakeEnvironment {
-            token_endpoint: "http://127.0.0.1:9/token".into(),
-            ..FakeEnvironment::default()
-        })
-        .login(
-            MODEL,
-            Some(authorized_user(&server, json!({"quota_project_id": "quota"})).to_string()),
-            None,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(failure(error).exception, PythonException::Transport);
-        assert_eq!(server.requests.load(Ordering::SeqCst), 0);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn an_empty_configured_project_is_not_replaced_by_the_credentials_project(
-        #[future] token_server: TokenServer,
-    ) {
-        let server = token_server.await;
-        let error = auth(at(&server))
-            .login(
-                MODEL,
-                Some(authorized_user(&server, json!({"quota_project_id": "quota"})).to_string()),
-                Some(String::new()),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(failure(error).message, "Could not resolve project_id");
-    }
-
-    #[rstest]
-    #[case::impersonated(json!({
-        "type": "impersonated_service_account", "client_email": "sa@p.iam.gserviceaccount.com",
-        "source_credentials": {"type": "authorized_user"},
-        "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken"
-    }))]
-    #[case::unknown_type(json!({"type": "gdch_service_account", "client_email": "sa@p.iam.gserviceaccount.com"}))]
-    #[tokio::test]
-    async fn explicit_credentials_of_another_type_are_refused_as_a_service_account(
-        #[case] configured: Value,
-    ) {
-        let error = auth(FakeEnvironment::default())
-            .login(MODEL, Some(configured.to_string()), Some("project".into()))
-            .await
-            .unwrap_err();
-        assert_eq!(
-            failure(error),
-            GoogleLoginFailure::new(
-                PythonException::Malformed,
-                "The service account key is missing token_uri."
-            )
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn credentials_that_do_not_build_from_a_file_name_the_file_failure() {
-        let file = key_file(&json!({"type": "impersonated_service_account"}));
-        let error = auth(FakeEnvironment::default())
-            .login(
-                MODEL,
-                Some(file.path().to_str().unwrap().into()),
-                Some("project".into()),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            failure(error).file,
-            Some(UnusableFile::Invalid {
-                path: file.path().to_str().unwrap().into(),
-                problem: "holds credentials that cannot be used: The service account key is missing client_email, token_uri.".into(),
-            })
-        );
-    }
-
-    #[derive(Clone, Default)]
-    struct Errors(Arc<std::sync::Mutex<Vec<String>>>);
-
-    impl litellm_tracing::Sink for Errors {
-        fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
-            *metadata.level() == litellm_tracing::Level::ERROR
-        }
-
-        fn emit(&self, record: &litellm_tracing::Record) {
-            self.0.lock().unwrap().push(record.message.clone());
-        }
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn a_credentials_file_read_off_the_runtime_still_logs_its_path_and_problem() {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), "not json").unwrap();
-        let path = file.path().to_str().unwrap().to_owned();
-        let errors = Errors::default();
-        let error = litellm_tracing::Logger::new(errors.clone())
-            .instrument(auth(FakeEnvironment::default()).login(
-                MODEL,
-                Some(path.clone()),
-                Some("project".into()),
-            ))
-            .await
-            .unwrap_err();
-        assert!(failure(error).file.is_some());
-        let logged = errors.0.lock().unwrap().clone();
-        assert!(
-            logged.iter().any(|line| line.starts_with(&format!(
-                "Vertex: the credentials file at '{path}' is not valid JSON"
-            ))),
-            "{logged:?}"
-        );
-    }
-
-    fn environment(env: &[(&'static str, &str)]) -> FakeEnvironment {
-        FakeEnvironment {
-            env: env
-                .iter()
-                .map(|(name, value)| (*name, value.to_string()))
+    fn merged(base: Value, extra: Value) -> Value {
+        Value::Object(
+            base.as_object()
+                .unwrap()
+                .clone()
+                .into_iter()
+                .chain(extra.as_object().unwrap().clone())
                 .collect(),
-            ..FakeEnvironment::default()
-        }
+        )
     }
 
-    #[rstest]
-    #[case::credentials_file_project(&[], "file-project")]
-    #[case::google_cloud_project_first(&[("GOOGLE_CLOUD_PROJECT", "env-project")], "env-project")]
-    #[case::legacy_project_name(&[("GCLOUD_PROJECT", "legacy-project")], "legacy-project")]
-    #[case::empty_project_variable_is_skipped(&[("GOOGLE_CLOUD_PROJECT", "")], "file-project")]
-    #[tokio::test]
-    async fn application_default_credentials_name_the_project_as_google_auth_does(
-        #[future] token_server: TokenServer,
-        #[case] env: &[(&'static str, &str)],
-        #[case] expected: &str,
-    ) {
-        let server = token_server.await;
-        let file = key_file(&authorized_user(
-            &server,
-            json!({"quota_project_id": "quota"}),
-        ));
-        let gcloud = tempfile::tempdir().unwrap();
-        let path = gcloud.path().join("application_default_credentials.json");
-        std::fs::copy(file.path(), &path).unwrap();
-        let fake = FakeEnvironment {
-            gcloud_project: Some("file-project"),
-            token_endpoint: server.url.clone(),
-            ..environment(
-                &env.iter()
-                    .copied()
-                    .chain([("CLOUDSDK_CONFIG", gcloud.path().to_str().unwrap())])
-                    .collect::<Vec<_>>(),
+    fn authorized_user(extra: Value) -> Value {
+        merged(
+            json!({
+                "type": "authorized_user", "client_id": "client", "client_secret": "secret",
+                "refresh_token": "refresh", "token_uri": "http://127.0.0.1:9/token",
+            }),
+            extra,
+        )
+    }
+
+    fn service_account(extra: Value) -> Value {
+        merged(
+            json!({
+                "type": "service_account", "client_email": CLIENT_EMAIL, "private_key": PRIVATE_KEY,
+                "private_key_id": "key-1", "project_id": "key-project",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }),
+            extra,
+        )
+    }
+
+    fn external_account(google: &Google, source: Value) -> Value {
+        json!({
+            "type": "external_account", "audience": POOL_AUDIENCE, "subject_token_type": STS_JWT,
+            "token_url": google.token_url(), "credential_source": source,
+        })
+    }
+
+    /// A JWT's header and claims.
+    fn decoded(token: &str) -> (Value, Value) {
+        let part = |index: usize| -> Value {
+            serde_json::from_slice(
+                &URL_SAFE_NO_PAD
+                    .decode(token.split('.').nth(index).unwrap())
+                    .unwrap(),
             )
+            .unwrap()
         };
-        let login = auth(fake).login(MODEL, None, None).await.unwrap();
-        assert_eq!(login.project_id, expected);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn an_authorized_user_named_by_google_application_credentials_carries_no_project(
-        #[future] token_server: TokenServer,
-    ) {
-        let server = token_server.await;
-        let file = key_file(&authorized_user(
-            &server,
-            json!({"quota_project_id": "quota"}),
-        ));
-        let fake = FakeEnvironment {
-            gcloud_project: Some("gcloud-project"),
-            token_endpoint: server.url.clone(),
-            ..environment(&[(
-                "GOOGLE_APPLICATION_CREDENTIALS",
-                file.path().to_str().unwrap(),
-            )])
-        };
-        let error = auth(fake).login(MODEL, None, None).await.unwrap_err();
-        assert_eq!(failure(error).message, "Could not resolve project_id");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn the_metadata_server_names_the_project_on_gce() {
-        let fake = FakeEnvironment {
-            on_gce: true,
-            gce_project: Some("gce-project"),
-            ..FakeEnvironment::default()
-        };
-        let login = auth(fake).login(MODEL, None, None).await.unwrap();
-        assert_eq!(login.project_id, "gce-project");
-        assert_eq!(login.token.expose(), "metadata-token");
-    }
-
-    #[rstest]
-    #[case::project_found(Some("crm-project"), Ok("crm-project"))]
-    #[case::project_not_found(None, Err("Could not resolve project_id"))]
-    #[tokio::test]
-    async fn an_external_account_default_asks_resource_manager_for_its_project(
-        #[future] token_server: TokenServer,
-        #[case] answered: Option<&'static str>,
-        #[case] expected: Result<&str, &str>,
-    ) {
-        let server = token_server.await;
-        let subject = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(subject.path(), "subject-token").unwrap();
-        let file = key_file(&json!({
-            "type": "external_account",
-            "audience": "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/p/providers/q",
-            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-            "token_url": server.url,
-            "credential_source": {"file": subject.path().to_str().unwrap()},
-        }));
-        let fake = Arc::new(FakeEnvironment {
-            resource_manager_project: answered,
-            ..environment(&[(
-                "GOOGLE_APPLICATION_CREDENTIALS",
-                file.path().to_str().unwrap(),
-            )])
-        });
-        let login = VertexMessagesAuth::new(fake.clone())
-            .login(MODEL, None, None)
-            .await;
-        assert_eq!(
-            login
-                .map(|login| login.project_id)
-                .map_err(|error| failure(error).message),
-            expected.map(str::to_string).map_err(str::to_string)
-        );
-        assert_eq!(
-            *fake.resource_manager_urls.lock().unwrap(),
-            ["https://cloudresourcemanager.googleapis.com/v1/projects/123456"]
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn a_configured_project_skips_resource_manager(#[future] token_server: TokenServer) {
-        let server = token_server.await;
-        let subject = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(subject.path(), "subject-token").unwrap();
-        let file = key_file(&json!({
-            "type": "external_account",
-            "audience": "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/p/providers/q",
-            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-            "token_url": server.url,
-            "credential_source": {"file": subject.path().to_str().unwrap()},
-        }));
-        let fake = Arc::new(environment(&[
-            (
-                "GOOGLE_APPLICATION_CREDENTIALS",
-                file.path().to_str().unwrap(),
-            ),
-            ("GOOGLE_CLOUD_PROJECT", "env-project"),
-        ]));
-        let login = VertexMessagesAuth::new(fake.clone())
-            .login(MODEL, None, None)
-            .await
-            .unwrap();
-        assert_eq!(login.project_id, "env-project");
-        assert!(fake.resource_manager_urls.lock().unwrap().is_empty());
-    }
-
-    #[rstest]
-    #[case::missing_file(
-        &[("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/adc.json")],
-        "The credentials file /nonexistent/adc.json does not exist."
-    )]
-    #[case::nothing_found(
-        &[],
-        "No application default credentials were found. Set GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default login`."
-    )]
-    #[tokio::test]
-    async fn application_default_failures_are_default_credentials_errors(
-        #[case] env: &[(&'static str, &str)],
-        #[case] message: &str,
-    ) {
-        let error = auth(environment(env))
-            .login(MODEL, None, Some("p".into()))
-            .await
-            .unwrap_err();
-        assert_eq!(
-            failure(error),
-            GoogleLoginFailure::new(PythonException::DefaultCredentials, message)
-        );
-    }
-
-    #[rstest]
-    #[case::numeric_project(json!({"type": "service_account", "project_id": 7}))]
-    #[case::listed_credential_source(json!({"type": "external_account", "credential_source": ["file"]}))]
-    #[tokio::test]
-    async fn an_application_default_file_with_a_field_of_the_wrong_type_is_refused(
-        #[case] contents: Value,
-    ) {
-        let file = key_file(&contents);
-        let path = file.path().to_str().unwrap().to_string();
-        let failure = failure(
-            auth(environment(&[("GOOGLE_APPLICATION_CREDENTIALS", &path)]))
-                .login(MODEL, None, Some("p".into()))
-                .await
-                .unwrap_err(),
-        );
-        assert_eq!(failure.exception, PythonException::DefaultCredentials);
-        assert!(
-            failure.message.starts_with(&format!(
-                "The credentials file {path} holds a field of the wrong type: "
-            )),
-            "{}",
-            failure.message
-        );
-    }
-
-    #[rstest]
-    #[case::unknown_type(json!({"type": "weird"}))]
-    #[case::no_type(json!({"project_id": "p"}))]
-    #[case::numeric_type(json!({"type": 7}))]
-    #[tokio::test]
-    async fn an_application_default_file_of_an_unknown_type_names_the_valid_types(
-        #[case] contents: Value,
-    ) {
-        let file = key_file(&contents);
-        let path = file.path().to_str().unwrap().to_string();
-        let error = auth(environment(&[("GOOGLE_APPLICATION_CREDENTIALS", &path)]))
-            .login(MODEL, None, Some("p".into()))
-            .await
-            .unwrap_err();
-        assert_eq!(
-            failure(error).message,
-            format!(
-                "The file {path} does not have a valid type, expected one of authorized_user, service_account, external_account, external_account_authorized_user, impersonated_service_account."
-            )
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn an_application_default_external_account_authorized_user_logs_in(
-        #[future] token_server: TokenServer,
-    ) {
-        let server = token_server.await;
-        let file = key_file(&json!({
-            "type": "external_account_authorized_user",
-            "audience": "//iam.googleapis.com/locations/global/workforcePools/p/providers/q",
-            "refresh_token": "r", "token_url": server.url, "client_id": "c", "client_secret": "s",
-        }));
-        let login = auth(environment(&[(
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            file.path().to_str().unwrap(),
-        )]))
-        .login(MODEL, None, Some("p".into()))
-        .await
-        .unwrap();
-        assert_eq!(
-            (login.token.expose(), login.project_id.as_str()),
-            ("user-token", "p")
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn an_application_default_impersonated_service_account_is_loaded() {
-        let file = key_file(&json!({
-            "type": "impersonated_service_account",
-            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken",
-            "source_credentials": {"type": "authorized_user", "client_id": "c", "client_secret": "s", "refresh_token": "r", "token_uri": "http://127.0.0.1:9/token"}
-        }));
-        let error = auth(environment(&[(
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            file.path().to_str().unwrap(),
-        )]))
-        .login(MODEL, None, Some("p".into()))
-        .await
-        .unwrap_err();
-        assert_ne!(
-            failure(error).exception,
-            PythonException::DefaultCredentials
-        );
+        (part(0), part(1))
     }
 
     #[rstest]
@@ -869,13 +597,566 @@ mod tests {
     }
 
     #[rstest]
+    #[case::with_key_id(json!({}), "key-1", "key-project")]
+    #[case::without_key_id_or_project(json!({"private_key_id": null, "project_id": null}), "", "configured")]
     #[tokio::test]
-    async fn the_shared_loader_keeps_main_s_login_for_other_consumers(
-        #[future] token_server: TokenServer,
+    async fn a_service_account_signs_its_own_token(
+        #[future] google: Google,
+        #[case] extra: Value,
+        #[case] key_id: &str,
+        #[case] project: &str,
     ) {
-        let server = token_server.await;
+        let google = google.await;
+        let login = auth(at(&google))
+            .login(
+                Some(
+                    service_account(merged(extra, json!({"token_uri": google.token_url()})))
+                        .to_string(),
+                ),
+                (project == "configured").then(|| "configured".into()),
+            )
+            .await
+            .unwrap();
+        let (header, claims) = decoded(login.token.expose());
+        assert_eq!(header["kid"], key_id);
+        assert_eq!(header["alg"], "RS256");
+        assert_eq!(claims["iss"], CLIENT_EMAIL);
+        assert_eq!(
+            claims["scope"],
+            "https://www.googleapis.com/auth/cloud-platform"
+        );
+        assert_eq!(login.project_id, project);
+        assert!(google.sent_to("/token").is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_authorized_user_refreshes_at_google_whatever_token_uri_it_names(
+        #[future] google: Google,
+    ) {
+        let google = google.await;
+        let login = auth(at(&google))
+            .login(
+                Some(authorized_user(json!({"quota_project_id": "quota"})).to_string()),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (login.token.expose(), login.project_id.as_str()),
+            ("granted", "quota")
+        );
+        assert!(google.sent_to("/token")[0].body.contains("refresh"));
+    }
+
+    fn file_source(google: &Google, directory: &Path) -> Value {
+        let subject = directory.join("subject");
+        std::fs::write(&subject, "file-subject").unwrap();
+        external_account(google, json!({"file": subject}))
+    }
+
+    fn url_source(google: &Google, _directory: &Path) -> Value {
+        external_account(google, json!({"url": format!("{}/subject", google.url)}))
+    }
+
+    fn aws_metadata_source(google: &Google, _directory: &Path) -> Value {
+        merged(
+            external_account(
+                google,
+                json!({
+                    "environment_id": "aws1",
+                    "region_url": format!("{}/aws/region", google.url),
+                    "url": format!("{}/aws/credentials", google.url),
+                    "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15",
+                }),
+            ),
+            json!({"subject_token_type": "urn:ietf:params:aws:token-type:aws4_request"}),
+        )
+    }
+
+    fn impersonating_source(google: &Google, directory: &Path) -> Value {
+        merged(
+            file_source(google, directory),
+            json!({"service_account_impersonation_url": format!(
+                "{}/v1/projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com:generateAccessToken",
+                google.url
+            )}),
+        )
+    }
+
+    fn explicit_aws(google: &Google, _directory: &Path) -> Value {
+        merged(
+            aws_metadata_source(google, _directory),
+            json!({
+                "aws_access_key_id": "AKIDEXPLICIT", "aws_secret_access_key": "explicit-secret",
+                "aws_region_name": "us-east-1",
+            }),
+        )
+    }
+
+    #[rstest]
+    #[case::file(file_source, "granted", "subject_token=file-subject")]
+    #[case::url(url_source, "granted", "subject_token=url-subject")]
+    #[case::aws_metadata(aws_metadata_source, "granted", "subject_token=%257B")]
+    #[case::impersonated(impersonating_source, "impersonated", "subject_token=file-subject")]
+    #[case::explicit_aws(explicit_aws, "granted", "subject_token=%257B%2522headers%2522")]
+    #[tokio::test]
+    async fn an_external_account_exchanges_its_subject_token_at_sts(
+        #[future] google: Google,
+        #[case] account: fn(&Google, &Path) -> Value,
+        #[case] token: &str,
+        #[case] subject: &str,
+    ) {
+        let google = google.await;
+        let directory = tempfile::tempdir().unwrap();
+        let login = auth(at(&google))
+            .login(
+                Some(account(&google, directory.path()).to_string()),
+                Some("p".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(login.token.expose(), token);
+        let exchanges = google.sent_to("/token");
+        assert!(exchanges[0].body.contains(subject), "{exchanges:?}");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_allowed_executable_supplies_the_subject_token(#[future] google: Google) {
+        let google = google.await;
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("subject.sh");
+        let expires = time::OffsetDateTime::now_utc().unix_timestamp() + 3600;
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho '{{\"version\": 1, \"success\": true, \"token_type\": \"{STS_JWT}\", \"id_token\": \"executable-subject\", \"expiration_time\": {expires}}}'\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            &script,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+        )
+        .unwrap();
+        // Google's Rust SDK reads this from the process environment; nothing else here does.
+        unsafe { std::env::set_var("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES", "1") };
+        let configured = external_account(
+            &google,
+            json!({"executable": {"command": script, "timeout_millis": 5000}}),
+        );
+        let login = auth(environment(&[(
+            "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES",
+            "1",
+        )]))
+        .login(Some(configured.to_string()), Some("p".into()))
+        .await
+        .unwrap();
+        assert_eq!(login.token.expose(), "granted");
+        assert!(
+            google.sent_to("/token")[0]
+                .body
+                .contains("subject_token=executable-subject")
+        );
+    }
+
+    #[rstest]
+    #[case::configured_project_wins(json!({"quota_project_id": "quota"}), Some("configured"), Ok("configured"))]
+    #[case::authorized_user_quota_project(json!({"quota_project_id": "quota"}), None, Ok("quota"))]
+    #[case::no_quota_project(json!({}), None, Err("Could not resolve project_id"))]
+    #[case::null_quota_project(json!({"quota_project_id": null}), None, Err("Could not resolve project_id"))]
+    #[case::empty_configured_project(json!({"quota_project_id": "quota"}), Some(""), Err("Could not resolve project_id"))]
+    #[tokio::test]
+    async fn explicit_credentials_name_the_project_as_load_auth_does(
+        #[future] google: Google,
+        #[case] extra: Value,
+        #[case] configured: Option<&str>,
+        #[case] expected: Result<&str, &str>,
+    ) {
+        let google = google.await;
+        let login = auth(at(&google))
+            .login(
+                Some(authorized_user(extra).to_string()),
+                configured.map(str::to_string),
+            )
+            .await;
+        assert_eq!(
+            login
+                .map(|login| login.project_id)
+                .map_err(|error| failure(error).message),
+            expected.map(str::to_owned).map_err(str::to_owned)
+        );
+        assert_eq!(google.sent_to("/token").len(), 1);
+    }
+
+    #[rstest]
+    #[case::credentials_file_project(&[], "file-project")]
+    #[case::google_cloud_project_first(&[("GOOGLE_CLOUD_PROJECT", "env-project")], "env-project")]
+    #[case::legacy_project_name(&[("GCLOUD_PROJECT", "legacy-project")], "legacy-project")]
+    #[case::empty_project_variable_is_skipped(&[("GOOGLE_CLOUD_PROJECT", "")], "file-project")]
+    #[tokio::test]
+    async fn the_gcloud_credentials_file_names_the_project_as_google_auth_does(
+        #[future] google: Google,
+        #[case] env: &[(&'static str, &str)],
+        #[case] expected: &str,
+    ) {
+        let google = google.await;
+        let gcloud = tempfile::tempdir().unwrap();
+        std::fs::write(
+            gcloud.path().join("application_default_credentials.json"),
+            authorized_user(json!({"quota_project_id": "quota"})).to_string(),
+        )
+        .unwrap();
+        let fake = FakeEnvironment {
+            gcloud_project: Some("file-project"),
+            token_endpoint: google.token_url(),
+            ..environment(&[env, &[("CLOUDSDK_CONFIG", gcloud.path().to_str().unwrap())]].concat())
+        };
+        let login = auth(fake).login(None, None).await.unwrap();
+        assert_eq!(
+            (login.project_id.as_str(), login.token.expose()),
+            (expected, "granted")
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_authorized_user_named_by_google_application_credentials_carries_no_project(
+        #[future] google: Google,
+    ) {
+        let google = google.await;
+        let file = key_file(&authorized_user(json!({"quota_project_id": "quota"})));
+        let fake = FakeEnvironment {
+            gcloud_project: Some("gcloud-project"),
+            token_endpoint: google.token_url(),
+            ..environment(&[(
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                file.path().to_str().unwrap(),
+            )])
+        };
+        let error = auth(fake).login(None, None).await.unwrap_err();
+        assert_eq!(failure(error).message, "Could not resolve project_id");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_metadata_server_names_the_project_on_gce() {
+        let fake = FakeEnvironment {
+            on_gce: true,
+            gce_project: Some("gce-project"),
+            ..FakeEnvironment::default()
+        };
+        let login = auth(fake).login(None, None).await.unwrap();
+        assert_eq!(
+            (login.project_id.as_str(), login.token.expose()),
+            ("gce-project", "metadata-token")
+        );
+    }
+
+    #[rstest]
+    #[case::project_found(&[], Some("crm-project"), Ok("crm-project"), 1)]
+    #[case::project_not_found(&[], None, Err("Could not resolve project_id"), 1)]
+    #[case::environment_project_skips_it(&[("GOOGLE_CLOUD_PROJECT", "env-project")], Some("crm-project"), Ok("env-project"), 0)]
+    #[tokio::test]
+    async fn an_external_account_default_asks_resource_manager_for_its_project(
+        #[future] google: Google,
+        #[case] env: &[(&'static str, &str)],
+        #[case] answered: Option<&'static str>,
+        #[case] expected: Result<&str, &str>,
+        #[case] asked: usize,
+    ) {
+        let google = google.await;
+        let directory = tempfile::tempdir().unwrap();
+        let file = key_file(&file_source(&google, directory.path()));
+        let fake = Arc::new(FakeEnvironment {
+            resource_manager_project: answered,
+            ..environment(
+                &[
+                    env,
+                    &[(
+                        "GOOGLE_APPLICATION_CREDENTIALS",
+                        file.path().to_str().unwrap(),
+                    )],
+                ]
+                .concat(),
+            )
+        });
+        let login = VertexMessagesAuth::new(fake.clone())
+            .login(None, None)
+            .await;
+        assert_eq!(
+            login
+                .map(|login| login.project_id)
+                .map_err(|error| failure(error).message),
+            expected.map(str::to_string).map_err(str::to_string)
+        );
+        assert_eq!(
+            *fake.resource_manager_urls.lock().unwrap(),
+            vec![
+                "https://cloudresourcemanager.googleapis.com/v1/projects/123456".to_owned();
+                asked
+            ]
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_application_default_impersonated_service_account_logs_in(#[future] google: Google) {
+        let google = google.await;
+        let file = key_file(&json!({
+            "type": "impersonated_service_account",
+            "service_account_impersonation_url": format!(
+                "{}/v1/projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com:generateAccessToken",
+                google.url
+            ),
+            "source_credentials": authorized_user(json!({"token_uri": google.token_url()})),
+        }));
+        let login = auth(environment(&[(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            file.path().to_str().unwrap(),
+        )]))
+        .login(None, Some("p".into()))
+        .await
+        .unwrap();
+        assert_eq!(login.token.expose(), "impersonated");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_application_default_external_account_authorized_user_refreshes_at_its_token_url(
+        #[future] google: Google,
+    ) {
+        let google = google.await;
+        let file = key_file(&json!({
+            "type": "external_account_authorized_user",
+            "audience": "//iam.googleapis.com/locations/global/workforcePools/p/providers/q",
+            "refresh_token": "workforce-refresh", "token_url": google.token_url(),
+            "client_id": "c", "client_secret": "s",
+        }));
+        let auth = auth(environment(&[(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            file.path().to_str().unwrap(),
+        )]));
+        let first = auth.login(None, Some("p".into())).await.unwrap();
+        let second = auth.login(None, Some("p".into())).await.unwrap();
+        assert_eq!(
+            (first.token.expose(), second.token.expose()),
+            ("granted", "granted")
+        );
+        let refreshes = google.sent_to("/token");
+        assert_eq!(refreshes.len(), 1);
+        assert_eq!(
+            refreshes[0].authorization.as_deref(),
+            Some(format!("Basic {}", STANDARD.encode("c:s")).as_str())
+        );
+        assert!(
+            refreshes[0]
+                .body
+                .contains("refresh_token=workforce-refresh")
+        );
+    }
+
+    fn adc_file(contents: Value) -> impl Fn(&Google, &Path) -> (Option<String>, FakeEnvironment) {
+        move |_, directory| {
+            let path = directory.join("adc.json");
+            std::fs::write(&path, contents.to_string()).unwrap();
+            (
+                None,
+                environment(&[("GOOGLE_APPLICATION_CREDENTIALS", path.to_str().unwrap())]),
+            )
+        }
+    }
+
+    type Setup = Box<dyn Fn(&Google, &Path) -> (Option<String>, FakeEnvironment)>;
+
+    fn explicit(credentials: impl Fn(&Google) -> Value + 'static) -> Setup {
+        Box::new(move |google, _| (Some(credentials(google).to_string()), at(google)))
+    }
+
+    fn refused(status: u16, body: Value) -> Option<(u16, Value)> {
+        Some((status, body))
+    }
+
+    #[rstest]
+    #[case::no_credentials_anywhere(Box::new(|_: &Google, _: &Path| (None, FakeEnvironment::default())), None, PythonException::DefaultCredentials)]
+    #[case::missing_application_default_file(Box::new(|_: &Google, _: &Path| (None, environment(&[("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/adc.json")]))), None, PythonException::DefaultCredentials)]
+    #[case::application_default_file_not_an_object(Box::new(adc_file(json!("{oops"))), None, PythonException::DefaultCredentials)]
+    #[case::application_default_file_of_unknown_type(Box::new(adc_file(json!({"type": "weird"}))), None, PythonException::DefaultCredentials)]
+    #[case::application_default_gdch(Box::new(adc_file(json!({"type": "gdch_service_account"}))), None, PythonException::DefaultCredentials)]
+    #[case::vertex_credentials_file_missing(Box::new(|google: &Google, _: &Path| (Some("/nonexistent/vertex-key.json".into()), at(google))), None, PythonException::Value)]
+    #[case::service_account_without_a_private_key(explicit(|_| json!({"client_email": CLIENT_EMAIL, "token_uri": "https://t"})), None, PythonException::Malformed)]
+    #[case::service_account_with_an_unloadable_key(explicit(|_| service_account(json!({"private_key": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"}))), None, PythonException::Value)]
+    #[case::service_account_with_a_pkcs1_key(explicit(|_| service_account(json!({"private_key": PKCS1_PRIVATE_KEY}))), None, PythonException::Value)]
+    #[case::authorized_user_missing_a_field(explicit(|_| json!({"type": "authorized_user", "client_id": "c", "client_secret": "s"})), None, PythonException::Value)]
+    #[case::external_account_without_a_source(explicit(|google| json!({"type": "external_account", "audience": POOL_AUDIENCE, "token_url": google.token_url()})), None, PythonException::InvalidValue)]
+    #[case::executable_not_allowed(explicit(|google| external_account(google, json!({"executable": {"command": "/bin/true"}}))), None, PythonException::Malformed)]
+    #[case::explicit_aws_without_a_region(explicit(|google| merged(aws_metadata_source(google, Path::new("/")), json!({"aws_access_key_id": "AKID"}))), None, PythonException::Value)]
+    #[case::refresh_refused(explicit(|_| authorized_user(json!({}))), refused(400, json!({"error": "invalid_grant"})), PythonException::Refresh)]
+    #[case::refresh_server_error(explicit(|_| authorized_user(json!({}))), refused(500, json!({"error": "internal"})), PythonException::Refresh)]
+    #[case::refresh_answers_no_token(explicit(|_| authorized_user(json!({}))), refused(200, json!({"expires_in": 3600})), PythonException::Refresh)]
+    #[case::exchange_refused(Box::new(|google: &Google, directory: &Path| (Some(file_source(google, directory).to_string()), at(google))), refused(400, json!({"error": "invalid_grant"})), PythonException::OAuth)]
+    #[case::workforce_refresh_refused(Box::new(|google: &Google, directory: &Path| adc_file(json!({"type": "external_account_authorized_user", "refresh_token": "r", "token_url": google.token_url(), "client_id": "c", "client_secret": "s"}))(google, directory)), refused(401, json!({"error": "invalid_client"})), PythonException::OAuth)]
+    #[case::workforce_user_that_cannot_load(Box::new(adc_file(json!({"type": "external_account_authorized_user"}))), None, PythonException::DefaultCredentials)]
+    #[case::workforce_user_that_cannot_refresh(Box::new(adc_file(json!({"type": "external_account_authorized_user", "token": "file-token"}))), None, PythonException::Refresh)]
+    #[case::token_endpoint_unreachable(Box::new(|_: &Google, _: &Path| (Some(authorized_user(json!({})).to_string()), FakeEnvironment { token_endpoint: "http://127.0.0.1:9/token".into(), ..FakeEnvironment::default() })), None, PythonException::Transport)]
+    #[tokio::test]
+    async fn a_failed_login_is_raised_as_google_auth_s_exception(
+        #[future] google: Google,
+        #[case] setup: Setup,
+        #[case] answer: Option<(u16, Value)>,
+        #[case] exception: PythonException,
+    ) {
+        let google = google.await;
+        let directory = tempfile::tempdir().unwrap();
+        if let Some((status, body)) = answer {
+            google.queue(status, body);
+        }
+        let (credentials, environment) = setup(&google, directory.path());
+        let error = auth(environment)
+            .login(credentials, Some("p".into()))
+            .await
+            .unwrap_err();
+        assert_eq!(failure(error).exception, exception);
+    }
+
+    #[rstest]
+    #[case::impersonated(json!({
+        "type": "impersonated_service_account", "client_email": "sa@p.iam.gserviceaccount.com",
+        "source_credentials": {"type": "authorized_user"},
+        "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken"
+    }))]
+    #[case::unknown_type(json!({"type": "gdch_service_account", "client_email": "sa@p.iam.gserviceaccount.com"}))]
+    #[tokio::test]
+    async fn explicit_credentials_of_another_type_are_refused_as_a_service_account(
+        #[case] configured: Value,
+    ) {
+        let error = auth(FakeEnvironment::default())
+            .login(Some(configured.to_string()), Some("project".into()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure(error),
+            GoogleLoginFailure::new(
+                PythonException::Malformed,
+                "The service account key is missing token_uri, private_key."
+            )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn credentials_that_do_not_build_from_a_file_name_the_file_failure() {
+        let file = key_file(&json!({"type": "impersonated_service_account"}));
+        let error = auth(FakeEnvironment::default())
+            .login(
+                Some(file.path().to_str().unwrap().into()),
+                Some("project".into()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure(error).file,
+            Some(UnusableFile::Invalid {
+                path: file.path().to_str().unwrap().into(),
+                problem: "holds credentials that cannot be used: The service account key is missing client_email, token_uri, private_key.".into(),
+            })
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct Errors(Arc<Mutex<Vec<String>>>);
+
+    impl litellm_tracing::Sink for Errors {
+        fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+            *metadata.level() == litellm_tracing::Level::ERROR
+        }
+
+        fn emit(&self, record: &litellm_tracing::Record) {
+            self.0.lock().unwrap().push(record.message.clone());
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_credentials_file_read_off_the_runtime_still_logs_its_path_and_problem() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "not json").unwrap();
+        let path = file.path().to_str().unwrap().to_owned();
+        let errors = Errors::default();
+        let error = litellm_tracing::Logger::new(errors.clone())
+            .instrument(
+                auth(FakeEnvironment::default()).login(Some(path.clone()), Some("project".into())),
+            )
+            .await
+            .unwrap_err();
+        assert!(failure(error).file.is_some());
+        let logged = errors.0.lock().unwrap().clone();
+        assert!(
+            logged.iter().any(|line| line.starts_with(&format!(
+                "Vertex: the credentials file at '{path}' is not valid JSON"
+            ))),
+            "{logged:?}"
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_rewritten_key_file_loads_anew() {
+        let file = key_file(&service_account(json!({})));
+        let path = file.path().to_str().unwrap().to_owned();
+        let auth = auth(FakeEnvironment::default());
+        let before = auth.login(Some(path.clone()), None).await.unwrap();
+        std::fs::write(
+            file.path(),
+            service_account(json!({"client_email": "rotated@key-project.iam.gserviceaccount.com"}))
+                .to_string(),
+        )
+        .unwrap();
+        let after = auth.login(Some(path), None).await.unwrap();
+        assert_eq!(decoded(before.token.expose()).1["iss"], CLIENT_EMAIL);
+        assert_eq!(
+            decoded(after.token.expose()).1["iss"],
+            "rotated@key-project.iam.gserviceaccount.com"
+        );
+    }
+
+    #[rstest]
+    #[case::kept_while_granted(None, Ok("granted"), 1)]
+    #[case::loaded_anew_after_a_refusal(refused(400, json!({"error": "invalid_grant"})), Ok("granted"), 2)]
+    #[tokio::test]
+    async fn credentials_are_reused_until_google_refuses_them(
+        #[future] google: Google,
+        #[case] first: Option<(u16, Value)>,
+        #[case] second: Result<&str, ()>,
+        #[case] requests: usize,
+    ) {
+        let google = google.await;
+        if let Some((status, body)) = first {
+            google.queue(status, body);
+        }
+        let auth = auth(at(&google));
+        let credentials = authorized_user(json!({})).to_string();
+        let _ = auth
+            .login(Some(credentials.clone()), Some("p".into()))
+            .await;
+        let again = auth.login(Some(credentials), Some("p".into())).await;
+        assert_eq!(
+            again
+                .map(|login| login.token.expose().to_owned())
+                .map_err(|_| ()),
+            second.map(str::to_owned)
+        );
+        assert_eq!(google.sent_to("/token").len(), requests);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_shared_loader_keeps_main_s_login_for_other_consumers(#[future] google: Google) {
+        let google = google.await;
         let credentials =
-            authorized_user(&server, json!({"quota_project_id": "quota"})).to_string();
+            authorized_user(json!({"quota_project_id": "quota", "token_uri": google.token_url()}))
+                .to_string();
         let shared = VertexAuth::default()
             .validate_environment(
                 Vec::new(),
@@ -893,14 +1174,12 @@ mod tests {
             .await;
         assert!(matches!(
             shared,
-            Err(Error::CredentialAcquisition(
-                litellm_auth_types::ErrorDetail::Unresolved {
-                    subject: "GCP resource project"
-                }
-            ))
+            Err(Error::CredentialAcquisition(ErrorDetail::Unresolved {
+                subject: "GCP resource project"
+            }))
         ));
-        let messages = auth(at(&server))
-            .login(MODEL, Some(credentials), None)
+        let messages = auth(at(&google))
+            .login(Some(credentials), None)
             .await
             .unwrap();
         assert_eq!(messages.project_id, "quota");
@@ -908,18 +1187,12 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn the_shared_loader_ignores_explicit_aws_keys() {
-        let explicit_aws = json!({
-            "type": "external_account",
-            "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/aws",
-            "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
-            "token_url": "https://sts.googleapis.com/v1/token",
-            "credential_source": {
-                "environment_id": "aws1",
-                "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
-            },
-            "aws_access_key_id": "key"
-        })
+    async fn the_shared_loader_ignores_explicit_aws_keys(#[future] google: Google) {
+        let google = google.await;
+        let explicit_aws = merged(
+            aws_metadata_source(&google, Path::new("/")),
+            json!({"aws_access_key_id": "key"}),
+        )
         .to_string();
         let shared = GcpAuth::default()
             .load_provider(CredentialSource::Trusted(SecretValue::new(
@@ -928,295 +1201,197 @@ mod tests {
             .await;
         assert!(shared.is_ok(), "{:?}", shared.err());
         let error = auth(FakeEnvironment::default())
-            .login(MODEL, Some(explicit_aws), Some("p".into()))
+            .login(Some(explicit_aws), Some("p".into()))
             .await
             .unwrap_err();
-        assert_eq!(
-            failure(error),
-            GoogleLoginFailure::new(
-                PythonException::Value,
-                "aws_region_name is required in the WIF credential JSON when using explicit AWS authentication. Add \"aws_region_name\": \"<your-region>\" to your credential file."
-            )
+        assert_eq!(failure(error).exception, PythonException::Value);
+    }
+
+    /// A TLS endpoint on `127.0.0.1` with `server`'s certificate and client verification, which
+    /// answers each request with a granted token and keeps its body.
+    async fn tls_token_endpoint(server: rustls::ServerConfig) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "https://127.0.0.1:{}/token",
+            listener.local_addr().unwrap().port()
         );
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let recorded = bodies.clone();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let Ok(mut tls) = acceptor.accept(stream).await else {
+                    continue;
+                };
+                let mut request = Vec::new();
+                let mut chunk = [0; 4096];
+                while let Ok(read) = tls.read(&mut chunk).await {
+                    request.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&request).into_owned();
+                    let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                        continue;
+                    };
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(str::to_owned)
+                        })
+                        .and_then(|length| length.trim().parse().ok())
+                        .unwrap_or(0);
+                    if body.len() >= length || read == 0 {
+                        recorded.lock().unwrap().push(body.to_owned());
+                        break;
+                    }
+                }
+                let body = granted().to_string();
+                let _ = tls
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+                let _ = tls.shutdown().await;
+            }
+        });
+        (url, bodies)
     }
 
-    fn service_account_file(endpoint: &service_account::tests::Endpoint, extra: Value) -> Value {
-        service_account::tests::key_json(
-            &endpoint.url,
-            json!({"project_id": "key-project"})
-                .as_object()
-                .unwrap()
-                .clone()
-                .into_iter()
-                .chain(extra.as_object().unwrap().clone())
-                .collect::<Map<String, Value>>()
-                .into(),
-        )
+    /// A test CA, a server certificate it signed for `127.0.0.1`, and a client certificate and key
+    /// it signed, written to files.
+    struct Pki {
+        directory: tempfile::TempDir,
+        server: rustls::ServerConfig,
+        client_der: Vec<u8>,
     }
 
-    fn granted(token: &str, expires_in: i64) -> (u16, Value) {
-        (
-            200,
-            json!({"access_token": token, "expires_in": expires_in}),
-        )
-    }
-
-    async fn token(
-        auth: &VertexMessagesAuth,
-        file: &tempfile::NamedTempFile,
-    ) -> Result<String, Error> {
-        let path = file.path().to_str().unwrap().to_owned();
-        let login = auth.login(MODEL, Some(path), None).await?;
-        Ok(login.token.expose().to_owned())
-    }
-
-    #[tokio::test]
-    async fn a_key_file_s_token_is_reused_until_the_file_is_rewritten() {
-        let endpoint = service_account::tests::endpoint(vec![
-            granted("first", 3600),
-            granted("rotated", 3600),
-        ])
-        .await;
-        let file = key_file(&service_account_file(&endpoint, json!({})));
-        let auth = auth(FakeEnvironment::default());
-
-        let before = (
-            token(&auth, &file).await.unwrap(),
-            token(&auth, &file).await.unwrap(),
-        );
+    fn pki(require_client: bool) -> Pki {
+        use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, IsCa, KeyPair};
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca = CertifiedIssuer::self_signed(ca_params, KeyPair::generate().unwrap()).unwrap();
+        let server_key = KeyPair::generate().unwrap();
+        let server = CertificateParams::new(vec!["127.0.0.1".to_owned()])
+            .unwrap()
+            .signed_by(&server_key, &ca)
+            .unwrap();
+        let client_key = KeyPair::generate().unwrap();
+        let client = CertificateParams::new(vec!["workload".to_owned()])
+            .unwrap()
+            .signed_by(&client_key, &ca)
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("ca.pem"), ca.pem()).unwrap();
+        std::fs::write(directory.path().join("client.pem"), client.pem()).unwrap();
         std::fs::write(
-            file.path(),
-            service_account_file(&endpoint, json!({"rotated": true})).to_string(),
+            directory.path().join("client.key"),
+            client_key.serialize_pem(),
         )
         .unwrap();
-        let after = token(&auth, &file).await.unwrap();
-
-        assert_eq!(before, ("first".to_owned(), "first".to_owned()));
-        assert_eq!(after, "rotated");
-        assert_eq!(endpoint.forms.lock().unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn a_key_file_replaced_by_one_that_does_not_load_keeps_the_earlier_credentials() {
-        let endpoint = service_account::tests::endpoint(vec![granted("earlier", 3600)]).await;
-        let file = key_file(&service_account_file(&endpoint, json!({})));
-        let auth = auth(FakeEnvironment::default());
-        token(&auth, &file).await.unwrap();
-
-        std::fs::write(file.path(), "{\"type\": \"service_account\", \"half\": ").unwrap();
-
-        assert_eq!(token(&auth, &file).await.unwrap(), "earlier");
-        assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_key_file_whose_token_fetch_fails_does_not_fall_back() {
-        let endpoint = service_account::tests::endpoint(vec![
-            granted("earlier", 3600),
-            (
-                400,
-                json!({"error": "invalid_client", "error_description": "gone"}),
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let builder = rustls::ServerConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(ca.der().clone()).unwrap();
+        let builder = match require_client {
+            true => builder.with_client_cert_verifier(
+                rustls::server::WebPkiClientVerifier::builder_with_provider(
+                    Arc::new(roots),
+                    provider,
+                )
+                .build()
+                .unwrap(),
             ),
-        ])
-        .await;
-        let file = key_file(&service_account_file(&endpoint, json!({})));
-        let auth = auth(FakeEnvironment::default());
-        token(&auth, &file).await.unwrap();
+            false => builder.with_no_client_auth(),
+        };
+        let server = builder
+            .with_single_cert(
+                vec![server.der().clone()],
+                rustls::pki_types::PrivateKeyDer::try_from(server_key.serialize_der()).unwrap(),
+            )
+            .unwrap();
+        Pki {
+            directory,
+            server,
+            client_der: client.der().to_vec(),
+        }
+    }
 
+    #[rstest]
+    #[tokio::test]
+    async fn a_certificate_source_exchanges_its_certificate_over_mutual_tls() {
+        let pki = pki(true);
+        let (url, bodies) = tls_token_endpoint(pki.server.clone()).await;
+        let directory = pki.directory.path();
+        let config = directory.join("certificate_config.json");
         std::fs::write(
-            file.path(),
-            service_account_file(&endpoint, json!({"rotated": true})).to_string(),
+            &config,
+            json!({"cert_configs": {"workload": {
+                "cert_path": directory.join("client.pem"), "key_path": directory.join("client.key"),
+            }}})
+            .to_string(),
         )
         .unwrap();
-        let refused = failure(token(&auth, &file).await.unwrap_err());
-
-        assert_eq!(refused.exception, PythonException::Refresh);
+        let credentials = json!({
+            "type": "external_account", "audience": POOL_AUDIENCE,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:mtls", "token_url": url,
+            "credential_source": {"certificate": {"certificate_config_location": config}},
+        });
+        let login = auth(environment(&[(
+            "REQUESTS_CA_BUNDLE",
+            directory.join("ca.pem").to_str().unwrap(),
+        )]))
+        .login(Some(credentials.to_string()), Some("p".into()))
+        .await
+        .unwrap();
+        assert_eq!(login.token.expose(), "granted");
+        let body = bodies.lock().unwrap()[0].clone();
+        let subject: Vec<String> = serde_json::from_str(
+            &url::form_urlencoded::parse(body.as_bytes())
+                .find(|(name, _)| name == "subject_token")
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert_eq!(subject, [STANDARD.encode(&pki.client_der)]);
     }
 
     #[rstest]
-    #[case::invalid_grant_reloads_once(
-        (400, json!({"error": "invalid_grant", "error_description": "Invalid JWT Signature."})),
-        Ok("reloaded"),
-        3
-    )]
-    #[case::another_refusal_stands(
-        (400, json!({"error": "invalid_client", "error_description": "The OAuth client was not found."})),
-        Err("invalid_client: The OAuth client was not found."),
-        2
-    )]
+    #[case::requests_bundle_only(&[("REQUESTS_CA_BUNDLE", "/etc/corporate-ca.pem")], true)]
+    #[case::curl_bundle_only(&[("CURL_CA_BUNDLE", "/etc/corporate-ca.pem")], true)]
+    #[case::ssl_cert_file_set(&[("REQUESTS_CA_BUNDLE", "/etc/corporate-ca.pem"), ("SSL_CERT_FILE", "/etc/corporate-ca.pem")], false)]
+    #[case::no_bundle(&[], false)]
     #[tokio::test]
-    async fn an_expired_token_refused_for_good_reloads_the_key_file_once(
-        #[case] refusal: (u16, Value),
-        #[case] expected: Result<&str, &str>,
-        #[case] requests: usize,
+    async fn an_untrusted_token_endpoint_says_to_set_ssl_cert_file(
+        #[case] env: &[(&'static str, &str)],
+        #[case] hinted: bool,
     ) {
-        let endpoint = service_account::tests::endpoint(vec![
-            granted("expired", 0),
-            refusal,
-            granted("reloaded", 3600),
-        ])
-        .await;
-        let file = key_file(&service_account_file(&endpoint, json!({})));
-
-        let served = token(&auth(FakeEnvironment::default()), &file)
-            .await
-            .map_err(|error| failure(error).message);
-
-        assert_eq!(served, expected.map(str::to_owned).map_err(str::to_owned));
-        assert_eq!(endpoint.forms.lock().unwrap().len(), requests);
-    }
-
-    #[tokio::test]
-    async fn a_key_refused_with_invalid_grant_is_asked_for_a_token_once() {
-        let endpoint = service_account::tests::endpoint(vec![(
-            400,
-            json!({"error": "invalid_grant", "error_description": "Invalid JWT Signature."}),
-        )])
-        .await;
-        let file = key_file(&service_account_file(&endpoint, json!({})));
-
-        let refused = failure(
-            token(&auth(FakeEnvironment::default()), &file)
-                .await
-                .unwrap_err(),
-        );
-
-        assert_eq!(
-            refused,
-            GoogleLoginFailure::new(
-                PythonException::Refresh,
-                "invalid_grant: Invalid JWT Signature."
-            )
-            .rejecting_the_grant()
-        );
-        assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn request_supplied_service_account_mints_at_its_own_token_uri() {
-        let endpoint = service_account::tests::endpoint(vec![granted("own-uri", 3600)]).await;
-        assert!(!endpoint.url.starts_with("https://oauth2.googleapis.com"));
-        let login = auth(FakeEnvironment::default())
-            .login(
-                MODEL,
-                Some(service_account_file(&endpoint, json!({})).to_string()),
-                Some("p".into()),
-            )
-            .await
-            .unwrap();
-        assert_eq!(login.token.expose(), "own-uri");
-        assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
-    }
-
-    fn external_account_file(
-        endpoint: &service_account::tests::Endpoint,
-        subject: &tempfile::NamedTempFile,
-    ) -> String {
-        json!({
-            "type": "external_account",
-            "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q",
-            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-            "token_url": endpoint.url,
-            "credential_source": {"file": subject.path().to_str().unwrap()},
+        let (url, _) = tls_token_endpoint(pki(false).server).await;
+        let error = auth(FakeEnvironment {
+            token_endpoint: url,
+            ..environment(env)
         })
-        .to_string()
-    }
-
-    fn subject_file() -> tempfile::NamedTempFile {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), "subject-jwt").unwrap();
-        file
-    }
-
-    #[tokio::test]
-    async fn an_sts_reply_with_only_an_access_token_logs_in() {
-        let endpoint = service_account::tests::endpoint(vec![(
-            200,
-            json!({"access_token": "sts-only", "expires_in": 3600}),
-        )])
-        .await;
-        let subject = subject_file();
-        let login = auth(FakeEnvironment::default())
-            .login(
-                MODEL,
-                Some(external_account_file(&endpoint, &subject)),
-                Some("p".into()),
-            )
-            .await
-            .unwrap();
-        assert_eq!(login.token.expose(), "sts-only");
-        assert!(endpoint.forms.lock().unwrap()[0].contains("&subject_token=subject-jwt&"));
-    }
-
-    #[tokio::test]
-    async fn an_sts_reply_without_a_token_is_exchanged_twice_then_refused() {
-        let endpoint = service_account::tests::endpoint(vec![(
-            200,
-            json!({"token_type": "Bearer", "expires_in": 3600, "issued_token_type": "urn:ietf:params:oauth:token-type:access_token"}),
-        )])
-        .await;
-        let subject = subject_file();
-        let error = auth(FakeEnvironment::default())
-            .login(
-                MODEL,
-                Some(external_account_file(&endpoint, &subject)),
-                Some("p".into()),
-            )
-            .await
-            .unwrap_err();
+        .login(
+            Some(authorized_user(json!({})).to_string()),
+            Some("p".into()),
+        )
+        .await
+        .unwrap_err();
+        let failure = failure(error);
+        assert_eq!(failure.exception, PythonException::Transport);
         assert_eq!(
-            failure(error),
-            GoogleLoginFailure::new(
-                PythonException::Value,
-                "Could not resolve credentials token. Got None or non-string token (type=NoneType)"
-            )
+            failure
+                .message
+                .contains("set SSL_CERT_FILE to the same CA bundle"),
+            hinted,
+            "{}",
+            failure.message
         );
-        assert_eq!(endpoint.forms.lock().unwrap().len(), 2);
-    }
-
-    #[rstest]
-    #[case::array(json!(["a"]), "The credentials file {} is not a JSON object.")]
-    #[case::impersonated_without_source(
-        json!({"type": "impersonated_service_account", "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken"}),
-        "The impersonated service account credentials in {} cannot be used."
-    )]
-    #[tokio::test]
-    async fn unusable_application_default_files_are_default_credentials_errors(
-        #[case] contents: Value,
-        #[case] message: &str,
-    ) {
-        let file = key_file(&contents);
-        let path = file.path().to_str().unwrap();
-        let error = auth(environment(&[("GOOGLE_APPLICATION_CREDENTIALS", path)]))
-            .login(MODEL, None, Some("p".into()))
-            .await
-            .unwrap_err();
-        assert_eq!(
-            failure(error),
-            GoogleLoginFailure::new(
-                PythonException::DefaultCredentials,
-                message.replace("{}", path)
-            )
-        );
-    }
-
-    #[rstest]
-    #[case::one_model_twice(["claude-sonnet-5-5@default", "claude-sonnet-5-5@default"], 1)]
-    #[case::two_models(["claude-sonnet-5-5@default", "claude-opus-5-5@default"], 2)]
-    #[case::versions_are_other_models(["claude-sonnet-5-5", "claude-sonnet-5-5@default"], 2)]
-    #[tokio::test]
-    async fn each_model_keeps_its_own_login_as_python_s_config_cache_does(
-        #[case] models: [&str; 2],
-        #[case] mints: usize,
-    ) {
-        let endpoint = service_account::tests::endpoint(vec![granted("sa-token", 3600)]).await;
-        let credentials = service_account_file(&endpoint, json!({})).to_string();
-        let auth = auth(FakeEnvironment::default());
-        for model in models {
-            auth.login(model, Some(credentials.clone()), Some("p".into()))
-                .await
-                .unwrap();
-        }
-        assert_eq!(endpoint.forms.lock().unwrap().len(), mints);
     }
 }
