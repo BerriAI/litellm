@@ -204,6 +204,8 @@ async def send_with_vector_store_fallbacks(
             response: Final = await client.send(prepared, stream=True, follow_redirects=False)
             try:
                 await response.aread()
+            except httpx.DecodingError as error:
+                return Failed(target, error, classify_status(response.status_code))
             finally:
                 await response.aclose()
             if response.is_success:

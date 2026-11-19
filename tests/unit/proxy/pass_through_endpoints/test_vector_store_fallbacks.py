@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 from typing import Final
 from dataclasses import replace
 
@@ -441,3 +442,32 @@ async def test_invalid_target_preparation_is_terminal_without_sending(invalid: s
                 plan,
             )
     assert observed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 503])
+async def test_malformed_gzip_keeps_received_status_retryability(status: int) -> None:
+    seen: Final[list[httpx.Request]] = []
+    primary: Final = httpx.Response(
+        status, headers={"Content-Encoding": "gzip"}, stream=httpx.ByteStream(b"invalid gzip")
+    )
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return primary if request.url.host == "primary.example" else httpx.Response(200, json={"value": ["backup"]})
+
+    expectation: Final = pytest.raises(httpx.DecodingError) if status == 400 else nullcontext()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        with expectation:
+            response: Final = await send_with_vector_store_fallbacks(
+                client,
+                client.build_request("POST", "https://primary.example/indexes/docs/docs/search", json={"search": "hi"}),
+                plan_for("azure_ai", "indexes/docs/docs/search"),
+            )
+            assert response.status_code == 200
+            assert response.json() == {"value": ["backup"]}
+            assert response.headers["x-litellm-vector-store-id"] == "backup"
+    assert primary.is_closed
+    assert [request.url.host for request in seen] == (
+        ["primary.example"] if status == 400 else ["primary.example", "backup.example"]
+    )
