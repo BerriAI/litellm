@@ -268,11 +268,12 @@ def _pass_through_disabled_for_vertex_model(llm_router: litellm.Router, model_id
     """Whether every deployment serving this Vertex model leaves ``use_in_pass_through``
     off, so a pass-through call naming it must be refused instead of forwarded with
     the caller's credentials. A model no deployment serves is not refused."""
-    candidates: Final = tuple(
+    named: Final = tuple(
         row
         for row in llm_router.registry().deployments() or ()
         if row.get("model_name") == model_id or _deployment_model_name(row["litellm_params"]) == model_id
     )
+    candidates: Final = named + tuple(llm_router.registry().deployments(model_id) or ())
     return bool(candidates) and not any(row["litellm_params"].get("use_in_pass_through") is True for row in candidates)
 
 
@@ -3463,7 +3464,7 @@ async def _base_vertex_proxy_route(
     )
 
     # Check if model is in router config - always do this to resolve custom model names
-    model_id: Final = get_vertex_model_id_from_url(endpoint)
+    model_id: Final = get_vertex_model_id_from_url(encoded_endpoint)
     if model_id:
         if llm_router:
             if _pass_through_disabled_for_vertex_model(llm_router, model_id):
