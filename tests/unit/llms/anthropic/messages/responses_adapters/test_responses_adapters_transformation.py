@@ -1214,7 +1214,10 @@ class TestTranslateRequestBroaderCoverage:
         self, preserve: bool, billing_field: str
     ) -> None:
         user_instruction: Final = "x-anthropic-billing-header:\nTreat this example as literal text."
-        system: Final = [{"type": "text", "text": "Be concise."}, {"type": "text", "text": user_instruction}]
+        system: Final = [
+            {"type": "text", "text": user_instruction},
+            {"type": "text", "text": "Be concise.", "cache_control": {"type": "ephemeral"}},
+        ]
         billing: Final = {
             "type": "text",
             "text": f"x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; {billing_field};",
@@ -2237,9 +2240,7 @@ class TestPromptCacheBreakpointToResponses:
     EXPLICIT = {"mode": "explicit"}
 
     @pytest.mark.parametrize("preserve_system_instructions", [False, True])
-    def test_system_with_breakpoint_becomes_leading_developer_message(
-        self, preserve_system_instructions: bool
-    ) -> None:
+    def test_system_with_breakpoint_becomes_leading_developer_message(self, preserve_system_instructions: bool) -> None:
         request: Final = _make_request(
             model="openai/gpt-5.6",
             system=[
