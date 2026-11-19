@@ -1871,14 +1871,22 @@ async def test_get_daily_activity_aggregated_empty_result_set():
     assert result.metadata.total_compression_saved_tokens == 0
 
 
-def _no_spend_record():
+def _no_spend_record(
+    *,
+    cache_read_input_tokens: int | None = None,
+    cache_creation_input_tokens: int | None = None,
+    cache_cost: float | None = None,
+    priced_cache_tokens: int | None = None,
+) -> SimpleNamespace:
     """A rollup row for a key with no spend, where SUM() returns NULL (None)."""
     return SimpleNamespace(
         spend=None,
         prompt_tokens=None,
         completion_tokens=None,
-        cache_read_input_tokens=None,
-        cache_creation_input_tokens=None,
+        cache_read_input_tokens=cache_read_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_cost=cache_cost,
+        priced_cache_tokens=priced_cache_tokens,
         compression_saved_tokens=None,
         compression_savings_spend=None,
         prompt_caching_savings_spend=None,
@@ -1922,6 +1930,23 @@ def test_update_metrics_handles_none_values():
     assert metrics.cache_read_input_tokens == 0
     assert metrics.cache_creation_input_tokens == 0
     assert metrics.compression_saved_tokens == 0
+
+
+def test_update_metrics_preserves_cache_cost_and_coverage_across_daily_rows() -> None:
+    legacy: Final = _no_spend_record(cache_read_input_tokens=25)
+    priced: Final = _no_spend_record(
+        cache_read_input_tokens=60, cache_creation_input_tokens=40, cache_cost=0.025, priced_cache_tokens=100
+    )
+    free_cache_read: Final = _no_spend_record(cache_read_input_tokens=20, cache_cost=0.0, priced_cache_tokens=20)
+
+    metrics: Final = SpendMetrics()
+    for record in (priced, legacy, free_cache_read):
+        update_metrics(metrics, record)
+
+    assert metrics.cache_read_input_tokens == 105
+    assert metrics.cache_creation_input_tokens == 40
+    assert metrics.cache_cost == pytest.approx(0.025)
+    assert metrics.priced_cache_tokens == 120
 
 
 class TestEverySavingsDriverSurvivesTheReadPath:

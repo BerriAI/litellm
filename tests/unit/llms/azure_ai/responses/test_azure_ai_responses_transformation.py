@@ -1580,9 +1580,5 @@ async def test_acompletion_reaches_the_agent_through_the_project_responses_api()
     assert body["agent_reference"] == {"type": "agent_reference", "name": "support-agent"}
     assert "model" not in body
     assert "instructions" not in body
-    assert body["input"][0] == {
-        "type": "message",
-        "role": "system",
-        "content": [{"type": "input_text", "text": "Answer in French"}],
-    }
+    assert body["input"][0] == SYSTEM_PROMPT
     assert response.choices[0].message.content == "4"
