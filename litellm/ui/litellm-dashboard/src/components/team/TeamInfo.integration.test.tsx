@@ -1043,3 +1043,108 @@ describe("TeamInfoView - vector stores from access groups", () => {
     );
   });
 });
+
+describe("TeamInfoView - MCP auth profile grants", () => {
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4"],
+    editTeam: false,
+    premiumUser: false,
+  };
+  const catalog = [
+    {
+      server_id: "srv-1",
+      server_name: "deploy",
+      additional_auth: [{ id: "deploy-bots", auth_type: "api_key" }],
+    },
+  ];
+
+  const openEditor = async (user: ReturnType<typeof userEvent.setup>, objectPermission: Record<string, unknown>) => {
+    mockUseMCPServers.mockReturnValue({ data: catalog, isLoading: false, isError: false } as unknown as ReturnType<
+      typeof useMCPServers
+    >);
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ object_permission: objectPermission }) as unknown as TeamData,
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" });
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+  };
+
+  const savedObjectPermission = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    return vi.mocked(networking.teamUpdateCall).mock.calls[0][1].object_permission;
+  };
+
+  beforeEach(() => {
+    seedDefaultMocks();
+    authState.userRole = "Admin";
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows the granted profile and leaves the stored grant untouched on save", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { mcp_servers: ["srv-1"], mcp_auth_profiles: ["deploy-bots"] });
+
+    expect(await screen.findByLabelText("deploy")).toHaveTextContent("deploy-bots");
+    expect(await savedObjectPermission(user)).not.toHaveProperty("mcp_auth_profiles");
+  });
+
+  it("sends an empty list when the admin returns the server to the default profile", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { mcp_servers: ["srv-1"], mcp_auth_profiles: ["deploy-bots"] });
+
+    await user.click(await screen.findByLabelText("deploy"));
+    await user.click(await screen.findByRole("option", { name: "Default profile" }));
+
+    expect((await savedObjectPermission(user)).mcp_auth_profiles).toEqual([]);
+  });
+
+  it("shows and keeps a grant on a server the team reaches through a toolset", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { mcp_toolsets: ["ts-1"], mcp_auth_profiles: ["deploy-bots"] });
+
+    expect(await screen.findByLabelText("deploy")).toHaveTextContent("deploy-bots");
+    expect(await savedObjectPermission(user)).not.toHaveProperty("mcp_auth_profiles");
+  });
+
+  it("sends a changed grant even when the toolset list failed to load", async () => {
+    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: true } as unknown as ReturnType<
+      typeof useMCPToolsets
+    >);
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { mcp_servers: ["srv-1"], mcp_auth_profiles: ["deploy-bots"] });
+
+    await user.click(await screen.findByLabelText("deploy"));
+    await user.click(await screen.findByRole("option", { name: "Default profile" }));
+
+    expect((await savedObjectPermission(user)).mcp_auth_profiles).toEqual([]);
+  });
+
+  it("adds no key for a team that holds no grant", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { mcp_servers: ["srv-1"] });
+
+    expect(await savedObjectPermission(user)).not.toHaveProperty("mcp_auth_profiles");
+  });
+
+  it("offers a team admin who is not a proxy admin no profile choice and sends no grant", async () => {
+    authState.userRole = "Internal User";
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { mcp_servers: ["srv-1"], mcp_auth_profiles: ["deploy-bots"] });
+
+    expect(screen.queryByLabelText("deploy")).not.toBeInTheDocument();
+    expect(await savedObjectPermission(user)).not.toHaveProperty("mcp_auth_profiles");
+  });
+});

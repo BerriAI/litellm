@@ -14,6 +14,7 @@ interface MCPServerPermissionsProps {
   mcpAccessGroups?: string[];
   mcpToolPermissions?: Record<string, string[]>;
   mcpToolsets?: string[];
+  mcpAuthProfiles?: string[];
   inheritedMcpServers?: InheritedGrant[];
   accessToken?: string | null;
 }
@@ -23,6 +24,7 @@ export function MCPServerPermissions({
   mcpAccessGroups = [],
   mcpToolPermissions = {},
   mcpToolsets = [],
+  mcpAuthProfiles = [],
   inheritedMcpServers = [],
   accessToken,
 }: MCPServerPermissionsProps) {
@@ -297,6 +299,13 @@ export function MCPServerPermissions({
           <ServerIcon className="h-4 w-4 text-muted-foreground" />
           <p className="text-muted-foreground text-sm">{t("permissions.mcpServerPermissions.empty")}</p>
         </div>
+      )}
+
+      {mcpAuthProfiles.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {t("permissions.mcpServerPermissions.authProfiles")}{" "}
+          <span className="font-mono text-foreground">{mcpAuthProfiles.join(", ")}</span>
+        </p>
       )}
     </div>
   );

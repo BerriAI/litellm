@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MCPServer } from "@/components/mcp_tools/types";
 import { buildKeyCreatePayload, type KeyCreateInput, type KeyPayloadResult } from "./createKeyPayload";
 
 const baseInput: KeyCreateInput = {
@@ -682,5 +683,41 @@ describe("model_max_budget", () => {
 
   it("omits model_max_budget entirely when no model budget is set", () => {
     expect(payloadOf(build({}))).not.toHaveProperty("model_max_budget");
+  });
+});
+
+describe("MCP auth profile grants", () => {
+  const servers = [
+    { server_id: "tickets", additional_auth: [{ id: "tickets-bots", auth_type: "api_key" }] },
+    { server_id: "wiki", additional_auth: [{ id: "wiki-bots", auth_type: "api_key" }] },
+  ] as MCPServer[];
+  const selection = { servers: ["tickets"], accessGroups: [] };
+  const permissionOf = (result: KeyPayloadResult) => {
+    if (result.kind !== "ok") throw new Error(result.kind);
+    return result.payload.object_permission as Record<string, unknown> | undefined;
+  };
+
+  it("adds no new key when no profile is chosen", () => {
+    const withoutGrants = build({ allowed_mcp_servers_and_groups: selection }, { mcpServers: servers });
+    const today = build({ allowed_mcp_servers_and_groups: selection });
+    expect(JSON.stringify(withoutGrants)).toBe(JSON.stringify(today));
+    expect(permissionOf(withoutGrants)).not.toHaveProperty("mcp_auth_profiles");
+  });
+
+  it("sends the chosen profile in object_permission and never as a top-level field", () => {
+    const result = build(
+      { allowed_mcp_servers_and_groups: selection, mcp_auth_profiles: ["tickets-bots"] },
+      { mcpServers: servers },
+    );
+    expect(permissionOf(result)).toEqual({ mcp_servers: ["tickets"], mcp_auth_profiles: ["tickets-bots"] });
+    if (result.kind === "ok") expect(result.payload).not.toHaveProperty("mcp_auth_profiles");
+  });
+
+  it("sends a profile for a server the key reaches without selecting it", () => {
+    const result = build(
+      { allowed_mcp_servers_and_groups: selection, mcp_auth_profiles: ["wiki-bots"] },
+      { mcpServers: servers },
+    );
+    expect(permissionOf(result)).toEqual({ mcp_servers: ["tickets"], mcp_auth_profiles: ["wiki-bots"] });
   });
 });

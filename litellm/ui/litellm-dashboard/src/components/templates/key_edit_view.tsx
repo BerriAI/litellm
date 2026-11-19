@@ -68,7 +68,9 @@ import {
 } from "../key_team_helpers/TagRateLimitEditor";
 import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import type { MCPServer } from "../mcp_tools/types";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import McpAuthProfilePicker, { useKeyAuthProfileServers } from "../mcp_server_management/McpAuthProfilePicker";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
 import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
@@ -85,7 +87,11 @@ import { codeSamples } from "@/i18n/untranslated/codeSamples";
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
-  onSubmit: (values: any, dirtyFields: readonly string[]) => Promise<void>;
+  onSubmit: (
+    values: any,
+    dirtyFields: readonly string[],
+    authProfileServers: readonly MCPServer[] | undefined,
+  ) => Promise<void>;
   teams?: any[] | null;
   accessToken: string | null;
   userID: string | null;
@@ -162,6 +168,12 @@ function KeyEditSession({
   const isModelsDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
   const mcpSelection = form.watch("mcp_servers_and_groups") as McpServersAndGroups | undefined;
   const mcpScope = { teamId: form.watch("team_id") ?? null, userId: keyData.user_id };
+  const authProfileServers = useKeyAuthProfileServers(
+    mcpScope.teamId,
+    mcpScope.userId,
+    keyData.object_permission?.mcp_servers ?? [],
+    mcpSelection?.toolsets ?? [],
+  );
   const mcpToolPermissions = form.watch("mcp_tool_permissions");
 
   useEffect(() => {
@@ -325,6 +337,7 @@ function KeyEditSession({
           ...(detachProject && canDetachProject ? { project_id: null } : {}),
         }),
         [...Object.keys(form.formState.dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
+        authProfileServers,
       );
     } finally {
       setIsKeySaving(false);
@@ -835,6 +848,19 @@ function KeyEditSession({
               onChange={writeMcpToolPermissions(form)}
             />
           </div>
+
+          {userRole != null && isProxyAdminRole(userRole) && (
+            <FormField control={form.control} name="mcp_auth_profiles">
+              {({ value, onChange }) => (
+                <McpAuthProfilePicker
+                  value={value}
+                  onChange={onChange}
+                  servers={authProfileServers}
+                  followsTeam={mcpScope.teamId !== null}
+                />
+              )}
+            </FormField>
+          )}
 
           <KeyAgentAndSkillFields control={form.control} accessToken={accessToken || ""} />
 

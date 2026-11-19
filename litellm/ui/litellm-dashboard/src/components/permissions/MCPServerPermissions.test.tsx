@@ -18,6 +18,20 @@ describe("MCPServerPermissions", () => {
     vi.clearAllMocks();
   });
 
+  it("lists the auth profiles the caller is granted", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    render(<MCPServerPermissions mcpServers={["srv-1"]} mcpAuthProfiles={["tickets-bots", "wiki-bots"]} />);
+
+    expect(screen.getByText("tickets-bots, wiki-bots")).toBeInTheDocument();
+  });
+
+  it("shows no auth profile line when none is granted", () => {
+    render(<MCPServerPermissions mcpServers={["srv-1"]} />);
+
+    expect(screen.queryByText("Auth profiles:")).not.toBeInTheDocument();
+  });
+
   it("should display MCP servers with their aliases and IDs", async () => {
     /**
      * Tests that MCP servers are displayed with their correct aliases and truncated IDs.

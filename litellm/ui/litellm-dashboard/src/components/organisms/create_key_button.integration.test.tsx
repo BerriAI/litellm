@@ -20,7 +20,16 @@ const state = vi.hoisted(() => ({
   organizations: [] as { organization_id: string; organization_alias: string }[],
   accessGroups: [] as { access_group_id: string; access_group_name: string }[],
   projects: [] as { project_id: string; project_alias: string; team_id?: string; models?: string[] }[],
+  teamScopedMcpServers: undefined as Record<string, unknown>[] | undefined,
+  mcpToolsets: [] as Record<string, unknown>[],
+  teamInfo: undefined as Record<string, unknown> | undefined,
 }));
+
+const DEPLOY_SERVER = {
+  server_id: "srv-1",
+  server_name: "deploy",
+  additional_auth: [{ id: "deploy-bots", auth_type: "api_key" }],
+};
 
 vi.mock("@/lib/toast", () => ({
   toast: {
@@ -61,18 +70,22 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
     isFetchingNextPage: false,
     isLoading: false,
   }),
+  useTeam: () => ({ data: state.teamInfo }),
 }));
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   useAccessGroups: () => ({ data: state.accessGroups, isLoading: false, isError: false }),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
-  useMCPServers: () => ({ data: [], isLoading: false }),
+  useMCPServers: (teamId?: string | null) => ({
+    data: teamId && state.teamScopedMcpServers !== undefined ? state.teamScopedMcpServers : [DEPLOY_SERVER],
+    isLoading: false,
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups", () => ({
   useMCPAccessGroups: () => ({ data: [], isLoading: false }),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
-  useMCPToolsets: () => ({ data: [], isLoading: false }),
+  useMCPToolsets: () => ({ data: state.mcpToolsets, isLoading: false }),
 }));
 
 vi.mock("../networking", async (importOriginal) => {
@@ -239,6 +252,9 @@ describe("CreateKey", () => {
     state.organizations = [];
     state.projects = [];
     state.accessGroups = [];
+    state.teamScopedMcpServers = undefined;
+    state.mcpToolsets = [];
+    state.teamInfo = undefined;
     vi.mocked(keyCreateCall).mockClear().mockResolvedValue({ key: "sk-created", soft_budget: null });
     vi.mocked(keyCreateServiceAccountCall)
       .mockClear()
@@ -1350,6 +1366,71 @@ describe("CreateKey", () => {
       const payload = await createdPayload();
       expect(payload).not.toHaveProperty("mcp_tool_permissions");
       expect(payload).toHaveProperty("allowed_mcp_servers_and_groups");
+    });
+
+    it("sends the auth profile chosen for a selected MCP server inside object_permission", async () => {
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.mcp);
+      await userEvent.click(await screen.findByRole("combobox", { name: /MCP Servers/i }));
+      await userEvent.click(await screen.findByRole("option", { name: /deploy \(srv-1\)/ }));
+      await userEvent.click(await screen.findByLabelText("deploy"));
+      await userEvent.click(await screen.findByRole("option", { name: "deploy-bots" }));
+      await submit();
+
+      const payload = await createdPayload();
+      expect(payload.object_permission).toStrictEqual({ mcp_servers: ["srv-1"], mcp_auth_profiles: ["deploy-bots"] });
+      expect(payload).not.toHaveProperty("mcp_auth_profiles");
+    });
+
+    it("drops an auth profile chosen before the team changed", async () => {
+      state.teams = [{ team_id: "team-1", team_alias: "Team One", models: [] }];
+      await openModal({ teams: state.teams as unknown as Team[] });
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.mcp);
+      await userEvent.click(await screen.findByLabelText("deploy"));
+      await userEvent.click(await screen.findByRole("option", { name: "deploy-bots" }));
+      await userEvent.click(await screen.findByLabelText("Team"));
+      await userEvent.click(await screen.findByRole("option", { name: /Team One/ }));
+      expect(screen.getByLabelText("deploy")).toHaveTextContent("None (team or default)");
+      await submit();
+
+      const payload = await createdPayload();
+      expect(payload.object_permission ?? {}).not.toHaveProperty("mcp_auth_profiles");
+    });
+
+    it("offers the profile choice of a server the chosen team reaches only through its toolset", async () => {
+      state.teams = [{ team_id: "team-1", team_alias: "Team One", models: [] }];
+      state.teamScopedMcpServers = [];
+      state.mcpToolsets = [
+        { toolset_id: "deploy-ops", toolset_name: "deploy-ops", tools: [{ server_id: "srv-1", tool_name: "ship" }] },
+      ];
+      state.teamInfo = { team_id: "team-1", object_permission: { mcp_toolsets: ["deploy-ops"] } };
+      await openModal({ teams: state.teams as unknown as Team[] });
+      await nameTheKey();
+      await userEvent.click(await screen.findByLabelText("Team"));
+      await userEvent.click(await screen.findByRole("option", { name: /Team One/ }));
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.mcp);
+      await userEvent.click(await screen.findByLabelText("deploy"));
+      await userEvent.click(await screen.findByRole("option", { name: "deploy-bots" }));
+      await submit();
+
+      const payload = await createdPayload();
+      expect(payload.object_permission).toStrictEqual({ mcp_auth_profiles: ["deploy-bots"] });
+    });
+
+    it("offers no profile choice to a user who is not a proxy admin", async () => {
+      state.authorized = { ...state.authorized, userRole: "Internal User" };
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.mcp);
+
+      expect(await screen.findByRole("combobox", { name: /MCP Servers/i })).toBeInTheDocument();
+      expect(screen.queryByLabelText("deploy")).not.toBeInTheDocument();
     });
 
     it("registers no Optional Settings field while a team choice is still required", async () => {

@@ -3141,7 +3141,8 @@
       "tools_one": "tool",
       "tools_other": "tools",
       "toolset": "Toolset",
-      "empty": "No MCP servers, access groups, or toolsets configured"
+      "empty": "No MCP servers, access groups, or toolsets configured",
+      "authProfiles": "Auth profiles:"
     },
     "agentPermissions": {
       "fullId": "Full ID: {{id}}",
@@ -14719,6 +14720,12 @@
       "noServers": "No MCP Servers",
       "blockAll": "Block all",
       "empty": "No MCP servers found"
+    },
+    "authProfilePicker": {
+      "title": "Auth profile per server",
+      "description": "Pick the credential this caller uses on each server. A profile never grants access to a server.",
+      "defaultProfile": "Default profile",
+      "teamOrDefaultProfile": "None (team or default)"
     }
   },
   "logs": {
