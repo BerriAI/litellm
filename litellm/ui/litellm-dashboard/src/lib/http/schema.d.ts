@@ -38111,11 +38111,8 @@ export interface components {
              * @default []
              */
             agents: string[] | null;
-            /**
-             * Apps
-             * @default []
-             */
-            apps: string[] | null;
+            /** Apps */
+            apps?: string[] | null;
             /**
              * Blocked Tools
              * @default []
