@@ -212,3 +212,48 @@ async def test_guardrail_returning_fewer_descriptions_than_it_was_given_rejects_
 
     assert blocked.value.status_code == 400
     assert "different number of tool descriptions" in str(blocked.value.detail)
+
+
+_INPUT_ITEM_TYPES: Final = (
+    pytest.param("additional_tools", id="additional-tools"),
+    pytest.param("tool_search_output", id="tool-search-output"),
+)
+
+
+def _responses_with_input_tools(item_type: str, *tools: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": "what's the weather"},
+            {"type": item_type, "tools": [dict(tool) for tool in tools]},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("item_type", _INPUT_ITEM_TYPES)
+async def test_panw_blocks_poisoned_tool_carried_in_a_responses_input_item(item_type: str) -> None:
+    data: Final = _responses_with_input_tools(item_type, _responses_tool(_schema(POISON)))
+
+    with pytest.raises(HTTPException) as blocked:
+        await _pre_call(_panw(scan_tool_descriptions_as_text=True), data, "aresponses")
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("item_type", _INPUT_ITEM_TYPES)
+async def test_panw_masking_rewrites_tool_in_a_responses_input_item_and_keeps_the_rest_of_the_input(
+    item_type: str,
+) -> None:
+    clean_tool: Final = _responses_tool(_schema("City to look up"))
+    data: Final = _responses_with_input_tools(item_type, _responses_tool(_schema(POISON)), clean_tool)
+
+    result: Final = await _pre_call(
+        _panw(scan_tool_descriptions_as_text=True, mask_request_content=True), data, "aresponses"
+    )
+
+    assert (
+        _REQUEST.validate_python(result)["input"]
+        == _responses_with_input_tools(item_type, _responses_tool(_schema("[REDACTED]")), clean_tool)["input"]
+    )
