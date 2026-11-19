@@ -89,7 +89,8 @@ class ProviderSpecificHeaderUtils:
         only when `model` names a Claude model, entries marked `non_claude_models_only` only when it does not,
         entries marked `yields_to_configured` never replace a header already in `configured_headers`, and
         entries listing `configured_credential_headers` contribute only when `configured_headers` carries one of them,
-        whose value starts with `configured_credential_prefix` when the entry sets one.
+        whose value starts with `configured_credential_prefix` when the entry sets one, under a name no other
+        applicable entry replaces.
 
         Returns:
             Dict: The provider specific headers for the given custom llm provider
@@ -103,14 +104,23 @@ class ProviderSpecificHeaderUtils:
 
         configured: Final[Mapping[str, object]] = configured_headers or {}
         configured_names: Final = frozenset(name.lower() for name in configured)
-        applicable: Final = (
+        applicable: Final = tuple(
             scoped_header
             for scoped_header in scoped_headers
             if _applies_to_call(scoped_header, custom_llm_provider, native_anthropic_messages, model)
-            and _configures_a_listed_credential(scoped_header, configured)
         )
+        replaced_names: Final = frozenset(
+            chain.from_iterable(
+                _contributed_headers(scoped_header, configured_names)
+                for scoped_header in applicable
+                if not scoped_header.get("configured_credential_headers")
+            )
+        )
+        kept_configured: Final = {name: value for name, value in configured.items() if name not in replaced_names}
         return dict(
             chain.from_iterable(
-                _contributed_headers(scoped_header, configured_names).items() for scoped_header in applicable
+                _contributed_headers(scoped_header, configured_names).items()
+                for scoped_header in applicable
+                if _configures_a_listed_credential(scoped_header, kept_configured)
             )
         )

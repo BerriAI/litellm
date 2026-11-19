@@ -8552,6 +8552,65 @@ async def test_a_caller_api_key_skips_the_pin_only_when_anthropic_receives_it(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["messages", "chat"])
+@pytest.mark.parametrize(
+    "deployment_header_name,sent_credential,sent_profile",
+    [
+        ("authorization", "Bearer sk-ant-oat01-caller", "uprof_client"),
+        ("Authorization", "Bearer sk-ant-oat01-deployment", "uprof_key"),
+    ],
+    ids=["caller_token_replaces_the_deployment_token", "deployment_token_wins_the_merge"],
+)
+async def test_the_pin_follows_the_oauth_token_that_survives_a_caller_scoped_authorization(
+    route: str, deployment_header_name: str, sent_credential: str, sent_profile: str
+) -> None:
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    caller_token: Final = "sk-ant-oat01-caller"
+    updated: Final = await _request_data_added_by_the_proxy(
+        {
+            "api_key": caller_token,
+            "provider_specific_header": {
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"authorization": f"Bearer {caller_token}"},
+            },
+        },
+        {USER_PROFILE_ID_HEADER: "uprof_client"},
+        {},
+        _PINNED_KEY,
+    )
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake Anthropic endpoint records what the proxy sent
+
+    def anthropic_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(status_code=200, json=dict(_ANTHROPIC_MESSAGE_REPLY), request=request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(anthropic_answers))
+    call: Final[dict[str, object]] = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": "Say OK"}],
+        "max_tokens": 8,
+        "api_key": caller_token,
+        "extra_headers": {deployment_header_name: "Bearer sk-ant-oat01-deployment"},
+        "client": upstream,
+        "provider_specific_header": updated["provider_specific_header"],
+    }
+    try:
+        if route == "chat":
+            await litellm.acompletion(**call)
+        else:
+            await litellm.anthropic.messages.acreate(**call)
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1
+    assert received[0].headers.get_list("authorization") == [sent_credential]
+    assert received[0].headers.get_list("anthropic-user-profile-id") == [sent_profile]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "deployment_headers,sent_profile",
     [
