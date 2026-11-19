@@ -6690,6 +6690,29 @@ async def test_custom_pass_through_preserves_json_rpc_request_id(request_id: int
     assert upstream_body == body
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guardrails_config", [None, {"pii-guard": {}}], ids=["no-guardrail", "guardrail-on-the-route"])
+async def test_custom_pass_through_keeps_litellm_metadata_out_of_the_upstream_body(
+    guardrails_config: dict[str, object] | None,
+) -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="pii-guard", event_hook=GuardrailEventHooks.pre_call)
+    body: Final = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {},
+        "metadata": {"note": "never scanned by the guardrail"},
+        "litellm_metadata": {"tags": ["team-a"]},
+    }
+
+    with patch.object(litellm, "callbacks", [guardrail]):
+        upstream_body: Final = await _relay_through_pass_through(
+            body, "http://upstream.test/mcp", guardrails_config=guardrails_config, custom_endpoint=True
+        )
+
+    assert upstream_body == {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}}
+
+
 _MESSAGES_BODY: Final = MappingProxyType(
     {"model": "claude-sonnet-4-5", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}
 )
@@ -6704,6 +6727,7 @@ def no_configured_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize("custom_endpoint", [False, True], ids=["provider-route", "configured-route"])
 @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
 @pytest.mark.parametrize(
     "client_metadata, target, forwarded_metadata",
@@ -6751,14 +6775,20 @@ def no_configured_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
     ],
 )
 async def test_pass_through_forwards_only_an_acceptable_user_id_to_anthropic_messages(
-    stream: bool, client_metadata: object, target: str, forwarded_metadata: Mapping[str, object] | None
+    custom_endpoint: bool,
+    stream: bool,
+    client_metadata: object,
+    target: str,
+    forwarded_metadata: Mapping[str, object] | None,
 ) -> None:
     client_body: Final = MappingProxyType(
         {**_MESSAGES_BODY, "metadata": client_metadata, **({"stream": True} if stream else {})}
     )
     body_without_metadata: Final = {k: v for k, v in client_body.items() if k != "metadata"}
 
-    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
+    relayed: Final = await _relay_through_pass_through(
+        client_body, target, guardrails_config=None, custom_endpoint=custom_endpoint
+    )
 
     assert relayed == (
         body_without_metadata if forwarded_metadata is None else {**body_without_metadata, "metadata": forwarded_metadata}
@@ -6812,6 +6842,7 @@ async def test_pass_through_caps_the_user_id_for_a_configured_anthropic_compatib
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize("custom_endpoint", [False, True], ids=["provider-route", "configured-route"])
 @pytest.mark.parametrize(
     "default_on, event_hook, guardrails_config, client_fields, stream_scope, forwarded",
     [
@@ -6842,6 +6873,7 @@ async def test_pass_through_caps_the_user_id_for_a_configured_anthropic_compatib
     ],
 )
 async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
+    custom_endpoint: bool,
     default_on: bool,
     event_hook: GuardrailEventHooks,
     guardrails_config: dict[str, object] | None,
@@ -6857,7 +6889,7 @@ async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
 
     with patch.object(litellm, "callbacks", [guardrail]):
         relayed: Final = await _relay_through_pass_through(
-            client_body, _ANTHROPIC_MESSAGES, guardrails_config=guardrails_config
+            client_body, _ANTHROPIC_MESSAGES, guardrails_config=guardrails_config, custom_endpoint=custom_endpoint
         )
 
     assert relayed == (
