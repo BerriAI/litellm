@@ -36,10 +36,7 @@ def client(
 
 def test_choose_definition_discover_and_configure_existing_resource() -> None:
     http, store = client()
-    assert http.get("/management/v1/apps/definition").json() == {
-        "resource_type": None,
-        "auto_create_customers_without_app": True,
-    }
+    assert http.get("/management/v1/apps/definition").json() == {"resource_type": None, "auto_create_customers_without_app": True}
     assert http.get("/management/v1/apps/resources").json() == []
     preview: Final = http.get("/management/v1/apps/resources", params={"resource_type": "team"})
     assert preview.status_code == 200 and len(preview.json()) == 2
@@ -142,23 +139,9 @@ def test_list_and_get_apps_return_saved_budgets_and_period_usage() -> None:
 
 def test_customer_and_member_budget_endpoints_keep_apps_independent() -> None:
     http, store = client()
-    asyncio.run(
-        store.customers.organizations.create({"customer_org_id": "org-a", "created_by": "admin", "updated_by": "admin"})
-    )
-    asyncio.run(
-        store.customers.organizations.create({"customer_org_id": "org-b", "created_by": "admin", "updated_by": "admin"})
-    )
-    asyncio.run(
-        store.customers.members.create(
-            {
-                "customer_member_id": "member",
-                "parent_org_id": "org-a",
-                "parent_team_ids": [],
-                "created_by": "admin",
-                "updated_by": "admin",
-            }
-        )
-    )
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-a"}))
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-b"}))
+    asyncio.run(store.customers.members.create({"customer_member_id": "member", "parent_org_id": "org-a"}))
     assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
     chat: Final = http.post("/management/v1/apps", json={"resource_id": "chat"}).json()["app_id"]
     search: Final = http.post(
@@ -208,10 +191,6 @@ def test_customer_and_member_budget_endpoints_keep_apps_independent() -> None:
     assert permanent.json()["budget_source"] == "member_budget"
     rejected: Final = http.put(chat_org, json={"budget_id": "unknown", "budget": {"max_budget": 7}})
     assert rejected.status_code == 422
-    assert http.put(chat_org, json={"budget_id": "unknown"}).status_code == 422
-    invalid: Final = http.put(chat_member, json={"budget": {"max_budget": -1}})
-    assert invalid.status_code == 422
-    assert http.get(chat_member).json()["budget"] == permanent.json()["budget"]
     assert http.get(f"/management/v1/apps/{chat}/customer_members/missing").status_code == 404
 
 

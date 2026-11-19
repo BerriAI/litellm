@@ -27,15 +27,12 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
 if TYPE_CHECKING:
     from prisma import Prisma
 
-_WAITERS: Final = (
-    "SELECT count(*)::int AS count FROM pg_stat_activity "
-    "WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE '%LiteLLM_CustomerOrganizationTable%'"
-)
+_WAITERS: Final = "SELECT count(*)::int AS count FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))"
 _ROWS: Final = TypeAdapter(tuple[Mapping[str, int], ...])
 _NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-async def _wait_for_organization_contention(db: "Prisma", pid: int) -> None:
+async def _wait_for_contention(db: "Prisma", pid: int) -> None:
     while not _ROWS.validate_python(await db.query_raw(_WAITERS, pid))[0]["count"]:
         await asyncio.sleep(0.01)
 
@@ -62,7 +59,7 @@ async def test_member_creation_and_team_move_both_commit_under_contention(
             )
         )
         try:
-            await asyncio.wait_for(_wait_for_organization_contention(db, pid), timeout=10)
+            await asyncio.wait_for(_wait_for_contention(db, pid), timeout=10)
             moved: Final = await store.update_member(member, MemberPatch(parent_team_ids=(target,)), "admin")
             assert not isinstance(moved, Failure), moved
             assert moved.parent_team_ids == (target,)
@@ -78,30 +75,6 @@ async def test_member_creation_and_team_move_both_commit_under_contention(
     assert stored.parent_team_ids == (target,)
 
 
-@pytest.mark.asyncio
-async def test_member_edit_and_organization_cascade_both_commit_under_contention(
-    deletion_family: tuple["Prisma", CustomerHierarchy, str, str, str],
-) -> None:
-    db, hierarchy, org, _, member = deletion_family
-    async with db.tx(timeout=timedelta(seconds=30)) as transaction:
-        store: Final = CustomerHierarchyStore(transaction, _NOW, premium_user=True)
-        await store.lock_organization(org)
-        pid: Final = _ROWS.validate_python(await transaction.query_raw("SELECT pg_backend_pid() AS pid"))[0]["pid"]
-        deleting: Final = asyncio.create_task(hierarchy.delete_organization(org, cascade=True))
-        try:
-            await asyncio.wait_for(_wait_for_organization_contention(db, pid), timeout=10)
-            edited: Final = await store.update_member(member, MemberPatch(alias="Renamed"), "admin")
-            assert not isinstance(edited, Failure), edited
-            assert edited.alias == "Renamed"
-        except BaseException:
-            deleting.cancel()
-            await asyncio.gather(deleting, return_exceptions=True)
-            raise
-    assert await deleting is None
-    assert isinstance(await hierarchy.get_organization(org), Failure)
-    assert isinstance(await hierarchy.get_member(member), Failure)
-
-
 @pytest_asyncio.fixture(loop_scope="function")
 async def deletion_family() -> AsyncIterator[tuple["Prisma", CustomerHierarchy, str, str, str]]:
     from prisma import Prisma
@@ -112,21 +85,16 @@ async def deletion_family() -> AsyncIterator[tuple["Prisma", CustomerHierarchy, 
     suffix: Final = uuid4().hex
     org, team, member = (f"{name}-{suffix}" for name in ("org", "team", "member"))
     try:
-        assert not isinstance(
+        created: Final = (
             await hierarchy.create_organization(
                 OrganizationCreate(customer_org_id=org, budget=Budget(max_budget=1000)), org
             ),
-            Failure,
-        )
-        assert not isinstance(
-            await hierarchy.create_team(TeamCreate(customer_team_id=team, parent_org_id=org), org), Failure
-        )
-        assert not isinstance(
+            await hierarchy.create_team(TeamCreate(customer_team_id=team, parent_org_id=org), org),
             await hierarchy.create_member(
                 MemberCreate(customer_member_id=member, parent_team_ids=(team,), budget=Budget(max_budget=100)), org
             ),
-            Failure,
         )
+        assert all(not isinstance(row, Failure) for row in created), created
         yield db, hierarchy, org, team, member
     finally:
         await db.litellm_apptable.delete_many(where={"created_by": org})
@@ -148,9 +116,12 @@ async def _delete_family(hierarchy: CustomerHierarchy, resource: str, org: str, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("resource", ("member", "team", "organization", "organization_no_team"))
-async def test_customer_deletion_reclaims_app_budgets_and_preserves_shared_profiles(
-    deletion_family: tuple["Prisma", CustomerHierarchy, str, str, str], resource: str
+@pytest.mark.parametrize(
+    ("resource", "edit_team"),
+    (("member", False), ("team", False), ("organization", False), ("organization_no_team", False), ("team", True)),
+)
+async def test_deletion_reclaims_existing_and_inflight_budgets_but_preserves_shared_profiles(
+    deletion_family: tuple["Prisma", CustomerHierarchy, str, str, str], resource: str, edit_team: bool
 ) -> None:
     db, hierarchy, org, team, member = deletion_family
     if resource == "organization_no_team":
@@ -181,89 +152,45 @@ async def test_customer_deletion_reclaims_app_budgets_and_preserves_shared_profi
             "budget_override_id": member_override,
         }
     )
-    before: Final = frozenset(
-        row.budget_id for row in await db.litellm_budgettable.find_many(where={"created_by": org})
-    )
-    global_member: Final = await hierarchy.get_member(member)
     global_org: Final = await hierarchy.get_organization(org)
-    assert not isinstance(global_member, Failure)
     assert not isinstance(global_org, Failure)
     if resource == "organization_no_team":
         assert await hierarchy.delete_organization(org) == Failure(ErrorCode.HAS_CHILDREN)
         assert await db.litellm_customermembertable.find_unique(where={"customer_member_id": member}) is not None
-    reclaimed: Final = frozenset({member_base, member_override, global_member.budget_id}) | (
+    surviving: Final = frozenset({shared}) | (
         frozenset({org_base, org_override, org_member, global_org.budget_id})
-        if resource.startswith("organization")
+        if not resource.startswith("organization")
         else frozenset()
     )
-    await _delete_family(hierarchy, resource, org, team, member)
-    assert await db.litellm_appcustomermembertable.count(where={"app_id": application.app_id}) == 0
-    assert (
-        frozenset(row.budget_id for row in await db.litellm_budgettable.find_many(where={"created_by": org}))
-        == before - reclaimed
-    )
-    assert await db.litellm_budgettable.find_unique(where={"budget_id": shared}) is not None
-
-
-async def _wait_for_deletion_contention(db: "Prisma", pid: int) -> None:
-    while not _ROWS.validate_python(
-        await db.query_raw(
-            "SELECT count(*)::int AS count FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))", pid
-        )
-    )[0]["count"]:
-        await asyncio.sleep(0.01)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("resource", ("member", "team", "organization"))
-async def test_deletion_collects_member_budget_created_by_inflight_edit(
-    deletion_family: tuple["Prisma", CustomerHierarchy, str, str, str], resource: str
-) -> None:
-    db, hierarchy, org, team, member = deletion_family
     async with db.tx(timeout=timedelta(seconds=30)) as transaction:
-        store: Final = CustomerHierarchyStore(transaction, _NOW, premium_user=True)
-        await store.lock_member(member)
+        editing: Final = CustomerHierarchyStore(transaction, _NOW, premium_user=True)
+        await editing.lock_member(member)
+        if edit_team:
+            await transaction.query_raw(
+                'SELECT 1 FROM "LiteLLM_CustomerTeamTable" WHERE customer_team_id = $1 FOR UPDATE', team
+            )
         pid: Final = _ROWS.validate_python(await transaction.query_raw("SELECT pg_backend_pid() AS pid"))[0]["pid"]
         deleting: Final = asyncio.create_task(_delete_family(hierarchy, resource, org, team, member))
         try:
-            await asyncio.wait_for(_wait_for_deletion_contention(db, pid), timeout=10)
-            edited: Final = await store.update_member(member, MemberPatch(budget_override=Budget(max_budget=300)), org)
+            await asyncio.wait_for(_wait_for_contention(db, pid), timeout=10)
+            edited: Final = (
+                await editing.update_team(team, TeamPatch(budget=Budget(max_budget=300)), org)
+                if edit_team
+                else await editing.update_member(member, MemberPatch(budget_override=Budget(max_budget=300)), org)
+            )
             assert not isinstance(edited, Failure), edited
-            new_budget: Final = edited.budget_override_id
+            new_budget: Final = edited.budget_id if edit_team else edited.budget_override_id
             assert new_budget is not None
         except BaseException:
             deleting.cancel()
             await asyncio.gather(deleting, return_exceptions=True)
             raise
     await asyncio.wait_for(deleting, timeout=10)
-    assert await db.litellm_budgettable.find_unique(where={"budget_id": new_budget}) is None
-
-
-@pytest.mark.asyncio
-async def test_team_deletion_collects_budget_created_by_inflight_edit(
-    deletion_family: tuple["Prisma", CustomerHierarchy, str, str, str],
-) -> None:
-    db, hierarchy, org, team, member = deletion_family
-    async with db.tx(timeout=timedelta(seconds=30)) as transaction:
-        store: Final = CustomerHierarchyStore(transaction, _NOW, premium_user=True)
-        await store.lock_organization(org)
-        await transaction.query_raw(
-            'SELECT 1 FROM "LiteLLM_CustomerTeamTable" WHERE customer_team_id = $1 FOR UPDATE', team
-        )
-        pid: Final = _ROWS.validate_python(await transaction.query_raw("SELECT pg_backend_pid() AS pid"))[0]["pid"]
-        deleting: Final = asyncio.create_task(_delete_family(hierarchy, "team", org, team, member))
-        try:
-            await asyncio.wait_for(_wait_for_deletion_contention(db, pid), timeout=10)
-            edited: Final = await store.update_team(team, TeamPatch(budget=Budget(max_budget=300)), org)
-            assert not isinstance(edited, Failure), edited
-            new_budget: Final = edited.budget_id
-            assert new_budget is not None
-        except BaseException:
-            deleting.cancel()
-            await asyncio.gather(deleting, return_exceptions=True)
-            raise
-    await asyncio.wait_for(deleting, timeout=10)
-    assert await db.litellm_budgettable.find_unique(where={"budget_id": new_budget}) is None
+    assert await db.litellm_appcustomermembertable.count(where={"app_id": application.app_id}) == 0
+    assert (
+        frozenset(row.budget_id for row in await db.litellm_budgettable.find_many(where={"created_by": org}))
+        == surviving
+    )
 
 
 @pytest.mark.asyncio

@@ -14,110 +14,6 @@ REQUESTS: Final = "/management/v1/customer_budget_increase_requests"
 EXPIRES: Final = "2026-02-01T00:00:00Z"
 
 
-def _approve_increase(http: TestClient, member_id: str, expires_at: str = EXPIRES) -> None:
-    requested: Final = http.post(
-        REQUESTS,
-        json={"customer_member_id": member_id, "requested_max_budget": 1000, "expires_at": expires_at},
-    )
-    assert requested.status_code == 201, requested.text
-    approved: Final = http.put(f"{REQUESTS}/{requested.json()['request_id']}/approve")
-    assert approved.status_code == 200, approved.text
-
-
-@pytest.mark.parametrize("field", ("budget", "budget_override"))
-def test_temporary_increase_restores_the_members_custom_budget_after_expiry(field: str) -> None:
-    database: Final = Database()
-    http: Final = client(database=database)
-    member_id: Final = _paused_member(http, "pause_allow_increase")
-    custom: Final = http.patch(
-        f"/management/v1/customer_members/{member_id}",
-        json={
-            field: {
-                "max_budget": 750,
-                "budget_duration": "30d",
-                "tpm_limit": 1700,
-                "rpm_limit": 17,
-                "allowed_models": ["test-model"],
-                "cap_policy": "pause_allow_increase",
-            }
-        },
-    )
-    assert custom.status_code == 200, custom.text
-    original: Final = custom.json()["effective_budget"]
-    _approve_increase(http, member_id)
-    active: Final = http.get(f"/management/v1/customer_members/{member_id}").json()
-    assert active["effective_budget"] == {**original, "max_budget": 1000}
-    assert active["budget_id"] != active["budget_override_id"]
-    later: Final = client(database=database, now=NOW + timedelta(days=32))
-    expired: Final = later.get(f"/management/v1/customer_members/{member_id}").json()
-    assert expired["effective_budget"] == original
-    assert expired["budget_reset_at"] == custom.json()["budget_reset_at"]
-
-
-def test_editing_base_limits_preserves_the_active_grant_and_its_expiry() -> None:
-    database: Final = Database()
-    http: Final = client(database=database)
-    member_id: Final = _paused_member(http, "pause_allow_increase")
-    custom: Final = http.patch(
-        f"/management/v1/customer_members/{member_id}",
-        json={
-            "budget": {
-                "budget_limits": [
-                    {"budget_duration": "1mo", "max_budget": 750},
-                    {"budget_duration": "12mo", "max_budget": 8000},
-                ],
-                "rpm_limit": 17,
-                "cap_policy": "pause_allow_increase",
-            }
-        },
-    )
-    assert custom.status_code == 200, custom.text
-    _approve_increase(http, member_id)
-    active: Final = http.get(f"/management/v1/customer_members/{member_id}").json()
-    edited: Final = http.patch(f"/management/v1/customer_members/{member_id}", json={"budget": {"rpm_limit": 23}})
-    assert edited.status_code == 200, edited.text
-    assert edited.json()["budget_id"] == active["budget_id"]
-    assert edited.json()["budget_override_id"] == active["budget_override_id"]
-    assert edited.json()["budget_override"] == active["budget_override"]
-    assert edited.json()["budget_override_expires_at"] == EXPIRES
-    assert edited.json()["effective_budget"]["max_budget"] == 1000
-    later: Final = client(database=database, now=NOW + timedelta(days=32))
-    expired: Final = later.get(f"/management/v1/customer_members/{member_id}").json()
-    assert expired["effective_budget"] == {**custom.json()["budget"], "rpm_limit": 23}
-
-
-@pytest.mark.parametrize("maximum", (None, 750))
-def test_preserving_legacy_custom_budget_keeps_existing_increases_temporary(maximum: int | None) -> None:
-    database: Final = Database()
-    http: Final = client(database=database)
-    member_id: Final = _paused_member(http, "pause_allow_increase")
-    custom: Final = http.patch(
-        f"/management/v1/customer_members/{member_id}",
-        json={"budget_override": {"max_budget": maximum, "rpm_limit": 17}},
-    )
-    assert custom.status_code == 200, custom.text
-    original: Final = custom.json()["effective_budget"]
-    asyncio.run(
-        database.litellm_budgettable.update(
-            where={"budget_id": custom.json()["budget_override_id"]},
-            data={"temp_budget_increase": 50, "temp_budget_expiry": NOW + timedelta(days=3)},
-        )
-    )
-    _approve_increase(http, member_id, (NOW + timedelta(days=1)).isoformat())
-    promoted: Final = http.get(f"/management/v1/customer_members/{member_id}").json()
-    assert promoted["budget"] == original
-    assert promoted["budget_id"] == custom.json()["budget_override_id"]
-    assert promoted["effective_budget"]["max_budget"] == 1000
-    first_expired: Final = client(database=database, now=NOW + timedelta(days=2)).get(
-        f"/management/v1/customer_members/{member_id}"
-    )
-    assert first_expired.json()["effective_budget"] == {**original, "max_budget": original["max_budget"] + 50}
-    both_expired: Final = client(database=database, now=NOW + timedelta(days=4)).get(
-        f"/management/v1/customer_members/{member_id}"
-    )
-    assert both_expired.json()["effective_budget"] == original
-
-
 def _as(http: TestClient, caller: UserAPIKeyAuth) -> TestClient:
     http.app.dependency_overrides[user_api_key_auth] = lambda: caller  # pyright: ignore[reportAttributeAccessIssue]  # TestClient.app is the FastAPI app
     return http
@@ -152,9 +48,30 @@ def _paused_member(http: TestClient, cap_policy: str | None) -> str:
     return "paused-member"
 
 
-def test_request_waits_for_review_and_an_approval_lands_as_the_members_override() -> None:
-    http: Final = client()
+@pytest.mark.parametrize(
+    "field,maximum", ((None, 100), ("budget", 150), ("budget_override", None), ("budget_override", 150))
+)
+def test_request_waits_for_review_and_an_approval_lands_as_the_members_override(
+    field: str | None, maximum: int | None
+) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
     member_id: Final = _paused_member(http, "pause_allow_increase")
+    path: Final = f"/management/v1/customer_members/{member_id}"
+    policy: Final = {
+        "max_budget": maximum,
+        "rpm_limit": 17,
+        "model_rpm_limit": {"model": 5},
+        "budget_limits": [{"budget_duration": "12mo", "max_budget": 8000}],
+    }
+    original: Final = (http.patch(path, json={field: policy}) if field else http.get(path)).json()
+    if field == "budget_override":
+        asyncio.run(
+            database.litellm_budgettable.update(
+                where={"budget_id": original["budget_override_id"]},
+                data={"temp_budget_increase": 50, "temp_budget_expiry": NOW + timedelta(days=35)},
+            )
+        )
     filed: Final = http.post(
         REQUESTS,
         json={
@@ -189,6 +106,18 @@ def test_request_waits_for_review_and_an_approval_lands_as_the_members_override(
     again: Final = http.put(f"{REQUESTS}/{request_id}/approve")
     assert again.status_code == 409, again.text
     assert http.get(REQUESTS, params={"status": "pending_review"}).json()["meta"]["total_count"] == 0
+    edited: Final = http.patch(path, json={"budget": {"rpm_limit": 23}}).json()
+    assert edited["budget_override"] == member.json()["budget_override"]
+    assert edited["budget_override_id"] == member.json()["budget_override_id"]
+    assert edited["budget_override_expires_at"] == EXPIRES
+    assert edited["budget_reset_at"] == original["budget_reset_at"]
+    for days, increase in ((32, 50 if field == "budget_override" else 0), (36, 0)):
+        expired: Final = client(database=database, now=NOW + timedelta(days=days)).get(path).json()
+        assert expired["effective_budget"] == {
+            **original["effective_budget"],
+            "rpm_limit": 23,
+            "max_budget": original["effective_budget"]["max_budget"] + increase,
+        }
 
 
 def test_rejection_keeps_the_member_paused_and_records_the_notes() -> None:

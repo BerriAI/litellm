@@ -46,8 +46,7 @@ export const appBudgetValue = (fields: AppBudgetFields, original?: Budget | null
     windows.push({ ...window.budget, max_budget: parsedWindow.max_budget });
   }
   const value: Budget = original == null ? enteredBudget(parsed) : { ...original, ...parsed, budget_limits: null };
-  if (windows.length) value.budget_limits = windows;
-  return { ok: true, value } as const;
+  return { ok: true, value: windows.length ? { ...value, budget_limits: windows } : value } as const;
 };
 
 const MAX_SURCHARGE_PERCENT = 1000;

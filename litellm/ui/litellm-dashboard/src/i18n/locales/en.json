@@ -21060,6 +21060,7 @@
       "invalidNumber": "Enter finite, non-negative limits. Rate limits must be whole numbers.",
       "invalidExpiry": "Enter a valid expiry date and time.",
       "budgetRequired": "Select a budget template or enable an override for this customer member.",
+      "conflictingBudgetSources": "Save the selected preset first, then set custom limits.",
       "createTeam": "Create customer team",
       "createMember": "Create customer member",
       "createTeamHint": "Customer organization: {{organization}}",

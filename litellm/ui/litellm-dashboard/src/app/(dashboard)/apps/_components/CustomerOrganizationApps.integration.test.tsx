@@ -33,6 +33,9 @@ const assignedBudget = {
   tier_budget_id: "standard",
   spend: 5,
   effective_budget: {
+    tpm_limit: 1700,
+    rpm_limit: 17,
+    allowed_models: ["test-model"],
     budget_limits: [
       { budget_duration: "1mo", max_budget: 100 },
       { budget_duration: "12mo", max_budget: 1000 },
@@ -97,54 +100,6 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("customer app budgets", () => {
-  it("should send only entered first-custom fields when leaving an app organization preset", async () => {
-    bound = true;
-    assigned = true;
-    customAssociation = {
-      ...assignedBudget,
-      budget_id: "standard",
-      budget: null,
-      effective_budget: {
-        ...assignedBudget.effective_budget,
-        tpm_limit: 1700,
-        rpm_limit: 17,
-        allowed_models: ["test-model"],
-      },
-    };
-    const user = userEvent.setup();
-    render(<CustomerOrganizationApps organizationId="org-1" />);
-    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
-    await chooseAppOption(user, screen.getByRole("combobox", { name: "Budget source" }), "Custom budget");
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "0" } });
-    await user.click(screen.getByRole("button", { name: "Save app budget" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
-      budget: { max_budget: 0 },
-      customer_member_budget: null,
-    });
-  });
-
-  it.each([
-    { source: "expired grant", expiry: "2000-01-01T00:00:00Z", label: "Standard · Monthly" },
-    { source: "active grant", expiry: "2099-01-01T00:00:00Z", label: "Standard · Monthly" },
-    { source: "legacy override", expiry: null, label: "Custom budget · Monthly" },
-  ])("should label a $source as $label", async ({ expiry, label }) => {
-    bound = true;
-    assigned = true;
-    customAssociation = {
-      ...assignedBudget,
-      ...(expiry === null ? {} : { budget_id: "standard", budget: null }),
-      budget_override_id: expiry === null ? "legacy-1" : "grant-1",
-      budget_override: { max_budget: 200 },
-      budget_override_expires_at: expiry,
-    };
-    render(<CustomerOrganizationApps organizationId="org-1" />);
-    await screen.findByRole("button", { name: "Edit budget for chat" });
-    const table = within(screen.getByRole("table", { name: "App budgets" }));
-    expect(table.getByText(label)).toBeInTheDocument();
-    expect(table.queryAllByText(/Custom budget/)).toHaveLength(expiry === null ? 1 : 0);
-  });
-
   it("should show recorded period usage separately from cumulative spend", async () => {
     bound = true;
     assigned = true;
@@ -171,13 +126,21 @@ describe("customer app budgets", () => {
     expect(table.getByRole("button", { name: "Budget details" })).toBeInTheDocument();
     expect(table.getByText("$93.00 remaining")).toBeInTheDocument();
   });
-  it("should summarize the monthly group limit with additional limits in details", async () => {
+  const expiries = [undefined, "2000-01-01T00:00:00Z", "2099-01-01T00:00:00Z", null];
+  it.each(expiries)("summarizes monthly limits and source with override expiry %s", async (expiry) => {
     bound = true;
     assigned = true;
+    customAssociation = {
+      ...assignedBudget,
+      budget_override_id: expiry === undefined ? null : "override-1",
+      budget_override: expiry === undefined ? null : { max_budget: 200 },
+      budget_override_expires_at: expiry,
+    };
     render(<CustomerOrganizationApps organizationId="org-1" />);
     await screen.findByRole("button", { name: "Edit budget for chat" });
     const table = within(screen.getByRole("table", { name: "App budgets" }));
     expect(table.getByText("$100.00")).toBeInTheDocument();
+    expect(table.getByText(expiry === null ? "Custom budget · Monthly" : "Standard · Monthly")).toBeInTheDocument();
     expect(table.queryByText("$1,000.00")).not.toBeInTheDocument();
     expect(table.getByRole("button", { name: "Budget details" })).toBeInTheDocument();
     expect(table.queryByText("No spend limit")).not.toBeInTheDocument();
@@ -239,63 +202,46 @@ describe("customer app budgets", () => {
     expect(requests.every((request) => request.method === "GET")).toBe(true);
   });
 
-  it("should save a custom budget without creating a tier or changing the global customer budget", async () => {
+  it.each(["new", "preset", "custom", "legacy", "temporary"])("saves app org custom limits from %s", async (source) => {
+    bound = source !== "new";
+    assigned = source !== "new";
+    const legacy = source === "legacy";
+    const temporary = source === "temporary";
+    customAssociation = {
+      ...assignedBudget,
+      budget_id: source === "preset" ? "standard" : null,
+      budget: source === "custom" || temporary ? { max_budget: 5 } : null,
+      budget_override: legacy || temporary ? { max_budget: legacy ? 5 : 20 } : null,
+      budget_override_id: legacy || temporary ? "override" : null,
+      budget_override_expires_at: temporary ? "2099-01-01T00:00:00Z" : null,
+    };
     const user = userEvent.setup();
     render(<CustomerOrganizationApps organizationId="org-1" />);
-    await user.click(await screen.findByRole("button", { name: "Add app budget" }));
-    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "search");
+    if (source === "new") {
+      await user.click(await screen.findByRole("button", { name: "Add app budget" }));
+      await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "search");
+    } else await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
     await chooseAppOption(user, screen.getByRole("combobox", { name: "Budget source" }), "Custom budget");
+    if (source !== "new" && source !== "preset") {
+      expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(5);
+    }
+    const value = source === "preset" ? "0" : "100";
     act(() => {
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "100" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value } });
     });
-    act(() => {
+    if (source === "new") {
       fireEvent.change(screen.getByRole("textbox", { name: "Reset period" }), { target: { value: "1mo" } });
-    });
+    }
     await user.click(screen.getByRole("button", { name: "Save app budget" }));
     await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toMatchObject({
-      budget: { max_budget: 100, budget_duration: "1mo" },
+    const expected = { max_budget: 100, ...(source === "new" ? { budget_duration: "1mo" } : {}) };
+    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+      budget: source === "preset" ? { max_budget: 0 } : expect.objectContaining(expected),
+      customer_member_budget: null,
+      ...(legacy ? { budget_override: null } : {}),
     });
     expect(requests.some((request) => request.method === "PATCH")).toBe(false);
   });
-
-  it.each(["custom", "legacy", "temporary"])(
-    "should save a private org budget and preserve temporary overrides %s",
-    async (source) => {
-      bound = true;
-      assigned = true;
-      const legacy = source === "legacy";
-      const temporary = source === "temporary";
-      customAssociation = {
-        ...assignedBudget,
-        budget_id: legacy ? null : "private",
-        budget: legacy ? null : { max_budget: 5 },
-        budget_override: legacy || temporary ? { max_budget: legacy ? 5 : 20 } : null,
-        budget_override_id: legacy || temporary ? "override" : null,
-        budget_override_expires_at: temporary ? "2027-01-01T00:00:00Z" : null,
-      };
-      const user = userEvent.setup();
-      render(<CustomerOrganizationApps organizationId="org-1" />);
-      await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
-      expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(5);
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "7" } });
-      await user.click(screen.getByRole("button", { name: "Save app budget" }));
-      await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-      expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
-        budget: {
-          max_budget: 7,
-          soft_budget: null,
-          tpm_limit: null,
-          rpm_limit: null,
-          budget_duration: null,
-          allowed_models: null,
-          budget_limits: null,
-        },
-        customer_member_budget: null,
-        ...(legacy ? { budget_override: null } : {}),
-      });
-    },
-  );
 
   it("should keep association read failures visible instead of overwriting an unknown budget", async () => {
     bound = true;

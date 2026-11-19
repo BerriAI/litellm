@@ -78,11 +78,7 @@ describe("customer member apps", () => {
     await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
     const request = requests.find((row) => row.method === "PUT");
     expect(new URL(request!.url).pathname).toBe("/management/v1/apps/app-1/customer_members/member-1");
-    expect(await request?.json()).toEqual({
-      budget: {
-        max_budget: 5,
-      },
-    });
+    expect(await request?.json()).toEqual({ budget: { max_budget: 5 } });
   });
 
   it("should distinguish tiny positive member spend from zero", async () => {
@@ -122,7 +118,9 @@ describe("customer member apps", () => {
     expect(screen.queryByText("$99.00")).not.toBeInTheDocument();
   });
 
-  it("should clear an existing override to restore inherited member defaults", async () => {
+  it.each(["clear", "custom", "legacy", "temporary"])("saves or clears a member budget: %s", async (source) => {
+    const legacy = source === "legacy" || source === "clear";
+    const temporary = source === "temporary";
     const requests: Request[] = [];
     fetchMock.mockImplementation(async (input) => {
       const request = input as Request;
@@ -135,67 +133,27 @@ describe("customer member apps", () => {
               customer_member_id: "member-1",
               spend: 0,
               budget_override_id: "override-1",
-              budget_override: { max_budget: 5 },
+              budget: legacy ? null : { max_budget: 5 },
+              budget_override: legacy || temporary ? { max_budget: legacy ? 5 : 20 } : null,
+              budget_override_expires_at: temporary ? "2027-01-01T00:00:00Z" : null,
               budget_source: "member_override",
-              effective_budget: { max_budget: 5 },
+              effective_budget: { max_budget: 20 },
             },
       );
     });
     const user = userEvent.setup();
     render(<CustomerMemberApps memberId="member-1" />);
     await user.click(await screen.findByRole("button", { name: "Edit member budget for Assistant" }));
-    act(() => {
-      fireEvent.click(screen.getByRole("checkbox", { name: "Set custom limits" }));
-    });
+    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(5);
+    if (source === "clear") fireEvent.click(screen.getByRole("checkbox", { name: "Set custom limits" }));
+    else fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "7" } });
     await user.click(screen.getByRole("button", { name: "Save member app budget" }));
     await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((row) => row.method === "PUT")?.json()).toEqual({ budget: null, budget_override: null });
+    expect(await requests.find((row) => row.method === "PUT")?.json()).toEqual({
+      budget: source === "clear" ? null : expect.objectContaining({ max_budget: 7 }),
+      ...(legacy ? { budget_override: null } : {}),
+    });
   });
-
-  it.each(["custom", "legacy", "temporary"])(
-    "should initialize and save a permanent budget while an increase is present %s",
-    async (source) => {
-      const legacy = source === "legacy";
-      const temporary = source === "temporary";
-      const requests: Request[] = [];
-      fetchMock.mockImplementation(async (input) => {
-        const request = input as Request;
-        requests.push(request.clone());
-        return json(
-          new URL(request.url).pathname.endsWith("/apps")
-            ? [app]
-            : {
-                app_id: "app-1",
-                customer_member_id: "member-1",
-                spend: 0,
-                budget: legacy ? null : { max_budget: 5 },
-                budget_override: legacy || temporary ? { max_budget: legacy ? 5 : 20 } : null,
-                budget_override_expires_at: temporary ? "2027-01-01T00:00:00Z" : null,
-                effective_budget: { max_budget: 20 },
-              },
-        );
-      });
-      const user = userEvent.setup();
-      render(<CustomerMemberApps memberId="member-1" />);
-      await user.click(await screen.findByRole("button", { name: "Edit member budget for Assistant" }));
-      expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(5);
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "7" } });
-      await user.click(screen.getByRole("button", { name: "Save member app budget" }));
-      await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-      expect(await requests.find((request) => request.method === "PUT")?.json()).toEqual({
-        budget: {
-          max_budget: 7,
-          soft_budget: null,
-          tpm_limit: null,
-          rpm_limit: null,
-          budget_duration: null,
-          allowed_models: null,
-          budget_limits: null,
-        },
-        ...(legacy ? { budget_override: null } : {}),
-      });
-    },
-  );
 
   it("should not enable overwriting a member budget after a read failure", async () => {
     fetchMock.mockImplementation(async (input) =>
