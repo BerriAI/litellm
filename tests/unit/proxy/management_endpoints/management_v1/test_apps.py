@@ -291,10 +291,17 @@ def test_customer_and_member_budget_endpoints_keep_apps_independent() -> None:
     assert override.json()["budget_source"] == "member_override"
     assert http.get(search_member).json() == override.json()
     assert http.get(chat_member).json() == inherited.json()
-    restored: Final = http.put(search_member, json={})
+    restored: Final = http.put(search_member, json={"budget_override": None})
     assert restored.status_code == 200
     assert restored.json()["effective_budget"] == Budget(max_budget=20, allowed_models=()).model_dump(mode="json")
     assert restored.json()["budget_source"] == "app_default"
+    permanent: Final = http.put(chat_member, json={"budget": {"max_budget": 7}})
+    assert permanent.status_code == 200, permanent.text
+    assert permanent.json()["budget"] == Budget(max_budget=7, allowed_models=()).model_dump(mode="json")
+    assert http.get(search_member).json()["budget"] is None
+    assert permanent.json()["budget_source"] == "member_budget"
+    rejected: Final = http.put(chat_org, json={"budget_id": "unknown", "budget": {"max_budget": 7}})
+    assert rejected.status_code == 422
     assert http.get(f"/management/v1/apps/{chat}/customer_members/missing").status_code == 404
 
 
