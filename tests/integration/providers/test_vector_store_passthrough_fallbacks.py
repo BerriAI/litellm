@@ -1,6 +1,7 @@
 import json
 import os
 from collections.abc import Iterator, Mapping
+from itertools import product
 from pathlib import Path
 from typing import Final
 
@@ -88,9 +89,7 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
                 },
             )
             assert registered_get.status_code == 200, registered_get.text
-        configuration: Final = yaml.safe_load((Path(__file__).parents[1] / "proxy_config.yaml").read_text())
-        configuration["router_settings"] = {"cooldown_time": 60}
-        configuration["vector_store_registry"] = [
+        stores: Final = [
             {
                 "vector_store_name": f"{role}-{provider}",
                 "litellm_params": {
@@ -109,10 +108,9 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
                     **({"fallbacks": [f"backup-{provider}"]} if role == "primary" else {}),
                 },
             }
-            for provider in PROVIDERS
-            for role in ("primary", "backup")
+            for provider, role in product(PROVIDERS, ("primary", "backup"))
         ]
-        configuration["vector_store_registry"] += [
+        get_stores: Final = [
             {
                 **entry,
                 "vector_store_name": "get-" + entry["vector_store_name"],
@@ -126,9 +124,14 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
                     ),
                 },
             }
-            for entry in configuration["vector_store_registry"]
+            for entry in stores
             if entry["litellm_params"]["custom_llm_provider"] in ("azure_ai", "opensearch")
         ]
+        configuration: Final = {
+            **yaml.safe_load((Path(__file__).parents[1] / "proxy_config.yaml").read_text()),
+            "router_settings": {"cooldown_time": 60},
+            "vector_store_registry": [*stores, *get_stores],
+        }
         config: Final = directory / "config.yaml"
         config.write_text(yaml.safe_dump(configuration))
         with owned_proxy(
