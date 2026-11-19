@@ -1,5 +1,5 @@
 """Estimate gateway CPU from PodMetrics source windows, clipped to the measured pass. Polling a stale
-response adds no CPU. Stop waits up to a minute for windows covering the pass's end. Incomplete coverage
+response adds no CPU. Reading results waits up to a minute for windows covering the pass's end. Incomplete coverage
 is missing, not zero. The estimate assumes uniform CPU within each source window, including at pass and
 ramp boundaries; only cumulative counters could measure short bursts exactly. The runner's read-only
 service account cannot exec into gateway pods or read kubelet counters. Whole-second source timestamps
@@ -154,12 +154,18 @@ class GatewayCpuSampler:
 
     @property
     def seconds(self) -> float | None:
-        samples: Final = self._covered_samples()
+        samples: Final = self._finished_samples()
         return sum(sample.value for sample in samples) if samples is not None else None
 
     @property
     def series(self) -> Series[float]:
-        return Series(samples=self._covered_samples() or ())
+        return Series(samples=self._finished_samples() or ())
+
+    def _finished_samples(self) -> tuple[Sample[float], ...] | None:
+        if self._ended_at is None:
+            return None
+        self._thread.join()
+        return self._covered_samples()
 
     def _read_metrics(self) -> PodMetricsList | None:
         result: Final = get_external(
@@ -195,23 +201,22 @@ class GatewayCpuSampler:
         )
 
     def _run(self) -> None:
+        self._sample()
         while not self._stop.wait(_INTERVAL_S):
+            self._sample()
+        deadline: Final = time.monotonic() + self._settle_timeout_s
+        self._sample()
+        while self._covered_samples() is None and time.monotonic() < deadline:
+            self._pause(min(_INTERVAL_S, max(0.0, deadline - time.monotonic())))
             self._sample()
 
     def start(self) -> None:
-        self._sample()
         self._started_at = self._clock()
         self._thread.start()
 
     def stop(self) -> None:
         self._ended_at = self._clock()
         self._stop.set()
-        self._thread.join()
-        deadline: Final = time.monotonic() + self._settle_timeout_s
-        self._sample()
-        while self._covered_samples() is None and time.monotonic() < deadline:
-            self._pause(min(_INTERVAL_S, max(0.0, deadline - time.monotonic())))
-            self._sample()
 
 
 class NoSampler:

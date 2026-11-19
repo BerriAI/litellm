@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Final
@@ -195,3 +196,25 @@ def test_whole_second_timestamps_do_not_turn_subsecond_rounding_into_a_missing_p
 
     assert sampler.seconds == 50.0
     assert tuple(sample.at for sample in sampler.series.samples) == (1005.0, 1015.0)
+
+
+def test_collecting_final_cpu_does_not_hold_up_the_other_post_run_snapshots() -> None:
+    snapshots_read: Final = threading.Event()
+    final: Final = _metrics(_pod("gateway", 20, "20s", "2"))
+    responses: Final = iter((_metrics(_pod("gateway", 0, "20s", "0")), final))
+    times: Final = iter((1000.0, 1020.0))
+
+    def read() -> PodMetricsList | None:
+        response: Final = next(responses, None)
+        if response is final and not snapshots_read.wait(1.0):
+            return None
+        return response
+
+    sampler: Final = GatewayCpuSampler(
+        "gateway", "perf", "token", "ca.pem", read_metrics=read, clock=lambda: next(times), settle_timeout_s=0.0
+    )
+    sampler.start()
+    sampler.stop()
+    snapshots_read.set()
+
+    assert sampler.seconds == 40.0
