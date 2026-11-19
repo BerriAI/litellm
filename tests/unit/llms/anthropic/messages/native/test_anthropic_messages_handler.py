@@ -3105,7 +3105,10 @@ _DIAGNOSTICS: Final = {"previous_message_id": "msg_01previous"}
     ),
     ids=("anthropic", "azure_ai"),
 )
-async def test_messages_forwards_diagnostics_to_providers_that_take_it(deployment: dict[str, str]) -> None:
+@pytest.mark.parametrize("drop_params", (False, True), ids=("default", "drop_params"))
+async def test_messages_forwards_diagnostics_to_providers_that_take_it(
+    deployment: dict[str, str], drop_params: bool
+) -> None:
     bodies: Final[list[dict[str, object]]] = []
 
     await python_messages.anthropic_messages(
@@ -3113,7 +3116,7 @@ async def test_messages_forwards_diagnostics_to_providers_that_take_it(deploymen
         messages=[{"role": "user", "content": "hi"}],
         client=_bedrock_invoke_recording(bodies),
         diagnostics=_DIAGNOSTICS,
-        drop_params=True,
+        drop_params=drop_params,
         **deployment,
     )
 
