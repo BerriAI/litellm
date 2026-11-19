@@ -458,8 +458,8 @@ class AnthropicMessagesStreamingResponse:
 
 
 _SSE_FRAME_END: Final = re.compile(rb"(?<=\n\n)|(?<=\r\n\r\n)")
-_SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
-_SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAME_TERMINATORS) - 1
+SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
+_SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in SSE_FRAME_TERMINATORS) - 1
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -467,7 +467,7 @@ def _sse_data_payload(line: bytes) -> bytes | None:
     return line[len(b"data:") :].removeprefix(b" ") if line.startswith(b"data:") else None
 
 
-def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
+def sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
     payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
     data: Final = b"\n".join(payload for payload in payloads if payload is not None)
     try:
@@ -477,7 +477,7 @@ def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
 
 
 async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:
-    event: Final = _sse_frame_event(frame)
+    event: Final = sse_frame_event(frame)
     if event is None:
         return frame
     stamped: Final = await safeguard_results.observe(event)
@@ -485,7 +485,7 @@ async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardR
 
 
 def _ends_a_frame(open_frame: bytearray, scan_from: int) -> bool:
-    return any(open_frame.find(terminator, scan_from) != -1 for terminator in _SSE_FRAME_TERMINATORS)
+    return any(open_frame.find(terminator, scan_from) != -1 for terminator in SSE_FRAME_TERMINATORS)
 
 
 async def _stamped_sse_frames(
