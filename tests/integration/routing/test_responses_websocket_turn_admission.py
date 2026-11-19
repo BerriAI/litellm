@@ -63,6 +63,7 @@ SPEND_ROWS_FOR_KEY: Final = (
 STORED_TIME_RESOLUTION_SECONDS: Final = 0.001
 TURN_CHECK_FAULT: Final = "turn_check_fault"
 PASSTHROUGH_WORD: Final = "rutabaga"
+CRASH_WORD: Final = "parsnip"
 FAULTING_TURN_CHECK: Final = f"""
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -72,6 +73,13 @@ class PassthroughTurnGuardrail(CustomGuardrail):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         if "{PASSTHROUGH_WORD}" in str(data.get("input")):
             self.raise_passthrough_exception(violation_message="passthrough blocked {PASSTHROUGH_WORD}", request_data=data)
+        return data
+
+
+class CrashingTurnGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if "{CRASH_WORD}" in str(data.get("input")):
+            raise RuntimeError("guardrail crashed on {CRASH_WORD}")
         return data
 
 
@@ -95,6 +103,7 @@ SOCKET_TPM_LIMIT: Final = 1000
 BLOCKED_WORD: Final = "kumquat"
 TURN_GUARDRAIL: Final = "ws-turn-content-filter"
 PASSTHROUGH_GUARDRAIL: Final = "ws-turn-passthrough"
+CRASHING_GUARDRAIL: Final = "ws-turn-crashing"
 TURN_GUARDRAIL_CONFIGS: Final[tuple[dict[str, JsonValue], ...]] = (
     {
         "guardrail_name": TURN_GUARDRAIL,
@@ -109,6 +118,14 @@ TURN_GUARDRAIL_CONFIGS: Final[tuple[dict[str, JsonValue], ...]] = (
         "guardrail_name": PASSTHROUGH_GUARDRAIL,
         "litellm_params": {
             "guardrail": "faulting_turn_check.PassthroughTurnGuardrail",
+            "mode": "pre_call",
+            "default_on": False,
+        },
+    },
+    {
+        "guardrail_name": CRASHING_GUARDRAIL,
+        "litellm_params": {
+            "guardrail": "faulting_turn_check.CrashingTurnGuardrail",
             "mode": "pre_call",
             "default_on": False,
         },
@@ -653,15 +670,25 @@ def _relay_deployment(relay: str, scenario: Scenario, cert: tuple[Path, Path]) -
 
 @pytest.mark.parametrize("relay", ("managed", "native"))
 @pytest.mark.parametrize(
-    ("guardrail", "blocked_word"),
-    ((TURN_GUARDRAIL, BLOCKED_WORD), (PASSTHROUGH_GUARDRAIL, PASSTHROUGH_WORD)),
-    ids=("raising", "passthrough"),
+    ("guardrail", "blocked_word", "status", "error_type"),
+    (
+        (TURN_GUARDRAIL, BLOCKED_WORD, 400, "invalid_request_error"),
+        (PASSTHROUGH_GUARDRAIL, PASSTHROUGH_WORD, 400, "invalid_request_error"),
+        (CRASHING_GUARDRAIL, CRASH_WORD, 500, "server_error"),
+    ),
+    ids=("raising", "passthrough", "crashing"),
 )
-def test_a_turn_a_guardrail_blocks_gets_a_400_error_frame_and_the_socket_serves_the_next_turn(
-    faulting: Gateway, cert: tuple[Path, Path], relay: str, guardrail: str, blocked_word: str
+def test_a_turn_a_guardrail_stops_gets_an_error_frame_with_its_status_and_the_socket_serves_the_next_turn(
+    faulting: Gateway,
+    cert: tuple[Path, Path],
+    relay: str,
+    guardrail: str,
+    blocked_word: str,
+    status: int,
+    error_type: str,
 ) -> None:
     """Regression: Codex ignores the guardrail's error frame without a numeric status and hangs on the open socket,
-    and retries one whose status is a 5xx."""
+    retries a passthrough block sent as a 5xx, and should not read a crashed guardrail as a bad request."""
     with faulting.scenario() as scenario, _relay_deployment(relay, scenario, cert) as deployment:
         key: Final = scenario.key(models=[deployment.name], guardrails=[guardrail])
 
@@ -676,9 +703,9 @@ def test_a_turn_a_guardrail_blocks_gets_a_400_error_frame_and_the_socket_serves_
         first, blocked, after = asyncio.run(session())
 
         _assert_completed_without_error(first)
-        _assert_turn_ended_by_one_error_frame(blocked, 400)
+        _assert_turn_ended_by_one_error_frame(blocked, status)
         error: Final = object_value(blocked[-1]["error"])
-        assert error["type"] == "invalid_request_error", blocked
+        assert error["type"] == error_type, blocked
         assert blocked_word in string_value(error["message"]), blocked
         _assert_completed_without_error(after)
         assert deployment.forwarded_turns() == 2

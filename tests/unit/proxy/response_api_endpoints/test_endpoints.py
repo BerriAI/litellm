@@ -2776,7 +2776,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 "Rate limit exceeded",
                 False,
             ),
-            (ValueError("bad metadata"), (500, "invalid_request_error"), "Pre-call error", True),
+            (ValueError("bad metadata"), (500, "server_error"), "Pre-call error", True),
         ],
         ids=["rate-limited", "other-failure"],
     )
