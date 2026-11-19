@@ -2705,6 +2705,82 @@ def test_a_timed_out_request_is_priced_at_the_deployments_long_context_tier(monk
     assert response_cost == pytest.approx(prompt_tokens * expected_rate)
 
 
+PER_QUERY_RERANK_MODEL: Final = "cohere/rerank-v3.5"
+
+
+def _rerank_router_deployment(monkeypatch, deployment_id: str, extra_litellm_params: Mapping[str, object]) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-rerank",
+                "litellm_params": {"model": PER_QUERY_RERANK_MODEL, "api_key": "fake", **extra_litellm_params},
+                "model_info": {"id": deployment_id},
+            }
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+
+
+def _rerank_failure_input_cost(deployment_id: str) -> float:
+    from litellm.proxy.utils import _estimated_input_cost
+
+    return _estimated_input_cost(
+        model_call_details={"model": "team-rerank", "custom_llm_provider": "cohere", "call_type": "arerank"},
+        prompt_tokens=40,
+        deployment_id=deployment_id,
+        base_model=None,
+    )
+
+
+def test_a_failed_rerank_on_a_per_query_model_bills_the_one_query_at_the_cost_map_rate(monkeypatch):
+    _rerank_router_deployment(monkeypatch, "dep-rerank-cost-map", {})
+    published_rate: Final = litellm.get_model_info(model=PER_QUERY_RERANK_MODEL)["input_cost_per_query"]
+
+    assert published_rate
+    assert _rerank_failure_input_cost("dep-rerank-cost-map") == pytest.approx(published_rate)
+
+
+def test_a_failed_rerank_bills_the_per_query_rate_its_deployment_declares(monkeypatch):
+    _rerank_router_deployment(monkeypatch, "dep-rerank-own-query-rate", {"input_cost_per_query": 0.5})
+
+    assert _rerank_failure_input_cost("dep-rerank-own-query-rate") == pytest.approx(0.5)
+
+
+def test_a_failed_rerank_on_a_deployment_priced_per_token_bills_the_estimated_tokens(monkeypatch):
+    _rerank_router_deployment(monkeypatch, "dep-rerank-own-token-rate", {"input_cost_per_token": 0.001})
+
+    assert _rerank_failure_input_cost("dep-rerank-own-token-rate") == pytest.approx(40 * 0.001)
+
+
+def _failed_rerank_prompt_tokens(query: str, documents: list[object]) -> int:
+    from litellm.proxy.utils import _estimated_prompt_usage
+    from litellm.types.utils import CallTypes
+
+    request_body: Final = {"model": PER_QUERY_RERANK_MODEL, "query": query, "documents": documents}
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function=CallTypes.arerank.value,
+        rules_obj=litellm.utils.Rules(),
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="failed-rerank-estimate",
+        **request_body,
+    )
+    usage: Final = _estimated_prompt_usage(logging_obj.model_call_details, request_body, CallTypes.arerank.value)
+    assert usage is not None
+    return usage.prompt_tokens
+
+
+@pytest.mark.parametrize("documents", [["short"], [{"text": "short"}]])
+def test_a_failed_rerank_counts_the_documents_it_sent_next_to_the_query(documents):
+    longer_documents: Final = [*documents, "a much longer document " * 200]
+
+    assert _failed_rerank_prompt_tokens("which?", documents) < _failed_rerank_prompt_tokens("which?", longer_documents)
+    assert _failed_rerank_prompt_tokens("which?", []) < _failed_rerank_prompt_tokens("which?", documents)
+
+
+def test_a_failed_rerank_counts_the_query_it_sent():
+    assert _failed_rerank_prompt_tokens("which?", ["short"]) < _failed_rerank_prompt_tokens("which? " * 200, ["short"])
+
+
 def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(monkeypatch):
     """The router leaves one RetryAttemptRecord per failed attempt in metadata.previous_models, the
     final attempt included; the earlier Timeout ones are billed (each at the deployment that served
@@ -3980,10 +4056,10 @@ def test_a_dispatched_failure_lifts_the_fields_the_spend_log_needs():
 async def test_a_dispatched_failure_is_counted_off_the_event_loop():
     from unittest.mock import AsyncMock, patch
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -3994,7 +4070,7 @@ async def test_a_dispatched_failure_is_counted_off_the_event_loop():
                 "first_api_call_start_time": 1700000000.0,
                 "call_type": "acompletion",
                 "model": "claude-fable-5",
-                "messages": [{"role": "user", "content": text * 100}],
+                "messages": [{"role": "user", "content": uncounted_text()}],
             }
         ),
         "metadata": {},
@@ -4440,3 +4516,65 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
     assert _is_client_error_exception(ProxyException(message="x", type="x", param=None, code="429")) is True
     assert _is_client_error_exception(ValueError("x")) is False
+
+
+class _NativeHookMCPGuardrail(_RecordingMCPGuardrail):
+    use_native_lifecycle_hooks = True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringPostMCPCall(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return [GuardrailEventHooks.post_call, GuardrailEventHooks.post_mcp_call]
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringOtherHooks(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return [GuardrailEventHooks.post_call]
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringNoHooks(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return None
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("guardrail_class", "expected_calls", "expected_text"),
+    [
+        (_NativeHookDeclaringPostMCPCall, 1, "<MASKED>"),
+        (_NativeHookDeclaringOtherHooks, 0, "jane@example.com"),
+        (_NativeHookDeclaringNoHooks, 0, "jane@example.com"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_a_native_hook_guardrail_only_when_it_supports_post_mcp_call(
+    restore_callbacks, guardrail_class, expected_calls, expected_text
+):
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = guardrail_class(event_hook=GuardrailEventHooks.post_mcp_call)
+    litellm.callbacks = [guardrail]  # test-quality-ok: post_mcp_call_hook reads litellm.callbacks, restore_callbacks undoes it
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"mcp_tool_name": "echo"},
+        user_api_key_dict=None,
+    )
+
+    assert (guardrail.call_count, [item.text for item in returned.content]) == (expected_calls, [expected_text])

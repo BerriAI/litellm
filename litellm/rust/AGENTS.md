@@ -16,6 +16,18 @@ For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of 
 
 Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `str::parse`) with no `as_str`/`parse` wrapper that only delegates, and spell each variant with explicit `#[strum(serialize = "...")]` instead of `serialize_all`
 
+## Porting from Python
+
+- Put all Python compatibility (truthiness, either-of lookups, Python `str()` formatting and similar) in the `python-compat` crate, never inline in the crate being ported
+- Do not keep the old Python implementation around to run parity tests against. If a parity check is truly needed, capture the Python outputs once as JSON fixtures
+- Do not match Python error messages exactly. Never run a Python replay or a host call just to produce an error
+- Parse into typed structs at the boundary and keep `serde_json::Value` out of internal signatures
+- Keep logic out of the Python side of the host. If a host call is small, port it to Rust instead
+- Keep the host interface as small as possible
+- Do not reproduce Python string and parsing quirks around odd values such as huge integers or unusual characters
+- Add a doc comment to every file and struct that holds significant logic
+- Say "Rust", not "Native", when naming something written in Rust
+
 ## Test placement
 
 - Never create a `tests.rs` (or `test.rs`) file under `src/`, and never `#[path = "tests.rs"] mod tests;`

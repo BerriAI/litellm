@@ -1699,6 +1699,52 @@ class TestVertexBatchIntegerEnums:
         assert properties["mode"]["enum"] == ["fast", "slow"]
 
 
+_FLAT_TOOL_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+def _chat_entry_with_tool(custom_id: str, name: str, parameters: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "custom_id": custom_id,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Look it up"}],
+            "tools": [{"type": "function", "function": {"name": name, "parameters": parameters}}],
+        },
+    }
+
+
+class TestVertexBatchToolParameters:
+    @pytest.mark.parametrize(
+        "root_schema",
+        [
+            {
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+            },
+            {"type": ["object", "null"], "properties": {"a": {"type": "string"}}},
+        ],
+        ids=["anyof-root", "type-list-root"],
+    )
+    def test_rows_never_send_parameters_json_schema_since_vertex_batch_merges_keys_across_rows(
+        self, root_schema: Mapping[str, object]
+    ):
+        rows: Final = _wrap_entries(
+            [
+                _chat_entry_with_tool("root-1", "lookup", root_schema),
+                _chat_entry_with_tool("flat-1", "get_weather", _FLAT_TOOL_SCHEMA),
+            ]
+        )
+
+        declarations: Final = [row["request"]["tools"][0]["function_declarations"][0] for row in rows]
+        assert [
+            (declaration["name"], "parameters" in declaration, "parametersJsonSchema" in declaration)
+            for declaration in declarations
+        ] == [("lookup", True, False), ("get_weather", True, False)]
+
+
 class TestVertexEmbeddingsBatchOutputTranslation:
     """Vertex Gemini Embedding batch output rows must come back as OpenAI batch rows."""
 
@@ -2477,6 +2523,22 @@ def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_global_drop_
     assert _generation_config(row) == {"max_output_tokens": 5}
 
 
+@pytest.mark.parametrize(
+    ("deployment_params", "row_params"),
+    [({"drop_params": True}, {}), ({}, {"drop_params": True})],
+    ids=["deployment", "row"],
+)
+def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_deployment_or_row_drop_params(
+    monkeypatch: pytest.MonkeyPatch, deployment_params: Mapping[str, object], row_params: Mapping[str, object]
+) -> None:
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    deployment: Final = {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-zeta-9", **deployment_params}
+    entry: Final = dict(_chat_entry("gemini-zeta-9", {**_SAMPLING_KNOBS, **row_params}))
+    (row,) = _uploaded_rows(VertexAIFilesConfig(), deployment, [entry])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
 def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
@@ -2793,3 +2855,22 @@ def test_drop_params_keeps_json_schema_literals_whole_while_dropping_annotations
         "type": "object",
         "properties": {"answer": answer},
     }
+
+
+@pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",), ("logprobs", "top_logprobs")])
+def test_batch_row_keeps_flagged_logprobs_only_when_the_row_allows_them(
+    allowed: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+    knobs: Final = {"logprobs": True, "top_logprobs": 3, "drop_params": True}
+
+    (allowed_row, dropped_row) = _wrap_entries(
+        [
+            _chat_entry("gemini-zeta-9", {**knobs, "allowed_openai_params": list(allowed)}),
+            _chat_entry("gemini-zeta-9", knobs),
+        ]
+    )
+
+    assert _generation_config(allowed_row) == {"max_output_tokens": 5, "responseLogprobs": True, "logprobs": 3}
+    assert _generation_config(dropped_row) == {"max_output_tokens": 5}

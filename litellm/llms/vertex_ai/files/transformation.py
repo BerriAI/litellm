@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     validate_managed_cloud_file_id,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_object_list,
     as_str_mapping,
     drops_unsupported_params,
@@ -1504,19 +1505,22 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         config: Final = VertexGeminiConfig()
         raw_model: Final = openai_request_body.get("model", "")
         model: Final = raw_model if isinstance(raw_model, str) else ""
+        drop_params: Final = drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params))
         sampling_params: Final = tuple(
             p for p in ("temperature", "top_p", "top_k") if openai_request_body.get(p) is not None
         )
         if sampling_params and not VertexGeminiConfig.supports_sampling_params(model):
             VertexGeminiConfig.reject_unsupported_sampling_param(
-                model=model, param=", ".join(sampling_params), drop_params=False
+                model=model, param=", ".join(sampling_params), drop_params=drop_params
             )
         vertex_params: Final = config.map_openai_params(
             model=model,
             non_default_params=openai_request_body,
             optional_params={},
-            drop_params=drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params)),
+            drop_params=drop_params,
             allow_integer_enums=False,
+            allow_parameters_json_schema=False,
+            allowed_openai_params=allowed_openai_param_names(openai_request_body.get("allowed_openai_params")),
         )
         return vertex_params
 

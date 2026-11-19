@@ -380,6 +380,46 @@ def handle_messages_with_content_list_to_str_conversion(
     return [_message_with_str_content(message) for message in messages]
 
 
+def _text_part(part: object) -> str | None:
+    match part:
+        case {"type": "text", "text": str() as text}:
+            return text
+        case _:
+            return None
+
+
+def _text_only_content(content: object) -> str | None:
+    if not isinstance(content, list) or not content:
+        return None
+    parts: Final = cast("list[object]", content)  # cast-ok: isinstance narrows object to an unparameterized list
+    texts: Final = tuple(_text_part(part) for part in parts)
+    if None in texts:
+        return None
+    return "\n".join(text for text in texts if text is not None)
+
+
+def _content_of(message: Mapping[str, object]) -> object:
+    return message.get("content")
+
+
+def _message_with_text_only_content_as_str(message: AllMessageValues) -> AllMessageValues:
+    text: Final = _text_only_content(_content_of(message))
+    if text is None:
+        return message
+    return cast(  # cast-ok: the same message with its text parts joined into one string
+        AllMessageValues, {**message, "content": text}
+    )
+
+
+def handle_messages_with_text_only_content_lists_as_str(
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    """
+    Returns new messages with each all-text content list joined into one string, one line per part
+    """
+    return tuple(_message_with_text_only_content_as_str(message) for message in messages)
+
+
 def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[str] = ["user"]) -> AllMessageValues:
     """
     Removes 'name' from message

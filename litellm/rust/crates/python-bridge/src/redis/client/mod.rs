@@ -3,7 +3,7 @@ mod credentials;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use litellm_circuit_breaker::Config as BreakerConfig;
-use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
+use litellm_env::{Lookup, ProcessEnvironment};
 use litellm_host_python::PythonContext;
 use litellm_python_compat::number::{self, SecondsError};
 use litellm_redis_client::{RedisClient, RedisEvents};
