@@ -132,6 +132,7 @@ pub(super) struct Selected {
 #[derive(Default)]
 pub(super) struct HostedTransport {
     handler: Option<Py<PyAny>>,
+    read: Vec<(String, Option<String>)>,
     chunks: Option<Py<PyAny>>,
     pending: Option<Pending>,
 }
@@ -150,10 +151,17 @@ impl HostedTransport {
             .call1((request,))?
             .extract()?;
         self.handler = (!handler.is_none()).then(|| handler.unbind());
+        self.read.clone_from(&read);
         Ok(Selected {
             hosted: self.handler.is_some(),
             read,
         })
+    }
+
+    /// The secrets the host read to choose the transport, such as the `AZURE_API_BASE` the call
+    /// was sent to, which Python's failure mapping reads instead of looking them up again.
+    pub(super) fn read(&self) -> &[(String, Option<String>)] {
+        &self.read
     }
 
     pub(super) fn pending(&self) -> bool {

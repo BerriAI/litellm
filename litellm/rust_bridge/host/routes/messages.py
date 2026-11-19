@@ -8,6 +8,7 @@ import functools
 import http
 import http.client
 import inspect
+import ipaddress
 import json
 import os
 import socket
@@ -58,6 +59,7 @@ from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.anthropic.common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    anthropic_pass_through_api_base,
     strip_provider_specific_fields_from_anthropic_messages,
 )
 from litellm.llms.anthropic.messages.native import handler
@@ -106,6 +108,7 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # its params dict is untyped
+    get_ssl_configuration,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
@@ -690,11 +693,16 @@ _exception_type: Final = cast(  # cast-ok: the legacy public exception mapper is
     Callable[..., Exception], exception_mapping_utils.exception_type
 )
 _BODY_READ_TIMEOUT: Final = "Timeout on reading data from socket"  # aiohttp's SocketTimeoutError text
-_UNREACHABLE: Final = "could not reach the provider"
+_UNREACHABLE: Final = "could not reach the provider: "
 _UNSENDABLE_HEADER: Final = "invalid request: failed to parse header value"
 _AIOHTTP_UNSENDABLE_HEADER: Final = "Forbidden control character detected in headers. Potential header injection attack."  # aiohttp's `_safe_header` text
 _TOO_MANY_REDIRECTS: Final = "upstream network error: error following redirect: too many redirects"
 _SEND_FAILED: Final = "upstream network error: error sending request: client error (SendRequest): "
+_DNS_FAILURE: Final = "failed to lookup address information: "
+_HTTPX_DNS_ERRNO: Final = {
+    "Name or service not known": socket.EAI_NONAME,
+    "Temporary failure in name resolution": socket.EAI_AGAIN,
+}
 # rustls' text for a TLS peer that closed without `close_notify`, which is how a provider reached
 # through a CONNECT tunnel closes before sending headers.
 _TLS_CLOSED_WITHOUT_NOTIFY: Final = (
@@ -940,6 +948,64 @@ def _bedrock_credential_failure(
     return None
 
 
+def _sent_base(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> str | None:
+    """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
+    to send it and anthropic's to its default. Bedrock's is the origin Rust could not connect to,
+    which can differ from the caller's `api_base` (Mantle rebuilds a public host in its region)."""
+    origin: Final = optional_str(getattr(error, "messages_connect_origin", None))
+    if origin is not None and request_provider in ("bedrock", "bedrock_mantle"):
+        return origin
+    api_base: Final = request.get("api_base")
+    if isinstance(api_base, str) and (api_base or request_provider != "azure_ai"):
+        return api_base
+    if request_provider == "anthropic":
+        return anthropic_pass_through_api_base()
+    if request_provider == "azure_ai":
+        return dict(secrets_read).get("AZURE_API_BASE")
+    return None
+
+
+def _connect_failure(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> str | None:
+    rust_error_text: Final = str(error)
+    base: Final = _sent_base(error, request, request_provider, secrets_read)
+    if base is None:
+        return None
+    refused: Final = "tcp connect error: Connection refused" in rust_error_text
+    dns_reason: Final = rust_error_text.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in rust_error_text else None
+    tls_eof: Final = rust_error_text.endswith("tls handshake eof")
+    if not http_transport.uses_aiohttp_transport():
+        if refused:
+            return "All connection attempts failed"
+        dns_errno: Final = None if dns_reason is None else _HTTPX_DNS_ERRNO.get(dns_reason)
+        if dns_errno is not None:
+            return f"[Errno {dns_errno}] {dns_reason}"
+        return "" if tls_eof else None
+    url: Final = httpx.URL(base)
+    port: Final = url.port or (443 if url.scheme == "https" else 80)
+    if refused:
+        try:
+            address: Final = ipaddress.ip_address(url.host)
+        except ValueError:
+            return None
+        peer: Final = (str(address), port) if address.version == 4 else (str(address), port, 0, 0)
+        return _aiohttp_connect_failure(url, port, request, f"Connect call failed {peer}")
+    if dns_reason is not None:
+        return _aiohttp_connect_failure(url, port, request, dns_reason)
+    if tls_eof:
+        return _aiohttp_connect_failure(url, port, request, None)
+    return None
+
+
+def _aiohttp_connect_failure(url: httpx.URL, port: int, request: Mapping[str, object], reason: str | None) -> str:
+    ssl_verify: Final = request.get("ssl_verify")
+    ssl_config: Final = get_ssl_configuration(ssl_verify if isinstance(ssl_verify, bool | str) else None)
+    return f"Cannot connect to host {url.host}:{port} ssl:{'default' if ssl_config is True else ssl_config} [{reason}]"
+
+
 @functools.cache
 def _google_login_failure_classes() -> Mapping[str, _ERROR_CLASS]:
     """The classes a Vertex AI login Rust could not complete may raise, by the name Rust gives."""
@@ -971,7 +1037,9 @@ def _google_login_failure(error: Exception) -> Exception | None:
     return None if login_failure is None else login_failure(message)
 
 
-def _transport_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> str | None:
+def _transport_failure(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> str | None:
     """The text Python's HTTP client raises for a call that failed before any response arrived."""
     body_cut: Final = getattr(error, "messages_body_cut", None)
     if body_cut is not None:
@@ -994,8 +1062,10 @@ def _transport_failure(error: Exception, request: Mapping[str, object], request_
         if reset:
             return ""
         return "Server disconnected without sending a response." if closed else rust_error
-    # A failure to connect keeps Rust's own text, which names the host it could not reach.
-    return rust_error if rust_error.startswith(_UNREACHABLE) else None
+    if not rust_error.startswith(_UNREACHABLE):
+        return None
+    connect: Final = _connect_failure(error, request, request_provider, secrets_read)
+    return rust_error if connect is None else connect
 
 
 def _upstream_failure(
@@ -1024,9 +1094,11 @@ def _upstream_failure(
     return status, text, tuple(rebuilt.headers.items())
 
 
-def _provider_error(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception | None:
+def _provider_error(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> Exception | None:
     """The provider exception Python's `_handle_error` builds for the same failure."""
-    transport: Final = _transport_failure(error, request, request_provider)
+    transport: Final = _transport_failure(error, request, request_provider, secrets_read)
     failure: Final = _upstream_failure(error, request) if transport is None else (500, transport, ())
     if failure is None:
         return None
@@ -1192,8 +1264,10 @@ def map_failure(
     request: Mapping[str, object],
     request_provider: str,
     asynchronous: bool = False,
+    secrets_read: _SecretsRead | None = None,
 ) -> Exception:
-    """Raises what Python's Messages handler raises for the same failure."""
+    """Raises what Python's Messages handler raises for the same failure. `secrets_read` are the
+    secrets the host read to send the call, such as azure_ai's `AZURE_API_BASE`."""
     if request_provider == "bedrock" and getattr(error, "messages_stream_failure", False):
         stream_error: Final = _bedrock_stream_error(error, request)
         if stream_error is not None:
@@ -1253,7 +1327,7 @@ def map_failure(
     if credential_failure is not None:
         _log_resolved_call(request, request_provider, _provider_model(error, request, request_provider))
         return map_token_failure(credential_failure, request, request_provider, asynchronous)
-    provider_error: Final = _provider_error(error, request, request_provider)
+    provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
         return failures.map_native_failure(
             error,

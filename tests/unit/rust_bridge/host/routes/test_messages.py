@@ -806,21 +806,25 @@ def test_a_stream_decoding_failure_names_the_deployment_only_for_a_provider_with
 _TRANSPORT: Final = "error sending request: client error"
 
 
-_REFUSED_AT_9: Final = f"could not reach the provider at 127.0.0.1:9: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)"
-_UNRESOLVED_AT_9: Final = (
-    f"could not reach the provider at 127.0.0.1:9: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
-    "failed to lookup address information: Name or service not known"
-)
-_TLS_EOF_AT_9: Final = f"could not reach the provider at 127.0.0.1:9: {_TRANSPORT} (Connect): tls handshake eof"
-
-
 @pytest.mark.parametrize(
     ("aiohttp", "native", "text"),
     (
-        # A failure to connect keeps Rust's litellm-owned text, which names the host it could not reach.
-        (True, _REFUSED_AT_9, _REFUSED_AT_9),
-        (True, _UNRESOLVED_AT_9, _UNRESOLVED_AT_9),
-        (True, _TLS_EOF_AT_9, _TLS_EOF_AT_9),
+        (
+            True,
+            f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
+            "Cannot connect to host 127.0.0.1:9 ssl:<ssl> [Connect call failed ('127.0.0.1', 9)]",
+        ),
+        (
+            True,
+            f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+            "failed to lookup address information: Name or service not known",
+            "Cannot connect to host 127.0.0.1:9 ssl:<ssl> [Name or service not known]",
+        ),
+        (
+            True,
+            f"could not reach the provider: {_TRANSPORT} (Connect): tls handshake eof",
+            "Cannot connect to host 127.0.0.1:9 ssl:<ssl> [None]",
+        ),
         (
             True,
             f"upstream network error: {_TRANSPORT} (SendRequest): connection error: Connection reset by peer (os error 104)",
@@ -831,9 +835,18 @@ _TLS_EOF_AT_9: Final = f"could not reach the provider at 127.0.0.1:9: {_TRANSPOR
             f"upstream network error: {_TRANSPORT} (SendRequest): connection closed before message completed",
             "Server disconnected",
         ),
-        (False, _REFUSED_AT_9, _REFUSED_AT_9),
-        (False, _UNRESOLVED_AT_9, _UNRESOLVED_AT_9),
-        (False, _TLS_EOF_AT_9, _TLS_EOF_AT_9),
+        (
+            False,
+            f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
+            "All connection attempts failed",
+        ),
+        (
+            False,
+            f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+            "failed to lookup address information: Name or service not known",
+            "[Errno -2] Name or service not known",
+        ),
+        (False, f"could not reach the provider: {_TRANSPORT} (Connect): tls handshake eof", ""),
         (
             False,
             f"upstream network error: {_TRANSPORT} (SendRequest): connection error: Connection reset by peer (os error 104)",
@@ -852,6 +865,7 @@ def test_a_failure_before_any_response_maps_like_the_python_transport_error(
     from litellm.rust_bridge.host import http_transport
 
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", lambda _ssl_verify: "<ssl>")
 
     mapped: Final = messages_host.map_failure(
         RuntimeError(native), {"model": _ADAPTIVE_OPUS, "api_base": "http://127.0.0.1:9"}, "anthropic"
@@ -872,23 +886,42 @@ def _provider_and_model(error: Exception) -> tuple[object, object]:
     return getattr(error, "llm_provider", None), getattr(error, "model", None)
 
 
+def _ssl_configuration(_ssl_verify: object) -> str:
+    return "<ssl>"
+
+
 _REFUSED: Final = (
-    f"could not reach the provider at 127.0.0.1:47: {_TRANSPORT} (Connect): tcp connect error: "
-    "Connection refused (os error 111)"
+    f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)"
 )
 
 
-@pytest.mark.parametrize("aiohttp", (True, False), ids=("aiohttp", "httpx"))
-def test_an_azure_ai_connect_failure_keeps_the_host_rust_names(monkeypatch: pytest.MonkeyPatch, aiohttp: bool) -> None:
+@pytest.mark.parametrize(
+    ("aiohttp", "text"),
+    (
+        pytest.param(
+            True, "Cannot connect to host 127.0.0.1:47 ssl:<ssl> [Connect call failed ('127.0.0.1', 47)]", id="aiohttp"
+        ),
+        pytest.param(False, "All connection attempts failed", id="httpx"),
+    ),
+)
+def test_an_azure_ai_connect_failure_names_the_environment_base_the_host_sent_to(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, text: str
+) -> None:
     from litellm.rust_bridge.host import http_transport
 
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
 
-    mapped: Final = messages_host.map_failure(RuntimeError(_REFUSED), {"model": _AZURE_CLAUDE}, "azure_ai")
+    mapped: Final = messages_host.map_failure(
+        RuntimeError(_REFUSED),
+        {"model": _AZURE_CLAUDE},
+        "azure_ai",
+        secrets_read=[("AZURE_API_BASE", "http://127.0.0.1:47/anthropic")],
+    )
 
     assert type(mapped) is litellm.InternalServerError
     assert (mapped.status_code, *_provider_and_model(mapped)) == (500, "azure_ai", _AZURE_CLAUDE)
-    assert mapped.message.endswith(f"Azure_aiException - {_REFUSED}")
+    assert mapped.message.endswith(f"Azure_aiException - {text}")
 
 
 _UNSENDABLE_HEADER: Final = "invalid request: failed to parse header value"
@@ -2931,57 +2964,55 @@ def test_a_bedrock_upstream_status_maps_to_the_bedrock_exception_python_raises(
     assert mapped.model == _BEDROCK_INVOKE  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # the public error's model
 
 
+def _ssl_configuration(_ssl_verify: object) -> str:
+    return "<ssl>"
+
+
 @pytest.mark.parametrize(
-    ("aiohttp", "provider", "endpoint", "native"),
+    ("aiohttp", "provider", "origin", "rust_error", "text"),
     [
         (
             True,
             "bedrock",
-            {"aws_bedrock_runtime_endpoint": "http://127.0.0.1:9"},
-            f"could not reach the provider at 127.0.0.1:9: {_TRANSPORT} (Connect): tcp connect error: "
-            "Connection refused (os error 111)",
-        ),
-        (
-            True,
-            "bedrock",
-            {},
-            f"could not reach the provider at bedrock-runtime.us-east-1.amazonaws.com: {_TRANSPORT} (Connect): "
-            "dns error: error resolving DNS: failed to lookup address information: Name or service not known",
+            "http://127.0.0.1:9",
+            f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
+            "Cannot connect to host 127.0.0.1:9 ssl:<ssl> [Connect call failed ('127.0.0.1', 9)]",
         ),
         (
             True,
             "bedrock_mantle",
-            {},
-            f"could not reach the provider at bedrock-mantle.us-east-1.api.aws: {_TRANSPORT} (Connect): "
-            "dns error: error resolving DNS: failed to lookup address information: Name or service not known",
+            "https://bedrock-mantle.us-east-1.api.aws:443",
+            f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+            "failed to lookup address information: Name or service not known",
+            "Cannot connect to host bedrock-mantle.us-east-1.api.aws:443 ssl:<ssl> [Name or service not known]",
         ),
         (
             False,
             "bedrock",
-            {},
-            f"could not reach the provider at bedrock-runtime.us-east-1.amazonaws.com: {_TRANSPORT} (Connect): "
-            "tcp connect error: Connection refused (os error 111)",
+            "http://127.0.0.1:9",
+            f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
+            "All connection attempts failed",
         ),
     ],
-    ids=("aiohttp-runtime-endpoint", "aiohttp-default-host", "aiohttp-mantle-dns", "httpx"),
+    ids=("aiohttp-refused", "aiohttp-mantle-dns", "httpx"),
 )
-def test_a_bedrock_connect_failure_keeps_the_host_rust_names(
-    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, provider: str, endpoint: Mapping[str, str], native: str
+def test_a_bedrock_connect_failure_names_the_origin_rust_could_not_reach(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, provider: str, origin: str, rust_error: str, text: str
 ) -> None:
     from litellm.rust_bridge.host import http_transport
 
-    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
+    unreachable: Final = RuntimeError(rust_error)
+    unreachable.messages_connect_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
     model: Final = _BEDROCK_INVOKE if provider == "bedrock" else _BEDROCK_MANTLE
 
-    mapped: Final = messages_host.map_failure(
-        RuntimeError(native), {"model": model, "messages": [], **_AWS, **endpoint}, provider
-    )
+    mapped: Final = messages_host.map_failure(unreachable, {"model": model, "messages": [], **_AWS}, provider)
 
     assert type(mapped) is litellm.ServiceUnavailableError
     assert mapped.status_code == 503
     assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
-    assert str(mapped) == f"litellm.ServiceUnavailableError: BedrockException - {native}"
+    assert text in str(mapped)
 
 
 @pytest.mark.parametrize("aiohttp", (True, False), ids=("aiohttp", "httpx"))
@@ -2990,8 +3021,7 @@ def test_a_connect_failure_with_no_known_base_keeps_rust_s_text(monkeypatch: pyt
 
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
     rust_error: Final = (
-        f"could not reach the provider at us-east5-aiplatform.googleapis.com: {_TRANSPORT} (Connect): "
-        "tcp connect error: Connection refused (os error 111)"
+        f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)"
     )
 
     mapped: Final = messages_host.map_failure(RuntimeError(rust_error), {"model": "claude-sonnet-4-5"}, "vertex_ai")
@@ -3003,32 +3033,39 @@ def test_a_connect_failure_with_no_known_base_keeps_rust_s_text(monkeypatch: pyt
 
 
 @pytest.mark.parametrize(
-    ("provider", "api_base", "host"),
+    ("provider", "api_base", "origin"),
     [
-        ("bedrock_mantle", "http://bedrock-mantle.us-west-2.api.aws/v1", "bedrock-mantle.us-east-1.api.aws"),
-        ("bedrock_mantle", "", "bedrock-mantle.us-east-1.api.aws"),
-        ("bedrock", "", "bedrock-runtime.us-east-1.amazonaws.com"),
+        (
+            "bedrock_mantle",
+            "http://bedrock-mantle.us-west-2.api.aws/v1",
+            "https://bedrock-mantle.us-east-1.api.aws:443",
+        ),
+        ("bedrock_mantle", "", "https://bedrock-mantle.us-east-1.api.aws:443"),
+        ("bedrock", "", "https://bedrock-runtime.us-east-1.amazonaws.com:443"),
     ],
     ids=("mantle-host-rebuilt-in-region", "mantle-blank-base", "invoke-blank-base"),
 )
-def test_a_bedrock_connect_failure_names_rusts_host_over_the_callers_base(
-    monkeypatch: pytest.MonkeyPatch, provider: str, api_base: str, host: str
+def test_a_bedrock_connect_failure_names_rusts_origin_over_the_callers_base(
+    monkeypatch: pytest.MonkeyPatch, provider: str, api_base: str, origin: str
 ) -> None:
     from litellm.rust_bridge.host import http_transport
 
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: True)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
     unreachable: Final = RuntimeError(
-        f"could not reach the provider at {host}: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+        f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
         "failed to lookup address information: Name or service not known"
     )
+    unreachable.messages_connect_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
     model: Final = _BEDROCK_INVOKE if provider == "bedrock" else _BEDROCK_MANTLE
 
     mapped: Final = messages_host.map_failure(
         unreachable, {"model": model, "messages": [], "api_base": api_base, **_AWS}, provider
     )
 
+    host: Final = origin.removeprefix("https://")
     assert type(mapped) is litellm.ServiceUnavailableError
-    assert str(mapped) == f"litellm.ServiceUnavailableError: BedrockException - {unreachable}"
+    assert f"Cannot connect to host {host} ssl:<ssl> [Name or service not known]" in str(mapped)
 
 
 @pytest.fixture
@@ -3189,12 +3226,12 @@ def test_a_credential_failure_text_without_the_marker_keeps_the_native_mapping()
 _VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
 
 
-def test_a_vertex_connect_failure_keeps_the_host_rust_names(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_vertex_connect_failure_without_an_api_base_keeps_rust_s_text(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.rust_bridge.host import http_transport
 
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: True)
     native: Final = (
-        f"could not reach the provider at us-east5-aiplatform.googleapis.com: {_TRANSPORT} (Connect): dns error: "
+        f"could not reach the provider: {_TRANSPORT} (Connect): dns error: "
         "error resolving DNS: failed to lookup address information: Name or service not known"
     )
 

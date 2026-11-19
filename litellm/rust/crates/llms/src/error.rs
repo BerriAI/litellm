@@ -116,6 +116,13 @@ impl Error {
         matches!(self, Self::Http(error) if error.is_body_read_timeout())
     }
 
+    pub fn connect_origin(&self) -> Option<&str> {
+        match self {
+            Self::Http(error) => error.connect_origin(),
+            _ => None,
+        }
+    }
+
     pub fn body_cut(&self) -> Option<litellm_http::BodyCut> {
         match self {
             Self::Http(error) => error.body_cut(),

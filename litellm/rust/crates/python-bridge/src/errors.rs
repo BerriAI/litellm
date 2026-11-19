@@ -50,6 +50,8 @@ const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
 const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
 /// Why the STS call made for the credentials failed, as `(kind, operation, code, message)`.
 const MESSAGES_STS_FAILURE: &str = "messages_sts_failure";
+/// The `scheme://host:port` of a provider the call could not connect to.
+const MESSAGES_CONNECT_ORIGIN: &str = "messages_connect_origin";
 /// The provider replied with a body litellm refuses to read, which Python raises as `APIError` 500.
 const MESSAGES_REFUSED_REPLY: &str = "messages_refused_reply";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
@@ -339,6 +341,9 @@ pub(crate) fn route_failure(
             }
             if let Some(cut) = error.body_cut() {
                 value.setattr(MESSAGES_BODY_CUT, (cut.received, cut.expected, cut.reset))?;
+            }
+            if let Some(origin) = error.connect_origin() {
+                value.setattr(MESSAGES_CONNECT_ORIGIN, origin)?;
             }
             if error.is_missing_credential() {
                 value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
