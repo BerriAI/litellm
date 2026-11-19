@@ -17,7 +17,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
+from litellm.proxy._types import (
+    LitellmUserRoles,
+    ObjectPermissionDict,
+    SpecialMCPServerName,
+    SpecialMCPServerNames,
+)
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
 from litellm.proxy.utils import PrismaClient
@@ -515,6 +520,16 @@ async def _existing_object_permission_mcp_servers(
     if existing is None:
         return []
     return existing.mcp_servers or []
+
+
+def enforce_app_grant_is_admin_only(object_permission: object, user_role: LitellmUserRoles | str | None) -> None:
+    """Only a proxy admin may change which customer management apps a user, team or organization can read."""
+    if user_role == LitellmUserRoles.PROXY_ADMIN or getattr(object_permission, "apps", None) is None:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": "Only a proxy admin can grant access to customer management apps."},
+    )
 
 
 async def enforce_all_proxy_mcp_servers_grant_is_admin_only(

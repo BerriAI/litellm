@@ -58,6 +58,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     validate_budget_duration,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
+    enforce_app_grant_is_admin_only,
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
     reject_ambiguous_mcp_tool_permission_keys,
@@ -814,6 +815,7 @@ async def update_organization(
         prisma_client.jsonify_object(updated_organization_row_json)
     )
     if data.object_permission is not None:
+        enforce_app_grant_is_admin_only(data.object_permission, user_api_key_dict.user_role)
         updated_organization_row = await handle_update_object_permission(
             data_json=updated_organization_row,
             existing_organization_row=existing_organization_row,
@@ -956,6 +958,7 @@ async def update_organization_v2(
             status_code=422,
             detail={"error": "models cannot be set to null; send [] to clear it"},
         )
+    enforce_app_grant_is_admin_only(data.object_permission, user_api_key_dict.user_role)
     if data.object_permission is not None and not data.object_permission.model_dump(exclude_none=True):
         raise HTTPException(
             status_code=422,

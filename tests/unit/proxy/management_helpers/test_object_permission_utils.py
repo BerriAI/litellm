@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from litellm.proxy._types import (
     LiteLLM_AccessGroupTable,
     LiteLLM_ObjectPermissionBase,
+    LitellmUserRoles,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTableCachedObj,
     ObjectPermissionDict,
@@ -20,6 +21,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_server_ids,
     _resolve_team_allowed_mcp_servers,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
+    enforce_app_grant_is_admin_only,
     prepare_object_permission_upsert,
     set_object_permission,
     validate_key_mcp_servers_against_team,
@@ -1661,3 +1663,20 @@ def test_object_permission_dict_mirrors_pydantic_model():
         f"Only in Pydantic model: {sorted(pydantic_fields - typeddict_fields)}\n"
         f"Only in TypedDict:      {sorted(typeddict_fields - pydantic_fields)}"
     )
+
+
+@pytest.mark.parametrize(
+    "role",
+    (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.ORG_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, None),
+)
+@pytest.mark.parametrize("apps", (["chat"], []))
+def test_only_a_proxy_admin_can_change_app_grants(role: LitellmUserRoles | None, apps: list[str]) -> None:
+    with pytest.raises(HTTPException) as denied:
+        enforce_app_grant_is_admin_only(LiteLLM_ObjectPermissionBase(apps=apps), role)
+    assert denied.value.status_code == 403
+    enforce_app_grant_is_admin_only(LiteLLM_ObjectPermissionBase(apps=apps), LitellmUserRoles.PROXY_ADMIN)
+
+
+def test_a_non_admin_can_still_change_other_object_permissions() -> None:
+    enforce_app_grant_is_admin_only(LiteLLM_ObjectPermissionBase(vector_stores=["docs"]), LitellmUserRoles.ORG_ADMIN)
+    enforce_app_grant_is_admin_only(None, LitellmUserRoles.ORG_ADMIN)
