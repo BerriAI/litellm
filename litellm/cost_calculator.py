@@ -101,6 +101,7 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
+    video_clip_cost,
     video_output_cost_per_second,
 )
 from litellm.llms.perplexity.cost_calculator import (
@@ -124,7 +125,13 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
-from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
+from litellm.types.decisions import (
+    DecisionsResponse,
+    DecisionsUsage,
+    OpenAIDecisionCacheWriteTokensDetails,
+    OpenAIDecisionResponse,
+    OpenAIDecisionUsage,
+)
 from litellm.types.extraction import ExtractionResponse, ExtractionUsage
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
@@ -140,6 +147,7 @@ from litellm.types.llms.openai import (
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     CallTypesLiteral,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
@@ -400,6 +408,8 @@ class OCRPricing(TypedDict, total=False):
 
 
 _WALL_CLOCK_PRICED_MODES: Final = frozenset({"audio_transcription", "chat", "completion", "embedding", "responses"})
+_GROQ_WHISPER_TRANSCRIPTION_MODELS: Final = frozenset({"whisper-large-v3", "whisper-large-v3-turbo"})
+_GROQ_MINIMUM_TRANSCRIPTION_SECONDS: Final = 10.0
 
 
 def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
@@ -777,10 +787,19 @@ def cost_per_token(
                 data_residency=data_residency,
             )
 
+        billed_duration: Final = (
+            max(audio_transcription_file_duration, _GROQ_MINIMUM_TRANSCRIPTION_SECONDS)
+            if (
+                custom_llm_provider == "groq"
+                and model_without_prefix in _GROQ_WHISPER_TRANSCRIPTION_MODELS
+                and audio_transcription_file_duration > 0
+            )
+            else audio_transcription_file_duration
+        )
         return openai_cost_per_second(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
-            duration=audio_transcription_file_duration,
+            duration=billed_duration,
         )
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
@@ -791,6 +810,7 @@ def cost_per_token(
             custom_llm_provider=custom_llm_provider,
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
+            search_response=response if isinstance(response, SearchResponse) else None,
         )
     elif (
         per_second_cost := _per_second_pricing_cost(
@@ -1014,6 +1034,16 @@ def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | Non
     if own_model_info is None or not _declares_rates(own_model_info):
         return None
     return own_model_info["litellm_provider"]
+
+
+def _routed_model_pricing_provider(
+    request_model: str | None, served_model: str | None, custom_llm_provider: object
+) -> str | None:
+    if custom_llm_provider != "azure" or request_model is None or served_model is None:
+        return None
+    if not azure_ai_is_model_router_name(request_model) or _resolves_to_rates(served_model, "azure"):
+        return None
+    return "azure_ai" if _resolves_to_rates(served_model, "azure_ai") else None
 
 
 def _pricing_provider_for_cost_candidate(
@@ -1373,6 +1403,16 @@ def _usage_from_model(usage_model: BaseModel) -> Usage:
     return Usage(**_DumpedUsageFields(**_dumped_usage_fields(usage_model)))
 
 
+def _decisions_cache_write_lifetimes(
+    details: OpenAIDecisionCacheWriteTokensDetails | None,
+) -> CacheCreationTokenDetails | None:
+    if details is None:
+        return None
+    return CacheCreationTokenDetails(
+        ephemeral_30m_input_tokens=details.ttl_30m_tokens, ephemeral_12h_input_tokens=details.ttl_12h_tokens
+    )
+
+
 def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
     match usage:
         case DecisionsUsage():
@@ -1383,6 +1423,9 @@ def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage
             return PromptTokensDetailsWrapper(
                 cached_tokens=usage.input_tokens_details.cached_tokens,
                 cache_write_tokens=usage.input_tokens_details.cache_write_tokens,
+                cache_creation_token_details=_decisions_cache_write_lifetimes(
+                    usage.input_tokens_details.cache_write_tokens_details
+                ),
             )
         case _:
             assert_never(usage)
@@ -1928,6 +1971,11 @@ def completion_cost(
             if base_model is not None and custom_pricing is not True
             else None
         )
+        pricing_provider_override: Final = base_model_provider or (
+            _routed_model_pricing_provider(model, _get_response_model(completion_response), custom_llm_provider)
+            if base_model is None and custom_pricing is not True
+            else None
+        )
         invoked_model_id: Final = _invoked_model_id_for_cost(
             _LOGGED_LITELLM_PARAMS.validate_python(optional_params) if optional_params is not None else None,
             litellm_logging_obj,
@@ -1935,7 +1983,7 @@ def completion_cost(
         selected_model: Final = select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
-            custom_llm_provider=base_model_provider or custom_llm_provider,
+            custom_llm_provider=pricing_provider_override or custom_llm_provider,
             custom_pricing=custom_pricing,
             base_model=base_model,
             router_model_id=router_model_id,
@@ -1954,7 +2002,7 @@ def completion_cost(
         raw_candidates: Final = (
             (
                 selected_model,
-                base_model_provider if base_model_provider is not None else request_pricing_provider,
+                pricing_provider_override or request_pricing_provider,
             ),
             (_get_response_model(completion_response), request_pricing_provider),
             *(((model, request_pricing_provider),) if model is not None else ()),
@@ -2187,6 +2235,9 @@ def completion_cost(
                             custom_llm_provider=custom_llm_provider,
                             number_of_queries=number_of_queries,
                             optional_params=optional_params,
+                            search_response=completion_response
+                            if isinstance(completion_response, SearchResponse)
+                            else None,
                         )
                     )
 
@@ -3152,6 +3203,9 @@ def default_image_cost_calculator(
     return cost
 
 
+_VIDEO_COST_INFO: Final = TypeAdapter(Mapping[str, object])
+
+
 def default_video_cost_calculator(
     model: str,
     duration_seconds: float,
@@ -3213,6 +3267,10 @@ def default_video_cost_calculator(
 
     if cost_info is None:
         raise Exception(f"Model not found in cost map for model={model}")
+
+    clip_cost: Final = video_clip_cost(_VIDEO_COST_INFO.validate_python(cost_info), duration_seconds, video_resolution)
+    if clip_cost is not None:
+        return clip_cost
 
     video_cost: Final = cost_info.get("output_cost_per_video")
     if video_cost is not None:

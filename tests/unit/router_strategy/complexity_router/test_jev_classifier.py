@@ -1206,6 +1206,50 @@ async def test_jev_budget_uses_effective_headers_and_every_deployment(
 
 
 @pytest.mark.asyncio
+async def test_jev_budget_keeps_known_limits_when_drop_params_drops_a_bad_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(litellm.model_cost, "typesafe/jev-latest", deepcopy(litellm.model_cost["typesafe/jev-latest"]))
+    header: Final = "TypeSafe-Danger-Zone-Long-Context"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "budget-model",
+                "litellm_params": {
+                    "model": "typesafe/jev-latest",
+                    "api_key": "test",
+                    "api_base": "https://budget.test",
+                    "drop_params": True,
+                    "extra_headers": {header: "false", "X-Bad": 1},
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    classifier: Final = ComplexityRouter(
+        "bounded-classifier",
+        router,
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"deployment_name": "budget-model"},
+            "tiers": {"SIMPLE": "cheap"},
+        },
+        derive_savings_baseline=False,
+    )
+    ask: Final = "Explain this code " + "word001 word002 word003 " * 12000
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.route(method="POST").respond(json={"answers": {"tier": _answer().model_dump()}})
+        outcome: Final = await classifier.aclassify(ask)
+    assert outcome.cause == "jev_classifier"
+    telemetry: Final = outcome.classifier_input_telemetry
+    assert telemetry is not None and telemetry["classifier_input_budget_status"] == "truncated"
+    sent: Final = route.calls[0].request.headers
+    assert sent[header] == "false"
+    assert "x-bad" not in sent
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("oversized_field", "fallback"),
     [("instructions", "heuristic"), ("instructions", "default_model"), ("criteria", "custom")],

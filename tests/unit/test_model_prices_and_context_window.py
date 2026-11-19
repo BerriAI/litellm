@@ -15,7 +15,8 @@ from litellm.litellm_core_utils.fallback_generalizations import match_capability
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.types.utils import SearchFreeRequests
+from litellm.types.utils import CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, SearchFreeRequests, Usage
+from litellm.utils import ProviderConfigManager
 
 REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -101,6 +102,142 @@ def test_github_copilot_rows_derive_mode_from_their_endpoints(path: Path) -> Non
     assert {key: row.mode for key, row in rows.items()} == {
         key: "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses" for key, row in rows.items()
     }
+
+
+def _mantle_route_rows_priced_apart_from_their_provider_row(
+    prices: Mapping[str, Mapping[str, object]],
+) -> tuple[str, ...]:
+    route: Final = "bedrock/mantle/"
+    provider_rows: Final = {
+        key: prices.get(f"bedrock_mantle/{key.removeprefix(route)}") for key in prices if key.startswith(route)
+    }
+    return tuple(
+        key
+        for key, provider_row in provider_rows.items()
+        if provider_row is not None and _price_fields(prices[key]) != _price_fields(provider_row)
+    )
+
+
+def _price_fields(row: Mapping[str, object]) -> Mapping[str, object]:
+    return {field: value for field, value in row.items() if "cost" in field}
+
+
+def test_bedrock_mantle_route_rows_price_like_their_bedrock_mantle_provider_rows(prices: dict) -> None:
+    assert _mantle_route_rows_priced_apart_from_their_provider_row(prices) == ()
+
+
+@pytest.mark.parametrize("model", ("anthropic.claude-sonnet-5-5", "anthropic.claude-haiku-5-5"))
+def test_claude_5_5_costs_the_same_on_both_govcloud_bedrock_prefixes(
+    model: str, local_model_cost_map: None, prices: dict
+) -> None:
+    litellm.register_model({f"bedrock/us-gov-west-1/{model}": prices[f"bedrock/us-gov-west-1/{model}"]})
+    litellm.register_model({f"bedrock_mantle/us-gov-west-1/{model}": prices[f"bedrock_mantle/us-gov-west-1/{model}"]})
+    tokens: Final = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
+    assert litellm.cost_per_token(model=f"bedrock/us-gov-west-1/{model}", **tokens) == litellm.cost_per_token(
+        model=f"bedrock_mantle/us-gov-west-1/{model}", **tokens
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "region", "model"),
+    (
+        ("bedrock_mantle", "ap-northeast-1", "deepseek.v3.1"),
+        ("bedrock", "ap-south-1", "amazon.nova-pro-v1:0"),
+        ("bedrock", "ap-southeast-1", "apac.amazon.nova-lite-v1:0"),
+        ("azure", None, "us-gov/o3-mini-2025-01-31"),
+    ),
+)
+def test_regional_catalog_rows_price_the_requested_region(
+    provider: str, region: str | None, model: str, local_model_cost_map: None, prices: dict
+) -> None:
+    key: Final = f"{provider}/{region}/{model}" if region is not None else f"{provider}/{model}"
+    row: Final = prices[key]
+    assert litellm.cost_per_token(
+        model=model, custom_llm_provider=provider, region_name=region, prompt_tokens=1, completion_tokens=1
+    ) == pytest.approx((row["input_cost_per_token"], row["output_cost_per_token"]))
+
+
+@pytest.mark.parametrize("service_tier", ("priority", "flex"))
+@pytest.mark.parametrize(
+    ("provider", "region", "model"),
+    (
+        ("bedrock_mantle", "ap-northeast-1", "deepseek.v3.1"),
+        ("bedrock", "ap-south-1", "amazon.nova-pro-v1:0"),
+    ),
+)
+def test_regional_catalog_rows_price_the_requested_service_tier(
+    provider: str, region: str, model: str, service_tier: str, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[f"{provider}/{region}/{model}"]
+    assert litellm.cost_per_token(
+        model=model,
+        custom_llm_provider=provider,
+        region_name=region,
+        service_tier=service_tier,
+        prompt_tokens=1,
+        completion_tokens=1,
+    ) == pytest.approx(
+        (row[f"input_cost_per_token_{service_tier}"], row[f"output_cost_per_token_{service_tier}"])
+    )
+
+
+@pytest.mark.parametrize("tokens", (0, 1))
+@pytest.mark.parametrize("region", ("ap-northeast-1", "eu-north-1", "us-west-2"))
+@pytest.mark.parametrize("model", ("amazon.nova-2-5-sonic", "amazon.nova-2-sonic-v1:0"))
+def test_regional_sonic_catalog_rows_price_audio_tokens(
+    model: str, region: str, tokens: int, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[f"bedrock/{region}/{model}"]
+    assert litellm.cost_per_token(
+        model=model,
+        custom_llm_provider="bedrock",
+        region_name=region,
+        prompt_tokens=tokens,
+        completion_tokens=tokens,
+        usage_object=Usage(
+            prompt_tokens=tokens,
+            completion_tokens=tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=tokens, text_tokens=0),
+            completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=tokens, text_tokens=0),
+        ),
+    ) == pytest.approx((tokens * row["input_cost_per_audio_token"], tokens * row["output_cost_per_audio_token"]))
+
+
+@pytest.mark.parametrize("above_threshold", (False, True))
+@pytest.mark.parametrize(
+    ("model", "threshold"),
+    (
+        ("ca.anthropic.claude-haiku-5-5", 100_000),
+        ("in.openai.gpt-5.6-luna", 272_000),
+        ("in.openai.gpt-5.6-terra", 272_000),
+    ),
+)
+def test_geo_catalog_rows_price_the_declared_long_context_boundary(
+    model: str, threshold: int, above_threshold: bool, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[model]
+    prompt_tokens: Final = threshold + int(above_threshold)
+    suffix: Final = f"_above_{threshold // 1000}k_tokens" if above_threshold else ""
+    assert litellm.cost_per_token(
+        model=model, custom_llm_provider="bedrock", prompt_tokens=prompt_tokens, completion_tokens=1
+    ) == pytest.approx((prompt_tokens * row[f"input_cost_per_token{suffix}"], row[f"output_cost_per_token{suffix}"]))
+
+
+@pytest.mark.parametrize("model", ("openai.gpt-6.2-sol", "openai.gpt-6.2-astra"))
+def test_bedrock_mantle_gpt_6_2_deployments_are_served_by_the_mantle_responses_config(
+    model: str, local_model_cost_map: None
+) -> None:
+    # A proxy deployment registers its model_info under its own bedrock_mantle/ name. Without a
+    # bedrock_mantle row, that registration merges into the bedrock_converse row for the same
+    # Bedrock id, Mantle loses its Responses capability, and requests leave unsigned.
+    litellm.register_model({f"bedrock_mantle/{model}": {"litellm_provider": "bedrock_mantle", "mode": "responses"}})
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider=litellm.LlmProviders.BEDROCK_MANTLE, model=model
+    )
+    assert isinstance(config, litellm.BedrockMantleResponsesAPIConfig)
+    assert config.get_complete_url(api_base=None, litellm_params={"aws_region_name": "us-east-1"}) == (
+        "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
+    )
 
 
 def _rows_carrying_legacy_max_tokens(prices: Mapping[str, Mapping[str, object]]) -> tuple[str, ...]:
@@ -1112,3 +1249,57 @@ def test_azure_ai_claude_rows_priced_for_web_search_say_they_support_it(path: Pa
     assert priced_rows
     unflagged: Final = tuple(key for key, row in priced_rows.items() if row.get("supports_web_search") is not True)
     assert unflagged == (), unflagged
+
+
+@pytest.mark.parametrize(
+    ("model", "supports_vision", "supports_video_input", "supports_audio_input"),
+    (
+        ("deepinfra/zai-org/GLM-5.3-Flash", True, True, False),
+        ("deepinfra/XiaomiMiMo/MiMo-V2.6-Flash", True, True, True),
+        ("deepinfra/nvidia/NVIDIA-Nemotron-3.5-Super-VL", True, True, False),
+        ("deepinfra/tencent/Hy4-preview", False, False, False),
+    ),
+)
+def test_deepinfra_new_catalog_models_resolve_pricing_and_capabilities(
+    model: str,
+    supports_vision: bool,
+    supports_video_input: bool,
+    supports_audio_input: bool,
+    local_model_cost_map: None,
+) -> None:
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+
+    catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    backup: Final = TypeAdapter(dict[str, JsonValue]).validate_json(BACKUP_PRICES_PATH.read_bytes())
+    row: Final = catalog[model]
+    assert isinstance(row, dict)
+    assert row == backup[model]
+    assert (row["litellm_provider"], row["mode"]) == ("deepinfra", "chat")
+
+    max_input: Final = row["max_input_tokens"]
+    input_cost: Final = row["input_cost_per_token"]
+    output_cost: Final = row["output_cost_per_token"]
+    cache_read_cost: Final = row["cache_read_input_token_cost"]
+    assert isinstance(max_input, int) and max_input > 0
+    assert isinstance(input_cost, float) and isinstance(output_cost, float) and isinstance(cache_read_cost, float)
+    assert 0 < cache_read_cost < input_cost and output_cost > 0
+
+    bare_model: Final = model.removeprefix("deepinfra/")
+    info: Final = litellm.get_model_info(model=bare_model, custom_llm_provider="deepinfra")
+    assert info["input_cost_per_token"] == input_cost
+    assert info["output_cost_per_token"] == output_cost
+    assert info["cache_read_input_token_cost"] == cache_read_cost
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=1_000_000, completion_tokens=1_000_000
+    )
+    assert (prompt_cost, completion_cost) == pytest.approx((input_cost * 1_000_000, output_cost * 1_000_000))
+
+    assert litellm.supports_reasoning(model=model) is True
+    assert litellm.supports_function_calling(model=model) is True
+    assert litellm.supports_response_schema(model=model) is True
+    assert litellm.utils.supports_prompt_caching(model=model) is True
+    assert litellm.supports_vision(model=model) is supports_vision
+    assert litellm.supports_video_input(model=model) is supports_video_input
+    assert litellm.supports_audio_input(model=model) is supports_audio_input
+    assert "reasoning_effort" in DeepInfraConfig().get_supported_openai_params(model=model)

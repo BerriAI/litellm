@@ -1,6 +1,9 @@
 use axum::{
     extract::{FromRequestParts, MatchedPath, Request, State},
-    http::{header::AUTHORIZATION, request::Parts},
+    http::{
+        header::{AUTHORIZATION, AsHeaderName},
+        request::Parts,
+    },
     middleware::Next,
     response::Response,
 };
@@ -10,6 +13,10 @@ use crate::{AccessRequest, Auth, AuthenticatedRequest, Credential, Error};
 
 pub trait CredentialExtractor: Send + Sync {
     fn extract(&self, parts: &Parts) -> Result<Credential, Error>;
+
+    fn reject(&self, _: &Parts, error: Error) -> Error {
+        error
+    }
 }
 
 pub struct Bearer;
@@ -20,20 +27,57 @@ impl CredentialExtractor for Bearer {
     }
 }
 
-fn bearer(parts: &Parts) -> Result<SecretValue, Error> {
-    let mut values = parts.headers.get_all(AUTHORIZATION).iter();
-    let value = values.next().ok_or(Error::InvalidToken)?;
-    if values.next().is_some() {
-        return Err(Error::InvalidToken);
+pub struct BearerOrXApiKey;
+
+impl CredentialExtractor for BearerOrXApiKey {
+    fn extract(&self, parts: &Parts) -> Result<Credential, Error> {
+        if !reads_x_api_key(parts) {
+            return Bearer.extract(parts);
+        }
+        single(parts, X_API_KEY)
+            .and_then(token)
+            .map(Credential::Token)
+            .ok_or(Error::InvalidApiKey)
     }
-    let token = value
-        .to_str()
-        .ok()
+
+    fn reject(&self, parts: &Parts, error: Error) -> Error {
+        match error {
+            Error::InvalidToken if reads_x_api_key(parts) => Error::InvalidApiKey,
+            error => error,
+        }
+    }
+}
+
+const X_API_KEY: &str = "x-api-key";
+
+fn reads_x_api_key(parts: &Parts) -> bool {
+    parts.headers.contains_key(X_API_KEY)
+        && parts
+            .headers
+            .get_all(AUTHORIZATION)
+            .iter()
+            .all(|value| value.is_empty())
+}
+
+fn bearer(parts: &Parts) -> Result<SecretValue, Error> {
+    single(parts, AUTHORIZATION)
         .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
+        .and_then(token)
+        .ok_or(Error::InvalidToken)
+}
+
+fn single(parts: &Parts, name: impl AsHeaderName) -> Option<&str> {
+    let mut values = parts.headers.get_all(name).iter();
+    match (values.next(), values.next()) {
+        (Some(value), None) => value.to_str().ok(),
+        _ => None,
+    }
+}
+
+fn token(value: &str) -> Option<SecretValue> {
+    Some(value.trim())
         .filter(|value| !value.is_empty() && !value.bytes().any(|byte| byte.is_ascii_whitespace()))
-        .ok_or(Error::InvalidToken)?;
-    Ok(SecretValue::new(token))
+        .map(SecretValue::new)
 }
 
 pub async fn authenticate(
@@ -86,5 +130,42 @@ impl FromRequestParts<Auth> for RequireMasterKey {
         }
         parts.extensions.insert(identity);
         Ok(Self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::Request;
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::x_api_key(&[("x-api-key", "key")], Some("key"))]
+    #[case::bearer(&[("authorization", "Bearer key")], Some("key"))]
+    #[case::bearer_wins(&[("authorization", "Bearer bearer"), ("x-api-key", "x")], Some("bearer"))]
+    #[case::invalid_bearer_does_not_fall_back(&[("authorization", "Basic key"), ("x-api-key", "x")], None)]
+    #[case::empty_authorization_falls_back(&[("authorization", ""), ("x-api-key", "key")], Some("key"))]
+    #[case::empty(&[("x-api-key", "")], None)]
+    #[case::inner_whitespace(&[("x-api-key", "a b")], None)]
+    #[case::duplicate(&[("x-api-key", "key"), ("x-api-key", "key")], None)]
+    #[case::missing(&[], None)]
+    fn bearer_or_x_api_key_reads_x_api_key_only_without_authorization(
+        #[case] headers: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let (parts, ()) = headers
+            .iter()
+            .fold(Request::builder(), |request, (name, value)| {
+                request.header(*name, *value)
+            })
+            .body(())
+            .unwrap()
+            .into_parts();
+        let token = match BearerOrXApiKey.extract(&parts) {
+            Ok(Credential::Token(token)) => Some(token.expose().to_owned()),
+            _ => None,
+        };
+        assert_eq!(token.as_deref(), expected);
     }
 }

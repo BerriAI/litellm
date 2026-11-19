@@ -1,8 +1,10 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Final, Literal, Protocol
 
+from pydantic import JsonValue
 from typing_extensions import (
+    NotRequired,
     ReadOnly,
     Required,
     TypedDict,
@@ -163,6 +165,7 @@ class FunctionDeclaration(TypedDict, total=False):
     name: Required[str]
     description: str
     parameters: Schema | dict
+    parametersJsonSchema: ReadOnly[Mapping[str, JsonValue]]
     response: Schema
 
 
@@ -216,7 +219,7 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["minimal", "low", "medium", "high"]
+    thinkingLevel: ReadOnly[Literal["minimal", "low", "medium", "high", "xhigh"]]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
@@ -312,8 +315,8 @@ class TTL(TypedDict, total=False):
 
 
 class PromptTokensDetails(TypedDict):
-    modality: Literal["TEXT", "AUDIO", "IMAGE", "VIDEO"]
-    tokenCount: int
+    modality: ReadOnly[str]
+    tokenCount: ReadOnly[int]
 
 
 class UsageMetadata(TypedDict, total=False):
@@ -591,6 +594,7 @@ class Instance(TypedDict, total=False):
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: Required[list[Instance]]
     parameters: dict
+    labels: ReadOnly[Mapping[str, str]]
 
 
 class VideoEmbedding(TypedDict):
@@ -738,6 +742,7 @@ class VertexAIBatchPredictionJob(TypedDict):
     model: str
     inputConfig: InputConfig
     outputConfig: OutputConfig
+    labels: NotRequired[ReadOnly[Mapping[str, str]]]
 
 
 class VertexBatchPredictionResponse(TypedDict, total=False):

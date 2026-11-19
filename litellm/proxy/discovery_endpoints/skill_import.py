@@ -60,9 +60,12 @@ def parse_skill_source(
         return GitHubSkillSource(parts[0], parts[1], ref, parts[2], path)
     if len(parts) == 2:
         return GitHubSkillSource(parts[0], parts[1].removesuffix(".git"), ref, skill, path)
-    if len(parts) < 5 or parts[2] != "tree" or path is not None or ref != "HEAD":
-        return SkillImportError(400, "Use a repository URL with ref and path, or a GitHub tree URL")
-    return GitHubSkillSource(parts[0], parts[1], parts[3], skill, "/".join(parts[4:]))
+    if len(parts) < 5 or parts[2] not in ("tree", "blob") or path is not None or ref != "HEAD":
+        return SkillImportError(400, "Use a repository URL with ref and path, or a GitHub tree or SKILL.md blob URL")
+    if parts[2] == "blob" and parts[-1] != "SKILL.md":
+        return SkillImportError(400, "GitHub blob URLs must identify a SKILL.md file")
+    directory: Final = parts[4:-1] if parts[2] == "blob" else parts[4:]
+    return GitHubSkillSource(parts[0], parts[1], parts[3], skill, "/".join(directory))
 
 
 async def fetch_skill_source(source: GitHubSkillSource, client: httpx.AsyncClient) -> bytes | SkillImportError:

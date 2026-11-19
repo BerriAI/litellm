@@ -2,10 +2,13 @@
 Repository classes for database operations.
 """
 
+from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.repositories.end_user_repository import EndUserRepository
+from litellm.repositories.jwt_key_mapping_repository import JWTKeyMappingRepository
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.object_permission_repository import (
@@ -21,7 +24,6 @@ from litellm.repositories.prisma_protocols import (
 )
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
-    AccessGroupRepository,
     AdaptiveRouterSessionRepository,
     AdaptiveRouterStateRepository,
     AgentsRepository,
@@ -38,11 +40,9 @@ from litellm.repositories.table_repositories import (
     DeletedTeamRepository,
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
-    EndUserRepository,
     GuardrailsRepository,
     HealthCheckRepository,
     InvitationLinkRepository,
-    JWTKeyMappingRepository,
     ManagedObjectRepository,
     ManagedVectorStoreIndexRepository,
     ManagedVectorStoresRepository,
@@ -62,8 +62,6 @@ from litellm.repositories.table_repositories import (
     SpendLogsRepository,
     SpendLogToolIndexRepository,
     SSOConfigRepository,
-    TagRepository,
-    TeamMembershipRepository,
     ToolRepository,
     UISettingsRepository,
     UserNotificationsRepository,
@@ -71,6 +69,8 @@ from litellm.repositories.table_repositories import (
     WorkflowMessageRepository,
     WorkflowRunRepository,
 )
+from litellm.repositories.tag_repository import TagRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
     BudgetCascadeUnitOfWork,
