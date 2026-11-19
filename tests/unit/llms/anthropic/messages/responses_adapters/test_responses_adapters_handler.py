@@ -120,23 +120,23 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
 @pytest.mark.parametrize(
     "request_params,wire_controls,preserve_instructions",
     [
-        ({}, {}, True),
+        ({}, {}, False),
         ({"store": False, "drop_params": True}, {"store": False}, False),
         ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
         ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {"store": False}, False),
         ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {"store": False}, False),
         ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {"store": False}, False),
-        ({"extra_body": {"store": None}}, {"store": None}, True),
+        ({"extra_body": {"store": None}}, {"store": None}, False),
         (
             {"store": False, "extra_body": {"conversation": "conv_prior"}},
             {"store": False, "conversation": "conv_prior"},
             True,
         ),
-        ({"store": True}, {"store": True}, True),
+        ({"store": True}, {"store": True}, False),
         ({"store": False}, {"store": False}, False),
         ({"extra_body": {"store": False}}, {"store": False}, False),
-        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
         ({"store": False, "conversation": "conv_prior"}, {"store": False}, True),
         (
@@ -196,7 +196,7 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         ),
     ],
 )
-async def test_messages_system_input_requires_forwarded_store_false(
+async def test_messages_system_goes_in_input_unless_the_request_continues_a_chain(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,

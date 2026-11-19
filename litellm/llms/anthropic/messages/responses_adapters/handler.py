@@ -204,14 +204,10 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
 def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
     extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
     dropped: Final = drop_policy(request_params).additional_drop_params
-    placement_fields: Final = ("store", "previous_response_id", "conversation", "truncation")
+    placement_fields: Final = ("previous_response_id", "conversation", "truncation")
     top_level: Final = {key: request_params.get(key) for key in placement_fields if key not in dropped}
     sent: Final = {key: extra_body.get(key, top_level.get(key)) for key in placement_fields}
-    return (
-        sent["store"] is not False
-        or bool(sent["previous_response_id"] or sent["conversation"])
-        or sent["truncation"] == "auto"
-    )
+    return bool(sent["previous_response_id"] or sent["conversation"]) or sent["truncation"] == "auto"
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
