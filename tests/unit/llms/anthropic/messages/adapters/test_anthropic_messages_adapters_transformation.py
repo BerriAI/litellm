@@ -7305,6 +7305,121 @@ async def test_an_effort_the_request_model_info_declares_still_wins_below_the_th
     assert target.sent_effort(json.loads(route.calls.last.request.read())) == "minimal"
 
 
+_CHAT_ADAPTER_HIGH_BUDGET: Final = {"type": "enabled", "budget_tokens": 16384}
+_ENTRY_DECLARING_TARGETS: Final = (
+    *_CHAT_ADAPTER_TARGETS,
+    pytest.param(_PROD_REASONER_WITH_BASE_MODEL_PARAM, id="azure-base_model"),
+)
+
+
+def _with_declared_levels(monkeypatch: pytest.MonkeyPatch, model: str, *levels: str) -> None:
+    _with_effort_flags(monkeypatch, model)
+    monkeypatch.setitem(
+        litellm.model_cost, model, {**litellm.model_cost[model], "reasoning_effort_levels": list(levels)}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("target", _ENTRY_DECLARING_TARGETS)
+async def test_a_level_the_entry_does_not_declare_beside_a_thinking_budget_sends_the_budget_effort_on_the_chat_adapter(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    target: _ChatAdapterTarget,
+) -> None:
+    _with_declared_levels(monkeypatch, target.model, "high")
+    budget_effort: Final = await _chat_adapter_effort_sent(
+        respx_mock, monkeypatch, target, None, thinking=_CHAT_ADAPTER_HIGH_BUDGET, drop_params=True
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = await _chat_adapter_effort_sent(
+            respx_mock,
+            monkeypatch,
+            target,
+            None,
+            thinking=_CHAT_ADAPTER_HIGH_BUDGET,
+            output_config={"effort": "medium"},
+            drop_params=True,
+        )
+
+    warnings: Final = _chat_adapter_drop_warnings(caplog)
+    assert budget_effort == "high"
+    assert sent == budget_effort
+    assert len(warnings) == 1
+    assert warnings[0].startswith("Dropping output_config.effort='medium' ")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("target", _ENTRY_DECLARING_TARGETS)
+async def test_a_level_the_entry_does_not_declare_beside_a_thinking_budget_answers_400_on_the_chat_adapter(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
+) -> None:
+    _with_declared_levels(monkeypatch, target.model, "high")
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"output_config\.effort=medium"):
+        await _chat_adapter_effort_sent(
+            respx_mock, monkeypatch, target, None, thinking=_CHAT_ADAPTER_HIGH_BUDGET, output_config={"effort": "medium"}
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
+async def test_only_a_lower_level_the_entry_declares_wins_over_a_thinking_budget_on_the_chat_adapter(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
+) -> None:
+    _with_declared_levels(monkeypatch, target.model, "low", "high")
+
+    sent: Final = {
+        effort: await _chat_adapter_effort_sent(
+            respx_mock,
+            monkeypatch,
+            target,
+            None,
+            thinking=_CHAT_ADAPTER_HIGH_BUDGET,
+            output_config={"effort": effort},
+            drop_params=True,
+        )
+        for effort in ("low", "minimal", "medium")
+    }
+
+    assert sent == {"low": "low", "minimal": "low", "medium": "high"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
+async def test_a_deployment_declaring_its_own_levels_overrides_the_entry_beside_a_thinking_budget_on_the_chat_adapter(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
+) -> None:
+    _with_declared_levels(monkeypatch, target.model, "high")
+
+    entry_only: Final = await _chat_adapter_effort_sent(
+        respx_mock,
+        monkeypatch,
+        target,
+        None,
+        thinking=_CHAT_ADAPTER_HIGH_BUDGET,
+        output_config={"effort": "medium"},
+        drop_params=True,
+    )
+    deployment_declared: Final = await _chat_adapter_effort_sent(
+        respx_mock,
+        monkeypatch,
+        target,
+        {"reasoning_effort_levels": ["medium", "high"]},
+        thinking=_CHAT_ADAPTER_HIGH_BUDGET,
+        output_config={"effort": "medium"},
+        drop_params=True,
+    )
+
+    assert entry_only == "high"
+    assert deployment_declared == "medium"
+
+
 _NOT_A_WHOLE_TOKEN_COUNT: Final = (
     pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": float("inf")}), id="inf"),
     pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": float("nan")}), id="nan"),

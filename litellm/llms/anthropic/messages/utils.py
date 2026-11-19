@@ -329,6 +329,7 @@ def reasoning_chat_config(model: str, custom_llm_provider: str, base_model: str 
 def responses_gate_refuses_effort_level(
     level: str, *, model: str, custom_llm_provider: str, deployment_model_info: object
 ) -> bool:
+    from litellm.litellm_core_utils.reasoning_effort_capability import entry_refuses_reasoning_effort_level
     from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
     from litellm.utils import ProviderConfigManager
@@ -340,6 +341,8 @@ def responses_gate_refuses_effort_level(
     gated_level: Final = normalize_reasoning_effort_value(
         level, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
     )
+    if entry_refuses_reasoning_effort_level(gated_level, model=provider_model, custom_llm_provider=custom_llm_provider):
+        return True
     chat_config: Final = reasoning_chat_config(model, custom_llm_provider, None)
     if isinstance(chat_config, OpenAIOSeriesConfig):
         return chat_config.refuses_reasoning_effort_level(provider_model, gated_level)

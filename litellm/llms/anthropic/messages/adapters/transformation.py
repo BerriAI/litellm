@@ -16,7 +16,10 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
-from litellm.litellm_core_utils.reasoning_effort_capability import drops_explicit_reasoning_effort
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    drops_explicit_reasoning_effort,
+    entry_refuses_reasoning_effort_level,
+)
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
     explicit_effort_goes_out_within_budget,
@@ -323,9 +326,17 @@ def _reasoning_chat_gate(model: str, custom_llm_provider: str, base_model: str |
         case OpenAIGPT5Config() | OpenAIOSeriesConfig():
             deployment_model: Final = local_model_name(model, custom_llm_provider)
             gated_model: Final = (base_model or deployment_model) if config.LOOKS_UP_BASE_MODEL else deployment_model
-            return partial(config.refuses_reasoning_effort_level, gated_model)
+            return partial(_chat_gate_refuses, config.refuses_reasoning_effort_level, gated_model, custom_llm_provider)
         case _:
             return None
+
+
+def _chat_gate_refuses(
+    config_refuses: Callable[[str, str], bool], model: str, custom_llm_provider: str, level: str
+) -> bool:
+    return entry_refuses_reasoning_effort_level(
+        level, model=model, custom_llm_provider=custom_llm_provider
+    ) or config_refuses(model, level)
 
 
 def _reasoning_effort_gate(

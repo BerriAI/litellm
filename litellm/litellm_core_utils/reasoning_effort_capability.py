@@ -119,6 +119,11 @@ def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -
     return declared_reasoning_efforts(entry)
 
 
+def entry_refuses_reasoning_effort_level(level: str, *, model: str, custom_llm_provider: str) -> bool:
+    declared: Final = declared_reasoning_efforts_for_model(model, custom_llm_provider)
+    return declared is not None and level not in declared
+
+
 _ROUNDING_KEY: Final = "reasoning_effort_rounding"
 _EFFORT_KEY: Final = "effort"
 _LOGGABLE_REQUESTED_LEVELS: Final = frozenset(

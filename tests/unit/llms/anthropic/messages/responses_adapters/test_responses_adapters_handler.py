@@ -2202,6 +2202,89 @@ async def test_an_effort_the_request_model_info_declares_still_wins_below_the_th
     assert json.loads(route.calls.last.request.read()).get("reasoning") == {"effort": "minimal"}
 
 
+HIGH_BUDGET: Final = {"type": "enabled", "budget_tokens": 16384}
+
+
+def _with_declared_levels(monkeypatch: pytest.MonkeyPatch, *levels: str) -> None:
+    _with_effort_flags(monkeypatch)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        BRIDGED_MODEL,
+        {**litellm.model_cost[BRIDGED_MODEL], "reasoning_effort_levels": list(levels)},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_level_the_entry_does_not_declare_beside_a_thinking_budget_sends_the_budget_effort_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _with_declared_levels(monkeypatch, "high")
+    budget_only: Final = await _bridged_reasoning_sent(
+        respx_mock, monkeypatch, None, thinking=HIGH_BUDGET, drop_params=True
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = await _bridged_reasoning_sent(
+            respx_mock, monkeypatch, None, thinking=HIGH_BUDGET, output_config={"effort": "medium"}, drop_params=True
+        )
+
+    warnings: Final = _drop_warnings(caplog)
+    assert budget_only == {"effort": "high"}
+    assert sent == budget_only
+    assert len(warnings) == 1
+    assert warnings[0].startswith("Dropping output_config.effort='medium' ")
+
+
+@pytest.mark.asyncio
+async def test_a_level_the_entry_does_not_declare_beside_a_thinking_budget_answers_400_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_declared_levels(monkeypatch, "high")
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"output_config\.effort=medium"):
+        await _bridged_reasoning_sent(
+            respx_mock, monkeypatch, None, thinking=HIGH_BUDGET, output_config={"effort": "medium"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_only_a_lower_level_the_entry_declares_wins_over_a_thinking_budget_on_the_responses_bridge(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_declared_levels(monkeypatch, "low", "high")
+
+    sent: Final = {
+        effort: await _bridged_reasoning_sent(
+            respx_mock, monkeypatch, None, thinking=HIGH_BUDGET, output_config={"effort": effort}, drop_params=True
+        )
+        for effort in ("low", "minimal", "medium")
+    }
+
+    assert sent == {"low": {"effort": "low"}, "minimal": {"effort": "low"}, "medium": {"effort": "high"}}
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_declaring_its_own_levels_overrides_the_entry_beside_a_thinking_budget(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_declared_levels(monkeypatch, "high")
+
+    entry_only: Final = await _bridged_reasoning_sent(
+        respx_mock, monkeypatch, None, thinking=HIGH_BUDGET, output_config={"effort": "medium"}, drop_params=True
+    )
+    deployment_declared: Final = await _bridged_reasoning_sent(
+        respx_mock,
+        monkeypatch,
+        {"reasoning_effort_levels": ["medium", "high"]},
+        thinking=HIGH_BUDGET,
+        output_config={"effort": "medium"},
+        drop_params=True,
+    )
+
+    assert entry_only == {"effort": "high"}
+    assert deployment_declared == {"effort": "medium"}
+
+
 NOT_A_WHOLE_TOKEN_COUNT: Final = (
     pytest.param({"type": "enabled", "budget_tokens": float("inf")}, id="inf"),
     pytest.param({"type": "enabled", "budget_tokens": float("nan")}, id="nan"),
