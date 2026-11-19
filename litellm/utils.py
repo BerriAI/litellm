@@ -7643,6 +7643,12 @@ def get_model_info_helper(
                 ),
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
+                cache_read_input_image_token_cost_priority=_model_info.get(
+                    "cache_read_input_image_token_cost_priority", None
+                ),
+                cache_read_input_image_token_cost_flex=_model_info.get(
+                    "cache_read_input_image_token_cost_flex", None
+                ),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
@@ -7754,6 +7760,12 @@ def get_model_info_helper(
                 ),
                 input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
+                input_cost_per_image_token_priority=_model_info.get(
+                    "input_cost_per_image_token_priority", None
+                ),
+                input_cost_per_image_token_flex=_model_info.get(
+                    "input_cost_per_image_token_flex", None
+                ),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
                 input_cost_per_image_token_batches=_model_info.get("input_cost_per_image_token_batches", None),
@@ -7846,6 +7858,9 @@ def get_model_info_helper(
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
                 output_cost_per_image_token_priority=_model_info.get("output_cost_per_image_token_priority", None),
+                output_cost_per_image_token_flex=_model_info.get(
+                    "output_cost_per_image_token_flex", None
+                ),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
