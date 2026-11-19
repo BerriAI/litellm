@@ -496,11 +496,12 @@ async def delete_budget(
             },
         )
 
-    response: Final = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
+    async with prisma_client.tx() as transaction:
+        unlinked_teams: Final = _UNLINKED_TEAM_ROWS.validate_python(
+            await transaction.query_raw(_UNLINK_TEAM_MEMBER_BUDGET, data.id)
+        )
+        response: Final = await transaction.litellm_budgettable.delete(where={"budget_id": data.id})
 
-    unlinked_teams: Final = _UNLINKED_TEAM_ROWS.validate_python(
-        await prisma_client.writer_db.query_raw(_UNLINK_TEAM_MEMBER_BUDGET, data.id)
-    )
     with service_target("team_member_budgets"):
         try:
             for team in unlinked_teams:
