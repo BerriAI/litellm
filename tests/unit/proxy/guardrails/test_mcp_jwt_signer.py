@@ -857,6 +857,7 @@ def test_initialize_guardrail_passes_all_params():
     litellm_params.optional_claims = ["groups"]
     litellm_params.debug_headers = True
     litellm_params.allowed_scopes = ["mcp:tools/call"]
+    litellm_params.ignore_client_mcp_auth_headers = True
 
     guardrail = {"guardrail_name": "mcp-jwt-signer"}
 
@@ -883,6 +884,7 @@ def test_initialize_guardrail_passes_all_params():
     assert signer.optional_claims == ["groups"]
     assert signer.debug_headers is True
     assert signer.allowed_scopes == ["mcp:tools/call"]
+    assert signer.ignore_client_mcp_auth_headers is True
 
 
 # ---------------------------------------------------------------------------

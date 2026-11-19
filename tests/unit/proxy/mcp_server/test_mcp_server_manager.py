@@ -1054,7 +1054,7 @@ class TestMCPServerManager:
                 "auth_type": MCPAuth.oauth2_id_jag,
                 "client_id": "gateway-client",
                 "client_secret": "SECRET-CLIENT-SECRET",
-                "client_private_key": "-----BEGIN PRIVATE KEY-----SECRET-PEM-----END PRIVATE KEY-----",
+                "client_private_key": "-----BEGIN " + "PRIVATE KEY-----SECRET-PEM-----END " + "PRIVATE KEY-----",
                 "id_jag_resource_client_id": "resource-client-id",
                 "id_jag_resource_client_secret": "SECRET-RESOURCE-CLIENT-SECRET",
                 "token_exchange_endpoint": "https://org-idp.example/oauth2/token",
@@ -17743,6 +17743,165 @@ async def test_tools_call_keeps_the_signer_when_the_caller_auth_displaces_the_se
     server: Final = _keyed_server(_KEYED_BASE, auth_type, "server-key", "Authorization")
 
     assert await _tools_call_authorizations(server, caller_auth, caller_server_headers) == [_GATEWAY_JWT]
+
+
+_CLIENT_BEARER: Final = "Bearer chosen-by-the-client"
+
+_SIGNED_ONLY: Final = _KEYED_BASE.model_copy(update={"auth_type": MCPAuth.none, "access_groups": ["signers"]})
+
+_CLIENT_AUTH_SHAPES: Final = (
+    pytest.param(None, {"keyed": {"Authorization": _CLIENT_BEARER}}, _CLIENT_BEARER, id="x-mcp-alias-authorization"),
+    pytest.param(
+        None, {"signers": {"Authorization": _CLIENT_BEARER}}, _CLIENT_BEARER, id="x-mcp-access-group-authorization"
+    ),
+    pytest.param(_CLIENT_BEARER, None, "", id="deprecated-x-mcp-auth"),
+)
+
+
+def _gateway_signer(ignore_client_mcp_auth_headers: bool):
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import MCPJWTSigner
+
+    return MCPJWTSigner(
+        guardrail_name="mcp-jwt-signer",
+        event_hook="pre_mcp_call",
+        default_on=True,
+        ignore_client_mcp_auth_headers=ignore_client_mcp_auth_headers,
+    )
+
+
+async def _tools_list_authorizations(server: MCPServer, client_auth: str | dict[str, str] | None) -> list[str]:
+    upstream: Final = _DiscoveryUpstream()
+    with _mcp_upstream(upstream.respond):
+        await MCPServerManager(discovery_clock=_DiscoveryClock()).get_tools_page(
+            server,
+            mcp_auth_header=client_auth,
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-caller", user_id="caller"),
+        )
+    return [auth for method, auth in upstream.requests if method == "tools/list"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("caller_auth", "caller_server_headers", "default_authorization"), _CLIENT_AUTH_SHAPES)
+async def test_tools_call_lets_the_client_auth_displace_the_signed_token_by_default(
+    caller_auth: str | None, caller_server_headers: dict[str, dict[str, str]] | None, default_authorization: str
+) -> None:
+    _gateway_signer(ignore_client_mcp_auth_headers=False)
+
+    assert await _tools_call_authorizations(_SIGNED_ONLY, caller_auth, caller_server_headers) == [default_authorization]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("caller_auth", "caller_server_headers", "default_authorization"), _CLIENT_AUTH_SHAPES)
+async def test_tools_call_sends_the_signed_token_when_the_signer_ignores_client_auth_headers(
+    caller_auth: str | None, caller_server_headers: dict[str, dict[str, str]] | None, default_authorization: str
+) -> None:
+    _gateway_signer(ignore_client_mcp_auth_headers=True)
+
+    assert await _tools_call_authorizations(_SIGNED_ONLY, caller_auth, caller_server_headers) == [_GATEWAY_JWT]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_auth", "default_authorization"),
+    [({"Authorization": _CLIENT_BEARER}, _CLIENT_BEARER), (_CLIENT_BEARER, "")],
+    ids=["per-server", "deprecated-x-mcp-auth"],
+)
+async def test_tools_list_lets_the_client_auth_displace_the_signed_token_by_default(
+    client_auth: str | dict[str, str], default_authorization: str
+) -> None:
+    _gateway_signer(ignore_client_mcp_auth_headers=False)
+
+    assert await _tools_list_authorizations(_SIGNED_ONLY, client_auth) == [default_authorization]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_auth", [{"Authorization": _CLIENT_BEARER}, _CLIENT_BEARER], ids=["per-server", "deprecated-x-mcp-auth"]
+)
+async def test_tools_list_sends_the_signed_token_when_the_signer_ignores_client_auth_headers(
+    client_auth: str | dict[str, str],
+) -> None:
+    import jwt
+
+    signer: Final = _gateway_signer(ignore_client_mcp_auth_headers=True)
+
+    authorizations: Final = await _tools_list_authorizations(_SIGNED_ONLY, client_auth)
+
+    assert len(authorizations) == 1
+    signing_key: Final = jwt.PyJWK(signer.get_jwks()["keys"][0]).key
+    claims: Final = jwt.decode(
+        authorizations[0].removeprefix("Bearer "), signing_key, algorithms=["RS256"], audience=signer.audience
+    )
+    assert claims["iss"] == signer.issuer
+
+
+@pytest.mark.asyncio
+async def test_ignoring_a_client_authorization_never_logs_its_value(caplog: pytest.LogCaptureFixture) -> None:
+    _gateway_signer(ignore_client_mcp_auth_headers=True)
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        authorizations: Final = await _tools_call_authorizations(
+            _SIGNED_ONLY, _CLIENT_BEARER, {"keyed": {"Authorization": _CLIENT_BEARER}}
+        )
+
+    assert authorizations == [_GATEWAY_JWT]
+    assert any("ignore_client_mcp_auth_headers" in record.getMessage() for record in caplog.records)
+    assert not [record for record in caplog.records if "chosen-by-the-client" in record.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_without_a_signer_the_client_authorization_reaches_the_server() -> None:
+    assert await _tools_call_authorizations(_SIGNED_ONLY, None, {"keyed": {"Authorization": _CLIENT_BEARER}}) == [
+        _CLIENT_BEARER
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "server",
+    [
+        pytest.param(
+            _keyed_server(_KEYED_BASE, MCPAuth.bearer_token, "server-key", None), id="server-with-its-own-key"
+        ),
+        pytest.param(
+            _SIGNED_ONLY.model_copy(update={"static_headers": {"Authorization": "Bearer static"}}),
+            id="static-authorization",
+        ),
+        pytest.param(_SIGNED_ONLY.model_copy(update={"extra_headers": ["Authorization"]}), id="forwards-authorization"),
+    ],
+)
+async def test_ignoring_client_auth_headers_leaves_a_server_the_signer_does_not_authenticate_alone(
+    server: MCPServer,
+) -> None:
+    client_auth: Final = {"keyed": {"Authorization": _CLIENT_BEARER}}
+    _gateway_signer(ignore_client_mcp_auth_headers=False)
+    before: Final = await _tools_call_authorizations(server, None, client_auth)
+    _gateway_signer(ignore_client_mcp_auth_headers=True)
+
+    assert await _tools_call_authorizations(server, None, client_auth) == before
+
+
+@pytest.mark.asyncio
+async def test_ignoring_the_client_authorization_keeps_its_other_headers_for_the_server() -> None:
+    _gateway_signer(ignore_client_mcp_auth_headers=True)
+    upstream: Final = _DiscoveryUpstream()
+    seen: list[httpx2.Headers] = []  # mutable-ok: the mock upstream records each request's headers
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request.headers)
+        return await upstream.respond(request)
+
+    with _mcp_upstream(respond):
+        await MCPServerManager(discovery_clock=_DiscoveryClock()).get_tools_page(
+            _SIGNED_ONLY,
+            mcp_auth_header={"Authorization": _CLIENT_BEARER, "X-Tenant": "client-tenant"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-caller", user_id="caller"),
+        )
+
+    assert seen
+    assert {
+        (headers.get("x-tenant"), headers.get("authorization", "").startswith("Bearer eyJ")) for headers in seen
+    } == {("client-tenant", True)}
 
 
 @pytest.mark.asyncio

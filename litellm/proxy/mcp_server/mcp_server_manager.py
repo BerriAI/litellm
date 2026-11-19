@@ -1345,7 +1345,43 @@ def _server_auth_header_for(
         if mcp_server_auth_headers
         else None
     )
-    return mcp_auth_header if server_specific is None else server_specific
+    return without_signed_token_slot(server, mcp_auth_header if server_specific is None else server_specific)
+
+
+def _names_authorization(headers: Iterable[object] | None) -> bool:
+    return any(isinstance(name, str) and name.lower() == "authorization" for name in headers or ())
+
+
+def _signed_token_overrides_client_auth(server: MCPServer) -> bool:
+    if server.spec_path or server.is_byok or server.auth_type not in (None, MCPAuth.none):
+        return False
+    if _names_authorization(server.extra_headers) or _names_authorization(server.static_headers):
+        return False
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import get_mcp_jwt_signer
+
+    signer: Final = get_mcp_jwt_signer()
+    return signer is not None and signer.ignore_client_mcp_auth_headers
+
+
+def without_signed_token_slot(
+    server: MCPServer,
+    client_auth: str | dict[str, str] | None,  # mutable-ok: returned unchanged to the dict-typed client sinks
+) -> str | dict[str, str] | None:  # mutable-ok: create_mcp_client and ListedToolsCaller take this shape
+    """The client's auth for ``server`` minus any ``Authorization`` the MCP JWT signer's token must fill.
+
+    Only a server whose sole credential is the signed token qualifies, and only when the signer sets
+    ``ignore_client_mcp_auth_headers``. Other client headers for the server are kept.
+    """
+    if not client_auth or not _signed_token_overrides_client_auth(server):
+        return client_auth
+    if isinstance(client_auth, dict) and not _names_authorization(client_auth):
+        return client_auth
+    verbose_logger.debug(
+        "MCPServerManager: ignoring the client-supplied Authorization for server '%s' because "
+        "ignore_client_mcp_auth_headers is set on the MCP JWT signer. The signed token is sent instead.",
+        server.server_name or server.name,
+    )
+    return without_header(client_auth, DEFAULT_CREDENTIAL_HEADER) if isinstance(client_auth, dict) else None
 
 
 def _v1_default_key_header(auth_type: MCPAuthType) -> str | None:
@@ -4630,9 +4666,12 @@ class MCPServerManager:
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
 
         client = None
+        client_auth_header: Final = without_signed_token_slot(server, mcp_auth_header)
         listed_caller: Final = ListedToolsCaller(
             user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=_catalog_auth_header(mcp_auth_header, catalog_auth_header),
+            mcp_auth_header=without_signed_token_slot(
+                server, _catalog_auth_header(mcp_auth_header, catalog_auth_header)
+            ),
             raw_headers=raw_headers,
             oauth2_headers=oauth2_headers,
         )
@@ -4681,7 +4720,7 @@ class MCPServerManager:
                 if (
                     get_mcp_jwt_signer() is not None
                     and not has_static_authorization
-                    and not mcp_auth_header
+                    and (not client_auth_header or _signed_token_overrides_client_auth(server))
                     and not has_extra_authorization
                     and not _server_key_occupies_authorization(server)
                 ):
@@ -4698,7 +4737,7 @@ class MCPServerManager:
 
             client = await self.create_mcp_client(  # rebind-ok: pre-existing rebinding on a rename-only line
                 server=server,
-                mcp_auth_header=mcp_auth_header,
+                mcp_auth_header=client_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
@@ -4747,7 +4786,7 @@ class MCPServerManager:
                         self._discovery_key,
                         server,
                         user_api_key_auth,
-                        mcp_auth_header,
+                        client_auth_header,
                         extra_headers,
                         stdio_env,
                         subject_token,

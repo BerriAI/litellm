@@ -62,6 +62,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         debug_headers=_get("debug_headers") or False,
         # FR-10: configurable scopes
         allowed_scopes=_get("allowed_scopes"),
+        ignore_client_mcp_auth_headers=_get("ignore_client_mcp_auth_headers") or False,
         timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(signer)
