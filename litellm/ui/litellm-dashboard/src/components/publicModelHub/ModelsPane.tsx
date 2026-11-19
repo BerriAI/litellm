@@ -1,7 +1,7 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, Boxes, ChevronRight } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, Boxes } from "lucide-react";
 import type { MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -9,7 +9,7 @@ import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
@@ -42,7 +42,7 @@ type Models = HubData["models"];
 const filterSection = "min-w-0 border-b border-b-border pb-[22px] last:border-b-0";
 const filterLegend = "mb-3 text-xs leading-[1.2] font-semibold";
 const modeButton =
-  "h-auto gap-[normal] rounded-none border border-transparent bg-transparent px-3 py-[7px] text-xs leading-[1.6] font-normal text-muted-foreground hover:border-border hover:bg-background hover:text-foreground aria-pressed:border-(--catalog-rule-strong) aria-pressed:bg-muted aria-pressed:text-foreground dark:hover:bg-background max-[640px]:px-[9px]";
+  "h-auto gap-[normal] rounded-none border border-transparent bg-transparent px-3 py-[7px] text-xs leading-[1.6] font-normal text-muted-foreground hover:border-border hover:bg-background hover:text-foreground focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground active:not-aria-[haspopup]:translate-y-0 aria-pressed:border-(--catalog-rule-strong) aria-pressed:bg-muted aria-pressed:text-foreground aria-pressed:hover:border-border aria-pressed:focus-visible:border-(--catalog-rule-strong) focus-visible:hover:border-border dark:hover:bg-background dark:aria-pressed:hover:bg-muted max-[640px]:px-[9px]";
 const tableCell = "h-[66px] px-4 py-3 text-[13px] leading-[1.6] font-normal text-foreground max-[640px]:px-3";
 const tableHeading = "h-auto py-3.5 text-[11px] font-medium text-muted-foreground";
 
@@ -123,11 +123,14 @@ function CatalogFilter({
             key={option.value}
             className="flex cursor-pointer items-center gap-2.5 text-xs leading-[1.6] font-normal"
           >
-            <Checkbox
-              className="size-3.5 rounded-[2px] border-muted-foreground shadow-none data-checked:border-muted-foreground"
+            <Input
+              type="checkbox"
+              className="size-3.5 shrink-0 appearance-auto rounded-none border-0 bg-transparent p-0 accent-foreground shadow-none focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground focus-visible:ring-0 dark:bg-transparent"
               checked={values.includes(option.value)}
-              onCheckedChange={(checked) =>
-                onChange(checked ? [...values, option.value] : values.filter((value) => value !== option.value))
+              onChange={(event) =>
+                onChange(
+                  event.target.checked ? [...values, option.value] : values.filter((value) => value !== option.value),
+                )
               }
             />
             <span className="min-w-0 break-words">{option.label}</span>
@@ -176,7 +179,7 @@ function ModelFilters({ hub }: { hub: HubData }) {
             value={models.providerValues}
             onValueChange={models.onProvidersChange}
             placeholder={t("publicModelHub.catalog.allProviders")}
-            className="min-h-[38px] gap-[5px] rounded-[7px] border bg-card py-2 pr-[25px] pl-[29px] text-xs leading-[1.6] font-normal text-foreground shadow-none dark:bg-card [&_input::placeholder]:text-foreground [&_input::placeholder]:opacity-100"
+            className="min-h-[38px] gap-[5px] rounded-[7px] border bg-card py-2 pr-[25px] pl-[29px] text-xs leading-[1.6] font-normal text-foreground shadow-none dark:bg-card [&_input]:leading-[1.35] [&_input::placeholder]:text-foreground [&_input::placeholder]:opacity-100"
             contentClassName={catalogTypography}
           />
           <svg
@@ -257,7 +260,9 @@ function ModelLink({
       className="flex min-h-0 min-w-0 items-center gap-3 rounded-sm text-sm leading-[1.6] outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
       onClick={follow}
     >
-      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <svg className="size-3.5 shrink-0 text-muted-foreground" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="m6 4 4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
       <ProviderAvatar
         provider={model.providers?.[0] ?? ""}
         className="size-[30px] shrink-0 gap-[3px] rounded-sm ring-0"

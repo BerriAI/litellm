@@ -43,10 +43,10 @@ export function CatalogNavbar({
   const hideCommunity = useDisableShowPrompts();
   const inputRef = useRef<HTMLInputElement>(null);
   const iconButton =
-    "grid size-[34px] place-items-center rounded-md border bg-transparent p-0 font-normal text-foreground shadow-none hover:border-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground focus-visible:ring-0 dark:bg-transparent [&_svg]:size-[19px]";
+    "grid size-[34px] place-items-center rounded-md border bg-transparent p-0 text-base leading-[1.6] font-normal text-foreground shadow-none hover:border-foreground hover:bg-accent focus-visible:border-border focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground focus-visible:ring-0 active:not-aria-[haspopup]:translate-y-0 aria-expanded:bg-transparent dark:bg-transparent dark:hover:bg-accent [&_svg]:size-[19px]";
   const navTab =
     "flex cursor-pointer items-center border-b-2 border-b-transparent text-[13px] leading-[1.6] font-normal whitespace-nowrap text-muted-foreground hover:border-b-primary hover:text-primary data-active:border-b-primary data-active:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 max-[640px]:min-h-11";
-  const menuItem = "rounded-none px-3 py-2.5 text-[13px] leading-[1.6] font-normal";
+  const menuItem = "cursor-pointer rounded-none px-3 py-2.5 text-[13px] leading-[1.6] font-normal hover:bg-accent";
 
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -136,7 +136,7 @@ export function CatalogNavbar({
             />
             <InputGroupAddon align="inline-end" className="p-0 has-[>kbd]:mr-0 [&>kbd]:rounded-none">
               <Kbd
-                className="h-auto min-w-0 rounded-none bg-transparent p-0 font-mono text-[9px] leading-normal font-normal opacity-80 min-[641px]:max-[900px]:hidden"
+                className="h-auto min-w-0 rounded-none bg-transparent p-0 font-mono text-[9px] leading-[normal] font-normal opacity-80 min-[641px]:max-[900px]:hidden"
                 aria-hidden="true"
               >
                 ⌘ K
@@ -149,10 +149,10 @@ export function CatalogNavbar({
             href={DOCS_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs whitespace-nowrap text-muted-foreground no-underline hover:text-foreground max-[1180px]:hidden"
+            className="text-xs leading-[1.6] whitespace-nowrap text-muted-foreground no-underline hover:text-foreground max-[1180px]:hidden"
             aria-label={t("shell.docsLink.label")}
           >
-            {t("shell.docsLink.label")} ↗
+            {`${t("shell.docsLink.label")} ↗`}
           </a>
           <Button
             type="button"
@@ -170,7 +170,7 @@ export function CatalogNavbar({
               fill="none"
               stroke="currentColor"
               strokeWidth="1.5"
-              className="dark:hidden"
+              className="size-[19px] dark:hidden"
               aria-hidden="true"
             >
               <path d="M20.8 13.1A9 9 0 0 1 10.9 3.2 9 9 0 1 0 20.8 13.1Z" />
@@ -182,7 +182,7 @@ export function CatalogNavbar({
               fill="none"
               stroke="currentColor"
               strokeWidth="1.5"
-              className="hidden dark:block"
+              className="hidden size-[19px] dark:block"
               aria-hidden="true"
             >
               <circle cx="12" cy="12" r="4" />
@@ -206,7 +206,7 @@ export function CatalogNavbar({
             <DropdownMenuContent
               align="end"
               sideOffset={11}
-              className={`${catalogTypography} min-w-[210px] rounded-lg border border-border bg-card p-2 shadow-[0_12px_30px_rgb(0_0_0/16%)]`}
+              className={`${catalogTypography} min-w-[210px] rounded-lg border border-border bg-card p-2 shadow-[0_12px_30px_rgb(0_0_0/16%)] ring-0`}
             >
               <DropdownMenuItem
                 className={menuItem}

@@ -11,6 +11,7 @@
   --background: #f7f8fa;
   --card: #fff;
   --catalog-hover: #edf0f5;
+  --catalog-focus-ring: rgba(36, 69, 231, 0.16);
   --card-foreground: var(--foreground);
   --popover: var(--card);
   --popover-foreground: var(--foreground);
@@ -40,7 +41,8 @@
   --card: #191b20;
   --catalog-hover: #23262c;
   --muted: var(--card);
-  --accent: #24272d;
+  --accent: #ffffff05;
+  --catalog-focus-ring: rgba(145, 162, 255, 0.2);
   --primary-foreground: var(--background);
 }
 
