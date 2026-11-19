@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 from base64 import urlsafe_b64encode
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -14934,6 +14935,25 @@ async def test_optional_cimd_discovery_preserves_the_callers_configured_endpoint
     assert discovery.call_count > 0
 
 
+class _OneCredentialRow:
+    def __init__(self) -> None:
+        self.credential_b64: str | None = None
+
+    async def find_unique(self, where: object) -> SimpleNamespace | None:
+        if self.credential_b64 is None:
+            return None
+        return SimpleNamespace(credential_b64=self.credential_b64, updated_at=None)
+
+    async def upsert(self, where: object, data: Mapping[str, Mapping[str, str]]) -> None:
+        self.credential_b64 = data["create"]["credential_b64"]
+
+    async def update_many(self, where: Mapping[str, str], data: Mapping[str, str]) -> int:
+        if where["credential_b64"] != self.credential_b64:
+            return 0
+        self.credential_b64 = data["credential_b64"]
+        return 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", [None, "https://renamed-gateway.example.com"])
 async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
@@ -14955,20 +14975,16 @@ async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
     server: Final = _cimd_oauth_server()
     mcp_server_manager.global_mcp_server_manager.registry[server.server_id] = server
     identity: Final = "https://gateway.example.com/oauth/client-metadata.json"
-    table: Final = proxy_server.prisma_client.db.litellm_mcpusercredentials
-    table.find_unique = AsyncMock(return_value=None)
-    table.upsert = AsyncMock()
+    table: Final = _OneCredentialRow()
+    monkeypatch.setattr(proxy_server.prisma_client.db, "litellm_mcpusercredentials", table)
+    monkeypatch.setattr(proxy_server.prisma_client, "writer_db", proxy_server.prisma_client.db, raising=False)
     await endpoints._store_per_user_token_server_side(
         server,
         "jwt-owner",
         {"access_token": "expired", "refresh_token": "saved-refresh", "expires_in": -1},
         cimd_client_id=identity,
     )
-
-    async def saved_row(**kwargs):
-        return SimpleNamespace(credential_b64=table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
-
-    table.find_unique.side_effect = saved_row
+    await db.record_oauth_scope_refusal(proxy_server.prisma_client, "jwt-owner", server.server_id, "gist")
     if origin is None:
         monkeypatch.delenv("PROXY_BASE_URL")
     else:
@@ -14992,8 +15008,7 @@ async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
     assert parse_qs(upstream.calls[0].request.content.decode())["client_id"] == [identity]
     persisted: Final = await db.get_user_oauth_credential(proxy_server.prisma_client, "jwt-owner", server.server_id)
     assert persisted is not None and persisted["cimd_client_id"] == identity
-    assert persisted["refresh_token"] == "rotated"
-    assert table.upsert.await_count == 2
+    assert (persisted["refresh_token"], persisted.get("needs_scopes")) == ("rotated", ["gist"])
 
 
 @pytest.mark.asyncio
@@ -15289,8 +15304,13 @@ async def test_managed_scope_code_cannot_cross_oauth_boundaries(jwt_oauth_identi
     ],
 )
 async def test_managed_refresh_retains_only_the_actual_grant(
-    jwt_oauth_identity, monkeypatch, respx_mock, scope, requested_scope, expected
-):
+    jwt_oauth_identity: tuple[_JwtOAuthConfig, "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    scope: str | None,
+    requested_scope: str | None,
+    expected: list[str],
+) -> None:
     from types import SimpleNamespace
 
     from litellm.proxy import proxy_server
@@ -15316,6 +15336,8 @@ async def test_managed_refresh_retains_only_the_actual_grant(
     table = proxy_server.prisma_client.db.litellm_mcpusercredentials
     table.find_unique = AsyncMock(return_value=SimpleNamespace(credential_b64=credential))
     table.upsert = AsyncMock()
+    table.update_many = AsyncMock(return_value=1)
+    monkeypatch.setattr(proxy_server.prisma_client, "writer_db", proxy_server.prisma_client.db, raising=False)
     upstream = respx_mock.post(server.token_url).respond(
         200,
         json={
@@ -15340,7 +15362,7 @@ async def test_managed_refresh_retains_only_the_actual_grant(
         refresh_token="owner-refresh",
         scope=requested_scope,
     )
-    saved = db.decode_oauth_payload(table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    saved: Final = db.decode_oauth_payload(table.update_many.call_args.kwargs["data"]["credential_b64"])
     assert saved is not None and saved.get("scopes") == expected
     assert upstream.call_count == 1
     from urllib.parse import parse_qs

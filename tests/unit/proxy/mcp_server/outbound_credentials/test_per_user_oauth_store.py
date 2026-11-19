@@ -1,4 +1,7 @@
 import asyncio
+from collections.abc import Mapping
+from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -33,8 +36,11 @@ def credential_database(monkeypatch):
     from litellm.proxy import proxy_server
 
     prisma = MagicMock()
+    prisma.writer_db = prisma.db
     table = prisma.db.litellm_mcpusercredentials
     table.upsert = AsyncMock()
+    table.create = AsyncMock()
+    table.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setenv("LITELLM_SALT_KEY", "credential-persistence-test-salt")
     return table
@@ -78,9 +84,104 @@ async def test_native_refresh_persists_actual_grant_through_storage_adapter(
     refresher = AuthorizationCodeRefresher(lambda _: server, token_endpoint, _persist_credential)
     refreshed = await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="refresh", scopes=prior_scopes))
     assert refreshed is not None and refreshed.scopes == tuple(expected)
-    payload = decode_oauth_payload(credential_database.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    payload: Final = decode_oauth_payload(credential_database.create.call_args.kwargs["data"]["credential_b64"])
     assert payload is not None and payload.get("scopes") == expected
     assert payload["access_token"] == "rotated"
+
+
+@pytest.mark.asyncio
+async def test_native_refresh_keeps_the_scope_refusal_until_the_next_sign_in(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    from litellm.proxy.mcp_server.db import (
+        get_user_oauth_credential,
+        record_oauth_scope_refusal,
+        store_user_oauth_credential,
+    )
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeRefresher
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _persist_credential
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server: Final = MCPServer(
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        token_url="https://idp.example/token",
+        client_id="client",
+        client_secret="secret",
+    )
+
+    async def token_endpoint(url: str, form: Mapping[str, str], headers: Mapping[str, str]) -> dict[str, object]:
+        return {"access_token": "rotated", "expires_in": 3600}
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv", "old", refresh_token="refresh")
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv", "gist")
+    refresher: Final = AuthorizationCodeRefresher(lambda _: server, token_endpoint, _persist_credential)
+    await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="refresh"))
+
+    refreshed: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv")
+    assert refreshed is not None
+    assert (refreshed["access_token"], refreshed.get("needs_scopes")) == ("rotated", ["gist"])
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv", "signed-in")
+    signed_in: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv")
+    assert signed_in is not None and "needs_scopes" not in signed_in
+
+
+@pytest.mark.asyncio
+async def test_native_refresh_after_a_newer_sign_in_returns_no_token(credentials_prisma: SimpleNamespace) -> None:
+    from litellm.proxy.mcp_server.db import get_user_oauth_credential, store_user_oauth_credential
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeRefresher
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _persist_credential
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server: Final = MCPServer(
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        token_url="https://idp.example/token",
+        client_id="client",
+        client_secret="secret",
+    )
+
+    async def token_endpoint(url: str, form: Mapping[str, str], headers: Mapping[str, str]) -> dict[str, object]:
+        return {"access_token": "from-old-refresh", "expires_in": 3600}
+
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv", "signed-in", refresh_token="rt-new", expires_in=3600
+    )
+    refresher: Final = AuthorizationCodeRefresher(lambda _: server, token_endpoint, _persist_credential)
+
+    refreshed: Final = await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="rt-old"))
+
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv")
+    assert (refreshed, saved["access_token"] if saved else None) == (None, "signed-in")
+
+
+@pytest.mark.asyncio
+async def test_saved_credential_is_read_from_the_writer(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server.db import store_user_oauth_credential
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _read_credential
+
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv", "old", refresh_token="rt-old")
+    before_the_sign_in: Final = dict(rows.rows)
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv", "signed-in", refresh_token="rt-new")
+
+    async def lagging_read(where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
+        pair: Final = where["user_id_server_id"]
+        return before_the_sign_in.get((pair["user_id"], pair["server_id"]))
+
+    monkeypatch.setattr(
+        credentials_prisma, "db", SimpleNamespace(litellm_mcpusercredentials=SimpleNamespace(find_unique=lagging_read))
+    )
+
+    saved: Final = await _read_credential("alice", "srv")
+
+    assert saved is not None and saved["access_token"] == "signed-in"
 
 
 class _BlockingStore:

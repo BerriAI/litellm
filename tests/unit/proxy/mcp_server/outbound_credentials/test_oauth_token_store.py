@@ -1,7 +1,7 @@
 """Tests for the v2 OAuth token cache and refresh (CachedOAuthTokenStore, RefreshingTokenStore)."""
 
 import asyncio
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Final, List, Optional, Tuple
 
 import pytest
 
@@ -211,6 +211,27 @@ async def test_refreshing_returns_none_when_it_cannot_refresh():
     store = RefreshingTokenStore(src, src, expiry_skew_seconds=30, clock=_Clock(1000.0))
     # expired and unrefreshable -> None (the arm challenges), never a stale bearer
     assert await store.fetch("u", "s") is None
+
+
+class _SignInDuringRefresh:
+    def __init__(self) -> None:
+        self._current: OAuthToken = OAuthToken(access_token="old", expires_at=900.0)
+
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+        return self._current
+
+    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
+        self._current = OAuthToken(access_token="signed-in", expires_at=9999.0)
+        return None
+
+
+async def test_refreshing_serves_the_saved_token_when_a_refresh_is_not_kept() -> None:
+    src: Final = _SignInDuringRefresh()
+    store: Final = RefreshingTokenStore(src, src, expiry_skew_seconds=30, clock=_Clock(1000.0))
+
+    token: Final = await store.fetch("u", "s")
+
+    assert token is not None and token.access_token == "signed-in"
 
 
 async def test_refreshing_is_single_flight_under_concurrency():
