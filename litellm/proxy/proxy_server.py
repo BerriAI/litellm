@@ -401,6 +401,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
     attribute_or_none,
+    dict_from_pairs,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
@@ -1099,6 +1100,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
+    query_raw_rows,
     run_off_loop_if_fips,
     update_spend,
 )
@@ -2615,32 +2617,26 @@ def _config_param_table(client: PrismaClient | None, *, use_writer: bool = False
     )
 
 
-class _TTFTRow(TypedDict):
-    api_base: str
-    model: str
-    time_to_first_token: float
-    request_id: str
-    day: str
+async def _query_raw_rows(
+    prisma_client: PrismaClient, sql_query: str, *args: object
+) -> Sequence[Mapping[str, object]] | None:
+    return await query_raw_rows(prisma_client.db, sql_query, *args)
 
 
-class _LatencyRow(TypedDict):
-    api_base: str | None
-    model: str
-    day: str
-    avg_latency_per_token: float
+class _KeysAndGetItem(Protocol):
+    def keys(self) -> Iterable[object]: ...
+
+    def __getitem__(self, key: object, /) -> object: ...
 
 
-class _ExceptionRow(TypedDict, total=False):
-    combined_model_api_base: str
-    total_exceptions: int
-    exception_counts: Mapping[str, int]
+class _SupportsItems(Protocol):
+    def items(self) -> Iterable[tuple[object, object]]: ...
 
 
-_RawQueryRowT = TypeVar("_RawQueryRowT")
-
-
-async def _query_raw_rows(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RawQueryRowT] | None:
-    return await prisma_client.db.query_raw(sql_query, *args)
+def _dict_update_source(value: object) -> _KeysAndGetItem:
+    if has_attributes(value, _KeysAndGetItem, "keys"):
+        return value
+    return dict_from_pairs(value)
 
 
 @app.exception_handler(RequestValidationError)
@@ -7359,9 +7355,11 @@ class ProxyConfig:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
                             litellm.logging_callback_manager.add_litellm_success_callback(
-                                get_instance_fn(
-                                    value=callback,
-                                    config_file_path=config_file_path,
+                                _UNTYPED_VALUE.validate_python(
+                                    get_instance_fn(
+                                        value=callback,
+                                        config_file_path=config_file_path,
+                                    )
                                 )
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
@@ -7386,9 +7384,11 @@ class ProxyConfig:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
                             litellm.logging_callback_manager.add_litellm_failure_callback(
-                                get_instance_fn(
-                                    value=callback,
-                                    config_file_path=config_file_path,
+                                _UNTYPED_VALUE.validate_python(
+                                    get_instance_fn(
+                                        value=callback,
+                                        config_file_path=config_file_path,
+                                    )
                                 )
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
@@ -7409,9 +7409,11 @@ class ProxyConfig:
                     for callback in value:
                         if "." in callback:
                             litellm.audit_log_callbacks.append(
-                                get_instance_fn(
-                                    value=callback,
-                                    config_file_path=config_file_path,
+                                _UNTYPED_VALUE.validate_python(
+                                    get_instance_fn(
+                                        value=callback,
+                                        config_file_path=config_file_path,
+                                    )
                                 )
                             )
                         else:
@@ -18589,9 +18591,7 @@ async def model_streaming_metrics(
         """
 
     _all_api_bases: Final = set()
-    db_response: Final[Sequence[_TTFTRow] | None] = await _query_raw_rows(
-        prisma_client, sql_query, _selected_model_group, startTime, endTime
-    )
+    db_response: Final = await _query_raw_rows(prisma_client, sql_query, _selected_model_group, startTime, endTime)
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
     if db_response is not None:
         for model_data in db_response:
@@ -18611,7 +18611,7 @@ async def model_streaming_metrics(
                 if _day not in _daily_entries:
                     _daily_entries[_day] = {}
             _combined_model_name = str(_model)
-            if "https://" in _api_base:
+            if json_contains(_api_base, "https://"):
                 _combined_model_name = str(_api_base)
             if "/openai/" in _combined_model_name:
                 _combined_model_name = _combined_model_name.split("/openai/")[0]
@@ -18713,7 +18713,7 @@ async def model_metrics(
             avg_latency_per_token DESC;
     """
     _all_api_bases: Final = set()
-    db_response: Final[Sequence[_LatencyRow] | None] = await _query_raw_rows(
+    db_response: Final = await _query_raw_rows(
         prisma_client, sql_query, _selected_model_group, startTime, endTime, api_key, customer
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
@@ -18727,7 +18727,7 @@ async def model_metrics(
             if _day not in _daily_entries:
                 _daily_entries[_day] = {}
             _combined_model_name = str(_model)
-            if _api_base is not None and "https://" in _api_base:
+            if _api_base is not None and json_contains(_api_base, "https://"):
                 _combined_model_name = str(_api_base)
             if _combined_model_name is not None and "/openai/" in _combined_model_name:
                 _combined_model_name = _combined_model_name.split("/openai/")[0]
@@ -18901,7 +18901,7 @@ async def model_metrics_exceptions(
         ORDER BY total_exceptions DESC
         LIMIT 200;
     """
-    db_response: Final[Sequence[_ExceptionRow] | None] = await _query_raw_rows(
+    db_response: Final = await _query_raw_rows(
         prisma_client, sql_query, startTime, endTime, _selected_model_group, api_key
     )
     response: Final[list[dict]] = []
@@ -18926,10 +18926,10 @@ async def model_metrics_exceptions(
             curr_row = {
                 "model": model,
                 "total_exceptions": total_exceptions,
+                **dict(_dict_update_source(exception_counts)),
             }
-            curr_row.update(exception_counts)
             response.append(curr_row)
-            for k, v in exception_counts.items():
+            for k, v in require_attributes(exception_counts, _SupportsItems, "items").items():
                 exception_types.add(k)
 
     return {"data": response, "exception_types": list(exception_types)}

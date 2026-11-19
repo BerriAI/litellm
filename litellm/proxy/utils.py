@@ -20,7 +20,6 @@ from collections.abc import (
     Awaitable,
     Callable,
     Coroutine,
-    Iterable,
     Iterator,
     Mapping,
     Sequence,
@@ -55,7 +54,7 @@ from typing import (
 
 import anyio
 import httpx
-from typing_extensions import Never, NotRequired, ReadOnly, TypedDict, Unpack
+from typing_extensions import Never, ReadOnly, TypedDict, Unpack
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
@@ -194,6 +193,7 @@ from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_fo
 from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     coerce_token_limit,
+    decoded_json_object,
     get_or_create_metadata_bucket,
     has_attributes,
     independent_snapshot,
@@ -401,17 +401,6 @@ class _RelTuplesRow(TypedDict):
     reltuples: ReadOnly[int]
 
 
-class _TeamMemberRow(TypedDict):
-    role: ReadOnly[Literal["admin", "user"]]
-    user_id: ReadOnly[NotRequired[str | None]]
-    user_email: ReadOnly[NotRequired[str | None]]
-
-
-class _TeamMembershipRow(TypedDict):
-    user_id: ReadOnly[str | None]
-    team_members_with_roles: ReadOnly[Iterable[_TeamMemberRow] | None]
-
-
 class _DualCacheGetKwargs(TypedDict, total=False, extra_items=object):
     parent_otel_span: ReadOnly[Span | None]
 
@@ -487,16 +476,17 @@ def _query_first_row(
     return db.query_first(query, *args)
 
 
-def _team_member_for_user(row: _TeamMembershipRow) -> Member | None:
+def _team_member_for_user(row: Mapping[str, object]) -> Member | None:
     members_with_roles: Final = row["team_members_with_roles"]
     if members_with_roles is None:
         return None
     user_id: Final = row["user_id"]
     if user_id is None:
         return None
+    members: Final = (decoded_json_object(member) for member in iter_items(members_with_roles))
     matches: Final = [
-        Member(**member)
-        for member in members_with_roles
+        Member.model_validate(member)
+        for member in members
         if member.get("user_id") is not None and user_id == member.get("user_id")
     ]
     return matches[-1] if matches else None
@@ -6899,11 +6889,12 @@ class PrismaClient:
                         WHERE v.token = $1
                     """
 
-                    response = (
+                    view_row: Final = (
                         await _query_first_row(self.writer_db, sql_query, hashed_token)
                         if use_writer
                         else await self._query_first_with_cached_plan_fallback(sql_query, hashed_token)
                     )
+                    response = view_row
 
                     # If not found in main table, check deprecated keys (grace period)
                     # check_deprecated=False on the recursive call prevents unbounded chaining
@@ -6930,16 +6921,22 @@ class PrismaClient:
                                 verbose_proxy_logger.debug("Deprecated key used during grace period")
                             return deprecated_response
 
-                    if response is not None:
-                        if response["team_models"] is None:
-                            response["team_models"] = []
-                        if response["team_blocked"] is None:
-                            response["team_blocked"] = False
+                    if view_row is not None:
+                        team_models: Final = view_row["team_models"]
+                        team_blocked: Final = view_row["team_blocked"]
 
                         ## find the team member corresponding to user id
-                        team_member: Final = _team_member_for_user(response)
-                        response["team_member"] = team_member
-                        token_view: Final = LiteLLM_VerificationTokenView(**response, last_refreshed_at=time.time())
+                        team_member: Final = _team_member_for_user(view_row)
+                        no_team_models: Final[Sequence[object]] = []
+                        normalized_row: Final[Mapping[str, object]] = {
+                            **view_row,
+                            "team_models": no_team_models if team_models is None else team_models,
+                            "team_blocked": False if team_blocked is None else team_blocked,
+                            "team_member": team_member,
+                        }
+                        token_view: Final = LiteLLM_VerificationTokenView(
+                            **normalized_row, last_refreshed_at=time.time()
+                        )
                         # for prisma we need to cast the expires time to str
                         if token_view.expires is not None and isinstance(token_view.expires, datetime):
                             token_view.expires = token_view.expires.isoformat()

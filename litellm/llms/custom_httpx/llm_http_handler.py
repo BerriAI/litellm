@@ -3,7 +3,18 @@ import copy
 import inspect
 import json
 import ssl
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+import sys
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Generator,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
 from itertools import chain
@@ -84,6 +95,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    attribute_or_none,
     decoded_json_object,
     require_attributes,
     set_provider_response_headers_in_hidden_params,
@@ -327,6 +339,194 @@ else:
 
 class _HttpMethodName(Protocol):
     def lower(self) -> str: ...
+
+
+class _SyncHttpVerbs(Protocol):
+    @property
+    def get(self) -> Callable[..., httpx.Response]: ...
+
+    @property
+    def post(self) -> Callable[..., httpx.Response]: ...
+
+    @property
+    def put(self) -> Callable[..., httpx.Response]: ...
+
+    @property
+    def patch(self) -> Callable[..., httpx.Response]: ...
+
+    @property
+    def delete(self) -> Callable[..., httpx.Response]: ...
+
+
+class _AsyncHttpVerbs(Protocol):
+    @property
+    def get(self) -> Callable[..., Awaitable[httpx.Response]]: ...
+
+    @property
+    def post(self) -> Callable[..., Awaitable[httpx.Response]]: ...
+
+    @property
+    def put(self) -> Callable[..., Awaitable[httpx.Response]]: ...
+
+    @property
+    def patch(self) -> Callable[..., Awaitable[httpx.Response]]: ...
+
+    @property
+    def delete(self) -> Callable[..., Awaitable[httpx.Response]]: ...
+
+
+@runtime_checkable
+class _AwaitableObject(Protocol):
+    def __await__(self) -> Generator[object, None, object]: ...
+
+
+class _VerbRequest(NamedTuple):
+    method: str
+    keywords: Mapping[str, object]
+
+
+def _request_method(method: object) -> str:
+    return require_attributes(method, _HttpMethodName, "lower").lower()
+
+
+def _retrieve_request(request: Mapping[str, object]) -> _VerbRequest:
+    method: Final = _request_method(request["method"])
+    location: Final = {"url": request["url"], "headers": request["headers"]}
+    if method != "get" and request.get("data") is not None:
+        return _VerbRequest(method=method, keywords={**location, "data": request["data"]})
+    return _VerbRequest(method=method, keywords=location)
+
+
+def _client_attribute(client: object, name: str) -> object:
+    attribute: Final = attribute_or_none(client, name)
+    if attribute is None and not hasattr(client, name):
+        raise AttributeError(f"'{type(client).__name__}' object has no attribute '{name}'", name=name, obj=client)
+    return attribute
+
+
+def _callable_attribute(attribute: object) -> Callable[..., object]:
+    if callable(attribute):
+        return attribute
+    raise TypeError(f"'{type(attribute).__name__}' object is not callable")
+
+
+def _not_awaitable(value: object) -> TypeError:
+    if sys.version_info >= (3, 14):
+        return TypeError(f"'{type(value).__name__}' object can't be awaited")
+    return TypeError(f"object {type(value).__name__} can't be used in 'await' expression")
+
+
+def _unexpected_verb_result(client: object, name: str, result: object) -> TypeError:
+    return TypeError(f"{type(client).__name__}.{name}() returned {type(result).__name__}, not httpx.Response")
+
+
+class _UnlistedVerb(NamedTuple):
+    client: object
+    name: str
+    attribute: object
+
+
+def _sync_http_verb(client: _SyncHttpVerbs, method: str) -> Callable[..., httpx.Response] | _UnlistedVerb:
+    match method:
+        case "get":
+            return client.get
+        case "post":
+            return client.post
+        case "put":
+            return client.put
+        case "patch":
+            return client.patch
+        case "delete":
+            return client.delete
+        case _:
+            return _UnlistedVerb(client=client, name=method, attribute=_client_attribute(client, method))
+
+
+def _async_http_verb(client: _AsyncHttpVerbs, method: str) -> Callable[..., Awaitable[httpx.Response]] | _UnlistedVerb:
+    match method:
+        case "get":
+            return client.get
+        case "post":
+            return client.post
+        case "put":
+            return client.put
+        case "patch":
+            return client.patch
+        case "delete":
+            return client.delete
+        case _:
+            return _UnlistedVerb(client=client, name=method, attribute=_client_attribute(client, method))
+
+
+def _call_sync_verb(
+    verb: Callable[..., httpx.Response] | _UnlistedVerb, keywords: Mapping[str, object]
+) -> httpx.Response:
+    if not isinstance(verb, _UnlistedVerb):
+        return verb(**keywords)
+    response: Final = _callable_attribute(verb.attribute)(**keywords)
+    if isinstance(response, httpx.Response):
+        return response
+    raise _unexpected_verb_result(verb.client, verb.name, response)
+
+
+async def _call_async_verb(
+    verb: Callable[..., Awaitable[httpx.Response]] | _UnlistedVerb, keywords: Mapping[str, object]
+) -> httpx.Response:
+    if not isinstance(verb, _UnlistedVerb):
+        return await verb(**keywords)
+    pending: Final = _callable_attribute(verb.attribute)(**keywords)
+    if not isinstance(pending, _AwaitableObject):
+        raise _not_awaitable(pending)
+    response: Final = await pending
+    if isinstance(response, httpx.Response):
+        return response
+    raise _unexpected_verb_result(verb.client, verb.name, response)
+
+
+def _send_sync_upload(
+    client: _SyncHttpVerbs, request: Mapping[str, object], url: object, timeout: float | httpx.Timeout | None
+) -> httpx.Response:
+    verb: Final = _sync_http_verb(client, _request_method(request.get("method", "POST")))
+    return _call_sync_verb(
+        verb, {"url": url, "headers": request["headers"], "data": request["data"], "timeout": timeout}
+    )
+
+
+async def _send_async_upload(
+    client: _AsyncHttpVerbs, request: Mapping[str, object], url: object, timeout: float | httpx.Timeout | None
+) -> httpx.Response:
+    verb: Final = _async_http_verb(client, _request_method(request.get("method", "POST")))
+    return await _call_async_verb(
+        verb, {"url": url, "headers": request["headers"], "data": request["data"], "timeout": timeout}
+    )
+
+
+def _send_sync_presigned(
+    client: _SyncHttpVerbs, request: Mapping[str, object], timeout: float | httpx.Timeout | None
+) -> httpx.Response:
+    verb: Final = _sync_http_verb(client, _request_method(request["method"]))
+    return _call_sync_verb(
+        verb, {"url": request["url"], "headers": request["headers"], "data": request["data"], "timeout": timeout}
+    )
+
+
+async def _send_async_presigned(
+    client: _AsyncHttpVerbs, request: Mapping[str, object], timeout: float | httpx.Timeout | None
+) -> httpx.Response:
+    verb: Final = _async_http_verb(client, _request_method(request["method"]))
+    return await _call_async_verb(
+        verb, {"url": request["url"], "headers": request["headers"], "data": request["data"], "timeout": timeout}
+    )
+
+
+def _send_sync_retrieve(client: _SyncHttpVerbs, request: Mapping[str, object]) -> httpx.Response:
+    retrieve: Final = _retrieve_request(request)
+    return _call_sync_verb(_sync_http_verb(client, retrieve.method), retrieve.keywords)
+
+
+async def _send_async_retrieve(client: _AsyncHttpVerbs, request: Mapping[str, object]) -> httpx.Response:
+    retrieve: Final = _retrieve_request(request)
+    return await _call_async_verb(_async_http_verb(client, retrieve.method), retrieve.keywords)
 
 
 class _HeaderItems(Protocol):
@@ -4190,12 +4390,8 @@ class BaseLLMHTTPHandler:
                     raise ValueError("Failed to get upload URL from initial request")
 
                 # Step 2: Upload the actual file
-                upload_method: Final = transformed_request["upload_request"].get("method", "POST").lower()
-                upload_response = getattr(sync_httpx_client, upload_method)(
-                    url=upload_url,
-                    headers=transformed_request["upload_request"]["headers"],
-                    data=transformed_request["upload_request"]["data"],
-                    timeout=timeout,
+                upload_response = _send_sync_upload(
+                    sync_httpx_client, transformed_request["upload_request"], upload_url, timeout
                 )
 
                 # Store initial response for transformation
@@ -4214,12 +4410,7 @@ class BaseLLMHTTPHandler:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
             presigned_request: Final = cast(TwoStepFileUploadRequest, transformed_request)
-            upload_response = getattr(sync_httpx_client, presigned_request["method"].lower())(
-                url=presigned_request["url"],
-                headers=presigned_request["headers"],
-                data=presigned_request["data"],
-                timeout=timeout,
-            )
+            upload_response = _send_sync_presigned(sync_httpx_client, presigned_request, timeout)
         elif isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request:
             media_cfg: Final = cast(StreamingMediaUploadConfig, transformed_request["streaming_media_upload"])
             try:
@@ -4403,12 +4594,8 @@ class BaseLLMHTTPHandler:
                     raise ValueError("Failed to get upload URL from initial request")
 
                 # Step 2: Upload the actual file
-                upload_method: Final = transformed_request["upload_request"].get("method", "POST").lower()
-                upload_response = await getattr(async_httpx_client, upload_method)(
-                    url=upload_url,
-                    headers=transformed_request["upload_request"]["headers"],
-                    data=transformed_request["upload_request"]["data"],
-                    timeout=timeout,
+                upload_response = await _send_async_upload(
+                    async_httpx_client, transformed_request["upload_request"], upload_url, timeout
                 )
 
                 # Store initial response for transformation
@@ -4428,12 +4615,7 @@ class BaseLLMHTTPHandler:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
             presigned_request: Final = cast(TwoStepFileUploadRequest, transformed_request)
-            upload_response = await getattr(async_httpx_client, presigned_request["method"].lower())(
-                url=presigned_request["url"],
-                headers=presigned_request["headers"],
-                data=presigned_request["data"],
-                timeout=timeout,
-            )
+            upload_response = await _send_async_presigned(async_httpx_client, presigned_request, timeout)
         elif isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request:
             media_cfg: Final = cast(StreamingMediaUploadConfig, transformed_request["streaming_media_upload"])
             try:
@@ -4635,15 +4817,7 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                batch_method: Final = require_attributes(
-                    _DECODED_JSON.validate_python(transformed_request["method"]), _HttpMethodName, "lower"
-                ).lower()
-                batch_response = getattr(sync_httpx_client, batch_method)(
-                    url=transformed_request["url"],
-                    headers=transformed_request["headers"],
-                    data=transformed_request["data"],
-                    timeout=timeout,
-                )
+                batch_response = _send_sync_presigned(sync_httpx_client, transformed_request, timeout)
             elif isinstance(transformed_request, dict):
                 # For other providers that use JSON requests
                 batch_response = sync_httpx_client.post(
@@ -4726,19 +4900,7 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                method: Final = require_attributes(
-                    _DECODED_JSON.validate_python(transformed_request["method"]), _HttpMethodName, "lower"
-                ).lower()
-                request_kwargs: Final = {
-                    "url": transformed_request["url"],
-                    "headers": transformed_request["headers"],
-                }
-
-                # Only add data for non-GET requests
-                if method != "get" and transformed_request.get("data") is not None:
-                    request_kwargs["data"] = transformed_request["data"]
-
-                batch_response = getattr(sync_httpx_client, method)(**request_kwargs)
+                batch_response = _send_sync_retrieve(sync_httpx_client, transformed_request)
             elif isinstance(transformed_request, dict) and api_base:
                 # For other providers that use JSON requests
                 batch_response = sync_httpx_client.get(
@@ -4860,12 +5022,7 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                batch_response = await getattr(async_httpx_client, transformed_request["method"].lower())(
-                    url=transformed_request["url"],
-                    headers=transformed_request["headers"],
-                    data=transformed_request["data"],
-                    timeout=timeout,
-                )
+                batch_response = await _send_async_presigned(async_httpx_client, transformed_request, timeout)
             elif isinstance(transformed_request, dict):
                 # For other providers that use JSON requests
                 batch_response = await async_httpx_client.post(
@@ -4940,17 +5097,7 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                method: Final = transformed_request["method"].lower()
-                request_kwargs: Final = {
-                    "url": transformed_request["url"],
-                    "headers": transformed_request["headers"],
-                }
-
-                # Only add data for non-GET requests
-                if method != "get" and transformed_request.get("data") is not None:
-                    request_kwargs["data"] = transformed_request["data"]
-
-                batch_response = await getattr(async_httpx_client, method)(**request_kwargs)
+                batch_response = await _send_async_retrieve(async_httpx_client, transformed_request)
             elif isinstance(transformed_request, dict) and api_base:
                 # For other providers that use JSON requests
                 batch_response = await async_httpx_client.get(

@@ -9,6 +9,7 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
@@ -45,7 +46,6 @@ from litellm.types.utils import (
 )
 
 _JsonDict: TypeAlias = dict[str, object]
-_JsonDictList: TypeAlias = list[_JsonDict]
 
 
 class _GenAICompletionRequest(TypedDict, extra_items=object):
@@ -313,6 +313,10 @@ def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
     )
 
 
+def _is_single_content(contents: object) -> bool:
+    return isinstance(contents, dict)
+
+
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
     """
     Wrapper for streaming Google GenAI generate_content responses.
@@ -486,7 +490,7 @@ class GoogleGenAIAdapter:
     def translate_generate_content_to_completion(
         self,
         model: str,
-        contents: _JsonDictList | _JsonDict,
+        contents: object,
         config: Mapping[str, object] | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
         **kwargs,
@@ -510,10 +514,7 @@ class GoogleGenAIAdapter:
         tool_config: Final = kwargs.get("toolConfig") or kwargs.get("tool_config")
 
         # Normalize contents to list format
-        if isinstance(contents, dict):
-            contents_list = [contents]
-        else:
-            contents_list = contents
+        contents_list: Final = [contents] if _is_single_content(contents) else contents
 
         # Transform contents to OpenAI messages format
         messages: Final = self._transform_contents_to_messages(contents_list, system_instruction=system_instruction)
@@ -658,7 +659,7 @@ class GoogleGenAIAdapter:
 
     def _transform_contents_to_messages(
         self,
-        contents: Sequence[object],
+        contents: object,
         system_instruction: _GenAISystemInstruction | None = None,
     ) -> list[AllMessageValues]:
         """Transform Google GenAI contents to OpenAI messages format"""
@@ -668,7 +669,10 @@ class GoogleGenAIAdapter:
             if system_parts and "text" in system_parts[0]
             else ()
         )
-        return [*system_messages, *chain.from_iterable(_genai_content_messages(content) for content in contents)]
+        return [
+            *system_messages,
+            *chain.from_iterable(_genai_content_messages(content) for content in iter_items(contents)),
+        ]
 
     def translate_completion_to_generate_content(
         self,

@@ -3,7 +3,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 
 from httpx._models import Headers, Response
 from pydantic import BaseModel, TypeAdapter
@@ -71,7 +71,7 @@ def _json_document(value: object) -> str | bytes | bytearray:
 _TOOL_CALL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
 
 
-class _MessageFields(TypedDict, total=False, extra_items=object):
+class _KeywordFields(TypedDict, total=False, extra_items=object):
     pass
 
 
@@ -81,6 +81,24 @@ class _SupportsSetItem(Protocol):
 
 class _MessageSlots(_SupportsSetItem, Protocol):
     def __delitem__(self, key: str, /) -> None: ...
+
+
+@runtime_checkable
+class _SupportsAdd(Protocol):
+    def __add__(self, other: object, /) -> object: ...
+
+
+@runtime_checkable
+class _SupportsRightAdd(Protocol):
+    def __radd__(self, other: object, /) -> object: ...
+
+
+def _token_sum(left: object, right: object) -> object:
+    if isinstance(left, _SupportsAdd):
+        return left + right
+    if isinstance(right, _SupportsRightAdd):
+        return left + right
+    raise TypeError(f"unsupported operand type(s) for +: '{type(left).__name__}' and '{type(right).__name__}'")
 
 
 _NON_STRING_FINISH_REASONS: Final[Mapping[object, OpenAIChatCompletionFinishReason]] = MappingProxyType({})
@@ -450,7 +468,7 @@ class OllamaChatConfig(BaseConfig):
                 _DECODED_JSON.validate_python(json.loads(_json_document(subscript(response_json_message, "content"))))
             )
             message: Final = litellm.Message(
-                **_MessageFields(
+                **_KeywordFields(
                     content=None,
                     tool_calls=[
                         {
@@ -471,7 +489,7 @@ class OllamaChatConfig(BaseConfig):
             model_response.choices[0].finish_reason = "tool_calls"
         else:
             _message: Final = litellm.Message(
-                **_MessageFields(**keyword_arguments(response_json_message, litellm.Message))
+                **_KeywordFields(**keyword_arguments(response_json_message, litellm.Message))
             )
             model_response.choices[0].message = _message
             # Set finish_reason to "tool_calls" when tool_calls are present
@@ -480,8 +498,8 @@ class OllamaChatConfig(BaseConfig):
                 model_response.choices[0].finish_reason = "tool_calls"
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
-        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))
-        completion_tokens: Final = response_json.get(
+        prompt_tokens: Final = response_fields.get("prompt_eval_count", litellm.token_counter(messages=messages))
+        completion_tokens: Final = response_fields.get(
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
         )
@@ -489,9 +507,11 @@ class OllamaChatConfig(BaseConfig):
             model_response,
             "usage",
             litellm.Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
+                **_KeywordFields(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=_token_sum(prompt_tokens, completion_tokens),
+                )
             ),
         )
         return model_response

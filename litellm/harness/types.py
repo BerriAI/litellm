@@ -7,17 +7,34 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Final, Literal, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import Buffer
 
 from litellm.harness.errors import StateIncompatible
+from litellm.litellm_core_utils.core_helpers import subscript
 
 StopReason = Literal["done", "max_turns", "timeout", "cancelled", "runtime_error"]
 PermissionMode = Literal["read-only", "ask", "edit", "full"]
 FileChangeKind = Literal["created", "modified", "deleted"]
 
 STATE_VERSION = 1
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _state_version(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
 
 
 class Harness(Enum):
@@ -201,8 +218,9 @@ class State:
     def loads(cls, data: bytes) -> State:
         try:
             raw = json.loads(data.decode("utf-8"))
-            harness = Harness(raw["harness"])
-            version = int(raw["version"])
+            decoded: Final = _DECODED_JSON.validate_python(raw)
+            harness = Harness(subscript(decoded, "harness"))
+            version = _state_version(subscript(decoded, "version"))
         except (ValueError, KeyError, TypeError, UnicodeDecodeError) as e:
             raise StateIncompatible(f"Unreadable harness state: {e}") from e
         if version != STATE_VERSION:

@@ -271,7 +271,6 @@ from litellm.types.utils import (
     Delta,
     Embedding,
     EmbeddingResponse,
-    FileTypes,
     Function,
     ImageResponse,
     LlmProviders,
@@ -1537,7 +1536,7 @@ def function_setup(
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
             messages = _ocr_document_summary(args[1] if len(args) > 1 else kwargs.get("document"))
         elif call_type == CallTypes.atranscription.value or call_type == CallTypes.transcription.value:
-            _file_obj: Final[FileTypes] = args[1] if len(args) > 1 else kwargs["file"]
+            _file_obj: Final = _OPAQUE_VALUE.validate_python(args[1] if len(args) > 1 else kwargs["file"])
             # Lazy import audio_utils.utils only when needed for transcription calls
             audio_utils: Final = _get_cached_audio_utils()
             file_checksum: Final = audio_utils.get_audio_file_content_hash(file_obj=_file_obj)
@@ -1567,7 +1566,9 @@ def function_setup(
                     get_last_user_message,
                 )
 
-                contents_param: Final = args[1] if len(args) > 1 else kwargs.get("contents")
+                contents_param: Final = _OPAQUE_VALUE.validate_python(
+                    args[1] if len(args) > 1 else kwargs.get("contents")
+                )
                 model_param: Final[str] = args[0] if len(args) > 0 else kwargs.get("model", "")
 
                 if contents_param:
