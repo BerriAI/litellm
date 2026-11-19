@@ -4762,6 +4762,7 @@ class LlmProviders(str, Enum):
     TYPESAFE = "typesafe"
     PARALLEL_AI = "parallel_ai"
     NACE = "nace"
+    DECISIONMODELS = "decisionmodels"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"

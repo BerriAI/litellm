@@ -133,6 +133,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     ("typesafe", "typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone", "jev-1.13"),
     ("nace", "nace/drex-v2.0", "https://console.nace.ai/v1/systemone", "drex-v2.0"),
     ("eu_jev", "eu_jev/eu-jeff-latest", "https://eu-jev.com/v1/systemone", "eu-jeff-latest"),
+    ("decisionmodels", "decisionmodels/s1-fast", "https://api.decisionmodels.io/v1/systemone", "s1-fast"),
     (
         "openrouter",
         "openrouter/typesafe/jev-1.13",
@@ -6139,3 +6140,4 @@ async def test_other_decisions_providers_do_not_get_the_nace_client_header(
     )
 
     assert "x-nace-client" not in route.calls[0].request.headers
+
