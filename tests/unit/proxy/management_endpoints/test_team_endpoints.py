@@ -11181,8 +11181,8 @@ async def test_update_team_soft_budget_validation(
                 assert error_message in str(exc_info.value.message)
 
 
-def _team_alert_row(existing_metadata, existing_max_budget):
-    row = MagicMock()
+def _team_alert_row(existing_metadata: dict[str, object], existing_max_budget: float | None) -> MagicMock:
+    row: Final = MagicMock()
     row.team_id = "test-team-123"
     row.organization_id = None
     row.soft_budget = None

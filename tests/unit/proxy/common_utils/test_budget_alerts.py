@@ -13,5 +13,5 @@ from litellm.proxy.common_utils.budget_alerts import parse_budget_alert_recipien
         (" , , ", []),
     ],
 )
-def test_parse_budget_alert_recipients(raw, expected):
+def test_parse_budget_alert_recipients(raw: object, expected: list[str]) -> None:
     assert parse_budget_alert_recipients(raw) == expected

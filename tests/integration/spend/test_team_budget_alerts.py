@@ -42,8 +42,11 @@ def test_team_budget_thresholds_email_configured_recipients_once_across_rotating
     owner_email: Final = f"owner-{uuid.uuid4().hex}@integration.test"
     recipients: Final = {pct: f"p{pct}-{uuid.uuid4().hex}@integration.test" for pct in ("50", "75", "90")}
     other_recipient: Final = f"other-{uuid.uuid4().hex}@integration.test"
-    configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    configuration["general_settings"]["alerting"] = list(alerting)
+    base_configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration: Final = {
+        **base_configuration,
+        "general_settings": {**base_configuration["general_settings"], "alerting": list(alerting)},
+    }
     path: Final = tmp_path / "email-alerting.yaml"
     path.write_text(yaml.safe_dump(configuration))
     with smtp_sink() as mailbox:

@@ -1680,6 +1680,7 @@ async def common_checks(
                     team_object=team_object,
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
+                    send_percentage_alerts=RouteChecks.runs_inference_checks(route=route),
                 ),
                 _team_multi_budget_check(team_object=team_object),
                 virtual_key_max_budget_check(
@@ -7543,6 +7544,8 @@ async def team_max_budget_check(
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
     proxy_logging_obj: ProxyLogging,
+    *,
+    send_percentage_alerts: bool = False,
 ) -> None:
     """
     Check if the team is over it's max budget.
@@ -7561,14 +7564,15 @@ async def team_max_budget_check(
             max_budget=team_object.max_budget,
         )
 
-        team_max_budget_alert_check(
-            team_id=team_object.team_id,
-            team_alias=team_object.team_alias,
-            team_metadata=team_object.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_TeamTable.metadata is a bare dict
-            max_budget=team_object.max_budget,
-            proxy_logging_obj=proxy_logging_obj,
-            spend=spend,
-        )
+        if send_percentage_alerts:
+            team_max_budget_alert_check(
+                team_id=team_object.team_id,
+                team_alias=team_object.team_alias,
+                team_metadata=team_object.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_TeamTable.metadata is a bare dict
+                max_budget=team_object.max_budget,
+                proxy_logging_obj=proxy_logging_obj,
+                spend=spend,
+            )
 
         native: Final = _native_budget_decision(
             {
