@@ -279,11 +279,8 @@ _SURROGATE_RE: Final = re.compile(r"[\ud800-\udfff]")
 
 
 def _repair_surrogates(value: str) -> str:
-    """Repair malformed UTF-16 text without copying ordinary Unicode strings."""
     if not _SURROGATE_RE.search(value):
         return value
-    # Preserve valid surrogate pairs as their scalar value; replace only lone
-    # surrogates. Byte payloads and caller-owned mappings are never rewritten.
     return value.encode("utf-16-le", errors="surrogatepass").decode("utf-16-le", errors="replace")
 
 
