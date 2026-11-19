@@ -41,9 +41,10 @@ def test_a_non_release_version_exits_1_without_printing_a_version(
     assert err == f"::error::pyproject.toml version {version} is not an X.Y.0 release version\n"
 
 
-def test_the_repo_pyproject_is_read_when_no_path_is_given(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_the_working_directory_pyproject_is_read_when_no_path_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.chdir(_REPO_ROOT)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "1.104.0"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
     assert read_rc_version.main(["read_rc_version.py"]) == 0
-    assert capsys.readouterr().out == f"version={read_rc_version.read_version(_REPO_ROOT / 'pyproject.toml')}\n"
+    assert capsys.readouterr().out == "version=1.104.0\n"

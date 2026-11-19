@@ -253,7 +253,9 @@ async def test_anthropic_messages_count_tokens_endpoint():
     anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
-    async def mock_token_counter(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter(
+        request, call_endpoint=False, messages_format="openai", output_format=None, request_litellm_params=None
+    ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
         assert request.messages == [{"role": "user", "content": "Hello Claude!"}]
@@ -325,7 +327,9 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
     anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
-    async def mock_token_counter(request, call_endpoint=True, messages_format="openai", output_format=None):
+    async def mock_token_counter(
+        request, call_endpoint=True, messages_format="openai", output_format=None, request_litellm_params=None
+    ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
         assert request.messages == [{"role": "user", "content": "Hello GPT!"}]
@@ -1020,7 +1024,9 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
     original_token_counter = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with Bedrock-style error
-    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter_error(
+        request, call_endpoint=False, messages_format="openai", output_format=None, request_litellm_params=None
+    ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
             type="token_counting_error",
@@ -1070,7 +1076,9 @@ async def test_anthropic_endpoint_403_permission_error_format():
     original_token_counter = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with 403 error
-    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter_error(
+        request, call_endpoint=False, messages_format="openai", output_format=None, request_litellm_params=None
+    ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
             type="token_counting_error",
@@ -1120,7 +1128,9 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     original_token_counter = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with 429 error
-    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter_error(
+        request, call_endpoint=False, messages_format="openai", output_format=None, request_litellm_params=None
+    ):
         raise ProxyException(
             message="Rate limit exceeded",
             type="token_counting_error",

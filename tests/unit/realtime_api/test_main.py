@@ -730,8 +730,7 @@ async def _build_streaming(client_events, backend_ws):
 
     logging_obj = MagicMock()
     logging_obj.pre_call = MagicMock()
-    logging_obj.async_success_handler = AsyncMock()
-    logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     logging_obj.model_call_details = {}
 
     streaming = RealTimeStreaming(
