@@ -15780,7 +15780,7 @@ def _deployment_with_request_drop_settings(
             "conversation",
             "truncation",
         )
-        if sent_params.get(name) is not None
+        if name in sent_params
     }
     if not overrides:
         return deployment
