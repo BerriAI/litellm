@@ -34,34 +34,39 @@ const APPLICATIONS_PAGE_SIZE = 25;
 export default function AppsManager() {
   const { t } = useTranslation();
   const { accessToken, userRole, isViewOnly, isLoading } = useAuthorized();
-  const canManage = Boolean(accessToken && readsEveryApp(userRole, isViewOnly));
-  const definition = useQuery({ queryKey: appDefinitionKey, queryFn: loadAppDefinition, enabled: canManage });
+  if (isLoading) return <p role="status">{t("apps.loading")}</p>;
+  return accessToken && readsEveryApp(userRole, isViewOnly) ? <ManagedApps /> : <GranteeApps />;
+}
+
+function GranteeApps() {
+  const { t } = useTranslation();
+  const granted = useGrantedApps();
+  if (granted.apps.isLoading) return <p role="status">{t("apps.loading")}</p>;
+  if (granted.hasGrant) return <GrantedApps apps={granted.apps.data ?? []} />;
+  if (!granted.failed) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
+  return (
+    <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6">
+      <ErrorState message={extractProxyErrorMessage(granted.apps.error)} onRetry={() => void granted.apps.refetch()} />
+    </main>
+  );
+}
+
+function ManagedApps() {
+  const { t } = useTranslation();
+  const definition = useQuery({ queryKey: appDefinitionKey, queryFn: loadAppDefinition });
   const resourceType = definition.data?.resource_type ?? null;
   const resources = useQuery({
     queryKey: appResourcesKey(resourceType),
     queryFn: () => loadAppResources(resourceType!),
-    enabled: canManage && resourceType !== null,
+    enabled: resourceType !== null,
   });
   const apps = useQuery({
     queryKey: ["apps", resourceType],
     queryFn: () => loadApps(),
-    enabled: canManage && resourceType !== null,
+    enabled: resourceType !== null,
   });
   const [selected, setSelected] = useQueryState("app", parseAsString);
   const resource = resources.data?.find((row) => row.resource_id === selected);
-  const granted = useGrantedApps();
-  if (isLoading || (!canManage && granted.apps.isLoading)) return <p role="status">{t("apps.loading")}</p>;
-  if (!canManage && granted.hasGrant) return <GrantedApps apps={granted.apps.data ?? []} />;
-  if (!canManage && granted.failed)
-    return (
-      <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6">
-        <ErrorState
-          message={extractProxyErrorMessage(granted.apps.error)}
-          onRetry={() => void granted.apps.refetch()}
-        />
-      </main>
-    );
-  if (!canManage) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
   if (selected && [definition, resources].some((query) => query.isLoading))
     return <p role="status">{t("apps.loading")}</p>;
   if (selected && resource)

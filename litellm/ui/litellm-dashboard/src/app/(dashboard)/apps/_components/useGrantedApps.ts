@@ -18,5 +18,7 @@ export function useGrantedApps() {
   const enabled = Boolean(accessToken) && !isProxyAdmin;
   const query = { queryKey: grantedAppsKey, queryFn: () => loadApps(), enabled, retry: false };
   const apps = useQuery(query);
-  return { isProxyAdmin, apps, hasGrant: (apps.data?.length ?? 0) > 0, failed: grantedAppsFailed(apps.error) };
+  const hasGrant = (apps.data?.length ?? 0) > 0;
+  const failed = grantedAppsFailed(apps.error);
+  return { isProxyAdmin, apps, hasGrant, failed, opensCustomerManagement: isProxyAdmin || hasGrant };
 }

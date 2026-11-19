@@ -63,7 +63,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
   const router = useRouter();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
-  const { isProxyAdmin, hasGrant } = useGrantedApps();
+  const { isProxyAdmin, opensCustomerManagement } = useGrantedApps();
 
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
   const isChatRoute = isWorkspaceRoute(normalizedPathname, CHAT);
@@ -155,7 +155,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
       ),
       onClick: () => selectMode(e.key),
     })),
-    ...(isProxyAdmin || hasGrant ? [customerPortalItem] : []),
+    ...[customerPortalItem].filter(() => opensCustomerManagement),
     chatItem,
     {
       key: LENS,
