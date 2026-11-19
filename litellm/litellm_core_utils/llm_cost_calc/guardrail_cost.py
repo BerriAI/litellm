@@ -128,7 +128,7 @@ def native_bedrock_guardrail_information(
         "guardrail_id": name,
         "guardrail_provider": "bedrock",
         "guardrail_mode": GuardrailEventHooks.during_call,
-        "guardrail_response": redact_nested_match_and_regex_keys(reported.guardrail),
+        "guardrail_response": redact_nested_match_and_regex_keys(dict(reported.guardrail)),
         "guardrail_status": status,
         "guardrail_usage": reported.usage,
         "guardrail_cost": guardrail_cost_total(cost_by_unit),
