@@ -1,5 +1,7 @@
+from bisect import bisect_left
 from collections.abc import Mapping, Sequence
-from itertools import chain
+from itertools import chain, groupby
+from types import MappingProxyType
 from typing import Final, TypeVar
 
 from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
@@ -47,18 +49,27 @@ def _applies_to_call(
     return custom_llm_provider in (provider.strip() for provider in scoped_providers)
 
 
+def _sorted_text_values_by_name(headers: Mapping[str, object]) -> Mapping[str, tuple[str, ...]]:
+    pairs: Final = sorted((name.lower(), value if isinstance(value, str) else "") for name, value in headers.items())
+    return MappingProxyType(
+        {name: tuple(value for _, value in group) for name, group in groupby(pairs, key=lambda pair: pair[0])}
+    )
+
+
+def _carries(values_by_name: Mapping[str, tuple[str, ...]], name: str, prefix: str) -> bool:
+    values: Final = values_by_name.get(name, ())
+    position: Final = bisect_left(values, prefix)
+    return position < len(values) and values[position].startswith(prefix)
+
+
 def _configures_a_listed_credential(
-    scoped_header: ProviderSpecificHeader, configured_headers: Mapping[str, object]
+    scoped_header: ProviderSpecificHeader, configured_values: Mapping[str, tuple[str, ...]]
 ) -> bool:
     credential_headers: Final = frozenset(
         name.lower() for name in scoped_header.get("configured_credential_headers", ())
     )
     prefix: Final = scoped_header.get("configured_credential_prefix", "")
-    return not credential_headers or any(
-        not prefix or (isinstance(value, str) and value.startswith(prefix))
-        for name, value in configured_headers.items()
-        if name.lower() in credential_headers
-    )
+    return not credential_headers or any(_carries(configured_values, name, prefix) for name in credential_headers)
 
 
 def _contributed_headers(scoped_header: ProviderSpecificHeader, configured_names: frozenset[str]) -> Mapping[str, str]:
@@ -116,7 +127,9 @@ class ProviderSpecificHeaderUtils:
                 if not scoped_header.get("configured_credential_headers")
             )
         )
-        kept_configured: Final = {name: value for name, value in configured.items() if name not in replaced_names}
+        kept_configured: Final = _sorted_text_values_by_name(
+            {name: value for name, value in configured.items() if name not in replaced_names}
+        )
         return dict(
             chain.from_iterable(
                 _contributed_headers(scoped_header, configured_names).items()
