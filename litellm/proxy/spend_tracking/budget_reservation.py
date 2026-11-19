@@ -342,18 +342,6 @@ async def _forwards_subscription_oauth(
 ) -> bool:
     if request is None or not request.scope.get("headers"):
         return False
-    if any(
-        field in request_body
-        for field in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "models", "model_list")
-    ):
-        return False
-    if llm_router is not None:
-        settings: Final = llm_router.settings()
-        if any(
-            _CACHED_VALUE.validate_python(getattr(settings, field))
-            for field in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
-        ):
-            return False
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
     from litellm.proxy.litellm_pre_call_utils import forwarded_anthropic_oauth_token
 
@@ -367,6 +355,18 @@ async def _forwards_subscription_oauth(
         return await anthropic_route_uses_client_oauth(request, valid_token)
     if route not in ("/messages", "/v1/messages", "/chat/completions", "/v1/chat/completions"):
         return False
+    if any(
+        field in request_body
+        for field in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "models", "model_list")
+    ):
+        return False
+    if llm_router is not None:
+        settings: Final = llm_router.settings()
+        if any(
+            _CACHED_VALUE.validate_python(getattr(settings, field))
+            for field in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+        ):
+            return False
     if forwarded_anthropic_oauth_token(request.headers) is None:
         return False
     if llm_router is not None:

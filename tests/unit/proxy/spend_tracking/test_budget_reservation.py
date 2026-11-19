@@ -130,7 +130,9 @@ async def test_only_forwarded_subscription_oauth_skips_budget_hold(
         proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
         request=request,
     )
-    expected_skip: Final = fallback is None and (skip or (oauth and operator and not route.startswith("/anthropic/")))
+    expected_skip: Final = (fallback is None or route.startswith("/anthropic/")) and (
+        skip or (oauth and operator and not route.startswith("/anthropic/"))
+    )
     if expected_skip:
         assert result is None
         return
