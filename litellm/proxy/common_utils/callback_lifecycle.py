@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Iterable
 from typing import Final
 
-from fastapi import Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.routing import APIRoute
 
 from litellm._logging import verbose_proxy_logger
@@ -18,18 +18,30 @@ def _custom_loggers(callbacks: Iterable[object]) -> tuple[CustomLogger, ...]:
     return tuple({id(callback): callback for callback in callbacks if isinstance(callback, CustomLogger)}.values())
 
 
+def _key_auth_gap(callback: CustomLogger, router: APIRouter) -> str | None:
+    unprotected: Final = tuple(route for route in router.routes if not isinstance(route, APIRoute))
+    if not unprotected:
+        return None
+    return (
+        f"Callback {type(callback).__name__} returned routes that cannot carry LiteLLM key auth: "
+        f"{unprotected}. Register HTTP routes with add_api_route or the router decorators."
+    )
+
+
+async def _setup_proxy_callback(app: FastAPI, callback: CustomLogger) -> None:
+    router: Final = await callback.async_setup_proxy()
+    if router is None:
+        return
+    gap: Final = _key_auth_gap(callback, router)
+    if gap is not None:
+        raise ValueError(gap)
+    app.include_router(router, dependencies=[Depends(user_api_key_auth)])
+    app.openapi_schema = None  # rebind-ok: FastAPI caches the schema, so new routes must invalidate it
+
+
 async def setup_proxy_callbacks(app: FastAPI, callbacks: Iterable[object]) -> None:
     for callback in _custom_loggers(callbacks):
-        router = await callback.async_setup_proxy()
-        if router is not None:
-            unprotected = tuple(route for route in router.routes if not isinstance(route, APIRoute))
-            if unprotected:
-                raise ValueError(
-                    f"Callback {type(callback).__name__} returned routes that cannot carry LiteLLM key auth: "
-                    f"{unprotected}. Register HTTP routes with add_api_route or the router decorators."
-                )
-            app.include_router(router, dependencies=[Depends(user_api_key_auth)])
-            app.openapi_schema = None  # rebind-ok: FastAPI caches the schema, so new routes must invalidate it
+        await _setup_proxy_callback(app, callback)
 
 
 async def _close_proxy_callback(callback: CustomLogger, timeout: float) -> None:
