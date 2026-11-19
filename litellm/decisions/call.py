@@ -73,6 +73,7 @@ from litellm.types.decisions import (
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader, is_decisions_model_mode
 from litellm.utils import ProviderConfigManager, get_model_cost_key
 
@@ -725,6 +726,7 @@ def prepare_call(
         custom_llm_provider=custom_llm_provider,
         api_base=call_api_base,
         api_key=api_key,
+        litellm_params=GenericLiteLLMParams(use_litellm_proxy=kwargs.get("use_litellm_proxy") is True),
     )
     provider_config: Final = get_decisions_provider_config(upstream_model, provider)
     if not upstream_model:

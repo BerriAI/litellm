@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_id, app_scope_identity
-from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
+from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope, ErrorCode, Failure
 from litellm.types.proxy.management_endpoints.apps import (
     App,
     AppCreate,
@@ -196,19 +196,19 @@ async def seed_resources(database: AppDatabase) -> None:
     await database.litellm_verificationtoken.create({"token": "token-a", "key_alias": "Service key", "key_id": None})
 
 
-async def profile(store: AppStore, name: str, maximum: float) -> str:
+async def profile(
+    store: AppStore, name: str, maximum: float, scope: BudgetGroupScope = BudgetGroupScope.ORGANIZATION
+) -> str:
     from prisma import Json
 
     budget_id: Final = await store.customers.create_budget(BudgetTemplate(name=name, max_budget=maximum), "admin", name)
-    current: Final = await store.customers.config.find_unique(
-        where={"param_name": "customer_organization_budget_group_ids"}
-    )
+    current: Final = await store.customers.config.find_unique(where={"param_name": scope.value})
     ids: Final = TypeAdapter(tuple[str, ...]).validate_python(current.model_dump()["param_value"]) if current else ()
     await store.customers.config.upsert(
-        where={"param_name": "customer_organization_budget_group_ids"},
+        where={"param_name": scope.value},
         data={
             "create": {
-                "param_name": "customer_organization_budget_group_ids",
+                "param_name": scope.value,
                 "param_value": Json([budget_id]),
             },
             "update": {"param_value": Json([*ids, budget_id])},
@@ -735,3 +735,49 @@ async def test_app_custom_policy_survives_edits_grants_and_expiry(
     cleared: Final = await put(MemberPatch(budget=None, budget_override=None))
     assert cleared.effective_budget == policy
     assert await store.budget(created.budget_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", tuple(BudgetGroupScope))
+async def test_app_org_custom_forks_shared_profile_and_expiry_restores_private_budget(
+    app_store: tuple[AppDatabase, AppStore, App], scope: BudgetGroupScope
+) -> None:
+    database, store, app = app_store
+    tier: Final = await profile(store, "Standard", 10, scope)
+    await store.customers.update_budget(tier, Budget(rpm_limit=4, budget_duration="1mo"), "admin")
+    selected: Final = await store.put_organization(app.app_id, "org", AppOrganizationPut(budget_id=tier), "admin")
+    assert isinstance(selected, AppOrganization) and selected.budget_id == tier and selected.budget is None
+    forked: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget=Budget(max_budget=12)), "admin"
+    )
+    assert isinstance(forked, AppOrganization) and forked.budget is not None
+    assert forked.budget_id != tier and forked.budget.rpm_limit == 4 and forked.budget.max_budget == 12
+    assert await store.budget(tier) == selected.effective_budget
+    original_row: Final = await store.customers.budgets.find_unique(where={"budget_id": tier})
+    private_row: Final = await store.customers.budgets.find_unique(where={"budget_id": forked.budget_id})
+    assert original_row is not None and private_row is not None
+    assert private_row.model_dump()["budget_reset_at"] == original_row.model_dump()["budget_reset_at"]
+    patched: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget=Budget(rpm_limit=None)), "admin"
+    )
+    assert isinstance(patched, AppOrganization) and patched.budget is not None
+    assert (
+        patched.budget_id == forked.budget_id and patched.budget.rpm_limit is None and patched.budget.max_budget == 12
+    )
+    increased: Final = await store.put_organization(
+        app.app_id,
+        "org",
+        AppOrganizationPut(budget_override=Budget(max_budget=20), budget_override_expires_at=NOW.replace(year=2027)),
+        "admin",
+    )
+    assert isinstance(increased, AppOrganization) and increased.effective_budget == Budget(
+        max_budget=20, budget_duration="1mo", allowed_models=()
+    )
+    expired: Final = await AppStore(database, NOW.replace(year=2028)).organization(app, "org")
+    assert expired.effective_budget == await store.budget(forked.budget_id)
+    restored: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget_id=tier, budget_override=None), "admin"
+    )
+    assert isinstance(restored, AppOrganization) and restored.budget_id == tier
+    assert await store.budget(forked.budget_id) is None
+    assert await store.budget(tier) is not None

@@ -651,15 +651,29 @@ def admin_client(client_and_mocks):
 
 
 @pytest.mark.parametrize("encoded", (False, True))
-def test_delete_budget_preserves_organization_catalog(admin_client, encoded: bool) -> None:
+@pytest.mark.parametrize(
+    ("catalog", "endpoint"),
+    (
+        ("customer_organization_budget_group_ids", "customer_organization_budget_groups"),
+        ("app_customer_organization_budget_group_ids", "app_customer_organization_budget_groups"),
+    ),
+)
+def test_delete_budget_preserves_catalog(
+    admin_client: tuple[TestClient, MagicMock, MagicMock], encoded: bool, catalog: str, endpoint: str
+) -> None:
     from tests.unit.proxy.management_helpers.test_customer_hierarchy import Record
 
     client, database, table = admin_client
-    database.db.litellm_config.find_unique.return_value = Record.model_validate(
-        {"param_value": json.dumps(["tpl-1"]) if encoded else ["tpl-1"]}
-    )
+
+    def find_catalog(*, where: Mapping[str, object]) -> Record | None:
+        if where["param_name"] != catalog:
+            return None
+        return Record.model_validate({"param_value": json.dumps(["tpl-1"]) if encoded else ["tpl-1"]})
+
+    database.db.litellm_config.find_unique.side_effect = find_catalog
     response: Final = client.post("/budget/delete", json={"id": "tpl-1"})
     assert response.status_code == 409, response.text
+    assert response.json()["detail"]["error"] == f"Remove this group through {endpoint}."
     table.delete.assert_not_awaited()
 
 

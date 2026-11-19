@@ -213,8 +213,8 @@ describe("Sidebar (leftnav)", () => {
     );
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("href", "/ui/customers");
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active");
-    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/ui/customers/settings");
-    expect(getBreadcrumb("/ui/customers/settings")).toEqual({ section: "Customer Management", title: "Settings" });
+    expect(screen.getByRole("link", { name: "Budget groups" })).toHaveAttribute("href", "/ui/customers/settings");
+    expect(getBreadcrumb("/ui/customers/settings")).toEqual({ section: "Customer Management", title: "Budget groups" });
     expect(screen.queryByRole("link", { name: "End users" })).not.toBeInTheDocument();
   });
 
