@@ -3826,14 +3826,44 @@
             "litellm_provider": "bedrock"
         }
     },
+    "assemblyai/assemblyai-stt-3-7-realtime-agent": {
+        "input_cost_per_second": 0.000125,
+        "litellm_provider": "assemblyai",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0
+    },
     "assemblyai/best": {
-        "input_cost_per_second": 3.333e-05,
+        "input_cost_per_second": 0.00010278,
+        "litellm_provider": "assemblyai",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0
+    },
+    "assemblyai/conformer-2": {
+        "input_cost_per_second": 0.00010278,
         "litellm_provider": "assemblyai",
         "mode": "audio_transcription",
         "output_cost_per_second": 0.0
     },
     "assemblyai/nano": {
+        "input_cost_per_second": 3.333e-05,
+        "litellm_provider": "assemblyai",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0
+    },
+    "assemblyai/universal-2": {
         "input_cost_per_second": 0.00010278,
+        "litellm_provider": "assemblyai",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0
+    },
+    "assemblyai/universal-3-pro": {
+        "input_cost_per_second": 0.000125,
+        "litellm_provider": "assemblyai",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0
+    },
+    "assemblyai/universal-3-6-pro": {
+        "input_cost_per_second": 0.000125,
         "litellm_provider": "assemblyai",
         "mode": "audio_transcription",
         "output_cost_per_second": 0.0

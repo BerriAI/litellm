@@ -148,3 +148,23 @@ def test_shipped_per_second_models_bill_a_non_zero_cost(model, provider):
     prompt_cost, completion_cost = cost_per_second(model=model, custom_llm_provider=provider, duration=60.0)
 
     assert prompt_cost + completion_cost > 0.0
+
+
+@pytest.mark.parametrize(
+    "model, expected_hourly_cost",
+    [
+        ("assemblyai/best", 0.370008),
+        ("assemblyai/conformer-2", 0.370008),
+        ("assemblyai/nano", 0.119988),
+        ("assemblyai/universal-2", 0.370008),
+        ("assemblyai/universal-3-pro", 0.45),
+        ("assemblyai/universal-3-6-pro", 0.45),
+        ("assemblyai/assemblyai-stt-3-7-realtime-agent", 0.45),
+    ],
+)
+def test_assemblyai_models_hourly_pricing(model: str, expected_hourly_cost: float):
+    prompt_cost, completion_cost = cost_per_second(
+        model=model, custom_llm_provider="assemblyai", duration=3600.0
+    )
+    assert prompt_cost + completion_cost == pytest.approx(expected_hourly_cost)
+
