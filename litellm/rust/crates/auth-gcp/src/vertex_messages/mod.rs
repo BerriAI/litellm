@@ -105,6 +105,9 @@ pub struct VertexLogin {
     pub project_id: String,
 }
 
+/// How many key file paths keep the credentials they loaded last.
+const EARLIER_KEY_FILES: u64 = 64;
+
 /// How long a token request may take, as `requests` waits for google-auth's token requests.
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -146,6 +149,9 @@ pub struct VertexMessagesAuth {
     /// The AWS login behind an external account's explicit `aws_*` keys, which resolves an
     /// `aws_web_identity_token` reference such as `oidc/...` when it was given a resolver.
     aws: AwsAuthService,
+    /// The credentials each key file path loaded last, served while a rewrite of the file does
+    /// not load, as Python keeps its earlier credentials.
+    earlier_key_files: moka::future::Cache<String, Arc<dyn GcpTokenSource>>,
 }
 
 impl Default for VertexMessagesAuth {
@@ -179,6 +185,9 @@ impl VertexMessagesAuth {
             gcp: GcpAuth::default(),
             environment,
             aws: AwsAuthService::default(),
+            earlier_key_files: moka::future::Cache::builder()
+                .max_capacity(EARLIER_KEY_FILES)
+                .build(),
         }
     }
 
@@ -207,7 +216,7 @@ impl VertexMessagesAuth {
         // Python's `load_auth` loads, mints the first token and resolves the project, and logs
         // any failure of those; a call served cached credentials ran no `load_auth`.
         let loaded = AtomicBool::new(false);
-        let source = self
+        let loaded_source = self
             .gcp
             .load_keyed(key.clone(), async {
                 loaded.store(true, Ordering::Relaxed);
@@ -219,8 +228,8 @@ impl VertexMessagesAuth {
                     .map(|login| Arc::new(login) as Arc<dyn GcpTokenSource>)
                     .map_err(Error::from)
             })
-            .await
-            .map_err(credentials_failed)?;
+            .await;
+        let source = self.or_earlier_key_file(&key, loaded_source).await?;
         let token = match tokio::time::timeout(
             TOKEN_TIMEOUT,
             self.gcp.token_evicting(&key, &*source),
@@ -246,6 +255,35 @@ impl VertexMessagesAuth {
                 credentials_failed(value_failure("Could not resolve project_id").into())
             })?;
         Ok(VertexLogin { token, project_id })
+    }
+
+    /// Python's `_load_auth_or_earlier_key_file`: credentials a key file loaded are kept for its
+    /// path, and a rewrite of that file that does not load is logged and served the credentials
+    /// the path loaded last. Credentials that are not a key file, or a path that never loaded,
+    /// fail as they are.
+    async fn or_earlier_key_file(
+        &self,
+        key: &CredentialCacheKey,
+        loaded: Result<Arc<dyn GcpTokenSource>, Error>,
+    ) -> Result<Arc<dyn GcpTokenSource>, Error> {
+        let path = match key {
+            CredentialCacheKey::KeyFile { path, .. } => Some(path),
+            _ => None,
+        };
+        match (loaded, path) {
+            (Ok(source), Some(path)) => {
+                self.earlier_key_files
+                    .insert(path.clone(), source.clone())
+                    .await;
+                Ok(source)
+            }
+            (Ok(source), None) => Ok(source),
+            (Err(error), Some(path)) => {
+                let error = credentials_failed(error);
+                self.earlier_key_files.get(path).await.ok_or(error)
+            }
+            (Err(error), None) => Err(credentials_failed(error)),
+        }
     }
 
     /// `_credentials_from_json`: an authorized user or an external account by type, a service
@@ -1242,6 +1280,64 @@ mod tests {
         assert_eq!(
             decoded(after.token.expose()).1["iss"],
             "rotated@key-project.iam.gserviceaccount.com"
+        );
+    }
+
+    const BROKEN_KEY_FILE: &str = "{not a key file";
+    const ROTATED_EMAIL: &str = "rotated@key-project.iam.gserviceaccount.com";
+
+    fn good_key() -> String {
+        service_account(json!({})).to_string()
+    }
+
+    fn rotated_key() -> String {
+        service_account(json!({"client_email": ROTATED_EMAIL})).to_string()
+    }
+
+    /// `auth` logged in with each of `earlier` written in turn to `file`, and then `file` holding
+    /// `last`.
+    async fn rewritten(auth: &VertexMessagesAuth, file: &Path, earlier: &[String], last: &str) {
+        for contents in earlier {
+            std::fs::write(file, contents).unwrap();
+            let _ = auth.login(Some(file.to_str().unwrap().into()), None).await;
+        }
+        std::fs::write(file, last).unwrap();
+    }
+
+    #[rstest]
+    #[case::good_then_broken(vec![good_key()], BROKEN_KEY_FILE.into(), Ok(CLIENT_EMAIL), true)]
+    #[case::broken_first(vec![], BROKEN_KEY_FILE.into(), Err(PythonException::Value), true)]
+    #[case::broken_then_fixed(vec![good_key(), BROKEN_KEY_FILE.into()], rotated_key(), Ok(ROTATED_EMAIL), false)]
+    #[tokio::test]
+    async fn a_key_file_rewrite_that_does_not_load_keeps_the_earlier_credentials(
+        #[case] earlier: Vec<String>,
+        #[case] last: String,
+        #[case] expected: Result<&str, PythonException>,
+        #[case] logged: bool,
+    ) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let auth = auth(FakeEnvironment::default());
+        rewritten(&auth, file.path(), &earlier, &last).await;
+        let errors = Errors::default();
+
+        let login = litellm_tracing::Logger::new(errors.clone())
+            .instrument(auth.login(Some(file.path().to_str().unwrap().into()), None))
+            .await;
+
+        assert_eq!(
+            login
+                .map(|login| decoded(login.token.expose()).1["iss"].clone())
+                .map_err(|error| failure(error).exception),
+            expected.map(Value::from)
+        );
+        assert_eq!(
+            errors
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.starts_with("Failed to load vertex credentials.")),
+            logged
         );
     }
 
