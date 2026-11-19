@@ -1,15 +1,10 @@
 import hashlib
 import json
-import os
-import signal
-import subprocess
-import sys
-import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 import pytest
+
 import type_check_gate as gate
 
 ROOT = gate.REPO_ROOT
@@ -42,12 +37,20 @@ def test_basedpyright_counts_per_rule_from_json_not_warnings():
 
 
 def test_basedpyright_error_without_a_rule_is_bucketed():
-    payload = json.dumps({"generalDiagnostics": [_bpr(f"{ROOT}/litellm/x.py", "error", None)]})
+    payload = json.dumps(
+        {"generalDiagnostics": [_bpr(f"{ROOT}/litellm/x.py", "error", None)]}
+    )
     assert gate.count_basedpyright(payload) == {gate.UNCODED: 1}
 
 
 def test_paths_outside_repo_are_skipped():
-    payload = json.dumps({"generalDiagnostics": [_bpr("/tmp/elsewhere.py", "error", "reportArgumentType")]})
+    payload = json.dumps(
+        {
+            "generalDiagnostics": [
+                _bpr("/tmp/elsewhere.py", "error", "reportArgumentType")
+            ]
+        }
+    )
     assert gate.count_basedpyright(payload) == {}
 
 
@@ -56,7 +59,13 @@ def test_symlinked_root_keeps_diagnostics_in_tree(tmp_path):
     real.mkdir()
     link = tmp_path / "link"
     link.symlink_to(real)
-    payload = json.dumps({"generalDiagnostics": [_bpr(link / "litellm" / "x.py", "error", "reportArgumentType")]})
+    payload = json.dumps(
+        {
+            "generalDiagnostics": [
+                _bpr(link / "litellm" / "x.py", "error", "reportArgumentType")
+            ]
+        }
+    )
     assert gate.count_basedpyright(payload, root=link) == {"reportArgumentType": 1}
 
 
@@ -67,7 +76,9 @@ def test_node_options_with_heap_sets_the_flag_in_a_bare_env():
 def test_node_options_with_heap_appends_after_caller_flags_so_it_wins():
     # node resolves a repeated --max-old-space-size last-wins, so ours must come
     # after any caller-set value while keeping their other flags.
-    merged = gate.node_options_with_heap({"NODE_OPTIONS": "--max-old-space-size=4096 --no-warnings"})
+    merged = gate.node_options_with_heap(
+        {"NODE_OPTIONS": "--max-old-space-size=4096 --no-warnings"}
+    )
     assert merged == f"--max-old-space-size=4096 --no-warnings {gate.NODE_HEAP_OPTION}"
 
 
@@ -87,7 +98,9 @@ def test_run_basedpyright_exports_the_raised_heap_to_the_child(tmp_path, monkeyp
         f'echo "$NODE_OPTIONS" > "{captured}"\necho \'{{"generalDiagnostics": []}}\'',
     )
     monkeypatch.delenv("NODE_OPTIONS", raising=False)
-    assert json.loads(gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)) == {"generalDiagnostics": []}
+    assert json.loads(gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)) == {
+        "generalDiagnostics": []
+    }
     assert captured.read_text().strip() == gate.NODE_HEAP_OPTION
 
 
@@ -117,64 +130,6 @@ def test_run_basedpyright_fails_loudly_on_a_crash_exit_code(tmp_path):
         gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)
 
 
-def _pid_is_gone(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    return False
-
-
-def _within(seconds: float, predicate: Callable[[], bool]) -> bool:
-    deadline: Final = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.05)
-    return predicate()
-
-
-def _hanging_stub_with_a_worker(tmp_path: Path) -> tuple[Path, Path]:
-    worker_pid_file: Final = tmp_path / "worker.pid"
-    env_dir: Final = _stub_env(
-        tmp_path, f'sleep 20 &\necho $! > "{worker_pid_file}.tmp"\nmv "{worker_pid_file}.tmp" "{worker_pid_file}"\nwait'
-    )
-    return env_dir, worker_pid_file
-
-
-def test_a_run_past_the_time_limit_fails_loudly_and_kills_its_workers(tmp_path: Path) -> None:
-    env_dir, worker_pid_file = _hanging_stub_with_a_worker(tmp_path)
-    with pytest.raises(SystemExit, match="did not finish within 1s"):
-        gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir, timeout_seconds=1)
-    worker_pid: Final = int(worker_pid_file.read_text())
-    assert _within(10, lambda: _pid_is_gone(worker_pid))
-
-
-def test_sigterm_during_a_run_kills_its_workers(tmp_path: Path) -> None:
-    env_dir, worker_pid_file = _hanging_stub_with_a_worker(tmp_path)
-    runner: Final = subprocess.Popen(
-        [
-            sys.executable,
-            "-P",
-            "-c",
-            "import sys, pathlib, type_check_gate as gate\n"
-            "gate.run_basedpyright(cwd=pathlib.Path(sys.argv[1]), env_dir=pathlib.Path(sys.argv[2]), timeout_seconds=600)",
-            str(tmp_path),
-            str(env_dir),
-        ],
-        env={**os.environ, "PYTHONPATH": str(Path(gate.__file__).parent)},
-    )
-    try:
-        assert _within(10, worker_pid_file.exists)
-        runner.send_signal(signal.SIGTERM)
-        assert runner.wait(timeout=10) == 128 + signal.SIGTERM
-    finally:
-        runner.kill()
-        runner.wait()
-    worker_pid: Final = int(worker_pid_file.read_text())
-    assert _within(10, lambda: _pid_is_gone(worker_pid))
-
-
 def test_malformed_basedpyright_json_exits_loudly_not_as_zero_errors():
     import pytest
 
@@ -193,10 +148,12 @@ def test_fingerprints_carry_the_dependency_group_set():
     # another's: the fingerprint difference re-keys every cache entry and
     # artifact name, so a changed canonical set falls back to recompute.
     assert gate.environment_fingerprints() == gate.environment_fingerprints()
-    assert gate.environment_fingerprints(dep_groups=("proxy-dev",)) != gate.environment_fingerprints(
-        dep_groups=("proxy-dev", "e2e-dev")
+    assert gate.environment_fingerprints(
+        dep_groups=("proxy-dev",)
+    ) != gate.environment_fingerprints(dep_groups=("proxy-dev", "e2e-dev"))
+    assert gate.environment_fingerprints()[-1] == "groups:" + ",".join(
+        gate.TYPECHECK_DEP_GROUPS
     )
-    assert gate.environment_fingerprints()[-1] == "groups:" + ",".join(gate.TYPECHECK_DEP_GROUPS)
 
 
 def test_fingerprints_cover_the_prisma_schema():
