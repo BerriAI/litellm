@@ -376,7 +376,7 @@ async def _assert_legacy_database_parity(
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
     await client.db.connect()
-    database = await Database.open(
+    database: Final = await Database.open(
         client, parity_database, None, writer_connections=2, reader_connections=0
     )
     results = []

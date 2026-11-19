@@ -4901,7 +4901,9 @@ async def test_get_team_object_loads_model_aliases_relation(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [ConnectionError("db unreachable"), rust_database.NoDatabaseConnected()])
-async def test_get_team_object_distinguishes_absent_team_from_unreadable_row(monkeypatch, error):
+async def test_get_team_object_distinguishes_absent_team_from_unreadable_row(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from fastapi import HTTPException
