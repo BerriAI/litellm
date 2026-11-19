@@ -251,3 +251,121 @@ async fn a_deferred_release_frees_the_team_slot_for_another_pod(
     })
     .await;
 }
+
+fn key_and_team_rpm(key: &str) -> Vec<Descriptor> {
+    serde_json::from_value(json!([
+        {"key": "api_key", "value": key, "rate_limit": {"requests_per_unit": 10, "window_size": 60}},
+        {"key": "team", "value": TEAM, "rate_limit": {"requests_per_unit": 2, "window_size": 60}},
+    ]))
+    .unwrap()
+}
+
+fn key_and_team_tpm(key: &str) -> Vec<Descriptor> {
+    serde_json::from_value(json!([
+        {"key": "api_key", "value": key, "rate_limit": {"tokens_per_unit": 1000, "window_size": 60}},
+        {"key": "team", "value": TEAM, "rate_limit": {"tokens_per_unit": 100, "window_size": 60}},
+    ]))
+    .unwrap()
+}
+
+async fn count_request(engine: &Engine, descriptors: &[Descriptor], ctx: Ctx<'_>) -> Code {
+    engine
+        .should_rate_limit(descriptors, false, true, None, false, ctx)
+        .await
+        .expect("fail-closed: a cross-slot script would surface here as unverifiable")
+        .overall
+}
+
+async fn reserve_tokens(engine: &Engine, descriptors: &[Descriptor], tokens: i64) -> Code {
+    engine
+        .reserve_tpm_tokens(descriptors, tokens, &[], ctx(true))
+        .await
+        .expect("fail-closed: a cross-slot script would surface here as unverifiable")
+        .overall
+}
+
+#[rstest]
+#[case::now(false)]
+#[case::pre_call_batch(true)]
+#[tokio::test]
+async fn a_team_rpm_limit_is_shared_across_pods(
+    #[future(awt)] cluster: RedisDeployment,
+    #[case] batched: bool,
+) {
+    let (first, second) = (pod(&cluster), pod(&cluster));
+    let request = RequestRedis::new(Handle::current(), Duration::from_secs(60));
+    let on = Ctx {
+        request: batched.then_some(&request),
+        ..ctx(true)
+    };
+
+    assert_eq!(
+        count_request(&first, &key_and_team_rpm("key-1"), on).await,
+        Code::Ok
+    );
+    assert_eq!(
+        count_request(&first, &key_and_team_rpm("key-1"), on).await,
+        Code::Ok
+    );
+    assert_eq!(
+        count_request(&second, &key_and_team_rpm("key-2"), on).await,
+        Code::OverLimit
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_team_tpm_reservation_is_shared_across_pods(#[future(awt)] cluster: RedisDeployment) {
+    let (first, second) = (pod(&cluster), pod(&cluster));
+
+    assert_eq!(
+        reserve_tokens(&first, &key_and_team_tpm("key-1"), 80).await,
+        Code::Ok
+    );
+    assert_eq!(
+        reserve_tokens(&second, &key_and_team_tpm("key-2"), 80).await,
+        Code::OverLimit
+    );
+}
+
+#[rstest]
+#[case::plain_pipeline(false)]
+#[case::post_call_batch(true)]
+#[tokio::test]
+async fn team_tokens_settled_on_one_pod_count_on_another(
+    #[future(awt)] cluster: RedisDeployment,
+    #[case] post_call: bool,
+) {
+    let (first, second) = (pod(&cluster), pod(&cluster));
+    let request = RequestRedis::new(Handle::current(), Duration::from_secs(60));
+    let usage = [("api_key", "key-1"), ("team", TEAM)].map(|(descriptor, value)| {
+        first.tokens_increment(
+            &Scope {
+                descriptor: descriptor.into(),
+                value: value.into(),
+            },
+            90,
+        )
+    });
+
+    if post_call {
+        first
+            .increment_with_ttl_preservation(
+                &usage,
+                Ctx {
+                    request: Some(&request),
+                    ..ctx(true)
+                },
+            )
+            .await;
+        request.flush_post().await;
+    } else {
+        first.increment_many(&usage).await;
+    }
+
+    litellm_redis_testing::eventually(async || {
+        (reserve_tokens(&second, &key_and_team_tpm("key-2"), 20).await == Code::OverLimit)
+            .then_some(())
+    })
+    .await;
+}
