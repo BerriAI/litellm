@@ -168,7 +168,7 @@ def setup():
             sid = created.json()["server_id"]
         users = {}
         for name in ["u1", "u2", "u3", "u4", "cap", "other", "tool_a", "tool_b", "race", "pkce", "redis1",
-                     "redis2", "redis3", "expiry", "ui", "size", "bad"]:
+                     "redis2", "redis3", "expiry", "ui", "size", "bad", "finish", "roll"]:
             email = f"{name}-{side}-{RUN}@rig49642.test"
             pw = f"Pw-{name}-{secrets.token_hex(6)}!9"
             user = make_user(side, email, pw)
@@ -252,6 +252,26 @@ def main():
              statuses == [302] * 20 + [429] if side == "head" else statuses == [302] * 21)
         emit(side, "per_user_cap", "a second user right after", "302", f"{other.status_code}", other.status_code == 302)
 
+        # S5b finished connects give their slot back: 25 full connects by one user, then 21 unredeemed
+        finished = [full_flow(side, U["finish"], sid, f"byok-finish-{side}-key") for _ in range(25)]
+        submits = [f[0].status_code for f in finished]
+        tokens = sum(1 for f in finished if f[1] is not None and f[1].status_code == 200)
+        emit(side, "per_user_cap", "25 finished connects by one user", "no 429, head 25/25 token 200",
+             f"{submits.count(302)} x 302, {submits.count(429)} x 429, {tokens}/25 token 200",
+             submits == [302] * 25 and (tokens == 25 or side == "base"))
+        issued21 = [authorize(side, U["finish"]["cookie"], sid, f"byok-finish-{side}-key") for _ in range(21)]
+        pend = [x[0].status_code for x in issued21]
+        emit(side, "per_user_cap", "then 21 unredeemed authorizes by the same user", "head 20 x 302 then 429",
+             f"{pend.count(302)} x 302, then {pend[-1]}",
+             pend == [302] * 20 + [429] if side == "head" else pend == [302] * 21)
+        refused10 = [authorize(side, U["finish"]["cookie"], sid, f"byok-finish-{side}-key")[0].status_code for _ in range(10)]
+        redeemed20 = [exchange(side, x[1], x[2]).status_code for x in issued21[:20]]
+        again = [authorize(side, U["finish"]["cookie"], sid, f"byok-finish-{side}-key")[0].status_code for _ in range(21)]
+        emit(side, "per_user_cap", "10 more refused, redeem the 20, then 21 more", "head 10 x 429, 20 x 200, then 20 x 302 and 429",
+             f"{refused10.count(429)} x 429, redeemed {redeemed20.count(200)} x 200, then {again.count(302)} x 302, last {again[-1]}",
+             (refused10 == [429] * 10 and redeemed20 == [200] * 20 and again == [302] * 20 + [429]) if side == "head"
+             else (refused10 == [302] * 10 and again == [302] * 21))
+
         # S6 tool calls carry each user's own key, via REST and the MCP endpoint
         for name in ["tool_a", "tool_b"]:
             key_value = f"byok-{name}-{side}-{secrets.token_hex(4)}"
@@ -276,6 +296,13 @@ def main():
         r, _, _ = authorize(side, U["size"]["cookie"], sid, "k" * 8193)
         emit(side, "input_size", "api_key of 8193 chars", "head 400, base 302", f"{r.status_code} {err(r) if r.status_code != 302 else ''}".strip(),
              r.status_code == (400 if side == "head" else 302))
+        for label, extra in [("code_challenge of 129 chars", {"code_challenge": "c" * 129}),
+                             ("client_id of 8193 chars", {"client_id": "c" * 8193}),
+                             ("server_id of 8193 chars", {"server_id": "s" * 8193}),
+                             ("redirect_uri over 8192 chars", {"redirect_uri": CALLBACK + "?pad=" + "p" * 8192})]:
+            r, _, _ = authorize(side, U["size"]["cookie"], sid, "k", extra=extra)
+            emit(side, "input_size", label, "head 400, base 302", f"{r.status_code} {err(r) if r.status_code != 302 else ''}".strip(),
+                 r.status_code == (400 if side == "head" else 302))
         plain = [authorize(side, U["bad"]["cookie"], sid, "k", method="plain")[0].status_code for _ in range(25)]
         after, _, _ = authorize(side, U["bad"]["cookie"], sid, "k")
         emit(side, "malformed", "25 x code_challenge_method=plain then a valid one", "25 x 400 then 302",
@@ -289,10 +316,11 @@ def main():
             keys = redis_cli(side, "--scan", "--pattern", "*mcp_byok_auth_code:*").split()
             sealed = redis_cli(side, "GET", f"mcp_byok_auth_code:{code}")
             ttl = redis_cli(side, "TTL", f"mcp_byok_auth_code:{code}")
-            window = redis_cli(side, "GET", f"mcp_byok_auth_code_window:{U['expiry']['user_id']}")
-            wttl = redis_cli(side, "TTL", f"mcp_byok_auth_code_window:{U['expiry']['user_id']}")
+            wkey = (redis_cli(side, "--scan", "--pattern", f"*mcp_byok_auth_code_window:{U['expiry']['user_id']}:*").split() or ["none"])[0]
+            window = redis_cli(side, "GET", wkey)
+            wttl = redis_cli(side, "TTL", wkey)
             emit(side, "store", "pending code record in Redis", "encrypted, TTL<=300",
-                 f"{len(keys)} pending keys; record has plaintext={('plaintext-marker' in sealed)}; ttl {ttl}; user window {window} ttl {wttl}",
+                 f"{len(keys)} pending keys; record has plaintext={('plaintext-marker' in sealed)}; ttl {ttl}; user window {wkey.split(':')[-1]} = {window} ttl {wttl}",
                  "plaintext-marker" not in sealed and 0 < int(ttl) <= 300 and 0 < int(wttl) <= 300)
             st[side]["expiry_code"] = code
         for name in ["tool_a"]:
@@ -408,9 +436,54 @@ def wait_expiry():
         emit(side, "per_user_cap", "capped user after the 5 minute window", "302", f"{r.status_code}", r.status_code == 302)
 
 
+# ---------------------------------------------------------------- store check only
+def store_check():
+    st = load_state()
+    side = "head"
+    U = st[side]["users"]
+    sid = st[side]["server_id"]
+    r, code, _ = authorize(side, U["expiry"]["cookie"], sid, f"byok-expiry-{side}-plaintext-marker")
+    keys = redis_cli(side, "--scan", "--pattern", "*mcp_byok_auth_code:*").split()
+    sealed = redis_cli(side, "GET", f"mcp_byok_auth_code:{code}")
+    ttl = redis_cli(side, "TTL", f"mcp_byok_auth_code:{code}")
+    wkey = (redis_cli(side, "--scan", "--pattern", f"*mcp_byok_auth_code_window:{U['expiry']['user_id']}:*").split() or ["none"])[0]
+    window = redis_cli(side, "GET", wkey)
+    wttl = redis_cli(side, "TTL", wkey)
+    emit(side, "store", "pending code record in Redis", "encrypted, TTL<=300",
+         f"{len(keys)} pending keys; record has plaintext={('plaintext-marker' in sealed)}; ttl {ttl}; user window {wkey.split(':')[-1]} = {window} ttl {wttl}",
+         "plaintext-marker" not in sealed and 0 < int(ttl) <= 300 and 0 < int(wttl) <= 300)
+
+
+# ---------------------------------------------------------------- window rollover
+def window_rollover():
+    st = load_state()
+    boundary = (int(time.time()) // 300 + 1) * 300
+    if boundary - time.time() < 8:
+        boundary += 300
+    time.sleep(max(0, boundary - 5 - time.time()))
+    old = {}
+    for side in SIDES:
+        r, code, verifier = authorize(side, st[side]["users"]["roll"]["cookie"], st[side]["server_id"], f"byok-roll-{side}")
+        old[side] = (r.status_code, code, verifier, round(time.time() - boundary, 2))
+    time.sleep(max(0, boundary + 2 - time.time()))
+    for side in SIDES:
+        sid = st[side]["server_id"]
+        cookie = st[side]["users"]["roll"]["cookie"]
+        current = [authorize(side, cookie, sid, f"byok-roll-{side}")[0].status_code for _ in range(20)]
+        t = exchange(side, old[side][1], old[side][2])
+        last = authorize(side, cookie, sid, f"byok-roll-{side}")[0]
+        emit(side, "per_user_cap", "old code issued 5s before a window boundary, redeemed after 20 new ones",
+             "head old 200, then 429",
+             f"old issued {old[side][0]} at {old[side][3]}s, new {current.count(302)} x 302, old redeem {t.status_code}, then {last.status_code}",
+             t.status_code == 200 and current == [302] * 20 and last.status_code == (429 if side == "head" else 302))
+
+
 # ---------------------------------------------------------------- no Redis
 def noredis():
     for side in SIDES:
+        # the admin's first dashboard login creates the admin user row that invitations reference
+        print(side, "admin login", post(SIDES[side] + "/login", data={"username": "admin", "password": MASTER},
+                                        follow_redirects=False).status_code, flush=True)
         sid = admin(side, "/v1/mcp/server", {
             "server_name": f"byokecho{RUN}", "alias": f"byokecho{RUN}", "transport": "http",
             "url": f"http://127.0.0.1:{REC[side]}/mcp", "auth_type": "api_key", "is_byok": True})["server_id"]
@@ -428,4 +501,5 @@ def noredis():
         emit(side, "no_redis", f"{flows} flows, {mode}", "see mode", f"{oks}/{flows} token 200", True, mode=mode)
 
 
-{"setup": setup, "main": main, "chaos": chaos, "wait_expiry": wait_expiry, "noredis": noredis}[PHASE]()
+{"setup": setup, "main": main, "chaos": chaos, "wait_expiry": wait_expiry, "noredis": noredis,
+ "window_rollover": window_rollover, "store_check": store_check}[PHASE]()
