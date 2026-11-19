@@ -85,11 +85,10 @@ def test_completion_cost(model):
     )
 
 
-def test_large_3_alias_is_not_retargeted():
-    info = litellm.get_model_info("mistral/mistral-large-latest")
-    assert info["input_cost_per_token"] == 5e-07
-    assert info["max_input_tokens"] == 262144
-    assert not info["supports_reasoning"]
+def test_latest_alias_matches_large_4():
+    info: Final = litellm.get_model_info("mistral/mistral-large-latest")
+    canonical: Final = litellm.get_model_info(MODELS[0])
+    assert info == {**canonical, "key": "mistral/mistral-large-latest"}
 
 
 @pytest.mark.parametrize("model", MODELS)
