@@ -62,6 +62,7 @@ from litellm.constants import (
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    MID_STREAM_PARTIAL_COST_KEY,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
@@ -136,6 +137,7 @@ from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.exceptions import (
     GuardrailRaisedException,
     RejectedRequestError,
@@ -1122,6 +1124,8 @@ def _failure_usage_to_lift(
     provider_billed: bool = False,
     deployment_id: str | None = None,
     base_model: str | None = None,
+    continued_partial: tuple[Usage, float] | None = None,
+    continued_partial_billed: bool = False,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -1136,7 +1140,11 @@ def _failure_usage_to_lift(
     deployment's ``model_info.base_model``) or the deployment model; any other post-dispatch
     failure stays at zero cost. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
+    if continued_partial_billed:
+        return Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), 0.0
     recovered_usage: Final = model_call_details.get("combined_usage_object")
+    if continued_partial is not None:
+        return _with_continued_partial(recovered_usage, model_call_details.get("response_cost"), continued_partial)
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
     if not dispatched:
@@ -1153,6 +1161,37 @@ def _failure_usage_to_lift(
     return estimated_usage, _estimated_input_cost(
         model_call_details, estimated_usage.prompt_tokens, deployment_id=deployment_id, base_model=base_model
     )
+
+
+def _with_continued_partial(
+    recovered_usage: object, recovered_cost: object, continued_partial: tuple[Usage, float]
+) -> tuple[Usage, float]:
+    if not isinstance(recovered_usage, Usage):
+        return continued_partial
+    return (
+        BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[recovered_usage, continued_partial[0]]),
+        (recovered_cost if isinstance(recovered_cost, (int, float)) else 0.0) + continued_partial[1],
+    )
+
+
+def _with_continued_partial_breakdown(standard_logging_object: object, row_cost: object) -> object:
+    logged: Final = _as_str_mapping(standard_logging_object)
+    if not logged or not isinstance(row_cost, (int, float)):
+        return standard_logging_object
+    failure_breakdown: Final = _as_str_mapping(logged.get("cost_breakdown"))
+    failure_total: Final = failure_breakdown.get("total_cost")
+    failure_priced_cost: Final = failure_total if isinstance(failure_total, (int, float)) else 0.0
+    return {
+        **logged,
+        "cost_breakdown": {
+            **failure_breakdown,
+            "additional_costs": {
+                **_as_str_mapping(failure_breakdown.get("additional_costs")),
+                MID_STREAM_PARTIAL_COST_KEY: row_cost - failure_priced_cost,
+            },
+            "total_cost": row_cost,
+        },
+    }
 
 
 def _estimated_prompt_usage(
@@ -1589,7 +1628,23 @@ def _proxy_only_error_log_fields(
     )
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
+def error_spend_rows_tracked() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("disable_error_logs") is not True
+
+
+def _continued_partial_for_failure_row(logging_obj: object, writes_failure_row: bool) -> tuple[Usage, float] | None:
+    if not isinstance(logging_obj, Logging):
+        return None
+    if not writes_failure_row:
+        return logging_obj.continued_partial
+    return logging_obj.claim_continued_partial("failure")
+
+
+def _failure_fields_to_lift(
+    request_data: Mapping[str, object], provider_billed: bool = False, writes_failure_row: bool = True
+) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1606,6 +1661,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
     _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
     _billed: Final = provider_billed and not _success_already_logged
+    _continued_partial: Final = _continued_partial_for_failure_row(_logging_obj, writes_failure_row)
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,
         request_body=request_data,
@@ -1613,7 +1669,11 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
+        continued_partial=_continued_partial,
+        continued_partial_billed=isinstance(_logging_obj, Logging) and _logging_obj.continued_partial_billed,
     )
+    _lifted_cost: Final = None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)
+    _logged_failure: Final[object] = _model_call_details.get("standard_logging_object")
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data)
         if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
@@ -1629,8 +1689,13 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         ("first_api_call_start_time", _first_handoff),
         ("call_type", _model_call_details.get("call_type")),
         ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),
-        ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
-        ("standard_logging_object", _model_call_details.get("standard_logging_object")),
+        ("response_cost", _lifted_cost),
+        (
+            "standard_logging_object",
+            _logged_failure
+            if _continued_partial is None
+            else _with_continued_partial_breakdown(_logged_failure, _lifted_cost),
+        ),
         ("billed_failed_attempts", _earlier_attempts or None),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
@@ -3876,7 +3941,9 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data, provider_billed=_provider_billed_the_failure(original_exception)
+                request_data,
+                provider_billed=_provider_billed_the_failure(original_exception),
+                writes_failure_row=error_spend_rows_tracked(),
             )
         )
 

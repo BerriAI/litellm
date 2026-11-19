@@ -134,6 +134,11 @@ ignored_function_names = [
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_relayed_responses_leg",  # Tested through the estimated cut partial Responses fallback test in test_router.py
+    "_billed_responses_cut_partial",  # Tested through every Responses cut partial fallback test in test_router.py
+    "_carry_partial_spend_to_fallback",  # Tested through every Responses cut partial fallback test in test_router.py
+    "_carry_partial_spend_to_failed_request",  # Tested through the Responses cut tests whose fallback chain ends without a stream in test_router.py
+    "_without_own_usage",  # Tested through the disconnect during the fallback tests in test_router.py
 ]
 
 

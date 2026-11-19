@@ -12,7 +12,7 @@ import warnings
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -43,7 +43,14 @@ from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator imp
 )
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.models.access_group import LiteLLM_AccessGroupTable
-from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LitellmUserRoles,
+    Member,
+    ProxyException,
+    SpendLogsPayload,
+    UserAPIKeyAuth,
+)
 from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS,
@@ -5183,6 +5190,7 @@ async def test_aresponses_streaming_content_policy_error_event_routes_to_content
     logging_obj = MagicMock(spec=LiteLLMLogging)
     logging_obj.model_call_details = {"litellm_params": {}}
     logging_obj.completion_start_time = None
+    logging_obj.continued_partial = None
     source = ResponsesAPIStreamingIterator(
         response=raw_response,
         model="gpt-5.4",
@@ -5548,6 +5556,7 @@ def _make_native_responses_iterator(*, sse_payloads: tuple[dict[str, str], ...],
     logging_obj: Final = MagicMock(spec=LiteLLMLogging)
     logging_obj.completion_start_time = None
     logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.continued_partial = None
     return ResponsesAPIStreamingIterator(
         response=response,
         model="gpt-4",
@@ -27713,6 +27722,7 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
         logging_obj: Final = MagicMock(spec=LiteLLMLogging)
         logging_obj.model_call_details = {"litellm_params": {}}
         logging_obj.completion_start_time = None
+        logging_obj.continued_partial = None
         iterator: Final = ResponsesAPIStreamingIterator(
             response=httpx.Response(200),
             model="gpt-5.4",
@@ -27764,3 +27774,747 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
     wrapped.adopt_fallback_headers(fallback)
 
     assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
+
+
+class _CutSSE(httpx.AsyncByteStream):
+    def __init__(self, content: str) -> None:
+        self._content: Final = content
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield f"data: {json.dumps({'id': 'cut', 'object': 'chat.completion.chunk', 'created': 1700000000, 'model': 'm', 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': self._content}, 'finish_reason': None}]})}\n\n".encode()
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+
+class _SpendRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.successes: Final[list[dict[str, object]]] = []
+        self.failures: Final[list[dict[str, object]]] = []
+        self.spend_rows: Final[list[dict[str, object]]] = []
+        self.succeeded: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        self.successes.append(kwargs["standard_logging_object"])
+        self.spend_rows.append(get_logging_payload(kwargs, response_obj, start_time, end_time))
+        self.succeeded.set()
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.failures.append(kwargs["standard_logging_object"])
+
+
+def _responses_sse(*events: Mapping[str, object]) -> str:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+def _responses_envelope(response_id: str, model: str, status: str, **fields: object) -> dict[str, object]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1700000000,
+        "status": status,
+        "model": model,
+        "output": [],
+        **fields,
+    }
+
+
+_CUT_RESPONSES_PRICES: Final = MappingProxyType({"primary": (0.001, 0.002), "middle": (0.003, 0.004)})
+_PROVIDER_REPORTED_CUT_USAGE: Final = MappingProxyType({"input_tokens": 20, "output_tokens": 5, "total_tokens": 25})
+
+
+def _cut_responses_sse(response_id: str, words: tuple[str, ...], failed_usage: Mapping[str, int] | None) -> str:
+    return _responses_sse(
+        {"type": "response.created", "response": _responses_envelope(response_id, "gpt-4o", "in_progress")},
+        *(
+            {
+                "type": "response.output_text.delta",
+                "item_id": f"msg_{response_id}",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": word,
+            }
+            for word in words
+        ),
+        {
+            "type": "response.failed",
+            "response": _responses_envelope(
+                response_id,
+                "gpt-4o",
+                "failed",
+                error={"code": "server_error", "message": "The model had an internal error"},
+                **({"usage": dict(failed_usage)} if failed_usage is not None else {}),
+            ),
+        },
+    )
+
+
+def _mock_backup_responses(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_responses_sse(
+                {
+                    "type": "response.created",
+                    "response": _responses_envelope("resp_backup", "gpt-4o-mini", "in_progress"),
+                },
+                {
+                    "type": "response.completed",
+                    "response": _responses_envelope(
+                        "resp_backup",
+                        "gpt-4o-mini",
+                        "completed",
+                        output=[
+                            {
+                                "type": "message",
+                                "id": "msg_backup",
+                                "status": "completed",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": " dragon.", "annotations": []}],
+                            }
+                        ],
+                        usage={"input_tokens": 1000, "output_tokens": 700, "total_tokens": 1700},
+                    ),
+                },
+            ),
+        )
+    )
+
+
+def _shared_responses_logging() -> LiteLLMLogging:
+    shared_logging, _ = litellm.utils.function_setup(
+        original_function="aresponses",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+    )
+    return shared_logging
+
+
+async def _stream_responses_through_cut_legs(
+    respx_mock: respx.MockRouter, cut_groups: tuple[str, ...], failed_usage: Mapping[str, int] | None
+) -> LiteLLMLogging:
+    for group, words in (("primary", ("Once ", "upon ", "a ", "time ", "there")), ("middle", (" lived", " a"))):
+        respx_mock.post(f"https://{group}.example/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=_cut_responses_sse(f"resp_{group}", words, failed_usage),
+            )
+        )
+    _mock_backup_responses(respx_mock)
+    router: Final = Router(
+        model_list=[
+            *(
+                {
+                    "model_name": group,
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "k1",
+                        "api_base": f"https://{group}.example/v1",
+                        "input_cost_per_token": input_price,
+                        "output_cost_per_token": output_price,
+                    },
+                }
+                for group, (input_price, output_price) in _CUT_RESPONSES_PRICES.items()
+            ),
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "k2",
+                    "api_base": "https://backup.example/v1",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["middle" if "middle" in cut_groups else "backup"]}, {"middle": ["backup"]}],
+        num_retries=0,
+    )
+    shared_logging: Final = _shared_responses_logging()
+    response: Final = await router.aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+    _ = [event async for event in response]
+    return shared_logging
+
+
+def _backup_responses_cost() -> float:
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="openai/gpt-4o-mini", prompt_tokens=1000, completion_tokens=700
+    )
+    return prompt_cost + completion_cost
+
+
+def _relayed_cut_tokens(
+    failed_usage: Mapping[str, int] | None, relayed_text: str = "Once upon a time there"
+) -> tuple[int, int]:
+    if failed_usage is not None:
+        return failed_usage["input_tokens"], failed_usage["output_tokens"]
+    return (
+        litellm.token_counter(model="gpt-4o", messages=[{"role": "user", "content": "Tell me a story"}]),
+        litellm.token_counter(model="gpt-4o", text=relayed_text, count_response_tokens=True),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_usage",
+    [None, _PROVIDER_REPORTED_CUT_USAGE],
+    ids=["estimated_partial", "provider_reported_partial"],
+)
+async def test_responses_fallback_sharing_the_proxy_logging_object_bills_the_cut_partial_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, failed_usage: Mapping[str, int] | None
+) -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    shared_logging: Final = await _stream_responses_through_cut_legs(respx_mock, ("primary",), failed_usage)
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    cut_tokens: Final = _relayed_cut_tokens(failed_usage)
+    cut_cost: Final = (
+        cut_tokens[0] * _CUT_RESPONSES_PRICES["primary"][0] + cut_tokens[1] * _CUT_RESPONSES_PRICES["primary"][1]
+    )
+    assert cut_tokens[1] > 0
+    assert len(recorder.failures) == 1
+    (success,) = recorder.successes
+    assert (success["prompt_tokens"], success["completion_tokens"]) == (1000 + cut_tokens[0], 700 + cut_tokens[1])
+    assert success["response_cost"] == pytest.approx(cut_cost + _backup_responses_cost())
+    assert success["cost_breakdown"]["total_cost"] == pytest.approx(success["response_cost"])
+    assert success["cost_breakdown"]["additional_costs"]["mid_stream_partial_cost"] == pytest.approx(cut_cost)
+    (spend_row,) = recorder.spend_rows
+    assert (spend_row["prompt_tokens"], spend_row["completion_tokens"], spend_row["spend"]) == (
+        success["prompt_tokens"],
+        success["completion_tokens"],
+        success["response_cost"],
+    )
+    late_failure: Final = _failure_fields_to_lift({"litellm_logging_obj": shared_logging})
+    late_failure_row: Final = get_logging_payload(dict(late_failure), None, datetime.now(), datetime.now())
+    assert (late_failure_row["prompt_tokens"], late_failure_row["completion_tokens"], late_failure_row["spend"]) == (
+        0,
+        0,
+        0.0,
+    )
+
+
+_NATIVE_BACKUP_PARAMS: Final = MappingProxyType({"model": "openai/gpt-4o-mini", "api_base": "https://backup.example/v1"})
+
+
+def _cut_primary_router(
+    respx_mock: respx.MockRouter,
+    primary: Literal["bridged", "native"],
+    failed_usage: Mapping[str, int] | None = _PROVIDER_REPORTED_CUT_USAGE,
+    with_fallback: bool = True,
+    backup_params: Mapping[str, object] = _NATIVE_BACKUP_PARAMS,
+) -> Router:
+    if primary == "bridged":
+        respx_mock.post(host="api.mistral.ai").mock(
+            return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutSSE("Once upon"))
+        )
+    else:
+        respx_mock.post("https://primary.example/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=_cut_responses_sse("resp_primary", ("Once ", "upon"), failed_usage),
+            )
+        )
+    primary_params: Final = (
+        {"model": "mistral/mistral-large-latest"}
+        if primary == "bridged"
+        else {"model": "openai/gpt-4o", "api_base": "https://primary.example/v1"}
+    )
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    **primary_params,
+                    "api_key": "k1",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            },
+            {"model_name": "backup", "litellm_params": {**backup_params, "api_key": "k2"}},
+        ],
+        fallbacks=[{"primary": ["backup"]}] if with_fallback else [],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_from_a_chat_bridged_primary_bills_the_cut_partial_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    _mock_backup_responses(respx_mock)
+
+    response: Final = await _cut_primary_router(respx_mock, "bridged").aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=_shared_responses_logging(),
+    )
+    _ = [event async for event in response]
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    (cut_leg,) = recorder.failures
+    assert cut_leg["completion_tokens"] > 0
+    assert cut_leg["response_cost"] == pytest.approx(
+        cut_leg["prompt_tokens"] * 0.001 + cut_leg["completion_tokens"] * 0.002
+    )
+    (success,) = recorder.successes
+    assert (success["prompt_tokens"], success["completion_tokens"]) == (
+        1000 + cut_leg["prompt_tokens"],
+        700 + cut_leg["completion_tokens"],
+    )
+    assert success["response_cost"] == pytest.approx(cut_leg["response_cost"] + _backup_responses_cost())
+    assert success["cost_breakdown"]["additional_costs"]["mid_stream_partial_cost"] == pytest.approx(
+        cut_leg["response_cost"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_chain_sharing_the_proxy_logging_object_bills_both_cut_legs_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    await _stream_responses_through_cut_legs(respx_mock, ("primary", "middle"), _PROVIDER_REPORTED_CUT_USAGE)
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    cut_tokens: Final = (_PROVIDER_REPORTED_CUT_USAGE["input_tokens"], _PROVIDER_REPORTED_CUT_USAGE["output_tokens"])
+    cut_cost: Final = sum(
+        cut_tokens[0] * input_price + cut_tokens[1] * output_price
+        for input_price, output_price in _CUT_RESPONSES_PRICES.values()
+    )
+    (success,) = recorder.successes
+    assert (success["prompt_tokens"], success["completion_tokens"]) == (
+        1000 + 2 * cut_tokens[0],
+        700 + 2 * cut_tokens[1],
+    )
+    assert success["response_cost"] == pytest.approx(cut_cost + _backup_responses_cost())
+    assert success["cost_breakdown"]["additional_costs"]["mid_stream_partial_cost"] == pytest.approx(cut_cost)
+
+
+class _UnfinishedSSE(httpx.AsyncByteStream):
+    def __init__(self, content: str) -> None:
+        self._content: Final = content
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._content.encode()
+        await asyncio.Event().wait()
+
+
+def _mock_backup_still_streaming(respx_mock: respx.MockRouter, words: tuple[str, ...]) -> None:
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_UnfinishedSSE(
+                _responses_sse(
+                    {
+                        "type": "response.created",
+                        "response": _responses_envelope("resp_backup", "gpt-4o-mini", "in_progress"),
+                    },
+                    *(
+                        {
+                            "type": "response.output_text.delta",
+                            "item_id": "msg_backup",
+                            "output_index": 0,
+                            "content_index": 0,
+                            "delta": word,
+                        }
+                        for word in words
+                    ),
+                )
+            ),
+        )
+    )
+
+
+async def _relay_until_the_backups_last_word(response: AsyncIterator[object], words: tuple[str, ...]) -> None:
+    async for event in response:
+        if words and getattr(event, "delta", None) == words[-1]:
+            return
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    while not condition():
+        await asyncio.sleep(0.01)
+
+
+async def _stream_until_the_backup_relayed(
+    respx_mock: respx.MockRouter, primary: Literal["bridged", "native"], words: tuple[str, ...]
+) -> tuple[LiteLLMLogging, AsyncIterator[object]]:
+    _mock_backup_still_streaming(respx_mock, words)
+    shared_logging: Final = _shared_responses_logging()
+    response: Final = await _cut_primary_router(respx_mock, primary).aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+    relay: Final = asyncio.ensure_future(_relay_until_the_backups_last_word(response, words))
+    await asyncio.wait_for(
+        _until(lambda: relay.done() or (not words and getattr(response, "fallback_headers_adopted", False))),
+        timeout=10,
+    )
+    relay.cancel()
+    return shared_logging, response
+
+
+def _cut_leg_row(recorder: _SpendRecorder) -> tuple[int, int, float]:
+    (cut_leg,) = recorder.failures
+    return cut_leg["prompt_tokens"], cut_leg["completion_tokens"], cut_leg["response_cost"]
+
+
+def _final_failure_spend_row(shared_logging: LiteLLMLogging) -> SpendLogsPayload:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": shared_logging})
+    return get_logging_payload(dict(lifted), None, datetime.now(), datetime.now())
+
+
+def _final_failure_row(shared_logging: LiteLLMLogging) -> tuple[int, int, float]:
+    row: Final = _final_failure_spend_row(shared_logging)
+    return row["prompt_tokens"], row["completion_tokens"], row["spend"]
+
+
+def _input_output_partial_and_total_costs(row: SpendLogsPayload) -> tuple[float, float, float, float]:
+    breakdown: Final = json.loads(row["metadata"])["cost_breakdown"]
+    return (
+        breakdown["input_cost"],
+        breakdown["output_cost"],
+        breakdown.get("additional_costs", {}).get("mid_stream_partial_cost", 0.0),
+        breakdown["total_cost"],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backup_words", [(), (" lived",)], ids=["backup_relayed_nothing", "backup_relayed_text"])
+async def test_a_disconnect_during_the_fallback_bills_a_chat_bridged_cut_partial_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, backup_words: tuple[str, ...]
+) -> None:
+    from litellm.proxy.common_request_processing import _bill_partial_streamed_spend_on_disconnect
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    shared_logging, response = await _stream_until_the_backup_relayed(respx_mock, "bridged", backup_words)
+    await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": shared_logging}, response)
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    cut_prompt, cut_completion, cut_cost = _cut_leg_row(recorder)
+    backup_completion: Final = (
+        litellm.token_counter(model="gpt-4o-mini", text="".join(backup_words), count_response_tokens=True)
+        if backup_words
+        else 0
+    )
+    (success,) = recorder.successes
+    (spend_row,) = recorder.spend_rows
+    backup_prompt: Final = spend_row["prompt_tokens"] - cut_prompt
+    backup_input_cost, backup_output_cost = litellm.cost_per_token(
+        model="openai/gpt-4o-mini", prompt_tokens=backup_prompt, completion_tokens=backup_completion
+    )
+    breakdown: Final = success["cost_breakdown"]
+    assert cut_completion > 0
+    assert (backup_prompt > 0) == bool(backup_words)
+    assert spend_row["completion_tokens"] == cut_completion + backup_completion
+    assert (
+        breakdown["input_cost"],
+        breakdown["output_cost"],
+        breakdown["additional_costs"]["mid_stream_partial_cost"],
+    ) == pytest.approx((backup_input_cost, backup_output_cost, cut_cost))
+    assert (breakdown["total_cost"], success["response_cost"], spend_row["spend"]) == pytest.approx(
+        (backup_input_cost + backup_output_cost + cut_cost,) * 3
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary", ["bridged", "native"])
+async def test_a_hook_failing_while_the_fallback_streams_bills_the_cut_partial_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, primary: Literal["bridged", "native"]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    shared_logging, _ = await _stream_until_the_backup_relayed(respx_mock, primary, (" lived",))
+    await asyncio.sleep(0)
+
+    assert _cut_leg_row(recorder)[1] > 0
+    assert _final_failure_row(shared_logging) == pytest.approx(_cut_leg_row(recorder))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_row_first", [True, False], ids=["failure_row_before_success_row", "failure_row_after_success_row"]
+)
+async def test_a_late_failure_row_and_the_success_row_bill_the_cut_partial_once_together(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, failure_row_first: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    _mock_backup_responses(respx_mock)
+    shared_logging: Final = _shared_responses_logging()
+    response: Final = await _cut_primary_router(respx_mock, "native").aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+
+    rows_built_when_the_client_saw_completed: Final = [
+        (len(recorder.successes), _final_failure_row(shared_logging))
+        async for event in response
+        if failure_row_first and getattr(event, "type", None) == "response.completed"
+    ]
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+    successes_logged_before_the_failure_row, (failure_prompt, failure_completion, failure_spend) = (
+        rows_built_when_the_client_saw_completed[0]
+        if failure_row_first
+        else (len(recorder.successes), _final_failure_row(shared_logging))
+    )
+
+    assert successes_logged_before_the_failure_row == int(not failure_row_first)
+    (spend_row,) = recorder.spend_rows
+    cut_prompt: Final = _PROVIDER_REPORTED_CUT_USAGE["input_tokens"]
+    cut_completion: Final = _PROVIDER_REPORTED_CUT_USAGE["output_tokens"]
+    assert (
+        failure_prompt + spend_row["prompt_tokens"],
+        failure_completion + spend_row["completion_tokens"],
+        failure_spend + spend_row["spend"],
+    ) == pytest.approx(
+        (1000 + cut_prompt, 700 + cut_completion, cut_prompt * 0.001 + cut_completion * 0.002 + _backup_responses_cost())
+    )
+
+
+def _mock_chat_bridged_backup(respx_mock: respx.MockRouter, usage: Mapping[str, int]) -> None:
+    respx_mock.post("https://backup.example/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_responses_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_backup",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-haiku-5-5",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": usage["input_tokens"], "output_tokens": 1},
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " dragon."}},
+                {"type": "content_block_stop", "index": 0},
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": usage["output_tokens"]},
+                },
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_chat_bridged_fallback_after_a_native_cut_bills_its_own_usage_plus_the_cut_partial_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    backup_usage: Final = MappingProxyType({"input_tokens": 1000, "output_tokens": 700})
+    backup_input_price, backup_output_price = 0.003, 0.004
+    _mock_chat_bridged_backup(respx_mock, backup_usage)
+    router: Final = _cut_primary_router(
+        respx_mock,
+        "native",
+        backup_params={
+            "model": "anthropic/claude-haiku-5-5",
+            "api_base": "https://backup.example",
+            "input_cost_per_token": backup_input_price,
+            "output_cost_per_token": backup_output_price,
+        },
+    )
+
+    response: Final = await router.aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=_shared_responses_logging(),
+    )
+    _ = [event async for event in response]
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    cut_prompt: Final = _PROVIDER_REPORTED_CUT_USAGE["input_tokens"]
+    cut_completion: Final = _PROVIDER_REPORTED_CUT_USAGE["output_tokens"]
+    (spend_row,) = recorder.spend_rows
+    input_cost, output_cost, partial_cost, total_cost = _input_output_partial_and_total_costs(spend_row)
+    assert (spend_row["prompt_tokens"], spend_row["completion_tokens"]) == (
+        backup_usage["input_tokens"] + cut_prompt,
+        backup_usage["output_tokens"] + cut_completion,
+    )
+    assert (input_cost, output_cost, partial_cost) == pytest.approx(
+        (
+            backup_usage["input_tokens"] * backup_input_price,
+            backup_usage["output_tokens"] * backup_output_price,
+            cut_prompt * 0.001 + cut_completion * 0.002,
+        )
+    )
+    assert (input_cost + output_cost + partial_cost, total_cost) == pytest.approx((spend_row["spend"],) * 2)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_that_also_fails_mid_stream_bills_each_cut_partial_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_cut_responses_sse("resp_backup", (" lived",), None),
+        )
+    )
+    shared_logging: Final = _shared_responses_logging()
+    response: Final = await _cut_primary_router(respx_mock, "native").aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+
+    with pytest.raises(litellm.InternalServerError):
+        _ = [event async for event in response]
+
+    cut_prompt: Final = _PROVIDER_REPORTED_CUT_USAGE["input_tokens"]
+    cut_completion: Final = _PROVIDER_REPORTED_CUT_USAGE["output_tokens"]
+    final_row: Final = _final_failure_spend_row(shared_logging)
+    final_prompt, final_completion, final_spend = (
+        final_row["prompt_tokens"],
+        final_row["completion_tokens"],
+        final_row["spend"],
+    )
+    backup_prompt: Final = final_prompt - cut_prompt
+    backup_completion: Final = litellm.token_counter(model="gpt-4o", text=" lived", count_response_tokens=True)
+    backup_input_cost, backup_output_cost = litellm.cost_per_token(
+        model="gpt-4o", prompt_tokens=backup_prompt, completion_tokens=backup_completion
+    )
+    assert backup_prompt > 0
+    assert final_completion == cut_completion + backup_completion
+    assert final_spend == pytest.approx(
+        cut_prompt * 0.001 + cut_completion * 0.002 + backup_input_cost + backup_output_cost
+    )
+    assert _input_output_partial_and_total_costs(final_row) == pytest.approx(
+        (cut_prompt * 0.001, cut_completion * 0.002, backup_input_cost + backup_output_cost, final_spend)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_usage",
+    [None, _PROVIDER_REPORTED_CUT_USAGE],
+    ids=["estimated_partial", "provider_reported_partial"],
+)
+async def test_a_fallback_that_fails_before_it_streams_bills_the_cut_partial_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, failed_usage: Mapping[str, int] | None
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "backup is down", "type": "server_error"}})
+    )
+    shared_logging: Final = _shared_responses_logging()
+    response: Final = await _cut_primary_router(respx_mock, "native", failed_usage).aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+
+    with pytest.raises(litellm.InternalServerError):
+        _ = [event async for event in response]
+
+    cut_prompt, cut_completion = _relayed_cut_tokens(failed_usage, "Once upon")
+    cut_cost: Final = cut_prompt * 0.001 + cut_completion * 0.002
+    priced_by_the_failure: Final = (
+        (cut_prompt * 0.001, cut_completion * 0.002) if failed_usage is not None else (0.0, 0.0)
+    )
+    final_row: Final = _final_failure_spend_row(shared_logging)
+    assert cut_completion > 0
+    assert (final_row["prompt_tokens"], final_row["completion_tokens"], final_row["spend"]) == pytest.approx(
+        (cut_prompt, cut_completion, cut_cost)
+    )
+    assert _input_output_partial_and_total_costs(final_row) == pytest.approx(
+        (*priced_by_the_failure, cut_cost - sum(priced_by_the_failure), cut_cost)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary", ["bridged", "native"])
+@pytest.mark.parametrize("with_fallback", [False, True], ids=["no_fallback", "fallback_fails_before_streaming"])
+async def test_a_cut_whose_fallback_chain_ends_without_a_stream_prices_its_failure_event_like_its_row(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    primary: Literal["bridged", "native"],
+    with_fallback: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "backup is down", "type": "server_error"}})
+    )
+    shared_logging: Final = _shared_responses_logging()
+    response: Final = await _cut_primary_router(respx_mock, primary, with_fallback=with_fallback).aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+
+    with pytest.raises((litellm.APIConnectionError, litellm.InternalServerError)):
+        _ = [event async for event in response]
+    await asyncio.wait_for(
+        _until(lambda: shared_logging.model_call_details.get("standard_logging_object") is not None), timeout=10
+    )
+
+    failure_event: Final = shared_logging.model_call_details["standard_logging_object"]
+    row_prompt, row_completion, row_spend = _final_failure_row(shared_logging)
+    assert row_completion > 0
+    assert (
+        failure_event["prompt_tokens"],
+        failure_event["completion_tokens"],
+        failure_event["response_cost"],
+    ) == pytest.approx((row_prompt, row_completion, row_spend))

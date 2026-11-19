@@ -11,6 +11,7 @@ import pytest
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MID_STREAM_PARTIAL_COST_KEY
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
@@ -3020,6 +3021,52 @@ async def test_sidecar_writes_the_same_spend_row_and_counters_as_the_in_process_
     assert in_process_counters["budget_reservation"]["reserved_cost"] == 0.5
     assert in_process_counters["model_access_groups"] == ("premium",)
     assert sidecar_tools == in_process_tools == ("get_weather",)
+
+
+def _row_tokens(row: SpendLogsPayload) -> tuple[object, object, object]:
+    return row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_the_collector_writes_the_same_tokens_as_the_in_process_path_for_a_success_billing_a_carried_partial():
+    start_time: Final = datetime(2026, 1, 1, 0, 0, 0)
+    end_time: Final = datetime(2026, 1, 1, 0, 0, 2)
+
+    def success_kwargs() -> dict[str, object]:
+        kwargs: Final = _offload_kwargs()
+        return {
+            **kwargs,
+            "combined_usage_object": Usage(prompt_tokens=5040, completion_tokens=4007, total_tokens=9047),
+            "standard_logging_object": {
+                **kwargs["standard_logging_object"],
+                "cost_breakdown": {
+                    "input_cost": 0.0125,
+                    "output_cost": 0.0,
+                    "additional_costs": {MID_STREAM_PARTIAL_COST_KEY: 0.001},
+                },
+            },
+        }
+
+    async def in_process() -> None:
+        await ProxyDBLogger().async_log_success_event(success_kwargs(), _offload_response(), start_time, end_time)
+
+    async def collector_on() -> None:
+        producer: Final = SpendEventProducer(
+            address=UnixAddress(path="/nonexistent/spend.sock"),
+            on_unavailable="fallback",
+            buffer_size=10,
+            connect_timeout=1.0,
+            fallback=run_spend_event,
+        )
+        await ProxyDBLogger(producer).async_log_success_event(
+            success_kwargs(), _offload_response(), start_time, end_time
+        )
+        await producer.close(drain_timeout=5.0)
+
+    in_process_row, _, _ = await _spend_row_written_by(in_process)
+    collector_row, _, _ = await _spend_row_written_by(collector_on)
+
+    assert _row_tokens(collector_row) == _row_tokens(in_process_row) == (5040, 4007, 9047)
 
 
 @pytest.mark.asyncio

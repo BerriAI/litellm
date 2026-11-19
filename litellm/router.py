@@ -3505,6 +3505,75 @@ class Router:
         return None
 
     @staticmethod
+    def _relayed_responses_leg(cut_stream: "BaseResponsesAPIStreamingIterator") -> tuple[Usage | None, float | None]:
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        relayed: Final = cut_stream.relayed_partial_response()
+        relayed_usage: Final = relayed.response.usage if relayed is not None else None
+        if relayed_usage is None:
+            return None, None
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(relayed_usage), relayed_usage.cost
+
+    @staticmethod
+    def _billed_responses_cut_partial(cut_stream: "BaseResponsesAPIStreamingIterator") -> tuple[Usage, float] | None:
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        bridged: Final = isinstance(cut_stream, LiteLLMCompletionStreamingIterator)
+        cut_logging: Final = getattr(cut_stream, "litellm_logging_obj" if bridged else "logging_obj", None)
+        if not isinstance(cut_logging, LiteLLMLogging):
+            return None
+        details: Final = cut_logging.model_call_details
+        stashed_leg: Final = (details.get("combined_usage_object"), details.get("response_cost"))
+        candidate_legs: Final = (
+            stashed_leg if bridged or isinstance(stashed_leg[0], Usage) else Router._relayed_responses_leg(cut_stream),
+            cut_logging.continued_partial or (None, None),
+        )
+        billed_legs: Final = tuple(
+            (usage, float(cost) if isinstance(cost, (int, float)) else 0.0)
+            for usage, cost in candidate_legs
+            if isinstance(usage, Usage)
+        )
+        if not billed_legs:
+            return None
+        return (
+            BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[usage for usage, _ in billed_legs]),
+            sum((cost for _, cost in billed_legs), 0.0),
+        )
+
+    @staticmethod
+    def _without_own_usage(event: "ResponseIncompleteEvent | None") -> "ResponseIncompleteEvent | None":
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        if event is None:
+            return None
+        unpriced: Final = event.response.model_copy(
+            update={"usage": ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0)}
+        )
+        unpriced.hidden_params = {
+            key: value for key, value in event.response.hidden_params.items() if key != "response_cost"
+        }
+        return event.model_copy(update={"response": unpriced})
+
+    @staticmethod
+    def _carry_partial_spend_to_fallback(fallback_logging: object, cut_partial: tuple[Usage, float] | None) -> None:
+        if cut_partial is None or not isinstance(fallback_logging, LiteLLMLogging):
+            return
+        fallback_logging.record_continued_partial(usage=cut_partial[0], response_cost=cut_partial[1])
+
+    @staticmethod
+    def _carry_partial_spend_to_failed_request(
+        request_logging: object, cut_partial: tuple[Usage, float] | None
+    ) -> None:
+        if isinstance(request_logging, LiteLLMLogging) and isinstance(
+            request_logging.model_call_details.get("combined_usage_object"), Usage
+        ):
+            return
+        Router._carry_partial_spend_to_fallback(request_logging, cut_partial)
+
+    @staticmethod
     def _combine_responses_fallback_usage(
         fallback_item: "BaseLiteLLMOpenAIResponseObject",
         partial_usage: "ResponseAPIUsage",
@@ -3731,11 +3800,19 @@ class Router:
                 stream's relayed tokens are folded into the fallback's event, the way
                 _combine_responses_fallback_usage does for a natural end of stream.
                 """
-                from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+                from litellm.responses.streaming_iterator import (
+                    partial_responses_incomplete_event_on_disconnect,
+                    unpriced_partial_responses_incomplete_event_on_disconnect,
+                )
 
                 current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
                 if self._billing_source is source_iterator:
                     return current
+                fallback_logging: Final = getattr(self._billing_source, "logging_obj", None)
+                if isinstance(fallback_logging, LiteLLMLogging) and fallback_logging.continued_partial is not None:
+                    return current or Router._without_own_usage(
+                        unpriced_partial_responses_incomplete_event_on_disconnect(source_iterator)
+                    )
                 primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
                 if current is None or primary is None:
                     return current or primary
@@ -3850,6 +3927,7 @@ class Router:
         from litellm.exceptions import MidStreamFallbackError
 
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
+        cut_partial: Final = Router._billed_responses_cut_partial(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
         fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
         try:
@@ -3899,6 +3977,8 @@ class Router:
             )
             prepared_fallback_hidden_params: Final = adopt_headers(fallback_response)
             if hasattr(fallback_response, "__aiter__"):
+                fallback_logging: Final[object] = getattr(fallback_response, "logging_obj", None)
+                Router._carry_partial_spend_to_fallback(fallback_logging, cut_partial)
                 async for fallback_item in fallback_response:
                     Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                     if partial_usage is not None:
@@ -3910,6 +3990,8 @@ class Router:
                 yield fallback_response
         except Exception as fallback_error:
             verbose_router_logger.error("Responses streaming fallback also failed: %s", fallback_error)
+            if fallback_response is None:
+                Router._carry_partial_spend_to_failed_request(initial_kwargs.get("litellm_logging_obj"), cut_partial)
             if not fallback_yielded:
                 for held_event in held_lifecycle_events:
                     yield held_event
