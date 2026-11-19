@@ -6053,6 +6053,33 @@ async def test_follow_up_reads_the_stored_chain_with_the_timeout_and_extra_heade
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("instructions", "sent_instructions"),
+    [
+        ("Stable prefix\nAnswer in French", "Answer in French"),
+        ("Stable prefix and more", "Stable prefix and more"),
+    ],
+)
+async def test_follow_up_keeps_only_the_instructions_the_stored_chain_lacks(
+    instructions: str, sent_instructions: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        sent: Final = await awithout_stored_instructions(
+            {
+                "instructions": instructions,
+                "previous_response_id": "resp_prior",
+                "custom_llm_provider": "openai",
+                "api_key": "sk-test",
+            }
+        )
+    assert sent.get("instructions") == sent_instructions
+
+
+@pytest.mark.asyncio
 async def test_follow_up_reads_the_stored_chain_of_an_azure_deployment_with_its_ad_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
