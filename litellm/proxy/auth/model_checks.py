@@ -16,7 +16,6 @@ from typing import Final, TypeAlias, TypeVar, get_args
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
 from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -26,7 +25,9 @@ from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5
 from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_MODEL_ID_SPECS,
     BEDROCK_ROUTING_PREFIXES,
+    BedrockAgentRoute,
     BedrockRoute,
     get_all_bedrock_regions,
     get_bedrock_cross_region_inference_regions,
@@ -455,10 +456,10 @@ def _endpoint_serves_the_provider_catalog(provider: str, litellm_params: LiteLLM
 
 def _bedrock_routing_segments() -> Iterable[str]:
     routes: Final[tuple[BedrockRoute, ...]] = get_args(BedrockRoute)
-    invoke_providers: Final[tuple[BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]] = get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL)
+    agent_routes: Final[tuple[BedrockAgentRoute, ...]] = get_args(BedrockAgentRoute)
     return itertools.chain(
-        routes,
-        invoke_providers,
+        frozenset(routes).difference(agent_routes),
+        BEDROCK_MODEL_ID_SPECS,
         (prefix.removesuffix("/") for prefix in BEDROCK_ROUTING_PREFIXES),
         get_all_bedrock_regions(),
     )

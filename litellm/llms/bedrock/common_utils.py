@@ -73,13 +73,13 @@ _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
 _XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
+BedrockAgentRoute: TypeAlias = Literal["agent", "agentcore"]
 BedrockRoute = Literal[
     "converse",
     "invoke",
     "claude_platform",
     "converse_like",
-    "agent",
-    "agentcore",
+    BedrockAgentRoute,
     "async_invoke",
     "openai",
     "mantle",
@@ -1234,6 +1234,7 @@ BEDROCK_ROUTING_PREFIXES: Final = (
     "nova-2/",
     "nova/",
 )
+BEDROCK_MODEL_ID_SPECS: Final = frozenset(("llama", "deepseek_r1", "openai", "qwen2", "qwen3", "stability", "moonshot"))
 
 
 def strip_bedrock_routing_prefix(model: str) -> str:
