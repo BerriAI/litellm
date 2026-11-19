@@ -9658,7 +9658,10 @@ class TestCheckTeamMemberModelBudgetWithFallback:
     @pytest.mark.asyncio
     async def test_fallback_checks_candidate_access_group_budget_and_stamps_candidate_groups(self):
         import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy.common_utils.user_api_key_cache import model_access_group_cache_key
+        from litellm.proxy.common_utils.user_api_key_cache import (
+            model_access_group_cache_key,
+            model_access_group_registry_cache_key,
+        )
         from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 
         valid_token: Final = UserAPIKeyAuth(
@@ -9674,6 +9677,10 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         limiter, _ = await _real_model_budget_limiter(member_spend={"gpt-4o": 10.0})
         request_data: Final = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
+        await proxy_server.user_api_key_cache.async_set_cache(
+            key=model_access_group_registry_cache_key(),
+            value=("fallback-group",),
+        )
         await proxy_server.user_api_key_cache.async_set_cache(
             key=model_access_group_cache_key("fallback-group"),
             value=ModelAccessGroupBudget(access_group_name="fallback-group", spend=0.0, max_budget=10.0),
@@ -9708,7 +9715,10 @@ class TestCheckTeamMemberModelBudgetWithFallback:
     @pytest.mark.asyncio
     async def test_access_group_budget_exhaustion_skips_fallback_candidate(self):
         import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy.common_utils.user_api_key_cache import model_access_group_cache_key
+        from litellm.proxy.common_utils.user_api_key_cache import (
+            model_access_group_cache_key,
+            model_access_group_registry_cache_key,
+        )
         from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 
         valid_token: Final = UserAPIKeyAuth(
@@ -9724,6 +9734,10 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         limiter, _ = await _real_model_budget_limiter(member_spend={"gpt-4o": 10.0})
         request_data: Final = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
+        await proxy_server.user_api_key_cache.async_set_cache(
+            key=model_access_group_registry_cache_key(),
+            value=("fallback-group",),
+        )
         await proxy_server.user_api_key_cache.async_set_cache(
             key=model_access_group_cache_key("fallback-group"),
             value=ModelAccessGroupBudget(access_group_name="fallback-group", spend=5.0, max_budget=5.0),
