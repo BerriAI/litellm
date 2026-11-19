@@ -84,8 +84,25 @@ export const budgetFields = (budget: Budget | null | undefined): BudgetFields =>
   allowedModels: budget?.allowed_models ?? [],
 });
 
-export const customerHierarchyFields = (entity: CustomerHierarchyEntity): CustomerHierarchyFields => {
-  const storedBudget = entity.kind === "member" ? entity.record.budget_override : entity.record.budget;
+const hierarchyEditorBudget = (
+  entity: CustomerHierarchyEntity,
+  organization?: Organization,
+): Budget | null | undefined => {
+  if (entity.kind !== "member") return entity.record.budget;
+  if (entity.record.budget_override != null) {
+    return entity.record.budget_override_expires_at == null
+      ? entity.record.effective_budget
+      : entity.record.budget_override;
+  }
+  const preset = organization?.default_budgets.some((template) => template.budget_id === entity.record.budget_id);
+  return preset ? null : entity.record.budget;
+};
+
+export const customerHierarchyFields = (
+  entity: CustomerHierarchyEntity,
+  organization?: Organization,
+): CustomerHierarchyFields => {
+  const storedBudget = hierarchyEditorBudget(entity, organization);
   const monthly =
     entity.kind === "organization"
       ? storedBudget?.budget_limits?.find((window) => window.budget_duration === "1mo")
@@ -96,7 +113,10 @@ export const customerHierarchyFields = (entity: CustomerHierarchyEntity): Custom
     ...budgetFields(storedBudget),
     ...(monthly ? { maxBudget: asText(monthly.max_budget) } : {}),
     templateId: entity.kind !== "team" ? entity.record.budget_id ?? "" : "",
-    overrideExpiry: entity.kind === "member" ? localDateTime(entity.record.budget_override_expires_at) : "",
+    overrideExpiry:
+      entity.kind === "member" && entity.record.budget_override != null
+        ? localDateTime(entity.record.budget_override_expires_at)
+        : "",
   };
 };
 
@@ -152,21 +172,45 @@ const aliasChanges = (initial: string | null | undefined, value: string): { alia
 const memberPatch = (
   member: Member,
   fields: CustomerHierarchyFields,
-  budget: Budget | null,
-  changed: boolean,
+  initial: CustomerHierarchyFields,
 ): PatchResult => {
-  const initial = customerHierarchyFields({ kind: "member", record: member });
   if (!fields.templateId && !fields.budgetEnabled) return { ok: false, error: "budgetRequired" };
-  const body: components["schemas"]["MemberPatch"] = aliasChanges(member.alias, fields.alias);
-  if (fields.templateId !== initial.templateId) body.budget_id = fields.templateId || null;
-  if (changed) body.budget_override = budget;
-  if (!fields.budgetEnabled && initial.budgetEnabled) body.budget_override_expires_at = null;
-  if (fields.budgetEnabled && fields.overrideExpiry !== initial.overrideExpiry) {
-    const expiry = fields.overrideExpiry ? new Date(fields.overrideExpiry) : null;
-    if (expiry && Number.isNaN(expiry.getTime())) return { ok: false, error: "invalidExpiry" };
-    body.budget_override_expires_at = expiry?.toISOString() ?? null;
+  const alias = aliasChanges(member.alias, fields.alias);
+  const legacy = member.budget_override != null && member.budget_override_expires_at == null;
+  const clearLegacy = legacy ? { budget_override: null } : {};
+  const templateChanged = fields.templateId !== initial.templateId;
+  if (templateChanged && fields.templateId)
+    return { ok: true, patch: { kind: "member", body: { ...alias, budget_id: fields.templateId, ...clearLegacy } } };
+  const changed = budgetChanged(fields, initial) || fields.overrideExpiry !== initial.overrideExpiry;
+  if (!changed)
+    return { ok: true, patch: { kind: "member", body: { ...alias, ...(templateChanged ? { budget_id: null } : {}) } } };
+  if (!fields.budgetEnabled && initial.budgetEnabled && initial.overrideExpiry) {
+    return {
+      ok: true,
+      patch: { kind: "member", body: { ...alias, budget_override: null, budget_override_expires_at: null } },
+    };
   }
-  return { ok: true, patch: { kind: "member", body } };
+  const budget = fields.budgetEnabled ? parseBudget(fields) : null;
+  if (fields.budgetEnabled && budget == null) return { ok: false, error: "invalidNumber" };
+  if (fields.budgetEnabled && fields.overrideExpiry) {
+    const expiry = new Date(fields.overrideExpiry);
+    if (Number.isNaN(expiry.getTime())) return { ok: false, error: "invalidExpiry" };
+    return {
+      ok: true,
+      patch: {
+        kind: "member",
+        body: {
+          ...alias,
+          budget_override: budget,
+          ...(fields.overrideExpiry !== initial.overrideExpiry
+            ? { budget_override_expires_at: expiry.toISOString() }
+            : {}),
+        },
+      },
+    };
+  }
+  const selection = fields.budgetEnabled ? { budget } : { budget_id: fields.templateId };
+  return { ok: true, patch: { kind: "member", body: { ...alias, ...selection, ...clearLegacy } } };
 };
 
 const organizationBudget = (original: Budget | null | undefined, parsed: Budget, groupChanged: boolean): Budget => {
@@ -186,8 +230,10 @@ const organizationBudget = (original: Budget | null | undefined, parsed: Budget,
 export const buildCustomerHierarchyPatch = (
   entity: CustomerHierarchyEntity,
   fields: CustomerHierarchyFields,
+  organization?: Organization,
 ): PatchResult => {
-  const initial = customerHierarchyFields(entity);
+  const initial = customerHierarchyFields(entity, organization);
+  if (entity.kind === "member") return memberPatch(entity.record, fields, initial);
   const aliasPatch = aliasChanges(entity.record.alias, fields.alias);
   const groupChanged = entity.kind === "organization" && fields.templateId !== initial.templateId;
   if (groupChanged && fields.templateId) {
@@ -198,19 +244,16 @@ export const buildCustomerHierarchyPatch = (
   const budget =
     parsed && entity.kind === "organization" ? organizationBudget(entity.record.budget, parsed, groupChanged) : parsed;
   if (fields.budgetEnabled && changed && budget === null) return { ok: false, error: "invalidNumber" };
-  if (entity.kind === "organization" || entity.kind === "team") {
-    return {
-      ok: true,
-      patch: {
-        kind: entity.kind,
-        body: {
-          ...aliasPatch,
-          ...(changed ? { budget } : {}),
-        },
+  return {
+    ok: true,
+    patch: {
+      kind: entity.kind,
+      body: {
+        ...aliasPatch,
+        ...(changed ? { budget } : {}),
       },
-    };
-  }
-  return memberPatch(entity.record, fields, budget, changed);
+    },
+  };
 };
 
 const createMember = (
@@ -224,6 +267,7 @@ const createMember = (
   if (!templateId && !fields.budgetEnabled) return { ok: false, error: "budgetRequired" };
   const expiry = fields.budgetEnabled && fields.overrideExpiry ? new Date(fields.overrideExpiry) : null;
   if (expiry && Number.isNaN(expiry.getTime())) return { ok: false, error: "invalidExpiry" };
+  const permanent = fields.budgetEnabled ? { budget: common.budget } : { budget_id: templateId };
   return {
     ok: true,
     create: {
@@ -232,9 +276,9 @@ const createMember = (
         parent_team_ids: [target.team.customer_team_id],
         alias: common.alias,
         ...(common.identifier ? { customer_member_id: common.identifier } : {}),
-        budget_id: templateId,
-        budget_override: common.budget,
-        budget_override_expires_at: expiry?.toISOString() ?? null,
+        ...(expiry
+          ? { budget_id: templateId, budget_override: common.budget, budget_override_expires_at: expiry.toISOString() }
+          : permanent),
       },
     },
   };

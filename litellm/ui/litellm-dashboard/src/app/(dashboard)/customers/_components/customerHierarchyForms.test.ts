@@ -217,7 +217,7 @@ describe("customer hierarchy settings payloads", () => {
       patch: {
         kind: "member",
         body: {
-          budget_override: {
+          budget: {
             max_budget: 50,
             soft_budget: null,
             tpm_limit: null,
@@ -235,6 +235,58 @@ describe("customer hierarchy settings payloads", () => {
     expect(
       buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), overrideExpiry: "invalid" }),
     ).toEqual({ ok: false, error: "invalidExpiry" });
+  });
+
+  it("should migrate a legacy permanent override when selecting a preset", () => {
+    const entity: CustomerHierarchyEntity = { kind: "member", record: { ...member, budget_override_expires_at: null } };
+    expect(
+      buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), templateId: "template-2" }),
+    ).toEqual({
+      ok: true,
+      patch: { kind: "member", body: { budget_id: "template-2", budget_override: null } },
+    });
+  });
+
+  it.each([null, "2026-12-01T12:00:00Z"])(
+    "should save a permanent budget without overwriting an expiring increase %s",
+    (expiry) => {
+      const entity: CustomerHierarchyEntity = {
+        kind: "member",
+        record: { ...member, budget_override_expires_at: expiry },
+      };
+      expect(
+        buildCustomerHierarchyPatch(entity, {
+          ...customerHierarchyFields(entity),
+          maxBudget: "30",
+          overrideExpiry: "",
+        }),
+      ).toEqual({
+        ok: true,
+        patch: {
+          kind: "member",
+          body: {
+            budget: {
+              max_budget: 30,
+              soft_budget: null,
+              tpm_limit: null,
+              rpm_limit: 4,
+              budget_duration: null,
+              allowed_models: null,
+            },
+            ...(expiry == null ? { budget_override: null } : {}),
+          },
+        },
+      });
+    },
+  );
+
+  it("should initialize a private permanent member budget", () => {
+    expect(
+      customerHierarchyFields({
+        kind: "member",
+        record: { ...member, budget_override: null, budget: { max_budget: 8 } },
+      }),
+    ).toMatchObject({ budgetEnabled: true, maxBudget: "8", overrideExpiry: "" });
   });
 });
 
@@ -282,8 +334,6 @@ describe("customer hierarchy creation payloads", () => {
           parent_team_ids: ["team-1"],
           alias: null,
           budget_id: "standard-template",
-          budget_override: null,
-          budget_override_expires_at: null,
         },
       },
     });
@@ -301,8 +351,7 @@ describe("customer hierarchy creation payloads", () => {
         kind: "member",
         body: {
           customer_member_id: "new-member",
-          budget_id: null,
-          budget_override: { max_budget: 0, allowed_models: ["gpt-4.1"] },
+          budget: { max_budget: 0, allowed_models: ["gpt-4.1"] },
         },
       },
     });

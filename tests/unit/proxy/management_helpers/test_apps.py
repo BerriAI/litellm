@@ -26,6 +26,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     BudgetGroupsUpdate,
     BudgetTemplate,
+    MemberPatch,
 )
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import (
     NOW,
@@ -215,8 +216,18 @@ async def app_store() -> tuple[AppDatabase, AppStore, App]:
     store: Final = AppStore(database, NOW)
     await seed_resources(database)
     await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
-    await database.litellm_customerorganizationtable.create({"customer_org_id": "org"})
-    await database.litellm_customermembertable.create({"customer_member_id": "member", "parent_org_id": "org"})
+    await database.litellm_customerorganizationtable.create(
+        {"customer_org_id": "org", "created_by": "admin", "updated_by": "admin"}
+    )
+    await database.litellm_customermembertable.create(
+        {
+            "customer_member_id": "member",
+            "parent_org_id": "org",
+            "parent_team_ids": [],
+            "created_by": "admin",
+            "updated_by": "admin",
+        }
+    )
     app: Final = await store.create(AppCreate(resource_id="chat"), "admin")
     assert isinstance(app, App)
     return database, store, app
@@ -439,6 +450,62 @@ async def test_member_override_is_scoped_and_can_return_to_the_org_default(
     assert override.budget_source == AppMemberBudgetSource.MEMBER_OVERRIDE
     restored: Final = await store.put_member(app.app_id, "member", AppMemberPut(), "admin")
     assert isinstance(restored, AppMember) and restored.effective_budget == Budget(max_budget=5, allowed_models=())
+
+
+@pytest.mark.asyncio
+async def test_app_member_permanent_budget_keeps_temporary_increase_and_patches_private_row(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, store, app = app_store
+    preset: Final = await store.customers.create_budget(Budget(max_budget=10, rpm_limit=4), "admin")
+    await database.litellm_customerorganizationtable.update(
+        where={"customer_org_id": "org"}, data={"budget_template_ids": [preset]}
+    )
+    await database.litellm_customermembertable.update(
+        where={"customer_member_id": "member"}, data={"budget_id": preset}
+    )
+    increased: Final = await store.customers.update_member(
+        "member",
+        MemberPatch(budget_override=Budget(max_budget=20), budget_override_expires_at=NOW.replace(year=2027)),
+        "admin",
+    )
+    assert not isinstance(increased, Failure)
+    changed: Final = await store.put_member(app.app_id, "member", AppMemberPut(budget=Budget(max_budget=12)), "admin")
+    assert isinstance(changed, AppMember)
+    assert changed.budget is not None and changed.budget.max_budget == 12 and changed.budget.rpm_limit == 4
+    customer: Final = await store.customers.get_member("member")
+    assert not isinstance(customer, Failure)
+    assert customer.budget_id != preset
+    assert customer.budget_override_id == increased.budget_override_id
+    assert customer.budget_override_expires_at == increased.budget_override_expires_at
+    edited: Final = await store.put_member(app.app_id, "member", AppMemberPut(budget=Budget(rpm_limit=None)), "admin")
+    assert isinstance(edited, AppMember) and edited.budget is not None
+    assert edited.budget.max_budget == 12 and edited.budget.rpm_limit is None
+    latest: Final = await store.customers.get_member("member")
+    assert not isinstance(latest, Failure) and latest.budget_id == customer.budget_id
+    assert (await store.budget(preset)) == Budget(max_budget=10, rpm_limit=4, allowed_models=())
+    cleared: Final = await store.put_member(app.app_id, "member", AppMemberPut(budget=None), "admin")
+    assert isinstance(cleared, AppMember) and cleared.budget is None
+    assert await store.budget(customer.budget_id) is None
+
+
+@pytest.mark.asyncio
+async def test_app_budget_edit_preserves_legacy_override_unless_explicitly_cleared(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    _, store, app = app_store
+    legacy: Final = await store.put_member(
+        app.app_id, "member", AppMemberPut(budget_override=Budget(max_budget=5)), "admin"
+    )
+    assert isinstance(legacy, AppMember)
+    edited: Final = await store.put_member(app.app_id, "member", AppMemberPut(budget=Budget(max_budget=7)), "admin")
+    assert isinstance(edited, AppMember) and edited.budget_override_id == legacy.budget_override_id
+    migrated: Final = await store.put_member(
+        app.app_id, "member", AppMemberPut(budget=Budget(max_budget=8), budget_override=None), "admin"
+    )
+    assert isinstance(migrated, AppMember) and migrated.budget is not None
+    assert migrated.budget.max_budget == 8 and migrated.budget_override is None
+    assert await store.budget(legacy.budget_override_id) is None
 
 
 @pytest.mark.asyncio

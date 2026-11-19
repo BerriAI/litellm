@@ -409,7 +409,7 @@ describe("CustomerHierarchySettings", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
     expect(await lastRequest().clone().json()).toEqual({
-      budget_override: {
+      budget: {
         max_budget: 50,
         soft_budget: null,
         tpm_limit: null,

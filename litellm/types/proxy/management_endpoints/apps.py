@@ -117,6 +117,11 @@ class AppOrganizationPut(BaseModel):
 class AppMemberPut(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    budget: Budget | None = Field(
+        default=None,
+        description="Permanent customer member budget, shared across apps. Copies preset settings on first edit. "
+        "Explicit null fields clear limits. Independent of temporary member increases and app budget_override.",
+    )
     budget_override: Budget | None = None
 
 
@@ -150,6 +155,8 @@ class AppMember(BaseModel):
     )
     spend_reset_window: str | None = None
     budget_override_id: str | None = None
+    budget: Budget | None = None
+    budget_override: Budget | None = None
     effective_budget: Budget | None = None
     budget_source: AppMemberBudgetSource = AppMemberBudgetSource.NONE
 

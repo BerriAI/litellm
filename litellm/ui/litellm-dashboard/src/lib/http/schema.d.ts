@@ -28451,6 +28451,8 @@ export interface components {
         AppMember: {
             /** App Id */
             app_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Id */
             budget_override_id?: string | null;
             /** @default none */
@@ -28478,6 +28480,8 @@ export interface components {
         AppMemberBudgetSource: "member_override" | "customer_default" | "app_default" | "none";
         /** AppMemberPut */
         AppMemberPut: {
+            /** @description Permanent customer member budget, shared across apps. Copies preset settings on first edit. Explicit null fields clear limits. Independent of temporary member increases and app budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             budget_override?: components["schemas"]["Budget"] | null;
         };
         /** AppOrganization */

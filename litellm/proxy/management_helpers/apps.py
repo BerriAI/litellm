@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.user_api_key_cache import get_management_object_
 from litellm.proxy.management_helpers.customer_budget_usage import app_budget_usage
 from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchyStore,
+    Failure,
     PrismaRecord,
     organization_budget_group_ids,
     related_budget,
@@ -41,7 +42,7 @@ from litellm.types.proxy.management_endpoints.apps import (
     AppResource,
     AppResourceType,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
+from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget, MemberPatch
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -606,6 +607,13 @@ class AppStore:
         return await self.member_response(app, member, org)
 
     async def member_response(self, app: App, member: AppMember, organization: AppOrganization | None) -> AppMember:
+        customer: Final = await self.customers.get_member(member.customer_member_id)
+        if isinstance(customer, Failure):
+            return member
+        parent: Final = await self.customers.get_organization(customer.parent_org_id)
+        private: Final = not isinstance(parent, Failure) and all(
+            template.budget_id != customer.budget_id for template in parent.default_budgets
+        )
         inherited: Final = (
             organization.effective_customer_member_budget
             if organization is not None
@@ -614,6 +622,8 @@ class AppStore:
         organization_default_id: Final = organization.customer_member_budget_id if organization is not None else None
         return member.model_copy(
             update={
+                "budget": customer.budget if private else None,
+                "budget_override": await self.budget(member.budget_override_id),
                 "effective_budget": (
                     await self.budget(member.budget_override_id) if member.budget_override_id is not None else inherited
                 ),
@@ -670,6 +680,12 @@ class AppStore:
             return AppFailure(404, "Customer member not found.")
         parent: Final = _PARENT_ORG_ID.validate_python(customer.model_dump()["parent_org_id"])
         identity: Final = {"app_id": app_id, "customer_member_id": customer_member_id}
+        if "budget" in data.model_fields_set:
+            updated: Final = await self.customers.update_member(
+                customer_member_id, MemberPatch(budget=data.budget), actor
+            )
+            if isinstance(updated, Failure):
+                return AppFailure(422, updated.code.value)
         previous: Final = await self.members.find_unique(where={"app_id_customer_member_id": identity})
         current: Final = AppMember.model_validate(previous.model_dump()) if previous is not None else None
         override: Final = (
@@ -679,7 +695,13 @@ class AppStore:
                 actor,
             )
             if data.budget_override is not None
-            else None
+            else (
+                current.budget_override_id
+                if current is not None
+                and "budget_override" not in data.model_fields_set
+                and "budget" in data.model_fields_set
+                else None
+            )
         )
         await self.members.upsert(
             where={"app_id_customer_member_id": identity},

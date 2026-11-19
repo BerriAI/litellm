@@ -140,9 +140,19 @@ def test_list_and_get_apps_return_saved_budgets_and_period_usage() -> None:
 
 def test_customer_and_member_budget_endpoints_keep_apps_independent() -> None:
     http, store = client()
-    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-a"}))
-    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-b"}))
-    asyncio.run(store.customers.members.create({"customer_member_id": "member", "parent_org_id": "org-a"}))
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-a", "created_by": "admin", "updated_by": "admin"}))
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-b", "created_by": "admin", "updated_by": "admin"}))
+    asyncio.run(
+        store.customers.members.create(
+            {
+                "customer_member_id": "member",
+                "parent_org_id": "org-a",
+                "parent_team_ids": [],
+                "created_by": "admin",
+                "updated_by": "admin",
+            }
+        )
+    )
     assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
     chat: Final = http.post("/management/v1/apps", json={"resource_id": "chat"}).json()["app_id"]
     search: Final = http.post(
@@ -185,6 +195,13 @@ def test_customer_and_member_budget_endpoints_keep_apps_independent() -> None:
     assert restored.status_code == 200
     assert restored.json()["effective_budget"] == Budget(max_budget=20, allowed_models=()).model_dump(mode="json")
     assert restored.json()["budget_source"] == "app_default"
+    permanent: Final = http.put(chat_member, json={"budget": {"max_budget": 7}})
+    assert permanent.status_code == 200, permanent.text
+    assert permanent.json()["budget"] == Budget(max_budget=7, allowed_models=()).model_dump(mode="json")
+    assert http.get(search_member).json()["budget"] == permanent.json()["budget"]
+    invalid: Final = http.put(chat_member, json={"budget": {"max_budget": -1}})
+    assert invalid.status_code == 422
+    assert http.get(chat_member).json()["budget"] == permanent.json()["budget"]
     assert http.get(f"/management/v1/apps/{chat}/customer_members/missing").status_code == 404
 
 
