@@ -13,6 +13,7 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -49,6 +50,7 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    billed_flat_cost,
     get_usage_object,
     pricing_entry_for_cost_calc,
     select_model_name_for_cost_calc,
@@ -545,6 +547,13 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_AGENT_PRICE: Final = TypeAdapter(float)
+
+
+@dataclass(frozen=True, slots=True)
+class A2AAgentBilling:
+    agent_id: str
+    cost_per_query: object
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -580,6 +589,9 @@ class Logging(LiteLLMLoggingBaseClass):
         prometheusLogger, \
         slack_app
     custom_pricing: bool = False
+    a2a_agent_billing: A2AAgentBilling | None = None
+    a2a_agent_cost_per_query: object = None
+    a2a_agent_id: str | None = None
     stream_options = None
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
@@ -1816,10 +1828,30 @@ class Logging(LiteLLMLoggingBaseClass):
             return 0.0
         return (end_seconds - start_seconds) * 1000
 
+    def bill_as_a2a_agent(self, agent_id: str, cost_per_query: object) -> None:
+        self.a2a_agent_billing = A2AAgentBilling(agent_id=agent_id, cost_per_query=cost_per_query)
+        self.resume_billing_as_a2a_agent()
+
+    def resume_billing_as_a2a_agent(self) -> None:
+        billing: Final = self.a2a_agent_billing
+        if billing is None:
+            return
+        self.a2a_agent_cost_per_query = billing.cost_per_query
+        self.a2a_agent_id = billing.agent_id
+        self.model_call_details["agent_id"] = billing.agent_id
+
+    def stop_billing_as_a2a_agent(self) -> None:
+        if self.a2a_agent_id is not None:
+            self.model_call_details.pop("agent_id", None)
+        self.a2a_agent_cost_per_query = None
+
+    def stop_attributing_to_a2a_agent(self) -> None:
+        self.a2a_agent_id = None
+
     def set_cost_breakdown(
         self,
-        input_cost: float,
-        output_cost: float,
+        input_cost: float | None,
+        output_cost: float | None,
         total_cost: float,
         cost_for_built_in_tools_cost_usd_dollar: float,
         additional_costs: dict | None = None,
@@ -1860,14 +1892,16 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.billed_token_rates = billed_token_rates
         self.cost_breakdown = CostBreakdown(
-            input_cost=input_cost,
-            output_cost=output_cost,
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
             service_tier=service_tier,
             data_residency=data_residency,
             vertex_location=vertex_location,
         )
+        if input_cost is not None:
+            self.cost_breakdown["input_cost"] = input_cost
+        if output_cost is not None:
+            self.cost_breakdown["output_cost"] = output_cost
         if cache_read_cost is not None and cache_read_cost > 0:
             self.cost_breakdown["cache_read_cost"] = cache_read_cost
         if cache_creation_cost is not None and cache_creation_cost > 0:
@@ -1929,6 +1963,9 @@ class Logging(LiteLLMLoggingBaseClass):
             if isinstance(response_result, (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent))
             else response_result
         )
+
+        if self.a2a_agent_cost_per_query is not None:
+            return self._a2a_agent_response_cost(self.a2a_agent_cost_per_query)
 
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
@@ -2061,6 +2098,39 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def _a2a_agent_response_cost(self, cost_per_query: object) -> float | None:
+        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
+        try:
+            billed_cost: Final = billed_flat_cost(
+                base_cost=_AGENT_PRICE.validate_python(cost_per_query),
+                custom_llm_provider=provider if isinstance(provider, str) else None,
+                model=self.model,
+                litellm_logging_obj=self,
+            )
+        except Exception as e:  # noqa: BLE001  # a malformed price or cost config leaves the cost unset
+            self.model_call_details["response_cost_failure_debug_information"] = (
+                StandardLoggingModelCostFailureDebugInformation(
+                    error_str=str(e),
+                    traceback_str=_get_traceback_str_for_error(str(e)),
+                    model=self.model,
+                )
+            )
+            return None
+        additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
+        total_cost: Final = (
+            billed_cost + additional_response_cost
+            if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0
+            else billed_cost
+        )
+        if math.isfinite(total_cost):
+            return total_cost
+        verbose_logger.warning(
+            "Recording a non-finite response_cost as 0 for litellm_call_id=%s",
+            self.litellm_call_id.replace("\r", "").replace("\n", ""),
+        )
+        self.cost_breakdown = None
+        return 0.0
 
     def _record_zero_cost_diagnostic(
         self,

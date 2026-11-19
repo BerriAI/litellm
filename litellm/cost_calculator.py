@@ -1409,8 +1409,8 @@ def _apply_cost_margin(
 
 def _store_cost_breakdown_in_logging_obj(
     litellm_logging_obj: LitellmLoggingObject | None,
-    prompt_tokens_cost_usd_dollar: float,
-    completion_tokens_cost_usd_dollar: float,
+    prompt_tokens_cost_usd_dollar: float | None,
+    completion_tokens_cost_usd_dollar: float | None,
     cost_for_built_in_tools_cost_usd_dollar: float,
     total_cost_usd_dollar: float,
     additional_costs: dict | None = None,
@@ -1477,6 +1477,34 @@ def _store_cost_breakdown_in_logging_obj(
     except Exception as breakdown_error:
         verbose_logger.debug("Error storing cost breakdown: %s", breakdown_error)
         # Don't fail the main cost calculation if breakdown storage fails
+
+
+def billed_flat_cost(
+    base_cost: float,
+    custom_llm_provider: str | None,
+    model: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+) -> float:
+    discounted_cost, discount_percent, discount_amount = _apply_cost_discount(
+        base_cost=base_cost, custom_llm_provider=custom_llm_provider, model=model
+    )
+    billed_cost, margin_percent, margin_fixed_amount, margin_total_amount = _apply_cost_margin(
+        base_cost=discounted_cost, custom_llm_provider=custom_llm_provider
+    )
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=None,
+        completion_tokens_cost_usd_dollar=None,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        total_cost_usd_dollar=billed_cost,
+        original_cost=base_cost,
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+        margin_percent=margin_percent,
+        margin_fixed_amount=margin_fixed_amount,
+        margin_total_amount=margin_total_amount,
+    )
+    return billed_cost
 
 
 def _without_provider_stated_cost(usage: Usage | None) -> Usage | None:

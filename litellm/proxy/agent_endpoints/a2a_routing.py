@@ -18,18 +18,23 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     bridge_model_name,
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     resolve_databricks_backend_auth,
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.types.agents import AgentResponse
+from litellm.types.utils import CustomPricingLiteLLMParams
+from litellm.utils import get_base_model_from_metadata
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
 _AGENT_LAYERED_KWARGS: Final = ("custom_inputs", "extra_body")
 _CLIENT_TARGET_KWARGS: Final = ("api_base", "base_url")
+_CUSTOM_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
+_PER_SECOND_PRICES: Final = frozenset({"cost_per_second", "input_cost_per_second", "output_cost_per_second"})
 _PROXY_HEADER_PREFIX: Final = "x-litellm-"
 
 
@@ -169,8 +174,12 @@ async def route_a2a_agent_request(
     litellm_params: Final = agent.litellm_params or {}
 
     if litellm_params.get("custom_llm_provider") in A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS:
+        _bill_as_agent(data, agent, litellm_params)
         bridge_auth: Final = await resolve_databricks_backend_auth(litellm_params)
-        return _call_route(route_type, _bridge_agent_request(data, agent, bridge_auth.litellm_params))
+        return _call_route(
+            route_type,
+            _bridge_agent_request(data, agent, _agent_params_under_client_prices(bridge_auth.litellm_params, data)),
+        )
 
     # Get API base URL from agent config
     if not agent.agent_card_params or "url" not in agent.agent_card_params:
@@ -178,11 +187,16 @@ async def route_a2a_agent_request(
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
-    # Inject API base and route to litellm
-    data["api_base"] = agent.agent_card_params["url"]
-    verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
-
-    return _call_route(route_type, data)
+    _bill_as_agent(data, agent, litellm_params)
+    verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, agent.agent_card_params["url"])
+    return _call_route(
+        route_type,
+        {
+            **data,
+            **_agent_prices_the_client_left_unset(litellm_params, data),
+            "api_base": agent.agent_card_params["url"],
+        },
+    )
 
 
 def _bridge_agent_request(
@@ -194,6 +208,40 @@ def _bridge_agent_request(
     api_base: Final = {"api_base": card_url} if card_url else {}
     request: Final = {key: value for key, value in data.items() if key not in _CLIENT_TARGET_KWARGS}
     return _bridge_request_data({**request, **api_base}, litellm_params, agent.static_headers)
+
+
+def _client_sets_price(data: Mapping[str, object]) -> bool:
+    return (
+        any(data.get(key) is not None for key in _CUSTOM_PRICING_PARAMS)
+        or get_base_model_from_metadata(model_call_details={"litellm_params": data}) is not None
+    )
+
+
+def _bill_as_agent(data: Mapping[str, object], agent: AgentResponse, litellm_params: Mapping[str, object]) -> None:
+    logging_obj: Final = data.get("litellm_logging_obj")
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return
+    logging_obj.bill_as_a2a_agent(
+        agent_id=agent.agent_id,
+        cost_per_query=None if _client_sets_price(data) else litellm_params.get("cost_per_query"),
+    )
+
+
+def _agent_prices_the_client_left_unset(
+    litellm_params: Mapping[str, object], data: Mapping[str, object]
+) -> Mapping[str, object]:
+    if any(data.get(key) is not None for key in _PER_SECOND_PRICES):
+        return {}
+    return {
+        key: value for key, value in litellm_params.items() if key in _CUSTOM_PRICING_PARAMS and data.get(key) is None
+    }
+
+
+def _agent_params_under_client_prices(
+    litellm_params: Mapping[str, object], data: Mapping[str, object]
+) -> Mapping[str, object]:
+    unpriced: Final = {key: value for key, value in litellm_params.items() if key not in _CUSTOM_PRICING_PARAMS}
+    return {**unpriced, **_agent_prices_the_client_left_unset(litellm_params, data)}
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
