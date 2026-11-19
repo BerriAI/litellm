@@ -193,20 +193,22 @@ async def _reserve_auth_code_slot(
     except Exception as e:  # noqa: BLE001  # any shared-store fault refuses the new code
         verbose_proxy_logger.warning("byok authorize: pending-code counter unavailable: %s", e)
         return "unavailable"
-    return "ok" if issued <= _AUTH_CODES_PER_USER_MAX else "user_limit"
+    if issued <= _AUTH_CODES_PER_USER_MAX:
+        return "ok"
+    await _release_auth_code_slot(user_id, issued_at)
+    return "user_limit"
 
 
 @with_service_target(_AUTH_CODES_TARGET)
-async def _release_auth_code_slot(record: _PendingAuthCode) -> None:
-    """Give a redeemed code's slot back to the window it was issued in, while that window still exists."""
+async def _release_auth_code_slot(user_id: str, issued_at: float) -> None:
+    """Give one slot back to the window ``issued_at`` falls in, while that window still exists."""
     shared: Final = _shared_code_store()
     if shared is None:
         return
-    issued_at: Final = record["expires_at"] - _AUTH_CODE_TTL_SECONDS
     try:
-        await shared.async_increment_if_present(_auth_code_window_key(record["user_id"], issued_at), -1)
+        await shared.async_increment_if_present(_auth_code_window_key(user_id, issued_at), -1)
     except Exception as e:  # noqa: BLE001  # the window expires with its TTL, so a missed release only delays one slot
-        verbose_proxy_logger.warning("byok token: pending-code slot not released: %s", e)
+        verbose_proxy_logger.warning("byok: pending-code slot not released: %s", e)
 
 
 async def _claim_auth_code(code: str) -> "ClaimOutcome":
@@ -1020,6 +1022,7 @@ async def byok_authorize_post(
         },
     )
     if not stored:
+        await _release_auth_code_slot(user_id, issued_at)
         raise HTTPException(status_code=503, detail="Authorization is temporarily unavailable")
 
     params: Final = urlencode({"code": auth_code, "state": state})
@@ -1116,7 +1119,7 @@ async def byok_token(
         case _:
             assert_never(claim)
     await _discard_auth_code(code)
-    await _release_auth_code_slot(record)
+    await _release_auth_code_slot(record["user_id"], record["expires_at"] - _AUTH_CODE_TTL_SECONDS)
 
     # Persist the BYOK credential
     if prisma_client is not None:

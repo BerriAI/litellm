@@ -2272,6 +2272,42 @@ async def test_redeeming_a_code_from_the_previous_window_does_not_free_a_slot_in
     assert refused.status_code == 429
 
 
+@pytest.mark.asyncio
+async def test_authorizes_refused_at_the_cap_do_not_use_up_slots(
+    client: TestClient, salted: None, window_clock: MagicMock
+) -> None:
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
+
+    shared: Final = _SharedStore()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        codes: Final = [_issued_code("busy-user") for _ in range(_AUTH_CODES_PER_USER_MAX)]
+        refused: Final = [_authorize_as("busy-user").status_code for _ in range(10)]
+        redeemed: Final = [(await _redeem(code, _CredentialTable())).status_code for code in codes]
+        reissued: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
+        over: Final = _authorize_as("busy-user")
+    assert refused == [429] * 10
+    assert redeemed == [200] * _AUTH_CODES_PER_USER_MAX
+    assert reissued == [302] * _AUTH_CODES_PER_USER_MAX
+    assert over.status_code == 429
+
+
+@pytest.mark.parametrize("fault", ["set", "set_raise"], ids=["write dropped", "write raised"])
+def test_a_failed_code_write_does_not_use_up_a_slot(
+    client: TestClient, salted: None, window_clock: MagicMock, fault: str
+) -> None:
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
+
+    shared: Final = _SharedStore(down={(fault, _SHARED_CODE)})
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        failed: Final = [_authorize_as("busy-user").status_code for _ in range(5)]
+        shared.down.clear()
+        issued: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
+        over: Final = _authorize_as("busy-user")
+    assert failed == [503] * 5
+    assert issued == [302] * _AUTH_CODES_PER_USER_MAX
+    assert over.status_code == 429
+
+
 def test_no_shared_code_is_issued_when_the_pending_code_counter_is_unavailable(
     client: TestClient, salted: None
 ) -> None:
