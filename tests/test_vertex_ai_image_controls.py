@@ -14,7 +14,9 @@ from unittest.mock import patch
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
-if "litellm.rust_bridge._native" not in sys.modules:
+try:
+    import litellm.rust_bridge._native
+except ImportError:
     class _Installed:
         fallback_generalizations = {}
         rows = {}
@@ -162,4 +164,26 @@ def test_edit_preserves_explicit_controls_over_size():
     # If size="1024x1024" (default 1:1) and aspect_ratio="9:16" are passed, explicit aspect_ratio wins
     mapped = edit.map_openai_params({"size": "1024x1024", "aspect_ratio": "9:16"}, MODEL, drop_params=False)
     assert mapped["aspectRatio"] == "9:16"
+
+
+def test_edit_preserves_nested_image_config_over_size():
+    edit = VertexAIGeminiImageEditConfig()
+    mapped = edit.map_openai_params(
+        {"size": "1024x1024", "imageConfig": {"aspectRatio": "9:16", "imageSize": "2K"}},
+        MODEL,
+        drop_params=False,
+    )
+    assert mapped.get("aspectRatio") is None
+    body, _ = edit.transform_image_edit_request(
+        model=MODEL,
+        prompt="Make it night",
+        image=PNG,
+        image_edit_optional_request_params=mapped,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    image_config = json.loads(body)["generationConfig"].get("image_config", {})
+    assert image_config.get("aspect_ratio") == "9:16"
+    assert image_config.get("image_size") == "2K"
+
 

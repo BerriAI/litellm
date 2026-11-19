@@ -129,8 +129,24 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
                         model=model,
                     )
                 mapped_size = {"aspectRatio": "1:1"}
+            nested_cfg = (
+                mapped.get("imageConfig")
+                if isinstance(mapped.get("imageConfig"), dict)
+                else {}
+            )
             for param, val in mapped_size.items():
-                if param not in mapped:
+                if (
+                    param not in mapped
+                    and param not in nested_cfg
+                    and not (
+                        param in ("aspectRatio", "aspect_ratio")
+                        and ("aspectRatio" in nested_cfg or "aspect_ratio" in nested_cfg)
+                    )
+                    and not (
+                        param in ("imageSize", "image_size")
+                        and ("imageSize" in nested_cfg or "image_size" in nested_cfg)
+                    )
+                ):
                     mapped[param] = val
 
         return mapped
@@ -276,7 +292,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             ("imageSize", "image_size"),
             ("image_size", "image_size"),
         ):
-            if param in image_edit_optional_request_params:
+            if param in image_edit_optional_request_params and field not in image_config:
                 image_config[field] = image_edit_optional_request_params[param]
 
         generation_config: Final[dict[str, object]] = {
