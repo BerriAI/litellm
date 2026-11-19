@@ -2,8 +2,8 @@
 //! one leaves to Python.
 //!
 //! A setting is honored when the native app reads it as the proxy does, or when it only shapes
-//! something the gateway never admits: another route, or a caller the master key does not
-//! authenticate. Every other setting is a finding, never ignored. Each section is taken apart
+//! something the gateway never admits: another route, or a caller that holds neither the master
+//! key nor a virtual key. Every other setting is a finding, never ignored. Each section is taken apart
 //! field by field, so a setting added to the config does not compile here until it is either
 //! honored or named. Porting a feature deletes its finding.
 
@@ -56,6 +56,7 @@ enum Switch {
     DefaultMaxRetries,
     DefaultAllowedFails,
     DefaultCooldownTimeSeconds,
+    StoreModelInDb,
 }
 
 /// The name of each environment variable the caller looks up for [`Native::switches`].
@@ -67,8 +68,6 @@ pub(super) fn switches() -> impl Iterator<Item = &'static str> {
 pub(super) struct Native<'a> {
     /// Each deployment the router holds, as its model group and the provider it resolved to.
     pub deployed: &'a [(String, String)],
-    /// Whether Python runs with a database, which it reads keys, spend and settings from.
-    pub database: bool,
     /// The [`switches`] that are set.
     pub switches: &'a [&'static str],
 }
@@ -138,8 +137,9 @@ fn unknown<'a>(
     other(section, fields.keys(), &[])
 }
 
-/// The database settings are left to [`Native::database`]. The JWT settings shape only a caller
-/// whose token is a JWT, and the public routes only one who sends no key.
+/// The database settings are read as the proxy reads them, and what the proxy holds in its
+/// database beyond keys is not judged. The JWT settings shape only a caller whose token is a JWT,
+/// and the public routes only one who sends no key.
 fn general(settings: &GeneralSettings) -> Vec<Box<str>> {
     let GeneralSettings {
         master_key: _,
@@ -500,10 +500,9 @@ fn defaults_differ_for_a_coding_agent(settings: &LiteLlmSettings) -> bool {
 
 fn findings(config: &Config, native: &Native<'_>) -> Vec<Finding> {
     let everything = native
-        .database
-        .then(|| Box::<str>::from("database"))
-        .into_iter()
-        .chain(native.switches.iter().map(|switch| Box::from(*switch)))
+        .switches
+        .iter()
+        .map(|switch| Box::from(*switch))
         .chain(general(&config.general_settings))
         .chain(router(&config.router_settings))
         .chain(litellm(&config.litellm_settings))
@@ -570,7 +569,6 @@ mod tests {
     fn native<'a>(deployed: &'a [(String, String)]) -> Native<'a> {
         Native {
             deployed,
-            database: false,
             switches: &[],
         }
     }
@@ -758,17 +756,15 @@ mod tests {
     }
 
     #[rstest]
-    fn a_database_and_each_switch_that_is_set_leave_everything_to_python() {
+    fn each_switch_that_is_set_leaves_everything_to_python() {
         let native = Native {
             deployed: &[],
-            database: true,
             switches: &["LITELLM_MODIFY_PARAMS", "USE_AWS_KMS"],
         };
 
         assert_eq!(
             found(DROP, &native),
             [
-                everything("database"),
                 everything("LITELLM_MODIFY_PARAMS"),
                 everything("USE_AWS_KMS")
             ]
@@ -800,6 +796,7 @@ mod tests {
                 "DEFAULT_MAX_RETRIES",
                 "DEFAULT_ALLOWED_FAILS",
                 "DEFAULT_COOLDOWN_TIME_SECONDS",
+                "STORE_MODEL_IN_DB",
             ]
         );
     }

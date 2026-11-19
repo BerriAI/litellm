@@ -1,100 +1,46 @@
-use std::time::{Duration, SystemTime};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, SystemTime},
+};
 
 use litellm_gateway_auth::{
-    Error,
-    keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture, verify_key},
+    AccessRequest, Auth, AuthenticationMethod, Clock, Error, KeyAuthenticator, KeyHolder,
+    NoAdditionalPolicy,
+    keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture},
 };
 use litellm_secret_value::SecretValue;
-use rstest::{fixture, rstest};
+use rstest::rstest;
+
+const MASTER_KEY: &str = "sk-master-credential";
+const VIRTUAL_KEY: &str = "sk-test-credential";
+const NOW: u64 = 100;
+
+struct At(u64);
+
+impl Clock for At {
+    fn now(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(self.0)
+    }
+}
 
 struct Lookup {
-    hash: KeyHash,
     status: Option<KeyStatus>,
+    asked: AtomicUsize,
 }
 
 impl KeyLookup for Lookup {
     fn lookup<'a>(&'a self, hash: &'a KeyHash) -> LookupFuture<'a> {
         Box::pin(async move {
-            Ok(if hash == &self.hash {
-                self.status.clone()
-            } else {
-                None
-            })
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            Ok(self
+                .status
+                .clone()
+                .filter(|_| hash == &KeyHash::from_token(&SecretValue::new(VIRTUAL_KEY))))
         })
     }
-}
-
-#[fixture]
-fn token() -> SecretValue {
-    SecretValue::new("sk-test-credential")
-}
-
-#[fixture]
-fn now() -> SystemTime {
-    SystemTime::UNIX_EPOCH + Duration::from_secs(100)
-}
-
-#[rstest]
-#[case::no_expiration(None, true)]
-#[case::future(Some(101), true)]
-#[case::boundary(Some(100), false)]
-#[case::past(Some(99), false)]
-#[tokio::test]
-async fn checks_expiration(
-    token: SecretValue,
-    now: SystemTime,
-    #[case] expiration: Option<u64>,
-    #[case] valid: bool,
-) {
-    let hash = KeyHash::from_token(&token);
-    let lookup = Lookup {
-        hash: hash.clone(),
-        status: Some(KeyStatus::Active {
-            expires_at: expiration
-                .map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
-        }),
-    };
-
-    let result = verify_key(&lookup, &token, || now).await;
-
-    match valid {
-        true => assert_eq!(result.unwrap(), hash),
-        false => assert!(matches!(result, Err(Error::Expired))),
-    }
-}
-
-#[rstest]
-#[case::missing(None)]
-#[case::revoked(Some(KeyStatus::Revoked))]
-#[tokio::test]
-async fn rejects_unusable_keys(
-    token: SecretValue,
-    now: SystemTime,
-    #[case] status: Option<KeyStatus>,
-) {
-    let lookup = Lookup {
-        hash: KeyHash::from_token(&token),
-        status,
-    };
-
-    assert!(matches!(
-        verify_key(&lookup, &token, || now).await,
-        Err(Error::InvalidToken)
-    ));
-}
-
-#[rstest]
-#[tokio::test]
-async fn rejects_a_different_token(token: SecretValue, now: SystemTime) {
-    let lookup = Lookup {
-        hash: KeyHash::from_token(&token),
-        status: Some(KeyStatus::Active { expires_at: None }),
-    };
-
-    assert!(matches!(
-        verify_key(&lookup, &SecretValue::new("sk-other-credential"), || now).await,
-        Err(Error::InvalidToken)
-    ));
 }
 
 struct Unavailable;
@@ -109,13 +55,120 @@ impl KeyLookup for Unavailable {
     }
 }
 
+fn auth(keys: Arc<dyn KeyLookup>) -> Auth {
+    Auth::new(
+        Arc::new(KeyAuthenticator::new(
+            Some(SecretValue::new(MASTER_KEY)),
+            keys,
+        )),
+        Arc::new(KeyHolder),
+        Arc::new(NoAdditionalPolicy),
+        Arc::new(At(NOW)),
+    )
+}
+
+fn holding(status: Option<KeyStatus>) -> Arc<Lookup> {
+    Arc::new(Lookup {
+        status,
+        asked: AtomicUsize::new(0),
+    })
+}
+
+fn expiring(at: Option<u64>) -> Option<KeyStatus> {
+    Some(KeyStatus::Active {
+        expires_at: at.map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
+    })
+}
+
+#[rstest]
+#[case::no_expiration(None)]
+#[case::future(Some(NOW + 1))]
+#[tokio::test]
+async fn an_active_virtual_key_reaches_every_route_and_model(#[case] expires_at: Option<u64>) {
+    let identity = auth(holding(expiring(expires_at)))
+        .authenticate(&SecretValue::new(VIRTUAL_KEY))
+        .await
+        .unwrap();
+
+    let authentication = identity.caller().authentication();
+    assert_eq!(authentication.method, AuthenticationMethod::VirtualKey);
+    assert_eq!(
+        authentication.credential_id,
+        KeyHash::from_token(&SecretValue::new(VIRTUAL_KEY)).as_str()
+    );
+    for request in [
+        AccessRequest::Route {
+            method: "POST".into(),
+            path: "/v1/messages".into(),
+        },
+        AccessRequest::Model {
+            name: "claude".into(),
+            deployment: "anthropic/claude".into(),
+        },
+    ] {
+        assert!(identity.authorize(request).await.is_ok());
+    }
+}
+
+#[rstest]
+#[case::boundary(Some(NOW))]
+#[case::past(Some(NOW - 1))]
+#[tokio::test]
+async fn an_expired_virtual_key_is_refused(#[case] expires_at: Option<u64>) {
+    let result = auth(holding(expiring(expires_at)))
+        .authenticate(&SecretValue::new(VIRTUAL_KEY))
+        .await;
+
+    assert!(matches!(result, Err(Error::Expired)));
+}
+
+#[rstest]
+#[case::missing(None, VIRTUAL_KEY)]
+#[case::revoked(Some(KeyStatus::Revoked), VIRTUAL_KEY)]
+#[case::a_different_token(expiring(None), "sk-other-credential")]
+#[tokio::test]
+async fn a_key_the_lookup_does_not_report_active_is_refused(
+    #[case] status: Option<KeyStatus>,
+    #[case] token: &str,
+) {
+    let keys = holding(status);
+
+    let result = auth(keys.clone())
+        .authenticate(&SecretValue::new(token))
+        .await;
+
+    assert!(matches!(result, Err(Error::InvalidToken)));
+    assert_eq!(keys.asked.load(Ordering::SeqCst), 1);
+}
+
+#[rstest]
+#[case::the_master_key(MASTER_KEY, Some(AuthenticationMethod::MasterKey))]
+#[case::a_token_that_is_not_a_key("eyJhbGciOiJSUzI1NiJ9.e30.c2ln", None)]
+#[tokio::test]
+async fn only_a_virtual_key_is_looked_up(
+    #[case] token: &str,
+    #[case] method: Option<AuthenticationMethod>,
+) {
+    let keys = holding(expiring(None));
+
+    let identity = auth(keys.clone())
+        .authenticate(&SecretValue::new(token))
+        .await
+        .ok();
+
+    assert_eq!(
+        identity.map(|identity| identity.caller().authentication().method.clone()),
+        method
+    );
+    assert_eq!(keys.asked.load(Ordering::SeqCst), 0);
+}
+
 #[rstest]
 #[tokio::test]
-async fn lookup_failure_preserves_source_without_exposing_it(token: SecretValue, now: SystemTime) {
-    let error = verify_key(&Unavailable, &token, || now).await.unwrap_err();
+async fn a_lookup_that_fails_is_unavailable_and_never_a_denial() {
+    let result = auth(Arc::new(Unavailable))
+        .authenticate(&SecretValue::new(VIRTUAL_KEY))
+        .await;
 
-    assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
-    let cause = litellm_error::find::<std::io::Error>(&error).expect("lookup cause");
-    assert_eq!(cause.to_string(), "backend detail");
-    assert!(!error.to_string().contains("backend detail"));
+    assert!(matches!(&result, Err(error @ Error::Unavailable(_)) if !error.is_denied()));
 }

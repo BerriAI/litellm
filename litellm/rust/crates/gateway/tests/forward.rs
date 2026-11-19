@@ -84,6 +84,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 .unwrap(),
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
+                keys: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
             },
@@ -223,7 +224,7 @@ async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
-    let admit = litellm_gateway::Admit::new(&config, &resources, &state).await;
+    let admit = litellm_gateway::Admit::new(&config, &resources, &state);
     let native = middleware::global(
         litellm_gateway::router(state, &config),
         &middleware::Settings::default(),

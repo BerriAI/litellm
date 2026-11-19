@@ -10,6 +10,7 @@ use crate::{
     AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod, Authorizer,
     Bearer, CredentialExtractor, Error, NoAdditionalPolicy, Permissions, Principal, PrincipalKind,
     ResolvedIdentity, VerifiedIdentity,
+    keys::{KeyHash, KeyLookup, KeyStatus},
 };
 
 pub type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -54,7 +55,7 @@ impl IdentityResolver for LocalAdministrator {
         Box::pin(async move {
             let allowed = match identity.authentication.method {
                 AuthenticationMethod::MasterKey => identity.principal == master_principal(),
-                AuthenticationMethod::External(_) => false,
+                AuthenticationMethod::VirtualKey | AuthenticationMethod::External(_) => false,
             };
             if !allowed {
                 return Err(Error::Forbidden);
@@ -64,6 +65,26 @@ impl IdentityResolver for LocalAdministrator {
                 permissions: Permissions::All,
             })
         })
+    }
+}
+
+/// Grants the master key and a verified virtual key everything. A key with limits of its own is
+/// never verified, since a [`KeyLookup`] does not report one.
+pub struct KeyHolder;
+
+impl IdentityResolver for KeyHolder {
+    fn resolve<'a>(&'a self, identity: &'a VerifiedIdentity) -> AuthFuture<'a, ResolvedIdentity> {
+        match identity.authentication.method {
+            AuthenticationMethod::VirtualKey => Box::pin(async {
+                Ok(ResolvedIdentity {
+                    principal: identity.principal.clone(),
+                    permissions: Permissions::All,
+                })
+            }),
+            AuthenticationMethod::MasterKey | AuthenticationMethod::External(_) => {
+                LocalAdministrator.resolve(identity)
+            }
+        }
     }
 }
 
@@ -102,6 +123,18 @@ impl Auth {
             identities: Arc::new(LocalAdministrator),
             authorizer: Arc::new(NoAdditionalPolicy),
             clock: Arc::new(SystemClock),
+        }
+    }
+
+    /// [`Self::from_config`], with every other `sk-` token verified as a virtual key of `keys`.
+    pub fn with_keys(config: &Config, keys: Arc<dyn KeyLookup>) -> Self {
+        Self {
+            authenticator: Arc::new(KeyAuthenticator::new(
+                config.general_settings.master_key.clone(),
+                keys,
+            )),
+            identities: Arc::new(KeyHolder),
+            ..Self::from_config(config)
         }
     }
 
@@ -183,6 +216,17 @@ impl MasterKeyAuthenticator {
             .filter(|key| !key.expose().trim().is_empty())
             .ok_or(Error::Unconfigured)
     }
+
+    /// Whether `credential` is the master key.
+    fn holds(&self, credential: &Credential) -> Result<bool, Error> {
+        let expected = self.key()?;
+        Ok(match credential {
+            Credential::Token(token) => {
+                bool::from(Sha256::digest(token.expose()).ct_eq(&Sha256::digest(expected.expose())))
+            }
+            Credential::Transport => false,
+        })
+    }
 }
 
 impl Authenticator for MasterKeyAuthenticator {
@@ -196,26 +240,85 @@ impl Authenticator for MasterKeyAuthenticator {
         _: &'a Parts,
     ) -> AuthFuture<'a, VerifiedIdentity> {
         Box::pin(async move {
-            let expected = self.key()?;
-            let Credential::Token(credential) = credential else {
+            match self.holds(credential)? {
+                true => Ok(master_identity()),
+                false => Err(Error::InvalidToken),
+            }
+        })
+    }
+}
+
+const VIRTUAL_KEY: &str = "litellm:virtual-key";
+const VIRTUAL_KEY_PREFIX: &str = "sk-";
+
+/// Verifies the master key, and every other `sk-` token as the virtual key `keys` holds under its
+/// hash.
+pub struct KeyAuthenticator {
+    master: MasterKeyAuthenticator,
+    keys: Arc<dyn KeyLookup>,
+}
+
+impl KeyAuthenticator {
+    pub fn new(master_key: Option<SecretValue>, keys: Arc<dyn KeyLookup>) -> Self {
+        Self {
+            master: MasterKeyAuthenticator::new(master_key),
+            keys,
+        }
+    }
+}
+
+impl Authenticator for KeyAuthenticator {
+    fn validate(&self) -> AuthFuture<'_, ()> {
+        self.master.validate()
+    }
+
+    fn verify<'a>(
+        &'a self,
+        credential: &'a Credential,
+        _: &'a Parts,
+    ) -> AuthFuture<'a, VerifiedIdentity> {
+        Box::pin(async move {
+            if self.master.holds(credential)? {
+                return Ok(master_identity());
+            }
+            let Credential::Token(token) = credential else {
                 return Err(Error::InvalidToken);
             };
-            if !bool::from(
-                Sha256::digest(credential.expose()).ct_eq(&Sha256::digest(expected.expose())),
-            ) {
+            if !token.expose().starts_with(VIRTUAL_KEY_PREFIX) {
                 return Err(Error::InvalidToken);
             }
-            Ok(VerifiedIdentity {
-                principal: master_principal(),
-                authentication: Authentication {
-                    method: AuthenticationMethod::MasterKey,
-                    verifier: "litellm:master-key".into(),
-                    credential_id: "master".into(),
-                    expires_at: None,
-                },
-                restrictions: Permissions::All,
-            })
+            let hash = KeyHash::from_token(token);
+            match self.keys.lookup(&hash).await? {
+                Some(KeyStatus::Active { expires_at }) => Ok(VerifiedIdentity {
+                    principal: Principal::new(
+                        VIRTUAL_KEY.into(),
+                        hash.as_str().into(),
+                        PrincipalKind::Service,
+                    ),
+                    authentication: Authentication {
+                        method: AuthenticationMethod::VirtualKey,
+                        verifier: VIRTUAL_KEY.into(),
+                        credential_id: hash.as_str().into(),
+                        expires_at,
+                    },
+                    restrictions: Permissions::All,
+                }),
+                Some(KeyStatus::Revoked) | None => Err(Error::InvalidToken),
+            }
         })
+    }
+}
+
+fn master_identity() -> VerifiedIdentity {
+    VerifiedIdentity {
+        principal: master_principal(),
+        authentication: Authentication {
+            method: AuthenticationMethod::MasterKey,
+            verifier: "litellm:master-key".into(),
+            credential_id: "master".into(),
+            expires_at: None,
+        },
+        restrictions: Permissions::All,
     }
 }
 

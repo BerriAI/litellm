@@ -16,24 +16,32 @@
   - `Group`, for a deployment's own setting or provider. It leaves that model group and every group that can fall back to it, and no other group
   - `Asking`, for a setting that only matters to a request carrying a trait, as an unset `drop_params` only matters to a coding agent
 - Each config section in `survey.rs` is destructured field by field, so a new config field does not compile until it is honored (`field: _`) or named as a finding. A key the config types do not name is always a finding. Never add a catch-all `..`
-- A setting is honored when the native app reads it as Python does, or when it only shapes what `admit` never admits: another route, or a caller the master key does not authenticate
+- A setting is honored when the native app reads it as Python does, or when it only shapes what `admit` never admits: another route, or a caller that holds neither the master key nor a virtual key
 - Rules exist only for what the native app lacks. Porting a feature deletes its finding or its trait in the same change, and finding a new gap adds one. Never keep a rule for something the native app already does as Python does
 - Forward only what is opt-in and can be told from the config or the request before any side effect. What sits on the default path has to be ported, and its finding is the list of what still blocks a config from being served natively
 - `MESSAGES_PROVIDERS` in `survey.rs` is the list of providers the native `/v1/messages` has been compared with Python on. Add a provider only with a live comparison
 - A trait in `request.rs` is found from the request alone, and `Trait::is_read` says whether the native app reads it as Python does unless a finding names it. A trait the native app never reads needs no finding
-- A request trait that is admitted only because a setting is refused is tied to that setting. Session headers are admitted because no callback, agent or database reads them, so the change that makes callbacks native has to emit the traits it does not handle yet
+- A request trait that is admitted only because a setting is refused is tied to that setting. Session headers are admitted because no callback or agent reads them and the native app records no spend, so the change that makes callbacks or spend native has to emit the traits it does not handle yet
 - A model the config does not name is left to Python, which also resolves wildcards, deployment ids and aliases the gateway does not
 - Checks run cheapest first: the settings that leave everything, the route, the caller, the headers, then the body. The body is read only when every earlier check passed
 - The body is parsed once. `admit` judges the parsed object by its keys and hands it to the route as the `JsonObject` extension, so the route does not parse it again. Only an admitted request carries it. Whether each value has the right type is left to the route
 - Boot logs every finding with its setting and its scope, and each refusal logs what it was over at debug. The header keeps the short reason, never a setting name
-- Not judged yet: config Python holds in its database (a database leaves everything to Python), CLI flags Python was started with, a Redis only `REDIS_*` configures, and environment variables outside `Switch`
+- A database no longer leaves a request to Python. The caller check reads it for a virtual key (see Keys), and a config or `STORE_MODEL_IN_DB` that turns `store_model_in_db` on still leaves everything
+- Not ported yet, and not a finding either: what Python writes to its database after a call. A request the native app answers gets no spend log row and adds nothing to its key's spend
+- Not judged yet: models and settings Python holds in its database, which it also reads when only the database turns `store_model_in_db` on, CLI flags Python was started with, a Redis only `REDIS_*` configures, and environment variables outside `Switch`
+
+## Keys
+- With a database, `AppState::auth` authenticates the master key and a virtual key, in both modes. `StoredKeys` (`src/keys.rs`) reads the key's row from Postgres on every request, with no cache in front of it
+- The native app honors a key's expiry and its block and nothing else. `carried` takes the row apart column by column, and a key that holds anything else (a team, an owner, a budget, a limit, a model list, metadata) is `Forbidden`, which `admit` leaves to Python as `credential`. A column added to the row does not compile until it is honored or named
+- Honoring a column natively moves it out of `carried` in the same change. Never report a key active while a column it holds is not enforced
+- `admit` and the route's `authenticate` layer each check the caller, so an admitted virtual key costs two reads
 
 ## Resources
 - `Resources::build` (`src/resources.rs`) makes what every part is built from, once per config: the environment (the config's `environment_variables` in front of the process environment), the `SecretResolver` over it, the HTTP client config and the inference `CoreResources` with the client pool. Inference, Redis and the database each take what they need from it. Never reach into one part for another part's pool, config or secrets, and never build a second environment overlay
 - A setting that can come from the environment, the secret manager or OIDC is read through `resources.secrets`. `resources.environment` is only for what Python reads straight from `os.environ`
 
 ## State
-- `AppState::build` (`src/state.rs`) builds `Resources` and hands them to `AppState::over`, which builds what both modes share once at boot: inference, the Redis clients and the database pools. `router` takes it and hands it to routes with `with_state`, and a handler or middleware takes the part it needs with `State<RedisClients>` or `State<Option<Pools>>`, which `FromRef` clones out of it. Never build a store inside a route and never give one mode a store the other lacks
+- `AppState::build` (`src/state.rs`) builds `Resources` and hands them to `AppState::over`, which builds what both modes share once at boot: inference, the Redis clients, the database pools and the key lookup over them. `router` takes it and hands it to routes with `with_state`, and a handler or middleware takes the part it needs with `State<RedisClients>` or `State<Option<Pools>>`, which `FromRef` clones out of it. Never build a store inside a route and never give one mode a store the other lacks
 - In front of Python the config is the local YAML file Python loads, which the supervisor names in `LITELLM_FORWARD_CONFIG`. When Python loads no local file, `load_config` cannot load the one it names, or the native app cannot be built from it, `native_state` in `src/main.rs` builds the state from `Config::default()`, so only the environment's `REDIS_*` and `DATABASE_*` are seen, and `Admit::unconfigured` leaves every request to Python. Never fail boot on that file or on what it sets, because the gateway exiting stops Python too. Config stored in the database is not read yet
 
 ## Host
@@ -49,7 +57,7 @@
 - `/health/readiness` never touches Redis, matching the proxy
 
 ## Database
-- `db::connect` (`src/db.rs`) builds `litellm_db::Pools` from `resolve` in `db-resolve`, which takes `general_settings` and `resources.secrets` the way `redis-resolve`'s `resolve` does. No database configured, or a token auth toggle Rust cannot mint for yet, is `None`
+- `db::connect` (`src/db.rs`) builds `litellm_db::Pools`, and the `litellm_repositories::Database` the repositories run their queries on, from `resolve` in `db-resolve`, which takes `general_settings` and `resources.secrets` the way `redis-resolve`'s `resolve` does. No database configured, or a token auth toggle Rust cannot mint for yet, is `None`
 - The pools are lazy, so boot never waits for Postgres. A handler takes `State<Option<Pools>>` and picks `writer()`, `read()` or `read_after_write()` per query. Don't add an extractor that checks out a connection, because it would hide that choice
 - `/health/readiness` pings the writer for up to 2s and reports `connected`, `disconnected`, or `Not connected` when no database is configured, and always answers 200. The proxy's 503 on `disconnected` without `allow_requests_on_db_unavailable` and its 15s cache of a good answer are not ported
 

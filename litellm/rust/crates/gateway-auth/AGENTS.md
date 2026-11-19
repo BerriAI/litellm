@@ -1,6 +1,6 @@
 # Gateway authentication
 
-Inbound authentication uses a verifier, identity resolver, and authorizer injected into `Auth`. `Auth::from_config` composes the current master-key implementation. `Auth::new` accepts alternate implementations and an injected clock
+Inbound authentication uses a verifier, identity resolver, and authorizer injected into `Auth`. `Auth::from_config` composes the master-key implementation, and `Auth::with_keys` adds virtual keys to it. `Auth::new` accepts alternate implementations and an injected clock
 
 `CredentialExtractor` selects a token or transport credential from HTTP request parts. The default `Bearer` extractor is strict. `BearerOrXApiKey` reads one `x-api-key` header, the Anthropic SDK's key header, only when the request has no non-empty Authorization header, as the Python proxy does, so a malformed Authorization header never falls back to it. A malformed or rejected `x-api-key` answers 401 `missing or invalid API key`, and every other 401, a request with no credential included, keeps `missing or invalid bearer token`. `CredentialExtractor::reject` is where a profile renames a verifier's rejection for the header it read. A host can supply another extractor with `Auth::with_extractor` for a separate route profile. A transport credential is only a selection marker, never proof of identity
 
@@ -20,6 +20,8 @@ Failures distinguish invalid or expired credentials, forbidden operations, unava
 
 The plain-text rejection body is the top-level message only, never the `Report` chain, because the caller is unauthenticated and the sources carry secret-manager and backend detail. That stays reachable through `source()` for logs
 
-Virtual-key storage, JWT verification, OAuth2 introspection, trusted-proxy validation, SSO, and custom Python hook adapters are not implemented here yet. They should supply these contracts rather than bypassing the shared authorization boundary. Request-body-dependent custom hooks will need a bounded endpoint adapter after parsing
+`KeyAuthenticator` is one verifier for both kinds of key. A token that is the master key is the master key, and every other `sk-` token is hashed and asked of the injected `KeyLookup`, which answers active with an expiry, revoked or unknown. A token without the `sk-` prefix is never looked up. `KeyHolder` grants a verified virtual key everything, so a `KeyLookup` must fail with `Forbidden` for a key whose limits the server does not enforce, never report it active. Where the keys are stored belongs to the mounting server
+
+JWT verification, OAuth2 introspection, trusted-proxy validation, SSO, and custom Python hook adapters are not implemented here yet. They should supply these contracts rather than bypassing the shared authorization boundary. Request-body-dependent custom hooks will need a bounded endpoint adapter after parsing
 
 Budget reservations, rate limits, usage settlement, retries, and cancellation accounting belong after authorization in the execution lifecycle. This foundation adds no accounting backend or cached authorization decisions. Future reservations must bind the same caller and resolved operation and settle idempotently across streaming completion and cancellation

@@ -4,6 +4,7 @@ mod db;
 mod error;
 mod health;
 pub mod host;
+mod keys;
 mod license;
 pub mod middleware;
 mod redis;
@@ -24,7 +25,6 @@ use axum::Router;
 
 use litellm_config::Config;
 use litellm_env::{Lookup, ProcessEnvironment};
-use litellm_gateway_auth::{Auth, BearerOrXApiKey};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution,
     media::PublicDnsResolver,
@@ -79,9 +79,11 @@ pub fn install_crypto_provider() {
 }
 
 pub fn router(state: AppState, config: &Config) -> Router {
-    let auth = Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey));
     let inference = litellm_gateway_inference::router(state.inference.clone()).route_layer(
-        axum::middleware::from_fn_with_state(auth, litellm_gateway_auth::authenticate),
+        axum::middleware::from_fn_with_state(
+            state.auth(config),
+            litellm_gateway_auth::authenticate,
+        ),
     );
     middleware::inference(inference).merge(health::router(state))
 }

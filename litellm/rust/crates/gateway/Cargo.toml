@@ -23,6 +23,8 @@ litellm-config-load.workspace = true
 litellm-core-utils.workspace = true
 litellm-db.workspace = true
 litellm-db-resolve.workspace = true
+litellm-repositories.workspace = true
+chrono.workspace = true
 litellm-error.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
@@ -49,6 +51,7 @@ tower-http = { version = "0.6.11", features = ["catch-panic", "cors", "decompres
 uuid.workspace = true
 
 [dev-dependencies]
+serde_json = { workspace = true, features = ["raw_value"] }
 litellm-redis-testing.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true

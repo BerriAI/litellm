@@ -26,23 +26,8 @@ pub enum KeyStatus {
 pub type LookupFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<KeyStatus>, Error>> + Send + 'a>>;
 
+/// The virtual keys this server authenticates. A key it holds but cannot honor is an error, never
+/// a status.
 pub trait KeyLookup: Send + Sync {
     fn lookup<'a>(&'a self, hash: &'a KeyHash) -> LookupFuture<'a>;
-}
-
-pub async fn verify_key(
-    lookup: &dyn KeyLookup,
-    token: &SecretValue,
-    now: impl FnOnce() -> SystemTime,
-) -> Result<KeyHash, Error> {
-    let hash = KeyHash::from_token(token);
-    match lookup.lookup(&hash).await? {
-        Some(KeyStatus::Active { expires_at }) => {
-            if expires_at.is_some_and(|expiry| expiry <= now()) {
-                return Err(Error::Expired);
-            }
-            Ok(hash)
-        }
-        Some(KeyStatus::Revoked) | None => Err(Error::InvalidToken),
-    }
 }

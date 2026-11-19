@@ -129,7 +129,7 @@ async fn admitted_state(
 ) -> Result<(AppState, Admit), litellm_gateway::Error> {
     let resources = Resources::build(config)?;
     let state = AppState::over(config, environment, &resources).await?;
-    let admit = Admit::new(config, &resources, &state).await;
+    let admit = Admit::new(config, &resources, &state);
     Ok((state, admit))
 }
 

@@ -8,8 +8,8 @@ pub mod keys;
 use sha2::{Digest, Sha256};
 
 pub use authentication::{
-    Auth, AuthFuture, Authenticator, Clock, Credential, IdentityResolver, LocalAdministrator,
-    MasterKeyAuthenticator, SystemClock,
+    Auth, AuthFuture, Authenticator, Clock, Credential, IdentityResolver, KeyAuthenticator,
+    KeyHolder, LocalAdministrator, MasterKeyAuthenticator, SystemClock,
 };
 pub use authorization::{
     AccessRequest, AuthenticatedRequest, AuthorizedOperation, Authorizer, NoAdditionalPolicy,

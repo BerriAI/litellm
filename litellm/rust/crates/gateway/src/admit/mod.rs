@@ -2,7 +2,8 @@
 //!
 //! `survey` and `plan` decide from the config, once and without IO, what is left to Python.
 //! `request` finds what one request carries. This module is the only part that does IO: it looks
-//! up what the config does not say, checks the caller and reads the body.
+//! up what the config does not say, checks the caller, which reads the database for a virtual
+//! key, and reads the body.
 
 mod body;
 mod plan;
@@ -17,7 +18,7 @@ use axum::{
     http::{Method, request::Parts},
 };
 use litellm_config::Config;
-use litellm_gateway_auth::{Auth, BearerOrXApiKey};
+use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::JsonObject;
 use litellm_router_core::registry::DeploymentFilter;
 use serde_json::{Map, Value};
@@ -103,7 +104,7 @@ impl Admit {
 
     /// By the `config` the native app `state` is built from. The config is judged here, once, and
     /// every setting found to leave requests to Python is logged with whose it leaves.
-    pub async fn new(config: &Config, resources: &Resources, state: &AppState) -> Self {
+    pub fn new(config: &Config, resources: &Resources, state: &AppState) -> Self {
         let deployed: Vec<_> = state
             .inference
             .router
@@ -120,15 +121,10 @@ impl Admit {
         let switches: Vec<_> = survey::switches()
             .filter(|name| resources.environment.get(name).is_some())
             .collect();
-        let database = !matches!(
-            litellm_db_resolve::resolve(&config.general_settings, &resources.secrets).await,
-            Ok(None)
-        );
         let plan = survey::plan(
             config,
             &Native {
                 deployed: &deployed,
-                database,
                 switches: &switches,
             },
         );
@@ -139,14 +135,11 @@ impl Admit {
                 "the native app does not honor a setting of the config python runs with, so python answers what it reaches"
             );
         }
-        Self::by(config, plan)
+        Self::by(state.auth(config), plan)
     }
 
-    fn by(config: &Config, plan: Plan) -> Self {
-        Self(Some(Arc::new(Judge {
-            auth: Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey)),
-            plan,
-        })))
+    fn by(auth: Auth, plan: Plan) -> Self {
+        Self(Some(Arc::new(Judge { auth, plan })))
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an
@@ -173,6 +166,11 @@ impl Admit {
 
 #[cfg(test)]
 mod tests {
+    use litellm_gateway_auth::{
+        BearerOrXApiKey,
+        keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture},
+    };
+    use litellm_secret_value::SecretValue;
     use rstest::rstest;
 
     use super::*;
@@ -180,7 +178,36 @@ mod tests {
     const CONFIG: &str = "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n  - model_name: gpt\n    litellm_params:\n      model: openai/gpt-5.5\n      api_key: provider-key\ngeneral_settings:\n  master_key: gateway-key\n";
     const MASTER_KEY: (&str, &str) = ("authorization", "Bearer gateway-key");
 
-    fn admit(settings: &str) -> Admit {
+    const VIRTUAL_KEY: (&str, &str) = ("authorization", "Bearer sk-virtual");
+
+    /// What the database answers for the hash of [`VIRTUAL_KEY`], and nothing for any other.
+    #[derive(Clone, Copy)]
+    enum Held {
+        Active,
+        Revoked,
+        Restricted,
+        Unreachable,
+    }
+
+    impl KeyLookup for Held {
+        fn lookup<'a>(&'a self, hash: &'a KeyHash) -> LookupFuture<'a> {
+            Box::pin(async move {
+                if hash != &KeyHash::from_token(&SecretValue::new("sk-virtual")) {
+                    return Ok(None);
+                }
+                match self {
+                    Self::Active => Ok(Some(KeyStatus::Active { expires_at: None })),
+                    Self::Revoked => Ok(Some(KeyStatus::Revoked)),
+                    Self::Restricted => Err(litellm_gateway_auth::Error::Forbidden),
+                    Self::Unreachable => Err(litellm_gateway_auth::Error::Unavailable(
+                        litellm_error::Source::new(std::io::Error::other("database down")),
+                    )),
+                }
+            })
+        }
+    }
+
+    fn judged(settings: &str, auth: impl FnOnce(&Config) -> Auth) -> Admit {
         let config = Config::from_yaml(&format!("{CONFIG}{settings}")).unwrap();
         let deployed = [
             ("claude".to_owned(), "anthropic".to_owned()),
@@ -188,10 +215,20 @@ mod tests {
         ];
         let native = Native {
             deployed: &deployed,
-            database: false,
             switches: &[],
         };
-        Admit::by(&config, survey::plan(&config, &native))
+        Admit::by(
+            auth(&config).with_extractor(Arc::new(BearerOrXApiKey)),
+            survey::plan(&config, &native),
+        )
+    }
+
+    fn admit(settings: &str) -> Admit {
+        judged(settings, Auth::from_config)
+    }
+
+    fn admit_holding(held: Held) -> Admit {
+        judged("", |config| Auth::with_keys(config, Arc::new(held)))
     }
 
     fn messages(headers: &[(&str, &str)], model: &str) -> Request {
@@ -218,6 +255,35 @@ mod tests {
         assert_eq!(
             refusal(admit(""), messages(&[credential], "claude")).await,
             None
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_virtual_key_the_native_app_authenticates_is_admitted() {
+        assert_eq!(
+            refusal(
+                admit_holding(Held::Active),
+                messages(&[VIRTUAL_KEY], "claude")
+            )
+            .await,
+            None
+        );
+    }
+
+    #[rstest]
+    #[case::revoked(Held::Revoked, VIRTUAL_KEY)]
+    #[case::holding_what_the_native_app_does_not_honor(Held::Restricted, VIRTUAL_KEY)]
+    #[case::unreadable(Held::Unreachable, VIRTUAL_KEY)]
+    #[case::unknown(Held::Active, ("authorization", "Bearer sk-someone-else"))]
+    #[tokio::test]
+    async fn a_virtual_key_the_native_app_does_not_authenticate_is_pythons(
+        #[case] held: Held,
+        #[case] credential: (&str, &str),
+    ) {
+        assert_eq!(
+            refusal(admit_holding(held), messages(&[credential], "claude")).await,
+            Some(Refused::Credential)
         );
     }
 
