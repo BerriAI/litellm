@@ -668,18 +668,25 @@ SHARED_LITELLM_MODEL_LIST: Final = [
     deployment("chain-b", "b", model="openai/shared"),
     deployment("solo", "s1", model="openai/solo"),
     deployment("solo", "s2", model="openai/solo"),
+    deployment("backup", "backup", model="openai/backup"),
 ]
 
 
 def _collision_core(
-    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch, env: str | None, flag: bool | None
+    make_core: MakeCore,
+    monkeypatch: pytest.MonkeyPatch,
+    env: str | None,
+    flag: bool | None,
+    **arguments: object,  # kwargs-ok: further router constructor arguments
 ) -> RouterCore:
     if env is None:
         monkeypatch.delenv(COLLISION_CHECK_ENV, raising=False)
     else:
         monkeypatch.setenv(COLLISION_CHECK_ENV, env)
     flag_argument: Final = {} if flag is None else {"enable_cross_model_group_collision_check": flag}
-    return make_core(model_list=SHARED_LITELLM_MODEL_LIST, model_group_alias={"alias-a": "chain-a"}, **flag_argument)
+    return make_core(
+        model_list=SHARED_LITELLM_MODEL_LIST, model_group_alias={"alias-a": "chain-a"}, **flag_argument, **arguments
+    )
 
 
 @pytest.mark.asyncio
@@ -762,3 +769,25 @@ async def test_a_completion_naming_a_shared_litellm_model_reaches_no_deployment_
     assert host.calls == []
     await core.acompletion(model="chain-a", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
     assert host.deployments_called("acompletion") == ["a"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op", ["acompletion", "completion"])
+@pytest.mark.parametrize(
+    ("fallback_arguments", "expected"),
+    [
+        ({"fallbacks": [{"openai/shared": ["backup"]}]}, "backup"),
+        ({"default_fallbacks": ["backup"]}, "backup"),
+    ],
+)
+async def test_a_refused_shared_litellm_model_reaches_only_its_configured_fallback(
+    make_core: MakeCore,
+    monkeypatch: pytest.MonkeyPatch,
+    host: ScriptedHost,
+    op: str,
+    fallback_arguments: dict[str, object],
+    expected: str,
+) -> None:
+    core: Final = _collision_core(make_core, monkeypatch, None, True, **fallback_arguments)
+    await core.call(op, {"model": "openai/shared", "messages": MESSAGES})
+    assert host.deployments_called(op) == [expected]

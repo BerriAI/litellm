@@ -66,8 +66,6 @@ fn logical_group(deployment: &Deployment) -> (Option<&str>, &str) {
     }
 }
 
-/// Refuses deployments matched by litellm model string `model` when the ones the caller's team
-/// may use span several model groups and the router opted into the check.
 fn refuse_cross_group(
     model: &str,
     deployments: Vec<Arc<Deployment>>,

@@ -86,8 +86,6 @@ pub enum Error {
     /// A proxy admin without a team named a public model name several teams use.
     #[error("model name `{model}` matches deployments from multiple teams")]
     MultipleTeams { model: String },
-    /// A litellm model string matched deployments of several model groups, with
-    /// `enable_cross_model_group_collision_check` on.
     #[error("model `{model}` matches deployments from multiple model groups")]
     MultipleModelGroups { model: String },
     /// Every deployment `model` resolved to is reserved for other teams by an active access
