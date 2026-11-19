@@ -30,6 +30,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.responses.stored_system_prompt import awithout_stored_instructions
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, StandardLoggingPayload, TextCompletionResponse
 
@@ -5967,6 +5968,50 @@ async def test_acompletion_follow_up_never_logs_the_stored_chain_lookup_as_a_cal
         )
         await asyncio.sleep(0.5)
     assert finished.call_types == ([] if no_log else ["acompletion"])
+
+
+@pytest.mark.asyncio
+async def test_follow_up_with_truncation_auto_keeps_instructions_without_reading_the_stored_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        "instructions": "Stable prefix",
+        "previous_response_id": "resp_prior",
+        "truncation": "auto",
+        "custom_llm_provider": "openai",
+        "api_key": "sk-test",
+    }
+    with respx.mock(assert_all_called=False) as router:
+        chain: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        sent: Final = await awithout_stored_instructions(request)
+    assert not chain.called
+    assert sent == request
+
+
+@pytest.mark.asyncio
+async def test_follow_up_reads_the_stored_chain_of_an_azure_deployment_with_its_ad_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as router:
+        chain: Final = router.get(url__regex=r"https://qa\.openai\.azure\.com/.*responses/resp_prior/input_items.*").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        sent: Final = await awithout_stored_instructions(
+            {
+                "instructions": "Stable prefix",
+                "previous_response_id": "resp_prior",
+                "custom_llm_provider": "azure",
+                "api_base": "https://qa.openai.azure.com",
+                "api_version": "2025-03-01-preview",
+                "azure_ad_token": "ad-token",
+            }
+        )
+    assert chain.calls[0].request.headers["authorization"] == "Bearer ad-token"
+    assert "instructions" not in sent
 
 
 @pytest.mark.parametrize(
