@@ -79197,6 +79197,121 @@
             "notes": "Self-hosted decision model; infrastructure costs are paid separately"
         }
     },
+    "bf16/moonshotai/kimi-k3.1-pro-uncensored": {
+        "cache_read_input_token_cost": 4.5e-07,
+        "input_cost_per_token": 2.9e-06,
+        "litellm_provider": "bf16",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 9.9e-06,
+        "source": "https://bf16.ai/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "max"
+        ]
+    },
+    "bf16/zai-org/glm-5.3-uncensored": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 1.35e-06,
+        "litellm_provider": "bf16",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.2e-06,
+        "source": "https://bf16.ai/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "max"
+        ]
+    },
+    "bf16/zai-org/glm-5.3-flash-uncensored": {
+        "cache_read_input_token_cost": 6.5e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "bf16",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.12e-06,
+        "source": "https://bf16.ai/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "max"
+        ]
+    },
+    "bf16/deepseek/deepseek-v4.1-flash-uncensored": {
+        "cache_read_input_token_cost": 4.5e-08,
+        "input_cost_per_token": 2.6e-07,
+        "litellm_provider": "bf16",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 130000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://bf16.ai/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "max"
+        ]
+    },
+    "bf16/deepseek/deepseek-v4.1-flash-uncensored-fast": {
+        "cache_read_input_token_cost": 5.5e-08,
+        "input_cost_per_token": 2.8e-07,
+        "litellm_provider": "bf16",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 130000,
+        "mode": "chat",
+        "output_cost_per_token": 1.12e-06,
+        "source": "https://bf16.ai/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "max"
+        ]
+    },
     "laya/english": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "laya",
