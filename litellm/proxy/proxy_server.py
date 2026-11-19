@@ -14932,7 +14932,7 @@ def _deployment_with_request_count_settings(
             "previous_response_id",
             "conversation",
         )
-        if request_params.get(name) is not None
+        if name in request_params
     }
     if not overrides:
         return deployment
