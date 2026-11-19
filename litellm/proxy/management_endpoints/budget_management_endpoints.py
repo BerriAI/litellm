@@ -49,12 +49,10 @@ from litellm.proxy.management_helpers.utils import validate_budget_windows_updat
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+from litellm.repositories.customer_member_repository import CustomerMemberRepository
+from litellm.repositories.customer_organization_repository import CustomerOrganizationRepository
+from litellm.repositories.customer_team_repository import CustomerTeamRepository
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import (
-    CustomerMemberRepository,
-    CustomerOrganizationRepository,
-    CustomerTeamRepository,
-)
 
 router: Final = APIRouter()
 _WRITE_VALUES: Final = TypeAdapter(Mapping[str, object])

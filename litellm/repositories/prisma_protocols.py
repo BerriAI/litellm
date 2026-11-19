@@ -108,6 +108,12 @@ class PrismaRecord(Protocol):
     def dict(self) -> Mapping[str, object]: ...
 
 
+class ModelDumpRecord(Protocol):
+    """A Prisma row read through its pydantic ``model_dump``."""
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
 class ReadOnlyTable(Protocol):
     async def find_many(self, *, where: Mapping[str, object]) -> Sequence[PrismaRecord]: ...
 

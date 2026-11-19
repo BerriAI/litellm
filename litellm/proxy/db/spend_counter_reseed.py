@@ -33,14 +33,14 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
 )
 from litellm.redis.stores.spend_counters import END_USER_COUNTER_PREFIX, SPEND_COUNTERS_TARGET, SpendCounterStore
 from litellm.redis.stores.spend_counters.types import parse_customer_window_counter
+from litellm.repositories.customer_member_repository import CustomerMemberRepository
+from litellm.repositories.customer_organization_repository import CustomerOrganizationRepository
+from litellm.repositories.customer_team_repository import CustomerTeamRepository
 from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
-    CustomerMemberRepository,
-    CustomerOrganizationRepository,
-    CustomerTeamRepository,
     SpendLogsRepository,
 )
 from litellm.repositories.team_membership_repository import TeamMembershipRepository

@@ -25,12 +25,12 @@ from litellm.proxy.management_endpoints.management_v1.customers import (
     require_customer_admin,
 )
 from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
-from litellm.proxy.management_helpers.apps import AppRepository
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure, PrismaRecord
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.app_repository import AppRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import DatabaseClient, TableActions
 from litellm.types.proxy.management_endpoints.common_daily_activity import SpendAnalyticsPaginatedResponse

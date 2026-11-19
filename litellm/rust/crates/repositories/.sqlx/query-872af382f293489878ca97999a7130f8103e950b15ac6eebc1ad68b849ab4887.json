@@ -1,0 +1,138 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.customer_org_id,\n       o.alias,\n       o.spend,\n       COALESCE(o.budget_template_ids, '{}') AS \"budget_template_ids!\",\n       o.budget_id,\n       o.default_budget_template_id,\n       o.created_at,\n       o.created_by,\n       o.updated_at,\n       o.updated_by,\n       to_jsonb(b) AS \"budget?: Json<Budget>\"\nFROM \"LiteLLM_CustomerOrganizationTable\" AS o\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = o.budget_id\nWHERE o.customer_org_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "customer_org_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerOrganizationTable\"",
+            "name": "customer_org_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerOrganizationTable\"",
+            "name": "alias"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerOrganizationTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "budget_template_ids!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerOrganizationTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "default_budget_template_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerOrganizationTable\"",
+            "name": "default_budget_template_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerOrganizationTable\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerOrganizationTable\"",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerOrganizationTable\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerOrganizationTable\"",
+            "name": "updated_by"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "budget?: Json<Budget>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      null,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "872af382f293489878ca97999a7130f8103e950b15ac6eebc1ad68b849ab4887"
+}
