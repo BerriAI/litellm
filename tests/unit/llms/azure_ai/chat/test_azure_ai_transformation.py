@@ -161,6 +161,16 @@ async def test_azure_ai_acompletion_posts_the_conversation_to_the_models_endpoin
             id="resource-root",
         ),
         pytest.param(
+            "https://example-resource.services.ai.azure.com/openai/",
+            "/openai/v1/chat/completions",
+            id="resource-openai-base",
+        ),
+        pytest.param(
+            "https://example-resource.services.ai.azure.com/openai?api-version=preview",
+            "/openai/v1/chat/completions",
+            id="resource-openai-base-preview",
+        ),
+        pytest.param(
             "https://example-resource.services.ai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions"
             "?api-version=2023-03-15-preview",
             "/openai/deployments/gpt-4.1-mini/chat/completions",
