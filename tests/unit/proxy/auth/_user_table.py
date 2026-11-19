@@ -1,11 +1,15 @@
 """An in-memory LiteLLM_UserTable that answers the queries the sign-in user lookup makes."""
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, MutableMapping
 from types import SimpleNamespace
 from typing import Final
 
 from litellm.proxy._types import LiteLLM_UserTable
+from litellm.repositories import rust_database
+from litellm.rust_bridge._native import RustUserRepository
+from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.proxy.rust_auth_stores import FakeUserStore
 
 _ILIKE_TOKEN: Final = re.compile(r"\\(.)|(%)|(_)|(.)", re.DOTALL)
 
@@ -45,6 +49,7 @@ class UserTable:
     def __init__(self, *rows: LiteLLM_UserTable) -> None:
         self.rows = list(rows)
         self.first_lookups: list[Mapping[str, object]] = []
+        self.email_checks: list[tuple[str, str]] = []
 
     def row(self, user_id: str) -> LiteLLM_UserTable:
         return next(r for r in self.rows if r.user_id == user_id)
@@ -102,5 +107,56 @@ def prisma_over(table: UserTable) -> SimpleNamespace:
         assert table_name == "user"
         return await table.create(data)
 
-    database: Final = SimpleNamespace(litellm_usertable=table)
+    _follow(table)
+    database: Final = prisma_with_empty_config().db
+    database.litellm_usertable = table
     return SimpleNamespace(db=database, writer_db=database, insert_data=insert_data, jsonify_object=dict)
+
+
+class _RowsById(MutableMapping[str, Mapping[str, object] | Exception]):
+    """``UserTable``'s rows keyed by ``user_id``, as the Rust user store fake reads and writes them."""
+
+    def __init__(self, table: UserTable) -> None:
+        self._table: Final = table
+
+    def __getitem__(self, user_id: str) -> Mapping[str, object]:
+        row: Final = next((r for r in self._table.rows if r.user_id == user_id), None)
+        if row is None:
+            raise KeyError(user_id)
+        return row.model_dump()
+
+    def __setitem__(self, user_id: str, value: Mapping[str, object] | Exception) -> None:
+        assert not isinstance(value, Exception)
+        updated: Final = LiteLLM_UserTable(**value)
+        rows: Final = self._table.rows
+        index: Final = next((i for i, r in enumerate(rows) if r.user_id == user_id), None)
+        if index is None:
+            rows.append(updated)
+        else:
+            rows[index] = updated
+
+    def __delitem__(self, user_id: str) -> None:
+        self._table.rows.remove(self._table.row(user_id))
+
+    def __iter__(self) -> Iterator[str]:
+        return iter([r.user_id for r in self._table.rows])
+
+    def __len__(self) -> int:
+        return len(self._table.rows)
+
+
+def rows_by_id(table: UserTable) -> MutableMapping[str, Mapping[str, object] | Exception]:
+    return _RowsById(table)
+
+
+def user_store_over(table: UserTable, store: type[FakeUserStore] = FakeUserStore) -> FakeUserStore:
+    """The Rust user store fake over ``table``, so a sign-in the store resolves and a row Prisma creates meet."""
+    return store(rows=rows_by_id(table))
+
+
+def _follow(table: UserTable) -> None:
+    """Points an installed Rust user store fake at ``table``, so lookups and Prisma writes share its rows."""
+    installed: Final = rust_database.repository(RustUserRepository)
+    if isinstance(installed, FakeUserStore):
+        installed.rows = rows_by_id(table)
+        installed.email_checks = table.email_checks

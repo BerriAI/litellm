@@ -7,7 +7,8 @@ FT.SEARCH KNN query itself via redis-py instead of shaping an httpx request.
 Documents are HASHes indexed by an FT index named after the vector_store_id.
 """
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NoReturn
 
@@ -78,6 +79,27 @@ def _import_query() -> "type[Query]":
     except ImportError as e:
         raise ValueError(_REDIS_INSTALL_HINT) from e
     return RedisQuery
+
+
+@contextmanager
+def _valkey_search_errors(vector_store_id: str) -> Generator[None]:
+    from redis.exceptions import AuthenticationError, AuthorizationError, ConnectionError, TimeoutError
+
+    try:
+        yield
+    except AuthenticationError as error:
+        raise litellm.AuthenticationError(message=str(error), model=vector_store_id, llm_provider="valkey") from error
+    except AuthorizationError as error:
+        raise litellm.PermissionDeniedError(
+            message=str(error),
+            model=vector_store_id,
+            llm_provider="valkey",
+            response=httpx.Response(403, request=httpx.Request("FT.SEARCH", "valkey://vector-store")),
+        ) from error
+    except TimeoutError as error:
+        raise litellm.Timeout(message=str(error), model=vector_store_id, llm_provider="valkey") from error
+    except ConnectionError as error:
+        raise litellm.APIConnectionError(message=str(error), model=vector_store_id, llm_provider="valkey") from error
 
 
 class _ValkeySearchParams(LiteLLMBaseModel):
@@ -241,7 +263,8 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}
 
         if self.sync_client is not None:
-            raw: Final = self.sync_client.ft(vector_store_id).search(knn, query_params=vec_params)
+            with _valkey_search_errors(vector_store_id):
+                raw: Final = self.sync_client.ft(vector_store_id).search(knn, query_params=vec_params)
             return self._to_response(raw, query_text, params.text_field)
 
         connect_timeout, op_timeout = self._socket_timeouts(timeout)
@@ -251,7 +274,8 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             socket_timeout=op_timeout,
         )
         try:
-            raw_result: Final = client.ft(vector_store_id).search(knn, query_params=vec_params)
+            with _valkey_search_errors(vector_store_id):
+                raw_result: Final = client.ft(vector_store_id).search(knn, query_params=vec_params)
             return self._to_response(raw_result, query_text, params.text_field)
         finally:
             client.close()
@@ -289,9 +313,10 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}
 
         if self.async_client is not None:
-            raw: Final = await self.async_client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
-                knn, query_params=vec_params
-            )
+            with _valkey_search_errors(vector_store_id):
+                raw: Final = await self.async_client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
+                    knn, query_params=vec_params
+                )
             return self._to_response(raw, query_text, params.text_field)
 
         connect_timeout, op_timeout = self._socket_timeouts(timeout)
@@ -301,9 +326,10 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             socket_timeout=op_timeout,
         )
         try:
-            raw_result: Final = await client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
-                knn, query_params=vec_params
-            )
+            with _valkey_search_errors(vector_store_id):
+                raw_result: Final = await client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
+                    knn, query_params=vec_params
+                )
             return self._to_response(raw_result, query_text, params.text_field)
         finally:
             await client.aclose()

@@ -294,7 +294,8 @@ def _budget_json_column(key: str, value: object) -> object:
 
 def budget_row_values(values: Mapping[str, object]) -> Mapping[str, object]:
     """Prisma writes Json columns only through ``Json``: a budget without windows carries ``Json(None)``, the same
-    JSON null the key path writes, since a bare ``None`` on a ``Json?`` column is rejected by the query engine."""
+    JSON null the key path writes, since a bare ``None`` on a ``Json?`` column is rejected by the query engine.
+    """
     return {
         key: _budget_json_column(key, value)
         for key, value in values.items()
@@ -388,6 +389,13 @@ _BUDGET_REFERENCE_FIELDS: Final = (
     "model_access_groups",
     "team_membership",
     "organization_membership",
+    "apps",
+    "app_default_tiers",
+    "app_default_members",
+    "app_org_tiers",
+    "app_org_overrides",
+    "app_org_members",
+    "app_member_overrides",
 )
 
 
@@ -557,7 +565,12 @@ def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
 
 class CustomerHierarchyStore:
     def __init__(
-        self, db: "Prisma", now: datetime, settings: BudgetResetSettings | None = None, *, premium_user: bool
+        self,
+        db: "Prisma",
+        now: datetime,
+        settings: BudgetResetSettings | None = None,
+        *,
+        premium_user: bool,
     ) -> None:
         self.db = db
         self.premium_user = premium_user
