@@ -11,10 +11,14 @@ import {
   resolveLitellmProviderSlug,
 } from "./provider_info_helpers";
 
-const PROVIDER_CREATE_FIELDS: { provider: string; provider_display_name: string; litellm_provider: string }[] =
-  JSON.parse(
-    readFileSync(resolve(__dirname, "../../../../proxy/public_endpoints/provider_create_fields.json"), "utf8"),
-  );
+const PROVIDER_CREATE_FIELDS: {
+  provider: string;
+  provider_display_name: string;
+  litellm_provider: string;
+  default_model_placeholder: string | null;
+}[] = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../proxy/public_endpoints/provider_create_fields.json"), "utf8"),
+);
 
 const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.parse(
   readFileSync(resolve(__dirname, "../../../../../model_prices_and_context_window.json"), "utf8"),
@@ -70,6 +74,13 @@ describe("provider_info_helpers", () => {
     expect(getProviderLogoAndName("AIAND")).toEqual(getProviderLogoAndName("aiand"));
     expect(providerLogoMap[Providers.AIAND]).toContain("aiand");
     expect(getPlaceholder(Providers.AIAND)).toBe("aiand/openai/gpt-oss-120b");
+  });
+
+  it("resolves the GitGot add-model provider to its display name and model placeholder", () => {
+    const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.litellm_provider === "gitgot");
+    const selectedProvider = metadata?.provider ?? "";
+    expect(Providers[selectedProvider as keyof typeof Providers]).toBe(metadata?.provider_display_name);
+    expect(getPlaceholder(selectedProvider)).toBe(metadata?.default_model_placeholder);
   });
 
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
