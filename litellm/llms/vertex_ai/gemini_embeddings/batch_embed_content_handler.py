@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -39,6 +40,9 @@ from .batch_embed_content_transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+_HTTPX_RESPONSE: Final = TypeAdapter(httpx.Response, config=ConfigDict(arbitrary_types_allowed=True))
 
 
 class _GeminiFileResource(TypedDict, total=False):
@@ -293,7 +297,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             )
 
         if response.status_code != 200:
-            raise _vertex_error(response)
+            raise _vertex_error(_HTTPX_RESPONSE.validate_python(response))
 
         _json_response: Final = response.json()
 
