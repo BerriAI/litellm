@@ -55,7 +55,7 @@ from litellm.litellm_core_utils.attempt_settlement import (
     routed_attempt,
 )
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.litellm_core_utils.clientside_credential_handler import PROVIDER_BOUND_PARAMS
+from litellm.litellm_core_utils.clientside_credential_handler import PROVIDER_BOUND_PARAMS, request_for_provider
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
@@ -122,7 +122,6 @@ from litellm.router_rust.invoke.shaping import (
     Shaping,
     non_stream_timeout,
     provider_of_deployment,
-    request_for_provider,
     serves_caller_credentials,
 )
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
@@ -262,6 +261,7 @@ from litellm.router_utils.dynamic_queue_router import (
     parse_dynamic_queue,
 )
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
+from litellm.router_utils.fallback_event_handlers import get_pre_routing_selection
 from litellm.router_utils.kubernetes_pod_discovery import (
     KubernetesPodDiscovery,
     async_resolve_pods_after_bound,
@@ -4536,6 +4536,7 @@ class _Driver:
         self._base_level: Final = stream_failure[0] if stream_failure is not None else 0
         # How many fallback hops deep the walk is: the "Successful fallback" lines a served hop logs.
         self._fallback_depth: int = 0
+        self._requested_selection: str | None = get_pre_routing_selection(request)
         self._level_errors: Final[dict[int, BaseException]] = dict(  # mutable-ok: filled as the call runs
             (stream_failure,) if stream_failure else ()
         )
@@ -5317,11 +5318,12 @@ class _Driver:
         self._attempts += 1
         self._attempt_started = datetime.now()  # noqa: DTZ005  # see _call
         try:
-            answered: Final = await passthrough(self._hop_request(step, partial(inferred_provider, name)), name)
+            sent: Final = self._hop_request(step, partial(inferred_provider, name))
+            answered: Final = await passthrough(sent, name)
         except Exception as error:  # noqa: BLE001  # handed to the Rust call loop like any attempt failure
             return {**self._failed(step, {}, None, error), "recorded": True}
         self._last_response = answered
-        self._served = (name, self._request)
+        self._served = (name, sent)
         return {"ok": True, "total_tokens": total_tokens(answered)}
 
     async def attempt(self, step: Mapping[str, object]) -> Mapping[str, object]:
@@ -5377,19 +5379,17 @@ class _Driver:
     def _hop_request(self, step: Mapping[str, object], provider: Callable[[], str | None]) -> Mapping[str, object]:
         """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
         params: Final = as_str_mapping(step.get("params"))
-        request: Final = self._request_for_hop(step, provider)
-        return request if params is None else {**request, **params}
-
-    def _request_for_hop(self, step: Mapping[str, object], provider: Callable[[], str | None]) -> Mapping[str, object]:
-        """A fallback hop sends the caller's credentials only to a provider the requested group serves them to."""
         level: Final = step.get("fallback_level")
-        if not isinstance(level, int) or level == 0 or self._request.keys().isdisjoint(PROVIDER_BOUND_PARAMS):
-            return self._request
-        return request_for_provider(self._request, provider(), self._credentials_sent_for)
+        request: Final = (
+            self._request
+            if not isinstance(level, int) or level == 0 or self._request.keys().isdisjoint(PROVIDER_BOUND_PARAMS)
+            else request_for_provider(self._request, provider(), self._credentials_sent_for)
+        )
+        return request if params is None else {**request, **params}
 
     @cached_property
     def _credentials_sent_for(self) -> frozenset[str]:
-        model: Final = _routed_model(self._request)
+        model: Final = self._requested_selection or _routed_model(self._request)
         if not isinstance(model, str):
             return frozenset()
         providers: Final = (
@@ -5640,11 +5640,15 @@ class _Driver:
     async def pre_route(self, step: Mapping[str, object]) -> object:
         request: Final = self._request
         try:
-            return await self._core._pre_route(  # pyright: ignore[reportPrivateUsage]  # see above
+            routed: Final = await self._core._pre_route(  # pyright: ignore[reportPrivateUsage]  # see above
                 step, request, *self._plan.pick_input(request), call_type=self._plan.handler
             )
         except Exception as error:  # noqa: BLE001  # see select
             return self._pick_raised(error, logged=True)
+        depth: Final = step.get("fallback_depth")
+        if not isinstance(depth, int) or depth == 0:
+            self._requested_selection = get_pre_routing_selection(request)
+        return routed
 
     def pre_route_sync(self, step: Mapping[str, object]) -> object:
         request: Final = self._request
@@ -5658,7 +5662,6 @@ class _Driver:
         ends the chain outside any hop's ``try``, as a chain's own failure: the level raises what it
         would have (``async_function_with_fallbacks_common_utils`` catches it), and its note or an
         order path reads the error as the next level's."""
-        from litellm.router_utils.fallback_event_handlers import get_pre_routing_selection
         from litellm.types.router import FallbackSkipReason
 
         ctx: Final = RoutingContext(self._core)  # pyright: ignore[reportArgumentType]  # the checks read registry() and settings()

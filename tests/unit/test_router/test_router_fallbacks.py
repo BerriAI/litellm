@@ -1363,6 +1363,7 @@ async def test_ordered_fallback_failures_preserve_the_original_context_error(
 
 
 _CALLER_ANTHROPIC_KEY: Final = "sk-ant-caller-forwarded-key"
+_CALLER_KEY: Final = "caller-forwarded-key"
 
 
 def _anthropic_overloaded_response() -> httpx.Response:
@@ -1525,11 +1526,160 @@ async def test_passthrough_fallback_to_an_unregistered_azure_model_uses_its_own_
         method="POST",
         endpoint="/v1/chat/completions",
         json={"messages": [{"role": "user", "content": "hi"}]},
-        api_key=_CALLER_ANTHROPIC_KEY,
+        api_key=_CALLER_KEY,
         fallbacks=["azure/gpt-backup"],
     )
 
-    assert primary.calls.last.request.headers["authorization"] == f"Bearer {_CALLER_ANTHROPIC_KEY}"
+    assert primary.calls.last.request.headers["authorization"] == f"Bearer {_CALLER_KEY}"
     sent: Final = azure.calls.last.request
     assert sent.headers["api-key"] == "azure-env-key"
+    assert all(_CALLER_KEY not in value for value in sent.headers.values())
+
+
+@pytest.mark.asyncio
+async def test_passthrough_fallback_between_unregistered_models_of_one_provider_keeps_the_callers_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(model_list=[], num_retries=0)
+    route: Final = respx_mock.post(host="caller-vllm.local").mock(
+        side_effect=(httpx.Response(503, json={}), _fallback_chat_response("y", "served by y"))
+    )
+
+    await router.allm_passthrough_route(
+        model="hosted_vllm/x",
+        method="POST",
+        endpoint="/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        api_key=_CALLER_KEY,
+        api_base="https://caller-vllm.local",
+        fallbacks=["hosted_vllm/y"],
+    )
+
+    assert tuple(call.request.headers["authorization"] for call in route.calls) == (
+        f"Bearer {_CALLER_KEY}",
+        f"Bearer {_CALLER_KEY}",
+    )
+
+
+def _complexity_router(name: str, tier: str) -> dict[str, object]:
+    return {
+        "model_name": name,
+        "litellm_params": {
+            "model": f"auto_router/complexity_router/{name}",
+            "complexity_router_default_model": tier,
+            "complexity_router_config": {"tiers": {"SIMPLE": tier, "MEDIUM": tier, "COMPLEX": tier, "REASONING": tier}},
+        },
+    }
+
+
+def _complexity_routed_router(fallback: str, *backups: dict[str, object]) -> Router:
+    return Router(
+        model_list=[
+            _complexity_router("smart", "claude"),
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-admin-key"},
+            },
+            *backups,
+        ],
+        fallbacks=[{"claude": [fallback]}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_complexity_router_fallback_to_another_anthropic_group_keeps_the_callers_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _complexity_routed_router(
+        "claude-backup",
+        {
+            "model_name": "claude-backup",
+            "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-backup-admin-key"},
+        },
+    )
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=(_anthropic_overloaded_response(), _anthropic_message_response())
+    )
+
+    response: Final = await router.acompletion(
+        model="smart", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    assert tuple(call.request.headers["x-api-key"] for call in route.calls) == (
+        _CALLER_ANTHROPIC_KEY,
+        _CALLER_ANTHROPIC_KEY,
+    )
+    assert response.choices[0].message.content == "served by the anthropic backup"
+
+
+@pytest.mark.asyncio
+async def test_complexity_router_fallback_to_a_bedrock_complexity_router_signs_with_iam(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _complexity_routed_router(
+        "smart-bedrock",
+        _complexity_router("smart-bedrock", "claude-bedrock"),
+        {
+            "model_name": "claude-bedrock",
+            "litellm_params": {
+                "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
+                "aws_access_key_id": "AKIAFALLBACKTEST",
+                "aws_secret_access_key": "fallback-test-secret",
+                "aws_region_name": "us-east-1",
+            },
+        },
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded_response())
+    bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=_bedrock_converse_response()
+    )
+
+    response: Final = await router.acompletion(
+        model="smart", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    sent: Final = bedrock.calls.last.request
+    assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAFALLBACKTEST/")
     assert all(_CALLER_ANTHROPIC_KEY not in value for value in sent.headers.values())
+    assert response.choices[0].message.content == "served by bedrock"
+
+
+@pytest.mark.asyncio
+async def test_admin_fallback_from_a_name_several_teams_share_still_serves(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": f"claude-{team}",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": f"sk-ant-{team}-admin-key"},
+                "model_info": {"id": f"claude-{team}", "team_id": team, "team_public_model_name": "claude"},
+            }
+            for team in ("team-a", "team-b")
+        ]
+        + [
+            {
+                "model_name": "claude-backup",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-backup-admin-key"},
+            }
+        ],
+        fallbacks=[{"claude": ["claude-backup"]}],
+        num_retries=0,
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_message_response())
+
+    response: Final = await router.acompletion(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key=_CALLER_ANTHROPIC_KEY,
+        metadata={"user_api_key_auth": UserAPIKeyAuth(user_role="proxy_admin")},
+    )
+
+    assert response.choices[0].message.content == "served by the anthropic backup"

@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.clientside_credential_handler import PROVIDER_BOUND_PARAMS
+from litellm.litellm_core_utils.clientside_credential_handler import request_for_provider
 from litellm.litellm_core_utils.core_helpers import (
     filter_internal_params,
     safe_deep_copy,
@@ -130,14 +130,16 @@ def _inherited_kwargs(
         model, requested_provider
     )
     its_own_template_picks_the_provider: Final = "prompt_id" in overrides and routes_through_a_prompt_manager(model)
-    switches_provider: Final = (
-        its_own_template_picks_the_provider or original_provider is None or original_provider != provider
+    credentials_sent_for: Final[frozenset[str]] = (
+        frozenset()
+        if its_own_template_picks_the_provider or original_provider is None
+        else frozenset((original_provider,))
     )
     model_bound: Final = (
         _MODEL_BOUND_PARAMS | {"custom_llm_provider"} if routes_through_a_prompt_manager(model) else _MODEL_BOUND_PARAMS
     )
-    dropped: Final = (model_bound | PROVIDER_BOUND_PARAMS) if switches_provider else model_bound
-    return {key: value for key, value in base_kwargs.items() if key not in dropped}
+    model_free: Final = {key: value for key, value in base_kwargs.items() if key not in model_bound}
+    return request_for_provider(model_free, provider, credentials_sent_for)
 
 
 def _without_the_applied_prompt_when_the_fallback_renders_its_own(

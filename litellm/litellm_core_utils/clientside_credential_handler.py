@@ -11,7 +11,7 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
 from litellm.exceptions import BadRequestError
@@ -89,6 +89,14 @@ PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {
     "headers",
     "litellm_credential_name",
 }
+
+
+def request_for_provider(
+    kwargs: Mapping[str, object], provider: str | None, credentials_sent_for: frozenset[str]
+) -> Mapping[str, object]:
+    if provider is not None and provider in credentials_sent_for:
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key not in PROVIDER_BOUND_PARAMS}
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:
