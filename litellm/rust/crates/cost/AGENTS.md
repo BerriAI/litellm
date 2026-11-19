@@ -53,6 +53,8 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - xAI bills a deployment's `input_cost_per_image` for each generated image, ahead of its `output_cost_per_image`, and bills the reported `cost_in_usd_ticks` once for the whole request whatever the image count (`llms/xai/image_generation/cost_calculator.py`)
 - Azure AI routes a call to the pixel calculator only when the per-image price is missing or 0, and a resolved row listing `input_cost_per_pixel` at 0 hides a positive rate on the catalog entry, billing 0.0 (`llms/azure_ai/image_generation/cost_calculator.py` `_input_cost_per_pixel`)
 
+- A Responses WebSocket session served on several tiers bills each tier's share on its own walk of the candidates and sums them, but stores only the last tier's breakdown on the logging object, so the stored breakdown total is not the billed cost (main's `completion_cost` recursion over `_split_responses_ws_logging_object_by_service_tier`, here python-bridge's `price_parts`, one walk per part in one call)
+
 - A Bedrock guardrail counter its pricing row does not list is unknown in the per-counter rollup but adds 0 to the billed total (`guardrail_cost_total`), and Azure Prompt Shield bills nothing on the free tier whatever its usage
 
 - A batch line's image and video input tokens read the flat batch rate whatever the prompt's size, as main reads them with no prompt tokens (`_batch_prompt_cost`), and its image output tokens read only flat rates

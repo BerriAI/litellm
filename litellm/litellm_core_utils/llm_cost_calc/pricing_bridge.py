@@ -13,6 +13,7 @@ from typing import Final, Literal, TypeAlias
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import current_billing_time
+from litellm.exceptions import ModelNotMappedError
 from litellm.litellm_core_utils.get_model_cost_map import model_cost_inputs
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
@@ -21,9 +22,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CacheWriteCounts,
     ModalityCounts,
     billed_usage,
-    parse_completion_tokens_details,
-    parse_prompt_tokens_details,
 )
+from litellm.litellm_core_utils.usage.token_details import parse_completion_tokens_details, parse_prompt_tokens_details
 from litellm.rust_bridge._native import NativeRateCard, NativeReceipt, NativeUnpriced
 from litellm.types.utils import CacheCreationTokenDetails, Usage
 
@@ -41,11 +41,22 @@ class PricedUsage(BilledUsage):
     inference_geo: ReadOnly[str | None]
 
 
+class HiddenFacts(TypedDict):
+    """The response's ``_hidden_params`` strings that pick a candidate, each a non-empty string or ``None``."""
+
+    model: ReadOnly[str | None]
+    litellm_model_name: ReadOnly[str | None]
+    provider_response_model: ReadOnly[str | None]
+    region: ReadOnly[str | None]
+
+
 class CallFacts(TypedDict):
-    """What ``completion_cost`` knows about a finished call before it picks a row."""
+    """What ``completion_cost`` knows about a finished call before Model Catalog picks its candidates. ``loop_provider``
+    and ``loop_region`` are the provider and region main's candidate loop prices with once it read the response's
+    hidden params."""
 
     by: ReadOnly[Literal["call"]]
-    provider: ReadOnly[str]
+    provider: ReadOnly[str | None]
     request_model: ReadOnly[str | None]
     response_model: ReadOnly[str | None]
     base_model: ReadOnly[str | None]
@@ -53,8 +64,9 @@ class CallFacts(TypedDict):
     deployment_id: ReadOnly[str | None]
     region: ReadOnly[str | None]
     invoked_model_id: ReadOnly[str | None]
-    provider_response_model: ReadOnly[str | None]
-    hidden_model: ReadOnly[str | None]
+    hidden: ReadOnly[HiddenFacts | None]
+    loop_provider: ReadOnly[str | None]
+    loop_region: ReadOnly[str | None]
 
 
 class ModelFacts(TypedDict):
@@ -423,6 +435,33 @@ class RouterFeeUse(TypedDict):
     billed: ReadOnly[FeeBilling]
 
 
+class CandidateFee(TypedDict):
+    billed: ReadOnly[FeeBilling]
+    row: ReadOnly[int]
+
+
+class CandidateFacts(TypedDict):
+    """What Python found for one candidate of a call, by its place among the candidates: the built-in tools it used
+    and the Model Router fee it bills, rows named by index among the candidate's own rows, which start at
+    ``rows_from`` among the rows passed beside the document, or that finding them raised."""
+
+    candidate: ReadOnly[int]
+    tools: ReadOnly[ToolUse | None]
+    router_fee: ReadOnly[CandidateFee | None]
+    failed: ReadOnly[bool]
+    rows_from: ReadOnly[int]
+
+
+class UsagePart(TypedDict):
+    """One usage a call bills on its own walk of its candidates, with its service tier and what Python found for each
+    candidate."""
+
+    usage: ReadOnly[PricedUsage]
+    service_tier: ReadOnly[str | None]
+    raw: ReadOnly[RawCounts]
+    candidates: ReadOnly[Sequence[CandidateFacts]]
+
+
 class _PriceDocument(TypedDict):
     named: ReadOnly[CallFacts | ModelFacts]
     usage: ReadOnly[PricedUsage]
@@ -443,6 +482,8 @@ class _PriceDocument(TypedDict):
     breakdown: ReadOnly[BreakdownFrom]
     tools: ReadOnly[ToolUse | None]
     router_fee: ReadOnly[RouterFeeUse | None]
+    candidates: ReadOnly[NotRequired[Sequence[CandidateFacts]]]
+    parts: ReadOnly[NotRequired[Sequence[UsagePart]]]
 
 
 class BatchLineDocument(TypedDict):
@@ -733,6 +774,128 @@ def price(
     return model_cost_inputs.price(document, row, beside.breakdown_row, beside.fee_row, beside.tool_rows)
 
 
+@dataclass(frozen=True, slots=True)
+class CostRow:
+    """A candidate Model Catalog prices a call with: its place among the candidates, the model name it hands
+    ``cost_per_token``, the provider it prices it as and the provider main's loop holds."""
+
+    candidate: int
+    model: str
+    provider: str
+    loop_provider: str
+
+
+@dataclass(frozen=True, slots=True)
+class CostCandidates:
+    """``call`` as ``completion_cost`` reads it: the name ``select_model_name_for_cost_calc`` picks with the provider
+    the call names, the name ``completion_cost`` selects with its own provider override, the names its loop walks in main's order, each with the provider it pairs it with, and the Bedrock
+    row every Bedrock candidate prices with (its key, the key a ``register_model`` price landed on, and whether that
+    registration is merged over the row)."""
+
+    selected: str | None
+    call_selected: str | None
+    names: tuple[tuple[str | None, str | None], ...]
+    bedrock: tuple[str, str | None, bool] | None
+
+
+def cost_candidates(call: CallFacts) -> CostCandidates:
+    selected, call_selected, names, bedrock = model_cost_inputs.cost_candidates(call)
+    return CostCandidates(selected=selected, call_selected=call_selected, names=tuple(names), bedrock=bedrock)
+
+
+def cost_rows(call: CallFacts) -> tuple[tuple[CostRow, ...], bool]:
+    """The candidates Model Catalog prices ``call`` with, in main's order, and whether the walk stops at a candidate
+    only Python prices."""
+    rows, deferred = model_cost_inputs.cost_rows(call)
+    return tuple(CostRow(*row) for row in rows), deferred
+
+
+def priced_names(model: str, provider: str | None, region: str | None) -> tuple[str, str]:
+    """The names ``cost_per_token`` looks ``model`` up with: the key it settles on and the name without a leading
+    provider segment."""
+    return model_cost_inputs.priced_names(model, provider, region)
+
+
+def price_call(
+    call: CallFacts,
+    usage: PricedUsage,
+    candidates: Sequence[CandidateFacts],
+    rows: Sequence[Mapping[str, object]],
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+    requested_model: str | None,
+    adjust: AdjustFacts,
+    branch: BranchFacts,
+    breakdown: BreakdownFrom,
+) -> NativeReceipt | None:
+    """The receipt of ``call``'s first candidate that prices, walked in main's order in Rust, each with what Python
+    found for it in ``candidates``. ``None`` when a candidate only Python prices comes first or none prices."""
+    document: Final = _PriceDocument(
+        named=call,
+        usage=usage,
+        requested_model=requested_model,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        at=_billed_at(None),
+        adjust=adjust,
+        rules=branch.rules,
+        elapsed=branch.elapsed,
+        characters=branch.characters,
+        embedding=branch.embedding,
+        raw=branch.raw,
+        reported=None,
+        custom=None,
+        decisions=False,
+        breakdown=breakdown,
+        tools=None,
+        router_fee=None,
+        candidates=candidates,
+    )
+    return model_cost_inputs.price(document, None, None, None, rows)
+
+
+def price_parts(
+    call: CallFacts,
+    parts: Sequence[UsagePart],
+    rows: Sequence[Mapping[str, object]],
+    data_residency: str | None,
+    vertex_location: str | None,
+    requested_model: str | None,
+    adjust: AdjustFacts,
+    branch: BranchFacts,
+    breakdown: BreakdownFrom,
+) -> tuple[NativeReceipt, ...] | None:
+    """The receipt of each part of ``call``, each part walking ``call``'s candidates on its own in main's order.
+    ``None`` when any part is left to Python."""
+    first: Final = parts[0]
+    document: Final = _PriceDocument(
+        named=call,
+        usage=first["usage"],
+        requested_model=requested_model,
+        service_tier=first["service_tier"],
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        at=_billed_at(None),
+        adjust=adjust,
+        rules=branch.rules,
+        elapsed=branch.elapsed,
+        characters=branch.characters,
+        embedding=branch.embedding,
+        raw=first["raw"],
+        reported=None,
+        custom=None,
+        decisions=False,
+        breakdown=breakdown,
+        tools=None,
+        router_fee=None,
+        parts=parts,
+    )
+    receipts: Final = model_cost_inputs.price_parts(document, rows)
+    return None if receipts is None else tuple(receipts)
+
+
 def branch_receipt(
     model: str,
     provider: str,
@@ -776,6 +939,11 @@ def branch_receipt(
         ),
         receipt=receipt,
     )
+    if priced is None and row is None:
+        raise ModelNotMappedError(
+            f"This model isn't mapped yet. model={model}, custom_llm_provider={provider}. "
+            "Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json."
+        )
     if priced is None:
         raise ValueError(f"No price for model={model}, custom_llm_provider={provider}")
     return priced

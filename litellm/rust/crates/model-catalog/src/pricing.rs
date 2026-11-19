@@ -280,7 +280,7 @@ mod tests {
     use crate::snapshot::SnapshotInputs;
     use crate::store::Store;
     use crate::test_support::{GENERATION, TestRows, bundled_rows, bundled_rules, names};
-    use crate::{CallIdentity, Tried};
+    use crate::{CallIdentity, TableOnly, TriedRow};
 
     const MODEL: &str = "claude-opus-4-5";
 
@@ -353,21 +353,26 @@ mod tests {
     }
 
     fn rows(snapshot: &Snapshot<Store<TestRows>>) -> PricingRows {
-        let found = snapshot.candidates(&CallIdentity {
-            provider: "anthropic".to_owned(),
-            request_model: Some(MODEL.to_owned()),
-            response_model: Some(MODEL.to_owned()),
-            ..CallIdentity::default()
-        });
+        let found = snapshot.candidates(
+            &CallIdentity {
+                provider: Some("anthropic".to_owned()),
+                request_model: Some(MODEL.to_owned()),
+                response_model: Some(MODEL.to_owned()),
+                loop_provider: Some("anthropic".to_owned()),
+                ..CallIdentity::default()
+            },
+            &TableOnly,
+        );
         snapshot.pricing_rows(
-            found.rows.into_iter().map(|Tried { model, row }| {
-                (
+            found.rows.into_iter().filter_map(|tried| match tried.row {
+                TriedRow::Table(row) => Some((
                     Candidate {
-                        model: model.into(),
+                        model: tried.model.into(),
                         provider: Provider::Anthropic,
                     },
                     row,
-                )
+                )),
+                TriedRow::Fields { .. } => None,
             }),
             [],
         )

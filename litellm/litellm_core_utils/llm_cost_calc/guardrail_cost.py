@@ -1,16 +1,19 @@
 import math
-from collections.abc import Iterator, Mapping, Sequence
-from functools import partial
-from itertools import chain
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Annotated, Final
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
-from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
+    object_items,
+    object_mapping,
     redact_nested_match_and_regex_keys,  # pyright: ignore[reportUnknownVariableType]  # signature uses bare dict
 )
+from litellm.litellm_core_utils.usage.bedrock_guardrail_trace import (
+    bedrock_guardrail_trace as bedrock_guardrail_trace,  # noqa: PLC0414  # re-export at the old path, tests import it
+)
+from litellm.litellm_core_utils.usage.bedrock_guardrail_trace import bedrock_guardrail_usage
 from litellm.rust_bridge._native import NativeReceipt, NativeUnpriced
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -20,8 +23,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import FeeDocument
 
 BEDROCK_GUARDRAIL_PRICING_KEY: Final = "bedrock/guardrails"
-BEDROCK_TRACE_FIELDS: Final = ("trace", "amazon-bedrock-trace")
-_INTERVENING_ACTIONS: Final = frozenset({"BLOCKED", "ANONYMIZED"})
 
 
 class GuardrailCostEntry(LiteLLMBaseModel):
@@ -107,127 +108,18 @@ def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str 
     return outcome.total if isinstance(outcome, NativeReceipt) else 0.0
 
 
-_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
-_OBJECT_ITEMS: Final = TypeAdapter(tuple[object, ...])
-
-
-def object_mapping(value: object) -> Mapping[str, object] | None:
-    """``value`` as a str-keyed mapping, None for anything else. Vendor JSON arrives untyped, so this is the one place
-    that turns it into something the rest of the module can read without guessing."""
-    try:
-        return _OBJECT_MAPPING.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def object_items(value: object) -> tuple[object, ...]:
-    if isinstance(value, (str, bytes, Mapping)):
-        return ()
-    try:
-        return _OBJECT_ITEMS.validate_python(value)
-    except ValidationError:
-        return ()
-
-
-def is_str_keyed_dict(
-    value: object,
-) -> TypeIs[dict[str, object]]:  # guard-ok: JSON object keys are str  # mutable-ok: the caller edits this dict in place
-    return isinstance(value, dict)
-
-
-def _trace_field(response: object, field: str) -> Mapping[str, object] | None:
-    source: Final = object_mapping(response)
-    trace: Final = object_mapping(source.get(field) if source is not None else getattr(response, field, None))
-    if trace is None or object_mapping(trace.get("guardrail")) is None:
-        return None
-    return trace
-
-
-def bedrock_guardrail_trace(response: object) -> Mapping[str, object] | None:
-    """The guardrail trace a Bedrock response carries: Converse puts it under ``trace``, Invoke under
-    ``amazon-bedrock-trace``. Returned as is, or None when the response has no guardrail section."""
-    traces: Final = map(partial(_trace_field, response), BEDROCK_TRACE_FIELDS)
-    return next((trace for trace in traces if trace is not None), None)
-
-
-class _Assessment(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="allow")
-    invocation_metrics: Mapping[str, JsonValue] = Field(default_factory=dict, alias="invocationMetrics")
-
-    @property
-    def billable_usage(self) -> Mapping[str, int]:
-        usage: Final = self.invocation_metrics.get("usage")
-        if not isinstance(usage, dict):
-            return {}
-        return {
-            counter: units
-            for counter, units in usage.items()
-            if counter.endswith("Units") and isinstance(units, int) and not isinstance(units, bool)
-        }
-
-
-class _GuardrailTrace(BaseModel):
-    """Both trace shapes: Converse ``inputAssessment`` {id: a} and ``outputAssessments`` {id: [a, ...]}, Invoke
-    ``input`` {id: a} and ``outputs`` [{id: a}, ...]."""
-
-    model_config = ConfigDict(frozen=True, extra="allow")
-    input_assessment: Mapping[str, _Assessment] = Field(default_factory=dict, alias="inputAssessment")
-    input: Mapping[str, _Assessment] = Field(default_factory=dict)
-    output_assessments: Mapping[str, tuple[_Assessment, ...]] = Field(default_factory=dict, alias="outputAssessments")
-    outputs: tuple[Mapping[str, _Assessment], ...] = ()
-
-    @property
-    def assessments(self) -> tuple[tuple[str, _Assessment], ...]:
-        listed: Final = (
-            (gid, a) for gid, items in self.output_assessments.items() for a in items
-        )  # comprehension-ok: id then its list
-        return (
-            *self.input_assessment.items(),
-            *self.input.items(),
-            *listed,
-            *chain.from_iterable(by_id.items() for by_id in self.outputs),
-        )
-
-
-_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
-
-
-def _summed_usage(usages: Sequence[Mapping[str, int]]) -> Mapping[str, int]:
-    counters: Final = tuple(dict.fromkeys(chain.from_iterable(usages)))
-    return {counter: sum(usage.get(counter, 0) for usage in usages) for counter in counters}
-
-
-def _actions(node: JsonValue) -> Iterator[str]:
-    if isinstance(node, list):
-        yield from chain.from_iterable(map(_actions, node))
-        return
-    if not isinstance(node, dict):
-        return
-    action: Final = node.get("action")
-    if isinstance(action, str):
-        yield action
-    yield from chain.from_iterable(map(_actions, node.values()))
-
-
 def native_bedrock_guardrail_information(
     trace: Mapping[str, object], aws_region_name: str | None, guardrail_identifier: str | None
 ) -> StandardLoggingGuardrailInformation | None:
     """The guardrail entry for a trace Bedrock returned because the deployment's ``guardrailConfig`` ran with
     ``trace: enabled``: every assessment's ``invocationMetrics.usage`` summed and priced like the proxy-side Bedrock
     guardrail. None when the trace carries no usage, which is what ``trace: disabled`` leaves."""
-    try:
-        guardrail: Final = _JSON_OBJECT.validate_python(trace.get("guardrail"))
-        pairs: Final = _GuardrailTrace.model_validate(guardrail).assessments
-    except ValidationError:
+    reported: Final = bedrock_guardrail_usage(trace)
+    if reported is None:
         return None
-    usage: Final = _summed_usage(tuple(assessment.billable_usage for _, assessment in pairs))
-    if not usage:
-        return None
-    cost_by_unit: Final = bedrock_guardrail_cost_by_unit(usage, aws_region_name)
-    name: Final = guardrail_identifier or pairs[0][0]
-    status: Final[GuardrailStatus] = (
-        "guardrail_intervened" if any(action in _INTERVENING_ACTIONS for action in _actions(guardrail)) else "success"
-    )
+    cost_by_unit: Final = bedrock_guardrail_cost_by_unit(reported.usage, aws_region_name)
+    name: Final = guardrail_identifier or reported.first_guardrail_id
+    status: Final[GuardrailStatus] = "guardrail_intervened" if reported.intervened else "success"
     priced: Final[StandardLoggingGuardrailInformation] = (
         {"guardrail_cost_by_unit": cost_by_unit} if cost_by_unit is not None else {}
     )
@@ -236,9 +128,9 @@ def native_bedrock_guardrail_information(
         "guardrail_id": name,
         "guardrail_provider": "bedrock",
         "guardrail_mode": GuardrailEventHooks.during_call,
-        "guardrail_response": redact_nested_match_and_regex_keys(guardrail),
+        "guardrail_response": redact_nested_match_and_regex_keys(dict(reported.guardrail)),
         "guardrail_status": status,
-        "guardrail_usage": usage,
+        "guardrail_usage": reported.usage,
         "guardrail_cost": guardrail_cost_total(cost_by_unit),
         **priced,
     }

@@ -2448,7 +2448,7 @@ def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], .
 
 
 def _record_usage_for_failure(turn_logging_obj: LiteLLMLoggingObj, events: Sequence[Mapping[str, object]]) -> None:
-    from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
+    from litellm.litellm_core_utils.usage.token_usage_processors import ResponsesWebSocketTokenUsageProcessor
 
     logging_result: Final = ResponsesWebSocketTokenUsageProcessor.create_logging_object(events)
     response_cost: Final = turn_logging_obj.response_cost_calculator(result=logging_result) or 0.0
@@ -2668,7 +2668,7 @@ class ResponsesWebSocketStreaming:
         self._log_turn(turn)
 
     async def _record_turn_usage(self, turn: _ResponsesWsTurn) -> None:
-        from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
+        from litellm.litellm_core_utils.usage.token_usage_processors import ResponsesWebSocketTokenUsageProcessor
 
         turn_litellm_params: Final = _json_object_or_none(
             turn.logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
