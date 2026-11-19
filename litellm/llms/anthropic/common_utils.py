@@ -236,6 +236,13 @@ def _claude_code_billing_fields(text: str) -> tuple[tuple[str, str], ...] | None
     return parsed_fields
 
 
+def is_claude_code_billing_header(text: object) -> bool:
+    if not isinstance(text, str):
+        return False
+    fields: Final = _claude_code_billing_fields(text)
+    return fields is not None and {"cc_version", "cc_entrypoint"} <= {key for key, _ in fields}
+
+
 def _claude_code_billing_texts(system: object) -> tuple[str, ...] | None:
     if isinstance(system, str):
         return (system,)
