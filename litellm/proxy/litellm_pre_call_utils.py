@@ -471,16 +471,12 @@ else:
     PolicyMatchContext = Any
 
 
-def parse_cache_control(cache_control):
-    cache_dict: Final = {}
-    directives: Final = cache_control.split(", ")
-
-    for directive in directives:
-        if "=" in directive:
-            key, value = directive.split("=")
-            cache_dict[key] = value
-        else:
-            cache_dict[directive] = True
+def parse_cache_control(cache_control: str) -> dict[str, str | bool]:
+    cache_dict: Final[dict[str, str | bool]] = {}
+    for directive in cache_control.split(","):
+        key, separator, value = directive.strip().partition("=")
+        if key:
+            cache_dict[key.lower()] = value.strip() if separator else True
 
     return cache_dict
 
@@ -3105,10 +3101,21 @@ async def add_litellm_data_to_request(
     data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
-    cache_control_header: Final = _headers.get("Cache-Control", None)
+    # Starlette lower-cases header names, so this lookup has to be lower-case too.
+    cache_control_header: Final[str | None] = _headers.get("cache-control")
     if cache_control_header:
         cache_dict: Final = parse_cache_control(cache_control_header)
-        data["ttl"] = cache_dict.get("s-maxage")
+        if cache_dict.get("s-maxage") is not None:
+            data["ttl"] = cache_dict["s-maxage"]
+        header_cache_controls: Final[dict[str, bool]] = {
+            directive: True for directive in ("no-cache", "no-store") if cache_dict.get(directive)
+        }
+        if header_cache_controls:
+            request_cache: Final = data["cache"] if "cache" in data else None
+            data["cache"] = {  # rebind-ok: data is an out-param
+                **header_cache_controls,
+                **(request_cache if isinstance(request_cache, dict) else {}),
+            }
 
     # requester_metadata is snapshotted AFTER the strip below so
     # downstream consumers (e.g. PANW guardrail reading user_ip /

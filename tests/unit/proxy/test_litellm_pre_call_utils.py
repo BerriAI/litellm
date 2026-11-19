@@ -8586,6 +8586,52 @@ async def test_key_cache_metadata_only_keeps_request_controls_the_key_allows(
     assert updated["cache"] == expected_cache
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cache_control_header, request_cache, expected_cache",
+    [
+        pytest.param("no-cache", None, {"no-cache": True}, id="no-cache-skips-the-cache-read"),
+        pytest.param("No-Cache", None, {"no-cache": True}, id="directive-names-in-any-case"),
+        pytest.param("max-age=0, no-cache", None, {"no-cache": True}, id="directives-without-a-space-after-the-comma"),
+        pytest.param("NO-STORE", None, {"no-store": True}, id="no-store-skips-the-cache-write"),
+        pytest.param("no-store", {"no-cache": False}, {"no-cache": False, "no-store": True}, id="body-controls-win"),
+    ],
+)
+async def test_cache_control_header_reaches_the_request_cache(
+    cache_control_header: str, request_cache: dict[str, object] | None, expected_cache: dict[str, object]
+):
+    """A client that sends the standard header gets the same behaviour as the body `cache` dict."""
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"cache-control", cache_control_header.encode())],
+        }
+    )
+
+    updated: Final = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "ttl": 300,
+            **({} if request_cache is None else {"cache": request_cache}),
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["cache"] == expected_cache
+    # A header without s-maxage must not clear the body ttl.
+    assert updated["ttl"] == 300
+
+
 class TestPromotedTraceControlFields:
     """LIT-5137: caller metadata trace fields must reach litellm_metadata."""
 
