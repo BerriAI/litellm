@@ -321,9 +321,10 @@ def find_anthropic_server_tool_result(
         (
             result
             for result in candidates
-            if isinstance(result, dict)
-            and result.get("tool_use_id") == tool_id
-            and (tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) or result.get("type") == "mcp_tool_result")
+            if (mapping := _as_mapping(result)) is not None
+            and isinstance(result, dict)
+            and mapping.get("tool_use_id") == tool_id
+            and (tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) or mapping.get("type") == "mcp_tool_result")
         ),
         None,
     )

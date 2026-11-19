@@ -2399,12 +2399,11 @@ def convert_to_anthropic_tool_invoke(
             if tool_id in answered_tool_ids
             else find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         )
-        mcp_server_name: Final = message_field(
+        mcp_server_name = message_field(
             message_field(get_attribute_or_key(tool, "function"), "provider_specific_fields"), "server_name"
         )
-        if (server_tool_result is not None and server_tool_result.get("type") == "mcp_tool_result") or (
-            isinstance(mcp_server_name, str) and mcp_server_name
-        ):
+        is_mcp_tool_result = server_tool_result is not None and server_tool_result.get("type") == "mcp_tool_result"
+        if is_mcp_tool_result or (isinstance(mcp_server_name, str) and mcp_server_name):
             if not isinstance(mcp_server_name, str) or not mcp_server_name:
                 continue
             _reject_split_server_tool_call(tool_inputs, tool_name)
@@ -3580,7 +3579,7 @@ def anthropic_messages_pt(
             replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
                 tool_invoke_results, thinking_blocks or (), is_final_message=msg_i == len(messages) - 1
             )
-            _has_server_tool_calls: Final = any(
+            _has_server_tool_calls = any(
                 item.get("type") in ("server_tool_use", "mcp_tool_use") for item in replayed_tool_invokes
             )
 
@@ -3725,9 +3724,9 @@ def anthropic_messages_pt(
                             assistant_content.append(cast(AnthropicMessagesTextParam, _cached_message))
                         # handle server_tool_use blocks (tool search, web search, etc.)
                         # Pass through as-is since these are Anthropic-native content types
-                        elif m.get("type", "") in ("server_tool_use", "mcp_tool_use") or m.get("type", "").endswith(
-                            "_tool_result"
-                        ):
+                        elif message_field(m, "type") in ("server_tool_use", "mcp_tool_use") or m.get(
+                            "type", ""
+                        ).endswith("_tool_result"):
                             assistant_content.append(m)
                 elif (
                     "content" in assistant_content_block
