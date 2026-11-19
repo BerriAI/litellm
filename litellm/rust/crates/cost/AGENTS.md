@@ -71,7 +71,7 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 
 ## Not copied from main
 - A result tier without a `max_results_range` is skipped, and a picked tier whose `input_cost_per_query` is not a price prices nothing, where main raised `KeyError` or multiplied what the row held. A `max_results` written as a numeric string reads as that number, and any other value that is not a number reads as 10, where main raised comparing either (`search_provider_cost_per_query`)
-- A regional endpoint, residency or FedRAMP multiplier below 1 lowers to no uplift, in the deployment prices the model group display shows too, where main applied it (`get_vertex_regional_endpoint_uplift` and its siblings, deleted)
+- A regional endpoint, residency or FedRAMP multiplier below 1 lowers to no uplift, in the deployment prices the model group display shows too, where main applied it (`get_vertex_regional_endpoint_uplift` and its siblings, deleted). This is intended. These multipliers model a provider's surcharge, so a discount belongs in the discount and margin settings
 - `video_generation_cost` read a catalog row through `get_model_info`, which drops every `output_cost_per_second_<resolution>` key but six. The core reads any resolution the row lists. No shipped row lists another
 
 - Main's stored breakdown raises on an unreadable speed or geo value, which fails the candidate when a logging object is attached. Rust leaves those uplifts out of the breakdown rates instead
