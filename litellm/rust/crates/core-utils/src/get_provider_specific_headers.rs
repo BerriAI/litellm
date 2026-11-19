@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
@@ -12,10 +14,27 @@ pub fn get_provider_specific_headers(
         Some(ProviderSpecificHeaders::One(entry)) => std::slice::from_ref(entry),
         Some(ProviderSpecificHeaders::Many(entries)) => entries,
     };
-    entries
+    let applicable: Vec<&ProviderSpecificHeader> = entries
         .iter()
         .filter(|entry| applies_to_call(entry, custom_llm_provider, model))
-        .filter(|entry| configures_a_listed_credential(entry, configured_headers))
+        .collect();
+    let replaced_names: HashSet<String> = applicable
+        .iter()
+        .filter(|entry| entry.configured_credential_headers.is_empty())
+        .flat_map(|entry| {
+            contributed_headers(entry, configured_headers)
+                .into_iter()
+                .map(|(name, _)| name)
+        })
+        .collect();
+    let kept_configured: Map<String, Value> = configured_headers
+        .iter()
+        .filter(|(name, _)| !replaced_names.contains(*name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    applicable
+        .into_iter()
+        .filter(|entry| configures_a_listed_credential(entry, &kept_configured))
         .flat_map(|entry| contributed_headers(entry, configured_headers))
         .collect()
 }
@@ -254,6 +273,43 @@ mod tests {
         assert_eq!(
             Value::Object(get_provider_specific_headers(
                 Some(&pinned),
+                "anthropic",
+                "claude-haiku-5-5",
+                configured.as_object().unwrap()
+            )),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::caller_replaces_the_configured_token(
+        json!({"authorization": "Bearer sk-ant-oat01-deployment"}),
+        json!({"authorization": "Bearer sk-ant-oat01-caller"})
+    )]
+    #[case::configured_token_kept_under_another_name(
+        json!({"Authorization": "Bearer sk-ant-oat01-deployment"}),
+        json!({"authorization": "Bearer sk-ant-oat01-caller", "anthropic-user-profile-id": "uprof_pinned"})
+    )]
+    fn a_pin_applies_only_while_the_configured_credential_survives_the_merge(
+        #[case] configured: Value,
+        #[case] expected: Value,
+    ) {
+        let entries: ProviderSpecificHeaders = serde_json::from_value(json!([
+            {
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"authorization": "Bearer sk-ant-oat01-caller"}
+            },
+            {
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
+                "configured_credential_headers": ["authorization"],
+                "configured_credential_prefix": "Bearer sk-ant-oat"
+            }
+        ]))
+        .unwrap();
+        assert_eq!(
+            Value::Object(get_provider_specific_headers(
+                Some(&entries),
                 "anthropic",
                 "claude-haiku-5-5",
                 configured.as_object().unwrap()
