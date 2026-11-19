@@ -147,8 +147,8 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     assert "default_api_key_tpm_limit" not in request_body
 
 
-def test_anthropic_completion_adds_extra_body_fields_top_level_without_overriding_the_request():
-    captured_requests: list[httpx.Request] = []
+def test_anthropic_completion_adds_extra_body_fields_top_level_without_overriding_the_request() -> None:
+    captured_requests: Final[list[httpx.Request]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         captured_requests.append(request)
@@ -166,7 +166,7 @@ def test_anthropic_completion_adds_extra_body_fields_top_level_without_overridin
             },
         )
 
-    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
     try:
         litellm.completion(
             model="anthropic/claude-sonnet-5-5",
@@ -186,7 +186,7 @@ def test_anthropic_completion_adds_extra_body_fields_top_level_without_overridin
     finally:
         client.close()
 
-    request_body = json.loads(captured_requests[0].content)
+    request_body: Final = json.loads(captured_requests[0].content)
     assert request_body == {
         "model": "claude-sonnet-5-5",
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
