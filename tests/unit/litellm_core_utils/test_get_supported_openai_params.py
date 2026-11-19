@@ -3,6 +3,7 @@ import pytest
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
+from litellm.llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
 
 BEDROCK_REAL_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 BEDROCK_LABEL = "claude-haiku-4-5"
@@ -114,15 +115,14 @@ def test_azure_base_model_detection_preserved():
 def test_sambanova_embeddings_request_returns_list_not_none():
     """The sambanova embeddings branch resolved the config but dropped the result,
     so embedding requests got ``None`` instead of the supported-params list while the
-    chat branch returned correctly. A list (the sambanova embeddings config exposes no
-    extra params, hence ``[]``) must reach the caller."""
+    chat branch returned correctly. The config's own list must reach the caller."""
     embedding_params = get_supported_openai_params(
         model="E5-Mistral-7B-Instruct",
         custom_llm_provider="sambanova",
         request_type="embeddings",
     )
 
-    assert embedding_params == []
+    assert embedding_params == SambaNovaEmbeddingConfig().get_supported_openai_params("E5-Mistral-7B-Instruct")
 
 
 def test_bedrock_converse_alias_resolves_like_bedrock():
