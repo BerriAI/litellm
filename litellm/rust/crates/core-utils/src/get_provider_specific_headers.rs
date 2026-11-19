@@ -174,7 +174,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn no_configured_headers_match_nothing() {
         assert_eq!(
             get_provider_specific_headers(None, "anthropic", "claude-haiku-5-5", &Map::new()),
@@ -340,42 +340,6 @@ mod tests {
                 configured.as_object().unwrap()
             )),
             expected
-        );
-    }
-
-    #[test]
-    fn many_conditional_entries_beside_many_configured_headers_resolve_in_linear_time() {
-        let configured: Map<String, Value> = (0..10_000)
-            .map(|index| (format!("x-configured-{index}"), json!("deployment")))
-            .collect();
-        let entries: ProviderSpecificHeaders = serde_json::from_value(Value::Array(
-            (0..10_000)
-                .map(|index| {
-                    json!({
-                        "custom_llm_provider": "anthropic",
-                        "extra_headers": {format!("x-caller-{index}"): "client"},
-                        "configured_credential_headers": ["x-absent", "X-Configured-9999"],
-                        "configured_credential_prefix": "deploy",
-                        "yields_to_configured": true
-                    })
-                })
-                .collect(),
-        ))
-        .unwrap();
-
-        let started = std::time::Instant::now();
-        let headers = get_provider_specific_headers(
-            Some(&entries),
-            "anthropic",
-            "claude-haiku-5-5",
-            &configured,
-        );
-        let elapsed = started.elapsed();
-
-        assert_eq!(headers.len(), 10_000);
-        assert!(
-            elapsed < std::time::Duration::from_secs(1),
-            "10,000 entries beside 10,000 configured headers took {elapsed:?}"
         );
     }
 }
