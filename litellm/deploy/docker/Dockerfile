@@ -125,6 +125,9 @@ RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/
     npm_config_cache=/root/.npm \
     prisma generate --schema=litellm/schema.prisma
 
+RUN packages="$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" && \
+    .venv/bin/python -m compileall -q "$packages/litellm" "$packages/prisma"
+
 RUN sed -i 's/\r$//' litellm/deploy/docker/docker-entrypoint.sh && chmod +x litellm/deploy/docker/docker-entrypoint.sh
 
 RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
