@@ -42,6 +42,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
+    get_bedrock_base_model,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
@@ -68,6 +69,22 @@ else:
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _MESSAGE_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+
+# https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-automatic
+_BEDROCK_AUTOMATIC_CACHE_MODELS: Final = frozenset(
+    {
+        "anthropic.claude-haiku-4-5",
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-sonnet-4-6",
+        "anthropic.claude-opus-4-7",
+        "anthropic.claude-opus-4-8",
+        "anthropic.claude-opus-5",
+        "anthropic.claude-opus-5-5",
+        "anthropic.claude-sonnet-5",
+        "anthropic.claude-sonnet-5-5",
+        "anthropic.claude-haiku-5-5",
+    }
+)
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -171,7 +188,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         - `scope` (e.g., "global") - always removed
         - `ttl` - removed for older models; Claude 4.5+ supports "5m" and "1h"
 
-        Processes `tools`, `system`, and `messages` content blocks.
+        Processes automatic caching and cache checkpoints on content blocks.
 
         Args:
             anthropic_messages_request: The request dictionary to modify in-place
@@ -197,6 +214,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             for item in content:
                 if isinstance(item, dict) and "cache_control" in item:
                     _sanitize_cache_control(item["cache_control"])
+
+        if isinstance(automatic_cache := anthropic_messages_request.get("cache_control"), dict):
+            anthropic_messages_request["cache_control"] = dict(automatic_cache)
+            _sanitize_cache_control(anthropic_messages_request["cache_control"])
 
         # Process tools
         if "tools" in anthropic_messages_request:
@@ -757,6 +778,12 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
             drop_params=drop_params,
         )
+
+        if (
+            self.beta_headers_provider != "bedrock"
+            or get_bedrock_base_model(model) not in _BEDROCK_AUTOMATIC_CACHE_MODELS
+        ):
+            anthropic_messages_request.pop("cache_control", None)
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(anthropic_messages_request=anthropic_messages_request, model=model)

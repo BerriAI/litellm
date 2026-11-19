@@ -3339,6 +3339,36 @@ _ANTHROPIC_MESSAGE: Final = {
 }
 
 
+@pytest.mark.parametrize(
+    ("model", "supports_automatic_cache"),
+    [
+        ("eu.anthropic.claude-sonnet-5-5", True),
+        ("us.anthropic.claude-haiku-4-5-20251001-v1:0", True),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", False),
+    ],
+)
+def test_bedrock_invoke_transform_preserves_automatic_cache_for_supported_models(
+    model: str, supports_automatic_cache: bool
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    marker: Final = {"type": "ephemeral"}
+    sent: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "system": [{"type": "text", "text": "Stable instructions", "cache_control": marker}],
+            "cache_control": {**marker, "scope": "global"},
+            "max_tokens": 16,
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert sent.get("cache_control") == (marker if supports_automatic_cache else None)
+    assert sent["system"] == [{"type": "text", "text": "Stable instructions", "cache_control": marker}]
+
+
 # Bedrock's 400 bodies for requests past Claude's strict tool limits, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-29
 
 
