@@ -4503,11 +4503,9 @@ async def _prepare_spend_counter_increment(
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
-       check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment means the worst case
-       is over-counting (conservative, blocks slightly early) rather than
-       under-counting (would allow overspend).
+    3. That cached fallback is written with SET NX: requests and pods that
+       all see the counter as absent write the spend once, where an increment
+       from each of them would multiply it.
     4. Increment is returned for the caller to apply via pipeline
     """
     with service_target(SPEND_COUNTERS_TARGET):
@@ -4607,17 +4605,12 @@ async def ensure_spend_counter_initialized(
             spend_counter_store=spend_counter_store,
             counter_key=counter_key,
             require_cache_warm=True,
-            cached_end_user_spend=(
-                await _get_source_cache_base_spend(source_cache_key=source_cache_key)
-                if counter_key.startswith(END_USER_COUNTER_PREFIX)
-                else None
-            ),
         )
         if db_spend is None:
             # DB unavailable - fall back to in-process cache (may be stale).
             base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
             if base_spend > 0:
-                await increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+                await _seed_spend_counter_cache(counter_key=counter_key, spend=base_spend)
 
 
 _ensure_spend_counter_initialized: Final = ensure_spend_counter_initialized
@@ -4720,6 +4713,17 @@ async def increment_spend_counter_cache(counter_key: str, increment: float) -> f
 
 
 _increment_spend_counter_cache: Final = increment_spend_counter_cache
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def _seed_spend_counter_cache(counter_key: str, spend: float) -> None:
+    try:
+        seeded: Final = await spend_counter_store.seed(counter_key, spend, increment_if_lost=False)
+    except Exception:
+        forget_spend_counter(counter_key)
+        raise
+    if spend_counter_store.has_redis:
+        record_spend_counter_value(counter_key, float(seeded))
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
