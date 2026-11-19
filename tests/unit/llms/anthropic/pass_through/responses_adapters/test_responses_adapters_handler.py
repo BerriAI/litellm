@@ -53,6 +53,26 @@ RESPONSES_SSE_BODY = (
         ("System prefix", {"store": False, "instructions": "Caller prompt"}, "Caller prompt", "developer"),
         (
             "System prefix",
+            {
+                "store": False,
+                "truncation": "auto",
+                "extra_body": {"truncation": "disabled", "instructions": "Caller prompt"},
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "truncation": "disabled",
+                "extra_body": {"truncation": "auto", "instructions": "Caller prompt"},
+            },
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
             {"store": False, "previous_response_id": "resp_previous", "instructions": "Caller prompt"},
             "System prefix\nCaller prompt",
             "user",
