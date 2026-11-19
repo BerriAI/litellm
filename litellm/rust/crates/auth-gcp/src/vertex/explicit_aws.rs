@@ -13,60 +13,29 @@ use http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 use litellm_auth_aws::{AwsAuthConfig, AwsAuthService, SigningScope, sign_headers};
 use litellm_python_compat::urllib::quote;
 use litellm_secret_value::SecretValue;
-use serde::Deserialize;
 use serde_json::json;
 
-use super::{
-    environment::GoogleEnvironment,
-    failure::{GoogleLoginFailure, PythonException},
-    source::{ExternalAccountInfo, present},
+use crate::{
+    GcpTokenSource,
+    google::{
+        GoogleLoginFailure, PythonException, builders::exchanged, credentials::ExternalAccountInfo,
+        environment::GoogleEnvironment,
+    },
 };
 
-/// LiteLLM's own `aws_*` keys in an external account file. Each is `Some(None)` when null, which
-/// still chooses the explicit AWS login.
-#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
-pub(crate) struct ExplicitAwsKeys {
-    #[serde(default, deserialize_with = "present")]
-    aws_access_key_id: Option<Option<String>>,
-    #[redact(with = "[REDACTED]")]
-    #[serde(default, deserialize_with = "present")]
-    aws_secret_access_key: Option<Option<String>>,
-    #[redact(with = "[REDACTED]")]
-    #[serde(default, deserialize_with = "present")]
-    aws_session_token: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present")]
-    aws_region_name: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present")]
-    aws_session_name: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present")]
-    aws_profile_name: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present")]
-    aws_role_name: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present")]
-    aws_web_identity_token: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present")]
-    aws_sts_endpoint: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present")]
-    aws_external_id: Option<Option<String>>,
-}
-
-impl ExplicitAwsKeys {
-    pub(crate) fn any_given(&self) -> bool {
-        [
-            &self.aws_access_key_id,
-            &self.aws_secret_access_key,
-            &self.aws_session_token,
-            &self.aws_region_name,
-            &self.aws_session_name,
-            &self.aws_profile_name,
-            &self.aws_role_name,
-            &self.aws_web_identity_token,
-            &self.aws_sts_endpoint,
-            &self.aws_external_id,
-        ]
-        .into_iter()
-        .any(Option::is_some)
-    }
+/// An external account in `vertex_credentials` with LiteLLM's own `aws_*` keys, which Python's
+/// `_credentials_from_json` signs in with through `aws`.
+pub(crate) fn explicit_aws_login(
+    info: &ExternalAccountInfo,
+    environment: &Arc<dyn GoogleEnvironment>,
+    aws: &AwsAuthService,
+) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
+    exchanged(
+        info,
+        explicit_aws_credentials(info, environment.clone(), aws.clone())?,
+        environment,
+        PythonException::Malformed,
+    )
 }
 
 /// A key's text when it is set and not empty.
@@ -289,7 +258,7 @@ mod tests {
     #[case::empty(json!({"aws_access_key_id": "key", "aws_region_name": ""}))]
     #[case::null(json!({"aws_region_name": null}))]
     fn a_missing_region_is_refused_before_any_aws_call(#[case] extra: Value) {
-        let environment = Arc::new(crate::vertex_messages::OnGce {
+        let environment = Arc::new(crate::google::OnGce {
             project: "p",
             token: "t",
         });
@@ -361,7 +330,7 @@ mod tests {
             "aws_web_identity_token": configured,
             "aws_sts_endpoint": endpoint,
         }));
-        let environment = Arc::new(crate::vertex_messages::OnGce {
+        let environment = Arc::new(crate::google::OnGce {
             project: "p",
             token: "t",
         });

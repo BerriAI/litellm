@@ -1242,8 +1242,8 @@ async fn run_with_google_token(call: MessagesCall) -> Result<MessagesOutput, Err
     let route = messages_route_with_auth(
         Arc::new(RecordingSecrets::empty()),
         litellm_auth::AuthServices {
-            vertex_messages: litellm_auth_gcp::vertex_messages::VertexMessagesAuth::new(Arc::new(
-                litellm_auth_gcp::vertex_messages::OnGce {
+            vertex_login: litellm_auth_gcp::vertex::VertexLoginService::new(Arc::new(
+                litellm_auth_gcp::google::OnGce {
                     project: "token-project",
                     token: "google-token",
                 },

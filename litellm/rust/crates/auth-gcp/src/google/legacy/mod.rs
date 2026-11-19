@@ -1,7 +1,7 @@
 //! Backwards compatibility only. Every file here keeps working a login path that Python's
 //! google-auth supports and Google's Rust SDK (`google_cloud_auth` 1.16) does not, and says which.
-//! Delete each file once the SDK covers its path. The rest of the Vertex AI Messages login reaches
-//! this module only through the functions below.
+//! Delete each file once the SDK covers its path. The rest of the Google login reaches this module
+//! only through the functions below.
 
 mod certificate_source;
 mod executable_source;
@@ -14,9 +14,9 @@ use std::sync::Arc;
 pub(crate) use external_account_authorized_user::ExternalAuthorizedUserInfo;
 
 use super::{
+    credentials::{CertificateSource, ExecutableSource, ExternalAccountInfo},
     environment::GoogleEnvironment,
     failure::GoogleLoginFailure,
-    source::{CertificateSource, ExecutableSource, ExternalAccountInfo},
 };
 use crate::{GcpTokenSource, identity::SdkCredentials};
 

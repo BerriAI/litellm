@@ -7,5 +7,5 @@ pub struct AuthServices {
     #[cfg(feature = "gcp")]
     pub gcp: litellm_auth_gcp::VertexAuth,
     #[cfg(feature = "gcp")]
-    pub vertex_messages: litellm_auth_gcp::vertex_messages::VertexMessagesAuth,
+    pub vertex_login: litellm_auth_gcp::vertex::VertexLoginService,
 }

@@ -12,7 +12,7 @@ use serde::Deserialize;
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
 use super::token::{CompatLogin, HeldToken, exchange};
-use crate::vertex_messages::{
+use crate::google::{
     environment::GoogleEnvironment,
     failure::{GoogleLoginFailure, PythonException},
 };

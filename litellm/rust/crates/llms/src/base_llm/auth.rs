@@ -11,7 +11,7 @@ use litellm_secret_value::SecretValue;
 
 use litellm_auth::VertexParams;
 use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, SigV4Signer};
-use litellm_auth_gcp::vertex_messages::{vertex_credentials, vertex_project};
+use litellm_auth_gcp::vertex::{vertex_credentials, vertex_project};
 use litellm_http::request::with_header;
 
 pub type Headers = Vec<(String, String)>;
@@ -141,7 +141,7 @@ pub async fn log_in_to_vertex(
         return Ok((ValidatedEnvironment { headers, auth }, None));
     };
     let login = services
-        .vertex_messages
+        .vertex_login
         .login(
             vertex_credentials(&params, secrets),
             vertex_project(&params, secrets),
@@ -270,7 +270,7 @@ mod tests {
     use litellm_auth_aws::Credentials;
     use rstest::rstest;
 
-    use litellm_auth_gcp::vertex_messages::{OnGce, VertexMessagesAuth};
+    use litellm_auth_gcp::{google::OnGce, vertex::VertexLoginService};
 
     use super::*;
 
@@ -436,7 +436,7 @@ mod tests {
         forwarded: &[(&str, &str)],
     ) -> Result<(ValidatedEnvironment, Option<String>), litellm_auth::Error> {
         let services = AuthServices {
-            vertex_messages: VertexMessagesAuth::new(Arc::new(OnGce {
+            vertex_login: VertexLoginService::new(Arc::new(OnGce {
                 project: "gce-project",
                 token: "google",
             })),

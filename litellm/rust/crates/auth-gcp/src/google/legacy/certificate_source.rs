@@ -19,10 +19,10 @@ use super::{
     impersonation,
     token::{Compat, CompatLogin, Granted, HeldToken, exchange, impersonating},
 };
-use crate::vertex_messages::{
+use crate::google::{
+    credentials::{CertificateSource, ExternalAccountInfo},
     environment::GoogleEnvironment,
     failure::{GoogleLoginFailure, PythonException, UNLOADABLE_CREDENTIALS},
-    source::{CertificateSource, ExternalAccountInfo},
 };
 use crate::{GcpTokenSource, constants::CLOUD_PLATFORM_SCOPE};
 

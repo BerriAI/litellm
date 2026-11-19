@@ -1,206 +1,26 @@
 //! The credentials a `vertex_credentials` value names, read as Python's
 //! `load_vertex_credentials_source` reads them and parsed once into typed credentials.
 
-use std::{io::Read, path::Path};
+use std::path::Path;
 
-use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
-use super::{
-    explicit_aws::ExplicitAwsKeys,
-    failure::{GoogleLoginFailure, PythonException, UnusableFile},
-    legacy::ExternalAuthorizedUserInfo,
+use crate::{
+    config::is_base64_encoded_json,
+    google::{
+        GoogleLoginFailure, PythonException, UnusableFile,
+        credentials::{
+            AuthorizedUserInfo, BoundedRead, CredentialsFile, ExternalAccountInfo,
+            MAX_CREDENTIALS_FILE_CHARACTERS, ServiceAccountInfo, Unparsed, read_bounded,
+        },
+    },
+    identity::SdkJson,
 };
-use crate::{config::is_base64_encoded_json, identity::SdkJson};
 
 const INLINE_JSON_LEADING_NOISE: [char; 7] = [' ', '\t', '\r', '\n', '\u{feff}', '"', '\''];
-const MAX_CREDENTIALS_FILE_CHARACTERS: usize = 1 << 20;
-/// The most bytes any credentials file is read to: four UTF-8 bytes for each of
-/// [`MAX_CREDENTIALS_FILE_CHARACTERS`].
-pub(crate) const MAX_CREDENTIALS_FILE_BYTES: u64 = 4 * MAX_CREDENTIALS_FILE_CHARACTERS as u64;
 const NOT_A_JSON_OBJECT: &str = "is JSON but not a JSON object, it may be quoted or encoded twice";
 const PRIVATE_KEY_HINT: &str = "Check for unescaped newlines in private_key.";
 const LEADING_NOISE_HINT: &str = "Remove the quotes or byte-order mark before the opening `{`.";
-
-/// A service account key, as `from_service_account_info` reads it, and the key itself for
-/// Google's Rust SDK.
-#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
-pub(crate) struct ServiceAccountInfo {
-    pub(crate) client_email: Option<String>,
-    pub(crate) token_uri: Option<String>,
-    #[redact(with = "[REDACTED]")]
-    pub(crate) private_key: Option<String>,
-    pub(crate) private_key_id: Option<String>,
-    pub(crate) project_id: Option<String>,
-    #[serde(skip)]
-    pub(crate) sdk: SdkJson,
-}
-
-/// An authorized user, as `Credentials.from_authorized_user_info` reads it, and the file itself
-/// for Google's Rust SDK.
-#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
-pub(crate) struct AuthorizedUserInfo {
-    #[redact(with = "[REDACTED]")]
-    pub(crate) refresh_token: Option<String>,
-    pub(crate) client_id: Option<String>,
-    #[redact(with = "[REDACTED]")]
-    pub(crate) client_secret: Option<String>,
-    #[redact(with = "[REDACTED]")]
-    pub(crate) rapt_token: Option<String>,
-    pub(crate) universe_domain: Option<String>,
-    pub(crate) quota_project_id: Option<String>,
-    #[serde(skip)]
-    pub(crate) sdk: SdkJson,
-}
-
-/// An external account's file, as `external_account.Credentials.from_info` and LiteLLM's
-/// explicit AWS login read it, and the file itself for Google's Rust SDK.
-#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
-pub(crate) struct ExternalAccountInfo {
-    pub(crate) audience: Option<String>,
-    pub(crate) subject_token_type: Option<String>,
-    pub(crate) token_url: Option<String>,
-    pub(crate) service_account_impersonation_url: Option<String>,
-    pub(crate) service_account_impersonation: Option<ImpersonationOptions>,
-    pub(crate) client_id: Option<String>,
-    #[redact(with = "[REDACTED]")]
-    pub(crate) client_secret: Option<String>,
-    pub(crate) workforce_pool_user_project: Option<String>,
-    pub(crate) universe_domain: Option<String>,
-    pub(crate) credential_source: Option<CredentialSource>,
-    #[serde(flatten)]
-    pub(crate) aws: ExplicitAwsKeys,
-    #[serde(skip)]
-    pub(crate) sdk: SdkJson,
-}
-
-/// `service_account_impersonation`'s options.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(crate) struct ImpersonationOptions {
-    pub(crate) token_lifetime_seconds: Option<u64>,
-}
-
-/// Where an external account reads its subject token, as far as the login routes it: AWS, a URL,
-/// an executable, a certificate or a file. Google's Rust SDK reads the rest of it.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(crate) struct CredentialSource {
-    pub(crate) environment_id: Option<String>,
-    pub(crate) url: Option<serde::de::IgnoredAny>,
-    pub(crate) executable: Option<ExecutableSource>,
-    pub(crate) certificate: Option<CertificateSource>,
-    pub(crate) file: Option<String>,
-    pub(crate) format: Option<SourceFormat>,
-}
-
-/// How a file source holds its subject token: the whole file, or one field of a JSON object.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(crate) struct SourceFormat {
-    #[serde(rename = "type")]
-    pub(crate) kind: Option<String>,
-    pub(crate) subject_token_field_name: Option<String>,
-}
-
-/// A credential helper executable: its command line, how long it may run and where it caches its
-/// answer.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(crate) struct ExecutableSource {
-    pub(crate) command: Option<String>,
-    pub(crate) timeout_millis: Option<u64>,
-    pub(crate) interactive_timeout_millis: Option<u64>,
-    pub(crate) output_file: Option<String>,
-}
-
-/// An x509 workload identity federation source: where its certificate configuration and trust
-/// chain are.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(crate) struct CertificateSource {
-    pub(crate) certificate_config_location: Option<String>,
-    pub(crate) use_default_certificate_config: Option<bool>,
-    pub(crate) trust_chain_path: Option<String>,
-}
-
-/// The impersonated service account credentials an application default credentials file holds:
-/// the fields the login checks, and the file itself for Google's Rust SDK to build them from.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(crate) struct ImpersonatedInfo {
-    pub(crate) source_credentials: Option<SourceCredentials>,
-    pub(crate) service_account_impersonation_url: Option<String>,
-    #[serde(skip)]
-    pub(crate) sdk: SdkJson,
-}
-
-/// The credentials an impersonated service account is minted from, by type.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(crate) struct SourceCredentials {
-    #[serde(rename = "type")]
-    pub(crate) kind: Option<String>,
-    /// The source when it is a workforce identity user, which Google's Rust SDK cannot build.
-    #[serde(flatten)]
-    pub(crate) external_authorized_user: ExternalAuthorizedUserInfo,
-}
-
-/// A credentials file, by the `type` it declares.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(tag = "type")]
-pub(crate) enum CredentialsFile {
-    #[serde(rename = "service_account")]
-    ServiceAccount(ServiceAccountInfo),
-    #[serde(rename = "authorized_user")]
-    AuthorizedUser(AuthorizedUserInfo),
-    #[serde(rename = "external_account")]
-    ExternalAccount(Box<ExternalAccountInfo>),
-    #[serde(rename = "external_account_authorized_user")]
-    ExternalAccountAuthorizedUser(ExternalAuthorizedUserInfo),
-    #[serde(rename = "impersonated_service_account")]
-    ImpersonatedServiceAccount(ImpersonatedInfo),
-    #[serde(rename = "gdch_service_account")]
-    GdchServiceAccount,
-    #[serde(other)]
-    Unknown,
-}
-
-/// Why a credentials JSON object could not be read as the credentials its type names.
-#[derive(Debug)]
-pub(crate) enum Unparsed {
-    /// The object declares no `type`, or one that is not text.
-    Untyped,
-    /// A field holds a value of a type the credentials cannot hold.
-    Field(serde_json::Error),
-}
-
-impl CredentialsFile {
-    /// The credentials an object holds, by the `type` it declares.
-    pub(crate) fn parse(info: Map<String, Value>) -> Result<Self, Unparsed> {
-        if !info.get("type").is_some_and(Value::is_string) {
-            return Err(Unparsed::Untyped);
-        }
-        let parsed =
-            serde_json::from_value::<Self>(Value::Object(info.clone())).map_err(Unparsed::Field)?;
-        Ok(match parsed {
-            Self::ServiceAccount(account) => Self::ServiceAccount(ServiceAccountInfo {
-                sdk: SdkJson(info),
-                ..account
-            }),
-            Self::AuthorizedUser(user) => Self::AuthorizedUser(AuthorizedUserInfo {
-                sdk: SdkJson(info),
-                ..user
-            }),
-            Self::ExternalAccount(account) => {
-                Self::ExternalAccount(Box::new(ExternalAccountInfo {
-                    sdk: SdkJson(info),
-                    ..*account
-                }))
-            }
-            Self::ImpersonatedServiceAccount(account) => {
-                Self::ImpersonatedServiceAccount(ImpersonatedInfo {
-                    sdk: SdkJson(info),
-                    ..account
-                })
-            }
-            other => other,
-        })
-    }
-}
 
 /// The credentials `_credentials_from_json` builds for a `vertex_credentials` value: an
 /// authorized user or an external account by type, and a service account for any other type.
@@ -266,25 +86,6 @@ fn parse_json_object(raw: &str) -> Parsed {
     }
 }
 
-/// `IAMCredentials`' `service_account_email`: the text between the last `/` of an
-/// impersonation URL and `:generateAccessToken`.
-pub(crate) fn target_principal(url: &str) -> Option<&str> {
-    url.rsplit_once('/')?
-        .1
-        .strip_suffix(":generateAccessToken")
-        .filter(|principal| !principal.is_empty())
-}
-
-/// `#[serde(deserialize_with)]` for a field that may be absent, null or a value: `None` when it
-/// is absent and `Some(None)` when it is null.
-pub(crate) fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
-}
-
 fn invalid_file(path: &str, problem: String) -> GoogleLoginFailure {
     GoogleLoginFailure::credentials_file(UnusableFile::Invalid {
         path: path.into(),
@@ -306,39 +107,6 @@ fn inline_not_json(detail: &str, hint: &str) -> GoogleLoginFailure {
         PythonException::Value,
         format!("The inline `vertex_credentials` value is not valid JSON: {detail}. {hint}"),
     )
-}
-
-/// Why [`read_bounded`] gave no contents.
-#[derive(Debug)]
-pub(crate) enum BoundedRead {
-    /// The file could not be opened or read.
-    Unreadable(std::io::Error),
-    /// The file holds more than [`MAX_CREDENTIALS_FILE_BYTES`].
-    TooLarge,
-}
-
-/// A file's bytes, read no further than one byte past [`MAX_CREDENTIALS_FILE_BYTES`], so a file
-/// such as `/dev/zero` is refused by its size instead of read without end.
-fn read_bounded(path: &str) -> Result<Vec<u8>, BoundedRead> {
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|file| {
-            file.take(MAX_CREDENTIALS_FILE_BYTES + 1)
-                .read_to_end(&mut bytes)
-        })
-        .map_err(BoundedRead::Unreadable)?;
-    match bytes.len() as u64 > MAX_CREDENTIALS_FILE_BYTES {
-        true => Err(BoundedRead::TooLarge),
-        false => Ok(bytes),
-    }
-}
-
-/// [`read_bounded`] on a blocking thread, for a file read while a token is fetched. A read that
-/// did not finish is unreadable.
-pub(crate) async fn read_bounded_off_runtime(path: String) -> Result<Vec<u8>, BoundedRead> {
-    tokio::task::spawn_blocking(move || read_bounded(&path))
-        .await
-        .unwrap_or_else(|error| Err(BoundedRead::Unreadable(std::io::Error::other(error))))
 }
 
 fn read_json_file(path: &str) -> Result<CredentialsJson, GoogleLoginFailure> {
@@ -541,16 +309,6 @@ mod tests {
         assert!(debug.contains("[REDACTED]"), "{debug}");
     }
 
-    #[rstest]
-    fn credentials_file_json_debug_never_shows_a_secret() {
-        let Value::Object(info) = json!({"private_key": "credential-value"}) else {
-            unreachable!()
-        };
-        let debug = format!("{:?}", SdkJson(info));
-        assert!(!debug.contains("credential-value"), "{debug}");
-        assert!(debug.contains("[REDACTED]"), "{debug}");
-    }
-
     #[cfg(unix)]
     #[rstest]
     fn an_endless_file_is_refused_by_its_size_without_reading_it_all() {
@@ -632,29 +390,5 @@ mod tests {
             failure.file,
             Some(UnusableFile::Invalid { problem, .. }) if problem.starts_with("holds a field of the wrong type: invalid type: integer `1`")
         ));
-    }
-
-    #[rstest]
-    #[case::service_account(json!({"type": "service_account"}), true)]
-    #[case::external_account(json!({"type": "external_account", "audience": "a"}), true)]
-    #[case::gdch(json!({"type": "gdch_service_account", "anything": 1}), true)]
-    #[case::unknown(json!({"type": "something_else"}), true)]
-    #[case::untyped(json!({"project_id": "p"}), false)]
-    #[case::numeric_type(json!({"type": 5}), false)]
-    fn a_file_is_read_by_the_type_it_declares(#[case] info: Value, #[case] typed: bool) {
-        let parsed = CredentialsFile::parse(info.as_object().unwrap().clone());
-        assert_eq!(parsed.is_ok(), typed, "{parsed:?}");
-    }
-
-    #[rstest]
-    fn an_external_account_keeps_its_file_for_google_s_sdk() {
-        let info = json!({"type": "external_account", "audience": "a", "credential_source": {"certificate": {}}});
-        let Ok(CredentialsFile::ExternalAccount(account)) =
-            CredentialsFile::parse(info.as_object().unwrap().clone())
-        else {
-            panic!("not an external account");
-        };
-        assert_eq!(account.audience.as_deref(), Some("a"));
-        assert_eq!(account.sdk, SdkJson(info.as_object().unwrap().clone()));
     }
 }

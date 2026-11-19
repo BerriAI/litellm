@@ -17,10 +17,10 @@ use litellm_auth_types::{Error, ErrorDetail};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 
-use crate::vertex_messages::{
+use crate::google::{
+    credentials::target_principal,
     environment::unreachable,
     failure::{GoogleLoginFailure, PythonException},
-    source::target_principal,
 };
 use crate::{GcpAuthFuture, GcpTokenSource, identity::SdkCredentials};
 

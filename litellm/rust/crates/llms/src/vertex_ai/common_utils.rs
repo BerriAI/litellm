@@ -1,4 +1,4 @@
-use litellm_auth_gcp::vertex_messages::{GoogleLoginFailure, PythonException};
+use litellm_auth_gcp::google::{GoogleLoginFailure, PythonException};
 use litellm_llms_types::providers::vertex_ai::{GLOBAL_API_BASE, GLOBAL_LOCATION};
 use litellm_python_compat::urllib::urlsplit;
 
@@ -88,6 +88,18 @@ pub(crate) fn graft_default_vertex_path(api_base: &str, default_url: &str) -> St
     )
 }
 
+/// Python's `VertexBase.get_vertex_region`: a model the model map lists `supported_regions` for
+/// is sent to the first of them unless the configured location is one of them.
+pub fn vertex_region(location: Option<String>, supported_regions: &[String]) -> String {
+    match (supported_regions.first(), location) {
+        (None, location) => location
+            .filter(|location| !location.is_empty())
+            .unwrap_or_else(|| "us-central1".into()),
+        (Some(_), Some(location)) if supported_regions.contains(&location) => location,
+        (Some(first), _) => first.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -131,5 +143,24 @@ mod tests {
     #[case::digit_after_letter("u1")]
     fn a_location_python_accepts_is_accepted(#[case] location: &str) {
         assert!(get_vertex_base_url(location).is_ok());
+    }
+
+    #[rstest]
+    #[case::no_regions(Some("europe-west4"), &[], "europe-west4")]
+    #[case::default_location(None, &[], "us-central1")]
+    #[case::empty_location(Some(""), &[], "us-central1")]
+    #[case::first_region_without_location(None, &["us-east5", "europe-west1"], "us-east5")]
+    #[case::supported_location_kept(Some("europe-west1"), &["us-east5", "europe-west1"], "europe-west1")]
+    #[case::unsupported_location_replaced(Some("asia-east1"), &["us-east5"], "us-east5")]
+    fn the_region_follows_the_model_s_supported_regions(
+        #[case] location: Option<&str>,
+        #[case] supported: &[&str],
+        #[case] expected: &str,
+    ) {
+        let supported: Vec<String> = supported.iter().map(|region| region.to_string()).collect();
+        assert_eq!(
+            vertex_region(location.map(str::to_string), &supported),
+            expected
+        );
     }
 }

@@ -16,7 +16,7 @@ use super::token::{CompatLogin, Granted, HeldToken};
 use crate::{
     GcpTokenSource,
     constants::CLOUD_PLATFORM_SCOPE,
-    vertex_messages::{
+    google::{
         environment::{GoogleEnvironment, unreachable},
         failure::{GoogleLoginFailure, PythonException},
     },

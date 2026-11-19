@@ -1,15 +1,9 @@
-//! Python's `VertexBase.load_auth` for Claude on Vertex AI's `/v1/messages`: which credentials
-//! `vertex_credentials`, `vertex_project` and `vertex_location` name, the region a call goes to,
-//! and the login itself, built on the shared [`crate::GcpAuth`] loader and Google's Rust SDK.
+//! Python's `VertexBase.load_auth`, shared by every Vertex AI route: which credentials
+//! `vertex_credentials`, `vertex_project` and `vertex_location` name, and the login itself, built
+//! on [`crate::google`] and the shared [`crate::GcpAuth`] loader.
 
-mod adc;
-mod bounded_file_source;
-mod builders;
-mod environment;
+mod credentials_source;
 mod explicit_aws;
-mod failure;
-mod legacy;
-mod source;
 
 use std::{
     sync::{
@@ -20,22 +14,20 @@ use std::{
 };
 
 use litellm_auth_aws::AwsAuthService;
-use litellm_auth_types::{Error, ErrorDetail, VertexParams};
+use litellm_auth_types::{Error, VertexParams};
 use litellm_python_compat::truthy::first_truthy;
 use litellm_secret_value::SecretValue;
 
-#[cfg(any(test, feature = "test-support"))]
-pub use environment::OnGce;
-pub use environment::{EnvironmentFuture, GoogleEnvironment, SystemGoogleEnvironment};
-pub use failure::{GoogleLoginFailure, PythonException, UnusableFile};
-
 use crate::{
-    GcpAuth, GcpAuthFuture, GcpTokenSource,
+    GcpAuth, GcpTokenSource,
+    google::{
+        GoogleEnvironment, GoogleLoginFailure, Login, PythonException, SystemGoogleEnvironment,
+        UnusableFile, adc, builders,
+    },
     identity::{CredentialCacheKey, SdkCredentials},
 };
-use explicit_aws::uses_explicit_aws;
-use failure::UnsignableKey;
-use source::{CredentialsJson, ExplicitCredentials, load_vertex_credentials_source};
+use credentials_source::{CredentialsJson, ExplicitCredentials, load_vertex_credentials_source};
+use explicit_aws::{explicit_aws_login, uses_explicit_aws};
 
 /// Python's `VertexBase.safe_get_vertex_ai_credentials`, with the deployment's
 /// `VERTEXAI_CREDENTIALS` read through the host's secrets as `get_secret_str` reads it.
@@ -86,19 +78,7 @@ pub fn vertex_location(
     )
 }
 
-/// Python's `VertexBase.get_vertex_region`: a model the model map lists `supported_regions` for
-/// is sent to the first of them unless the configured location is one of them.
-pub fn vertex_region(location: Option<String>, supported_regions: &[String]) -> String {
-    match (supported_regions.first(), location) {
-        (None, location) => location
-            .filter(|location| !location.is_empty())
-            .unwrap_or_else(|| "us-central1".into()),
-        (Some(_), Some(location)) if supported_regions.contains(&location) => location,
-        (Some(first), _) => first.clone(),
-    }
-}
-
-/// The token a Vertex AI Messages call is sent with and the project its URL names.
+/// The token a Vertex AI call is sent with and the project its URL names.
 #[derive(Clone, Debug)]
 pub struct VertexLogin {
     pub token: SecretValue,
@@ -111,39 +91,10 @@ const EARLIER_KEY_FILES: u64 = 64;
 /// How long a token request may take, as `requests` waits for google-auth's token requests.
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// A loaded login: its token source, the project its credentials resolved, and whether its token
-/// is a service account key's own signature.
-struct Login {
-    source: Arc<dyn GcpTokenSource>,
-    project: Option<String>,
-    signs: bool,
-}
-
-impl GcpTokenSource for Login {
-    fn project_id(&self) -> GcpAuthFuture<'_, String> {
-        Box::pin(async {
-            self.project
-                .clone()
-                .ok_or(Error::CredentialAcquisition(ErrorDetail::Unresolved {
-                    subject: "Vertex AI project",
-                }))
-        })
-    }
-
-    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
-        Box::pin(async {
-            self.source.token().await.map_err(|error| match self.signs {
-                true => Error::provider(UnsignableKey(error)),
-                false => error,
-            })
-        })
-    }
-}
-
-/// The Vertex AI Messages login: credentials loaded once per credentials text or key file
+/// The Vertex AI login: credentials loaded once per credentials text or key file
 /// version through the shared loader, and tokens served by Google's Rust SDK.
 #[derive(Clone)]
-pub struct VertexMessagesAuth {
+pub struct VertexLoginService {
     gcp: GcpAuth,
     environment: Arc<dyn GoogleEnvironment>,
     /// The AWS login behind an external account's explicit `aws_*` keys, which resolves an
@@ -154,7 +105,7 @@ pub struct VertexMessagesAuth {
     earlier_key_files: moka::future::Cache<String, Arc<dyn GcpTokenSource>>,
 }
 
-impl Default for VertexMessagesAuth {
+impl Default for VertexLoginService {
     fn default() -> Self {
         Self::new(Arc::new(SystemGoogleEnvironment))
     }
@@ -179,7 +130,7 @@ fn credentials_failed(error: Error) -> Error {
     error
 }
 
-impl VertexMessagesAuth {
+impl VertexLoginService {
     pub fn new(environment: Arc<dyn GoogleEnvironment>) -> Self {
         Self {
             gcp: GcpAuth::default(),
@@ -291,7 +242,7 @@ impl VertexMessagesAuth {
     fn explicit_source(&self, credentials: &CredentialsJson) -> Result<Login, GoogleLoginFailure> {
         let built = match &credentials.credentials {
             ExplicitCredentials::ExternalAccount(info) if uses_explicit_aws(info) => {
-                builders::explicit_aws(info, &self.environment, &self.aws)
+                explicit_aws_login(info, &self.environment, &self.aws)
             }
             ExplicitCredentials::ExternalAccount(info) => {
                 builders::external_account(info, &self.environment, true)
@@ -363,7 +314,11 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
-    use crate::{CredentialSource, VertexAuth, VertexConfig};
+    use crate::{
+        CredentialSource, VertexAuth, VertexConfig,
+        google::{EnvironmentFuture, OnGce, environment},
+    };
+    use litellm_auth_types::ErrorDetail;
 
     const PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDGRPkmZkzek9X0\nGGxUpS00yBkTR9RHh1yXLK0SIoIT9SgyZaP5+gETM7Mo3oT4/q1EUnx+9WgvqZPn\nkgMP+/P2vNc07tgYn+DZqkn+M4ys2sGZnK+VQTpcw2AE+4zaSlJJztpGxyMkDAcg\ntHJeKHc0aWxw52d1K+SLzLeIz9Niy3uL5t7iZlFpUDA4LAfTCXlzYW+f+zcXXbof\nTyHRlfl6kvYoOa7ss+9YVXVhp4GOfhLOT4tsYfO3gbNSVrkxzdF6iLG2Wqh9GHMD\n7TdI3aSUXHj7qpwRx6PBY8eH74oHlUlSpi6BHgDGeTK/HdxbrI7WK6hT+9FIP55h\n1Tbk4twjAgMBAAECggEADPgIaNyalplXW2B/MlVp//o+uaYiWo0EhdbxEy7/dzK7\nO5Phn/S2CuPmcJWHLFcfgK9fxiYwET4N/XQgwydMRycFcXu8b6mCWa24qh03f6I0\nTuOS3WtA2ArnkvipUMLS+YT2sVga3yOL3wKVBvFHd6QvT0tNPYeh3j5SNJ7ASV8m\nH2RgRpz9LmOr6CCgOmr/52ldidQiBW3GtqEo8WilF7z+q9tQ6KDFZmcXU+4T2Xzs\nR5ZPIIkZni4X5vDhw7F6NSrbNMbUREDtVStdcwRqmMLoMs9DI6SxEKRnjsV0HxRm\nL0SIs+AiptJPIbVVzWHkMI+L/8J9qiTjl4nozWlZAQKBgQDn0fshqf6yD2SSUf7h\nmpJbkcyw54szZPfJRLftyo0KvKCIGjys+I0+cBsCHPafbOHB70aV9/7pzil3a1uw\nU0C7WOYeTdw9lxm5TVnaAYPJl/iqCfTm+eZkTPnDZRDOeJimoheLN2UB52yKx+78\nXl1AYn/VsnlWd+Kt3sfcng6sQQKBgQDa8yAAHgeDJ1LvfHebzZeJU1QAYw9mO/QJ\nrCMvMTJY2azGJdo61SohDzsWYaFMT/QdlCMYu8W7V2keDZVaJbV2PTulp/XQyOB2\nCOW2899644FMtCkcIv9gDYoVt/xY64TcX5uofq2wdr96pnzlarU8MueUR1qM+mU+\ngJLi1UJ/YwKBgAWihAEweaFoYGByH8jqEe6p35jZN/f6108MHZBpIP6G0TwdryXh\nMMW4wd9ORuxfICmvoD6a9ZZHTZi6glMJ4wPqyEUqTVUt7BEmAS4cZVCsIf44GbzX\njDMZ7+RA+6SZJ9S9EedvZEQklO3WqEd4H7ol6seN/AcPCPKC/MavDNpBAoGBANVc\nRrrWiIuOLouhxwzU8+6mfR1DayY9Fjq2vDKoxl8+/9a33EmooD1HElVlHkG3SDPq\nv6jCkpVVQOJAamJGjOaEFTQA0NJ8bf+X/AKk9ApU2RNeHRGGKUX4667uc8JTAE2f\n/ZfcmnVzwnRK+Tq3GZVoJbOhNORcvXyC3qCdIQfxAoGBAMipsn9l6sqMgNddwtzp\n2n7CuvycTgNQgS+wzy2e3JgQaJYlXTe8J5IVwRbq3MbICm+8gsfMc4cBCvRtmWOZ\nA9P2N1liNx1TYJ2D31nC1FgAt5z+X8ODDqgZjCXvCSVS+AbA0ivkQtzXm7zwLVD7\nKR6kOMrEoPsqjSaI14o9qNFx\n-----END PRIVATE KEY-----\n";
     /// [`PRIVATE_KEY`] in PKCS#1 `RSA PRIVATE KEY` form.
@@ -576,8 +531,8 @@ mod tests {
         }
     }
 
-    fn auth(environment: FakeEnvironment) -> VertexMessagesAuth {
-        VertexMessagesAuth::new(Arc::new(environment))
+    fn auth(environment: FakeEnvironment) -> VertexLoginService {
+        VertexLoginService::new(Arc::new(environment))
     }
 
     fn failure(error: Error) -> GoogleLoginFailure {
@@ -667,25 +622,6 @@ mod tests {
                 .flatten()
         };
         assert_eq!(vertex_credentials(&params, &secrets).as_deref(), expected);
-    }
-
-    #[rstest]
-    #[case::no_regions(Some("europe-west4"), &[], "europe-west4")]
-    #[case::default_location(None, &[], "us-central1")]
-    #[case::empty_location(Some(""), &[], "us-central1")]
-    #[case::first_region_without_location(None, &["us-east5", "europe-west1"], "us-east5")]
-    #[case::supported_location_kept(Some("europe-west1"), &["us-east5", "europe-west1"], "europe-west1")]
-    #[case::unsupported_location_replaced(Some("asia-east1"), &["us-east5"], "us-east5")]
-    fn the_region_follows_the_model_s_supported_regions(
-        #[case] location: Option<&str>,
-        #[case] supported: &[&str],
-        #[case] expected: &str,
-    ) {
-        let supported: Vec<String> = supported.iter().map(|region| region.to_string()).collect();
-        assert_eq!(
-            vertex_region(location.map(str::to_string), &supported),
-            expected
-        );
     }
 
     #[rstest]
@@ -1079,7 +1015,7 @@ mod tests {
                 .concat(),
             )
         });
-        let login = VertexMessagesAuth::new(fake.clone())
+        let login = VertexLoginService::new(fake.clone())
             .login(None, None)
             .await;
         assert_eq!(
@@ -1331,7 +1267,7 @@ mod tests {
 
     /// `auth` logged in with each of `earlier` written in turn to `file`, and then `file` holding
     /// `last`.
-    async fn rewritten(auth: &VertexMessagesAuth, file: &Path, earlier: &[String], last: &str) {
+    async fn rewritten(auth: &VertexLoginService, file: &Path, earlier: &[String], last: &str) {
         for contents in earlier {
             std::fs::write(file, contents).unwrap();
             let _ = auth.login(Some(file.to_str().unwrap().into()), None).await;

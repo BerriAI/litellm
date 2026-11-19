@@ -93,7 +93,7 @@ static RESOURCES: LazyLock<litellm_inference::resources::CoreResources> = LazyLo
     litellm_inference::resources::CoreResources {
         pool: Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver))),
         auth: Arc::new(litellm_auth::AuthServices {
-            vertex_messages: litellm_auth_gcp::vertex_messages::VertexMessagesAuth::default()
+            vertex_login: litellm_auth_gcp::vertex::VertexLoginService::default()
                 .with_aws(aws.clone()),
             aws,
             ..litellm_auth::AuthServices::default()

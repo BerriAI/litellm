@@ -1,4 +1,4 @@
-//! google-auth's `default()` for the Vertex AI Messages login: where application default
+//! google-auth's `default()`: where application default
 //! credentials are found (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud credentials file or the
 //! GCE metadata server), which credentials Google's Rust SDK builds from them, and the project
 //! they resolve.
@@ -10,10 +10,10 @@ use serde_json::{Map, Value};
 use super::{
     Login,
     builders::{self, build},
+    credentials::{CredentialsFile, ExternalAccountInfo, ImpersonatedInfo, Unparsed},
     environment::GoogleEnvironment,
     failure::{GoogleLoginFailure, PythonException},
     legacy,
-    source::{CredentialsFile, ExternalAccountInfo, ImpersonatedInfo, Unparsed},
 };
 use crate::{GcpTokenSource, identity::SdkCredentials};
 

@@ -3,10 +3,11 @@
 //! project and region the call resolves.
 
 use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use crate::vertex_ai::common_utils::vertex_region;
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
     VertexConfig, get_vertex_ai_project, get_vertex_ai_project_from_credentials, secret_names,
-    vertex_messages::{vertex_location, vertex_region},
+    vertex::vertex_location,
 };
 use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{header_value, without_headers};

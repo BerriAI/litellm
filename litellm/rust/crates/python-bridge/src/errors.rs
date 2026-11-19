@@ -1,6 +1,6 @@
 use std::error::Error as StdError;
 
-use litellm_auth::gcp::vertex_messages::GoogleLoginFailure;
+use litellm_auth::gcp::google::GoogleLoginFailure;
 use litellm_error::{Report, Source};
 use litellm_inference::Error;
 use pyo3::{
@@ -381,7 +381,7 @@ pub(crate) fn route_error_to_pyerr(error: Error) -> PyErr {
 
 #[cfg(test)]
 mod tests {
-    use litellm_auth::gcp::vertex_messages::PythonException;
+    use litellm_auth::gcp::google::PythonException;
     use litellm_core_utils::decline::Decline;
     use reqwest::header::{HeaderValue, RETRY_AFTER};
 

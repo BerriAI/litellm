@@ -12,9 +12,9 @@ use google_cloud_auth::credentials::subject_token::{self, SubjectToken, SubjectT
 
 use super::{
     builders::{exchanged, programmatic},
+    credentials::{BoundedRead, ExternalAccountInfo, SourceFormat, read_bounded_off_runtime},
     environment::GoogleEnvironment,
     failure::{GoogleLoginFailure, PythonException, UNLOADABLE_CREDENTIALS},
-    source::{BoundedRead, ExternalAccountInfo, SourceFormat, read_bounded_off_runtime},
 };
 use crate::GcpTokenSource;
 
@@ -141,7 +141,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::vertex_messages::source::MAX_CREDENTIALS_FILE_BYTES;
+    use crate::google::credentials::MAX_CREDENTIALS_FILE_BYTES;
 
     fn info(source: serde_json::Value) -> ExternalAccountInfo {
         serde_json::from_value(json!({"credential_source": source})).unwrap()

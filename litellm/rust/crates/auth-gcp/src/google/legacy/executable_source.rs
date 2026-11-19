@@ -14,14 +14,14 @@ use serde::Deserialize;
 
 use crate::{
     GcpTokenSource,
-    vertex_messages::{
+    google::{
         builders::{exchanged, programmatic},
-        environment::GoogleEnvironment,
-        failure::{GoogleLoginFailure, PythonException},
-        source::{
+        credentials::{
             BoundedRead, ExecutableSource, ExternalAccountInfo, read_bounded_off_runtime,
             target_principal,
         },
+        environment::GoogleEnvironment,
+        failure::{GoogleLoginFailure, PythonException},
     },
 };
 
@@ -353,7 +353,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::vertex_messages::source::MAX_CREDENTIALS_FILE_BYTES;
+    use crate::google::credentials::MAX_CREDENTIALS_FILE_BYTES;
 
     const AUDIENCE: &str =
         "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q";

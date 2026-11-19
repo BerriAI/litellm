@@ -1,6 +1,6 @@
 # Vertex AI Messages login parity
 
-Claude on Vertex AI `/v1/messages` logs in through Google's Rust SDK (`google_cloud_auth` 1.16) via `src/vertex_messages/`. This file lists the login paths Python's google-auth handled that the SDK alone does not. A path is Legacy when it works only because of code we added on top of the SDK, and Unsupported when it worked in Python and fails here. Paths that work, or that fail the same way they did in Python, are not listed
+Vertex AI logins go through `src/vertex/`, built on the Google login in `src/google/` and Google's Rust SDK (`google_cloud_auth` 1.16). Claude on Vertex AI `/v1/messages` is the route that uses it today. This file lists the login paths Python's google-auth handled that the SDK alone does not. A path is Legacy when it works only because of code we added on top of the SDK, and Unsupported when it worked in Python and fails here. Paths that work, or that fail the same way they did in Python, are not listed
 
 A login that fails raises the google-auth exception class Python raised, with litellm's own message text, before anything is sent to Vertex. The proxy answers HTTP 500, and failure callbacks, deployment cooldown and router retries run as before. An unreachable token endpoint raises `TransportError` on every path
 
@@ -8,12 +8,12 @@ The "How common" column is an estimate, since there is no telemetry on how deplo
 
 | # | Status | Auth method or setup | How common | Rust | Caller gets |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Legacy | X.509 certificate workload identity | Rare | `legacy/certificate_source.rs` | Works. On failure 500 `MalformedError` or `RefreshError` (E1) |
-| 2 | Legacy | Credential helper executable | Rare | `legacy/executable_source.rs` | Works. On failure 500 `MalformedError`, `DefaultCredentialsError`, `InvalidValue` or `RefreshError` (E2) |
-| 3 | Legacy | Workforce identity user from gcloud ADC | Uncommon | `legacy/external_account_authorized_user.rs` | Works. On failure 500 `RefreshError` or `OAuthError` (E3) |
+| 1 | Legacy | X.509 certificate workload identity | Rare | `google/legacy/certificate_source.rs` | Works. On failure 500 `MalformedError` or `RefreshError` (E1) |
+| 2 | Legacy | Credential helper executable | Rare | `google/legacy/executable_source.rs` | Works. On failure 500 `MalformedError`, `DefaultCredentialsError`, `InvalidValue` or `RefreshError` (E2) |
+| 3 | Legacy | Workforce identity user from gcloud ADC | Uncommon | `google/legacy/external_account_authorized_user.rs` | Works. On failure 500 `RefreshError` or `OAuthError` (E3) |
 | 4 | Legacy | Impersonated ADC with a workforce identity user source | Rare | rows 3 and 5 | Works. Fails as rows 3 and 5 do |
-| 5 | Legacy | Impersonation through a non-default host (Private Service Connect, other universes) | Rare | `legacy/impersonation.rs` | Works. On failure 500 `RefreshError` (E4) |
-| 6 | Legacy | Service account key in PKCS#1 (`BEGIN RSA PRIVATE KEY`) | Uncommon | Re-encoded as PKCS#8 in `builders.rs` before the SDK reads it | Works |
+| 5 | Legacy | Impersonation through a non-default host (Private Service Connect, other universes) | Rare | `google/legacy/impersonation.rs` | Works. On failure 500 `RefreshError` (E4) |
+| 6 | Legacy | Service account key in PKCS#1 (`BEGIN RSA PRIVATE KEY`) | Uncommon | Re-encoded as PKCS#8 in `google/builders.rs` before the SDK reads it | Works |
 | 7 | Unsupported | Service account key behind a gateway that only accepts OAuth access tokens | Rare | Sends the SDK's self-signed JWT and never calls the key's `token_uri`, so the gateway rejects it | 401 `AuthenticationError` with the gateway's body |
 | 8 | Unsupported | Corporate CA only in `REQUESTS_CA_BUNDLE` or `CURL_CA_BUNDLE`, on SDK paths (authorized user, workload identity, SDK impersonation) | Moderate in enterprises | The SDK trusts only `SSL_CERT_FILE`, `SSL_CERT_DIR` and the system store, so TLS to Google's token endpoint fails. Legacy paths honour both variables | 500 `TransportError` (E6) |
 | 9 | Unsupported | Service account key outside 2048 to 8192 bits | Rare | Refused by the SDK | 500 `ValueError` (E5) |

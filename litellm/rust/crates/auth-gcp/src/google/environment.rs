@@ -1,4 +1,4 @@
-//! What the Vertex AI Messages login reads from the machine besides credential files: the
+//! What a Google login reads from the machine besides credential files: the
 //! process environment, the gcloud CLI, the GCE metadata server and Cloud Resource Manager, and
 //! the HTTP client litellm's own Google requests go through.
 

@@ -1,5 +1,5 @@
-//! The credentials a Vertex AI Messages login builds from what `vertex_credentials` or
-//! application default credentials hold: the inputs of Google's Rust SDK builders, chosen as
+//! The credentials a Google login builds from a credentials file, inline credentials or
+//! application default credentials: the inputs of Google's Rust SDK builders, chosen as
 //! Python's `_credentials_from_json` and google-auth's `default()` choose the credential class,
 //! with the checks google-auth makes before it would mint a token.
 
@@ -8,7 +8,6 @@ use std::sync::Arc;
 use google_cloud_auth::credentials::{
     external_account::ProgrammaticBuilder, subject_token::SubjectTokenProvider,
 };
-use litellm_auth_aws::AwsAuthService;
 use rsa::{
     RsaPrivateKey,
     pkcs1::DecodeRsaPrivateKey,
@@ -18,11 +17,10 @@ use serde_json::Value;
 
 use super::{
     bounded_file_source,
+    credentials::{ExternalAccountInfo, ServiceAccountInfo, target_principal},
     environment::GoogleEnvironment,
-    explicit_aws::explicit_aws_credentials,
     failure::{GoogleLoginFailure, PythonException, UNLOADABLE_CREDENTIALS},
     legacy,
-    source::{ExternalAccountInfo, ServiceAccountInfo, target_principal},
 };
 use crate::{
     GcpTokenSource,
@@ -162,21 +160,6 @@ fn with_pkcs8_private_key(info: &ServiceAccountInfo) -> SdkJson {
         ),
         None => info.sdk.clone(),
     }
-}
-
-/// An external account in `vertex_credentials` with LiteLLM's own `aws_*` keys, which Python's
-/// `_credentials_from_json` signs in with through `aws`.
-pub(crate) fn explicit_aws(
-    info: &ExternalAccountInfo,
-    environment: &Arc<dyn GoogleEnvironment>,
-    aws: &AwsAuthService,
-) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
-    exchanged(
-        info,
-        explicit_aws_credentials(info, environment.clone(), aws.clone())?,
-        environment,
-        PythonException::Malformed,
-    )
 }
 
 /// An external account as Python's `_credentials_from_json` builds it from `vertex_credentials`

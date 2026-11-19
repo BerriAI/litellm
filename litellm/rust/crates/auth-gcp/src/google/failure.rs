@@ -1,5 +1,4 @@
-//! A Vertex AI Messages login failure: the exception class Python's `VertexBase.load_auth`
-//! raises for it, its text, and the credentials file it is about, whose path only the log names.
+//! A Google login failure: the google-auth exception class Python raises for it, its text, and the credentials file it is about, whose path only the log names.
 //! Failures of Google's Rust SDK map onto the class google-auth raises for the same category.
 
 use std::error::Error as StdError;
@@ -43,8 +42,8 @@ pub enum UnusableFile {
     Invalid { path: String, problem: String },
 }
 
-/// A Vertex AI Messages login failure, as the exception Python's `VertexBase.load_auth` raises
-/// for it: its class and its text.
+/// A Google login failure, as the google-auth exception Python raises for it: its class and its
+/// text.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct GoogleLoginFailure {

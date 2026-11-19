@@ -1405,7 +1405,7 @@ mod tests {
         provider_call_with_secrets(call, &|_: &str| None).await
     }
 
-    use litellm_auth_gcp::vertex_messages::{OnGce, VertexMessagesAuth};
+    use litellm_auth_gcp::{google::OnGce, vertex::VertexLoginService};
 
     async fn provider_call_with_secrets(
         call: MessagesCall,
@@ -1430,7 +1430,7 @@ mod tests {
         let interceptors = ();
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
         let auth = AuthServices {
-            vertex_messages: VertexMessagesAuth::new(std::sync::Arc::new(OnGce {
+            vertex_login: VertexLoginService::new(std::sync::Arc::new(OnGce {
                 project: "token-project",
                 token: "google-token",
             })),
