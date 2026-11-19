@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -730,10 +731,10 @@ loaded = CustomLogger()
 def v2_headers_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
     directory: Final = tmp_path_factory.mktemp("v2-response-headers")
     (directory / "v2_headers.py").write_text(_V2_HEADERS_CODE)
-    config: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
-    config["litellm_settings"] = {
-        **object_value(config["litellm_settings"]),
-        "callbacks": ["v2_headers.loaded"],
+    base: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **base,
+        "litellm_settings": {**object_value(base["litellm_settings"]), "callbacks": ["v2_headers.loaded"]},
     }
     path: Final = directory / "config.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -750,22 +751,28 @@ class NativeCall:
     headers: Mapping[str, httpx.Headers]
 
 
+class ResponseHeadersByMethod:
+    def __init__(self) -> None:
+        self.seen: Mapping[str, httpx.Headers] = MappingProxyType({})
+
+    async def remember(self, response: httpx.Response) -> None:
+        if response.request.method == "POST":
+            method: Final = json.loads(response.request.content).get("method")
+            self.seen = MappingProxyType({**self.seen, method: response.headers})
+
+
 def _native_lookup(gateway: Gateway, scenario: Scenario, peer: McpPeer, record: str) -> NativeCall:
     alias: Final = "hdr" + uuid.uuid4().hex[:8]
     identity: Final = register_mcp(scenario, peer, alias)
     key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-    seen: Final[dict[str, httpx.Headers]] = {}
-
-    async def remember(response: httpx.Response) -> None:
-        if response.request.method == "POST":
-            seen[json.loads(response.request.content).get("method")] = response.headers
+    responses: Final = ResponseHeadersByMethod()
 
     async def run() -> NativeCall:
         client: Final = httpx.AsyncClient(
             headers={"x-litellm-api-key": key, "x-mcp-servers": alias, "x-integration-trace": alias},
             timeout=30,
             trust_env=False,
-            event_hooks={"response": [remember]},
+            event_hooks={"response": [responses.remember]},
         )
         url: Final = str(gateway.client.base_url).rstrip("/") + "/mcp"
         async with streamable_http_client(url, http_client=client) as streams:
@@ -773,7 +780,8 @@ def _native_lookup(gateway: Gateway, scenario: Scenario, peer: McpPeer, record: 
                 await session.initialize()
                 name: Final = next(tool.name for tool in (await session.list_tools()).tools if "lookup" in tool.name)
                 result: Final = await session.call_tool(name, {"record": record})
-                return NativeCall(key, alias, name, JSON_OBJECT.validate_python(result.model_dump(mode="json")), seen)
+                dumped: Final = JSON_OBJECT.validate_python(result.model_dump(mode="json"))
+                return NativeCall(key, alias, name, dumped, responses.seen)
 
     return asyncio.run(run())
 
