@@ -1608,6 +1608,7 @@ class TeamNewBody(BaseModel):
     organization_id: str | None = None
     metadata: TeamMetadata | None = None
     model_aliases: dict[str, str] | None = None
+    max_parallel_requests: int | None = None
 
 
 class TeamNewResponse(BaseModel):
@@ -1629,6 +1630,7 @@ class TeamData(BaseModel):
     organization_id: str | None = None
     team_alias: str | None = None
     models: list[str] = []
+    max_parallel_requests: int | None = None
     members_with_roles: list[TeamMemberEntry] = []
 
 
