@@ -274,7 +274,7 @@ def _with_kept_parts(tool_result: Mapping[str, object], parts: _KeptParts) -> ob
     return {**tool_result, "content": [_restored_part(part, parts.get(index)) for index, part in enumerate(blocks)]}
 
 
-_V = TypeVar("_V")
+_V = TypeVar("_V")  # rebind-ok: a TypeVar cannot be Final
 _ToolResultValues: TypeAlias = tuple[tuple[str, _V], ...]
 
 
