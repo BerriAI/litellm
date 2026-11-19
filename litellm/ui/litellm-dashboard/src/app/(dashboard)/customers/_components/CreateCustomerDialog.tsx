@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { $api } from "@/lib/http/api";
@@ -19,6 +18,7 @@ import {
 
 import CustomerBudgetInput from "./CustomerBudgetInput";
 import CustomerBudgetGroupsEditor from "./CustomerBudgetGroupsEditor";
+import { CustomerRateLimitFields } from "./CustomerRateLimits";
 
 interface Props {
   open: boolean;
@@ -26,7 +26,6 @@ interface Props {
   onCreated: (customerOrgId: string) => void;
 }
 
-const rateFields = ["tpm", "rpm"] as const;
 export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: Props) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
@@ -95,6 +94,14 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
               amount={fields.monthlyBudget}
               onChange={(budgetId, monthlyBudget) => setFields({ ...fields, budgetId, monthlyBudget })}
             />
+            {!fields.budgetId && (
+              <CustomerRateLimitFields
+                id="cc"
+                tpm={fields.tpm}
+                rpm={fields.rpm}
+                onChange={(field, value) => setFields({ ...fields, [field]: value })}
+              />
+            )}
             <CustomerBudgetGroupsEditor
               groups={fields.groups}
               defaultGroupId={fields.defaultGroupId}
@@ -104,28 +111,6 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
                 setError(null);
               }}
             />
-            <details hidden={Boolean(fields.budgetId)} className="group border-t pt-4">
-              <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-medium">
-                <ChevronRight className="size-4 group-open:rotate-90" />
-                {t("customerPortal.createDialog.advanced")}
-              </summary>
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                {rateFields.map((field) => (
-                  <div className="space-y-1.5" key={field}>
-                    <Label htmlFor={`cc-${field}`}>{t(`customerPortal.createDialog.${field}`)}</Label>
-                    <Input
-                      id={`cc-${field}`}
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={fields[field]}
-                      onChange={(event) => setFields({ ...fields, [field]: event.target.value })}
-                      placeholder={t("customerPortal.createDialog.noLimit")}
-                    />
-                  </div>
-                ))}
-              </div>
-            </details>
           </fieldset>
           {error && (
             <p role="alert" className="text-sm text-destructive">

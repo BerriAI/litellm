@@ -25,6 +25,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     model_budget_spend_cache_key,
 )
 from litellm.types.videos.utils import encode_video_id_with_provider
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 
 @pytest.mark.asyncio
@@ -191,7 +192,9 @@ async def test_custom_auth_defers_end_user_budget_to_common_checks_when_enabled(
 
 
 @pytest.mark.asyncio
-async def test_custom_auth_token_budget_still_loads_and_caches_unrestricted_end_user():
+async def test_custom_auth_token_budget_still_loads_and_caches_unrestricted_end_user(
+    rust_auth_stores: RustAuthStores,
+):
     """
     A token-supplied end_user_max_budget must leave the end-user row in cache.
 
@@ -208,17 +211,8 @@ async def test_custom_auth_token_budget_still_loads_and_caches_unrestricted_end_
         end_user_cache_key,
     )
 
-    end_user_row = MagicMock()
-    end_user_row.user_id = "customer-1"
-    end_user_row.dict = lambda: {
-        "user_id": "customer-1",
-        "blocked": False,
-        "spend": 100.0,
-    }
-
+    rust_auth_stores.end_user.rows["customer-1"] = {"user_id": "customer-1", "blocked": False, "spend": 100.0}
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     cache = UserApiKeyCache()
 
     _, end_user_object = await _lookup_end_user_and_apply_budget(
@@ -240,7 +234,9 @@ async def test_custom_auth_token_budget_still_loads_and_caches_unrestricted_end_
 
 
 @pytest.mark.asyncio
-async def test_custom_auth_key_default_end_user_budget_reaches_the_token_for_a_new_end_user(monkeypatch):
+async def test_custom_auth_key_default_end_user_budget_reaches_the_token_for_a_new_end_user(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     """A custom-auth token that carries a key ``end_user_budget_id`` must enforce that budget on a
     brand-new end user, ahead of the proxy-wide default, from the very first request."""
     from unittest.mock import MagicMock
@@ -251,15 +247,9 @@ async def test_custom_auth_key_default_end_user_budget_reaches_the_token_for_a_n
     monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-eu-budget")
     budgets = {"global-eu-budget": 100.0, "svc-a-budget": 0.5}
 
-    async def _find_budget(where):
-        row = MagicMock()
-        row.dict = lambda: {"budget_id": where["budget_id"], "max_budget": budgets[where["budget_id"]]}
-        return row
-
+    for budget_id, max_budget in budgets.items():
+        rust_auth_stores.budget.rows[budget_id] = {"budget_id": budget_id, "max_budget": max_budget}
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 
     valid_token, end_user_object = await _lookup_end_user_and_apply_budget(
         valid_token=UserAPIKeyAuth(
@@ -279,7 +269,9 @@ async def test_custom_auth_key_default_end_user_budget_reaches_the_token_for_a_n
 
 
 @pytest.mark.asyncio
-async def test_custom_auth_cap_stays_below_the_key_default_end_user_budget(monkeypatch):
+async def test_custom_auth_cap_stays_below_the_key_default_end_user_budget(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     """A custom auth callable that already capped the end user tighter than the key's default
     budget keeps its cap: the key default never loosens what custom auth set."""
     from unittest.mock import MagicMock
@@ -289,15 +281,8 @@ async def test_custom_auth_cap_stays_below_the_key_default_end_user_budget(monke
 
     monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
 
-    async def _find_budget(where):
-        row = MagicMock()
-        row.dict = lambda: {"budget_id": where["budget_id"], "max_budget": 0.5}
-        return row
-
+    rust_auth_stores.budget.rows["svc-a-budget"] = {"budget_id": "svc-a-budget", "max_budget": 0.5}
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 
     valid_token, _ = await _lookup_end_user_and_apply_budget(
         valid_token=UserAPIKeyAuth(
@@ -317,7 +302,9 @@ async def test_custom_auth_cap_stays_below_the_key_default_end_user_budget(monke
 
 
 @pytest.mark.asyncio
-async def test_custom_auth_proxy_wide_default_end_user_budget_reaches_an_uncapped_token(monkeypatch):
+async def test_custom_auth_proxy_wide_default_end_user_budget_reaches_an_uncapped_token(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     """With no key default, a brand-new end user on a custom-auth token that set no cap gets the
     proxy-wide default budget's cap, the same way the virtual-key path already applies it."""
     from unittest.mock import MagicMock
@@ -327,15 +314,8 @@ async def test_custom_auth_proxy_wide_default_end_user_budget_reaches_an_uncappe
 
     monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-eu-budget")
 
-    async def _find_budget(where):
-        row = MagicMock()
-        row.dict = lambda: {"budget_id": where["budget_id"], "max_budget": 100.0}
-        return row
-
+    rust_auth_stores.budget.rows["global-eu-budget"] = {"budget_id": "global-eu-budget", "max_budget": 100.0}
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 
     valid_token, end_user_object = await _lookup_end_user_and_apply_budget(
         valid_token=UserAPIKeyAuth(token="test_token", end_user_id="customer-new"),

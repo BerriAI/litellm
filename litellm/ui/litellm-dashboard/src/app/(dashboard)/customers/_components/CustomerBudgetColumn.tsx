@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { Button } from "@/components/ui/button";
 import { TableCell, TableHead } from "@/components/ui/table";
+import { CustomerRateLimitSummary, type CustomerRateLimits } from "./CustomerRateLimits";
 
 export function CustomerBudgetSortHeader({
   sort,
@@ -25,11 +26,18 @@ export function CustomerBudgetSortHeader({
   );
 }
 
-export function CustomerBudgetLimitCell({ limit }: { limit: number | null }) {
+export function CustomerBudgetLimitCell({
+  limit,
+  rateLimits,
+}: {
+  limit: number | null;
+  rateLimits?: CustomerRateLimits | null;
+}) {
   const { t } = useTranslation();
   return (
     <TableCell className="px-4 tabular-nums">
       {limit === null ? t("customerPortal.analytics.noLimit") : formatUsd(limit)}
+      <CustomerRateLimitSummary limits={rateLimits} />
     </TableCell>
   );
 }

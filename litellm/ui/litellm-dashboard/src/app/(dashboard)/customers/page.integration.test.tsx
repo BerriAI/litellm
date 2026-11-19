@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../../tests/test-utils";
+import {
+  act,
+  fireEvent,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "../../../../tests/test-utils";
 import CustomersPage from "./page";
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
@@ -114,10 +122,13 @@ afterEach(() => {
   document.cookie = "token=; Max-Age=0; Path=/";
 });
 
-const customerLinks = () => within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link");
+const customerLinks = () =>
+  within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link", {
+    name: (name) => name !== "App budgets",
+  });
 
 describe("customer organization overview", () => {
-  it("keeps complete totals and shares while sorting, paginating, and searching", async () => {
+  it("should keep complete totals and shares while sorting, paginating, and searching", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />);
     await screen.findByRole("link", { name: "Customer 29" });
@@ -126,6 +137,9 @@ describe("customer organization overview", () => {
       "href",
       "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15",
     );
+    expect(
+      within(screen.getByRole("row", { name: /Customer 29/ })).getByRole("link", { name: "App budgets" }),
+    ).toHaveAttribute("href", "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15#app-budgets");
     const overview = screen.getByRole("region", { name: "Overall customer usage" });
     expect(within(overview).getByText("$100.00")).toBeInTheDocument();
     expect(within(overview).getByText("20")).toBeInTheDocument();
@@ -144,8 +158,10 @@ describe("customer organization overview", () => {
     expect(within(row).getByText("Reached limit")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page" }));
     expect(await screen.findByText("Page 2 of 2")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: /Search by name or ID/ }), {
-      target: { value: "Customer 29" },
+    act(() => {
+      fireEvent.change(screen.getByRole("textbox", { name: /Search by name or ID/ }), {
+        target: { value: "Customer 29" },
+      });
     });
     await screen.findByText("Page 1 of 1");
     expect(customerLinks()).toHaveLength(1);
@@ -154,7 +170,7 @@ describe("customer organization overview", () => {
   });
 
   it.each(["range=2024-02-01..2024-02-29", "from=2024-02-01&to=2024-02-29"])(
-    "restores saved sorting and %s without changing monthly shares",
+    "should restore saved sorting and %s without changing monthly shares",
     async (dates) => {
       const user = userEvent.setup();
       renderWithProviders(<CustomersPage />, {
@@ -180,13 +196,17 @@ describe("customer organization overview", () => {
     },
   );
 
-  it("shows a newly created customer first and resets the search, sort, and page", async () => {
+  it("should show a newly created customer first and resets the search, sort, and page", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />, { searchParams: "?search=customer&sort_by=customer&sort_order=asc&page=2" });
     await screen.findByRole("link", { name: "Customer 25" });
     await user.click(screen.getByRole("button", { name: "Create organization" }));
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "New organization" } });
-    fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: "new-org" } });
+    act(() => {
+      fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "New organization" } });
+    });
+    act(() => {
+      fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: "new-org" } });
+    });
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create customer" }));
     await screen.findByRole("link", { name: "New organization" });
     expect(customerLinks()[0]).toHaveTextContent("New organization");
@@ -195,7 +215,7 @@ describe("customer organization overview", () => {
     expect(creations).toEqual([expect.objectContaining({ customer_org_id: "new-org", alias: "New organization" })]);
   });
 
-  it("reports failed usage instead of displaying partial totals or zero shares", async () => {
+  it("should report failed usage instead of displaying partial totals or zero shares", async () => {
     failed = true;
     renderWithProviders(<CustomersPage />);
     expect(await screen.findAllByText("Could not load customer organization usage.")).toHaveLength(2);

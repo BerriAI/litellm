@@ -82,6 +82,7 @@ from litellm.redis.stores.spend_counters import (
     user_window_counter,
 )
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.model_access_group_budget_repository import ModelAccessGroupBudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
@@ -90,10 +91,9 @@ from litellm.repositories.table_repositories import (
     CustomerMemberRepository,
     CustomerOrganizationRepository,
     CustomerTeamRepository,
-    EndUserRepository,
-    TagRepository,
-    TeamMembershipRepository,
 )
+from litellm.repositories.tag_repository import TagRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
     CustomerSpendTable,

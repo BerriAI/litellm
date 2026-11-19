@@ -40,7 +40,8 @@ from litellm.proxy.management_helpers.resource_display_names import (
 )
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
-from litellm.repositories.table_repositories import AccessGroupRepository, TeamRepository
+from litellm.repositories.access_group_repository import AccessGroupRepository
+from litellm.repositories.table_repositories import TeamRepository
 from litellm.types.access_group import (
     AccessGroupCreateRequest,
     AccessGroupResource,

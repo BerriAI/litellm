@@ -9,6 +9,8 @@ from litellm.llms.anthropic.messages.native import handler as main
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
+from litellm.llms.bedrock.messages.mantle_transformation import AmazonMantleMessagesConfig
+from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import catalog, detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
@@ -100,6 +102,15 @@ def _resolved(request: NativeCall) -> tuple[str, str | None]:
     return _resolved_model(str(request.resolved["model"]), optional_str(request.resolved.get("custom_llm_provider")))
 
 
+_CONFIG_TARGETS: Final[Mapping[type, Target]] = MappingProxyType(
+    {
+        AmazonAnthropicClaudeMessagesConfig: Target.BEDROCK_INVOKE,
+        AmazonMantleMessagesConfig: Target.BEDROCK_MANTLE,
+        BedrockMantleAnthropicMessagesConfig: Target.BEDROCK_MANTLE,
+    }
+)
+
+
 def _route_target(
     requested_model: str,
     model: str,
@@ -110,9 +121,7 @@ def _route_target(
 ) -> Target:
     provider_config: Final = main._provider_messages_config(model, provider, api_base)  # pyright: ignore[reportPrivateUsage]  # the handler's own config lookup
     if provider_config is not None:
-        return (
-            Target.BEDROCK_INVOKE if type(provider_config) is AmazonAnthropicClaudeMessagesConfig else Target.MESSAGES
-        )
+        return _CONFIG_TARGETS.get(type(provider_config), Target.MESSAGES)
     if main._deployment_passes_through_anthropic_messages(model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough opt-in
         return Target.MESSAGES_PASSTHROUGH
     if not compacting and main._should_route_to_responses_api(provider, requested_model, model, model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice

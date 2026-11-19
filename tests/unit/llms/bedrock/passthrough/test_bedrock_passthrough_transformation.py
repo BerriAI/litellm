@@ -930,6 +930,38 @@ def _tier_priced_cost(price_suffix: str) -> float:
     )
 
 
+@pytest.mark.asyncio
+async def test_converse_stream_passthrough_logs_the_tier_in_metadata() -> None:
+    endpoint: Final = f"/model/{TIERED_MODEL}/converse-stream"
+    callback: Final = _CaptureAsyncSuccessCallback()
+    logging_obj: Final = _stream_logging_obj(endpoint, [callback], model=TIERED_MODEL)
+    collector: Final = BedrockPassthroughConfig().create_stream_collector(
+        model=TIERED_MODEL, custom_llm_provider="bedrock", endpoint=endpoint
+    )
+    _feed(
+        collector,
+        _event_frame("messageStart", {"role": "assistant"})
+        + _text_block(0, ["Converse response"])
+        + _event_frame("messageStop", {"stopReason": "end_turn"})
+        + _event_frame(
+            "metadata",
+            {
+                "usage": {
+                    "inputTokens": TIERED_PROMPT_TOKENS,
+                    "outputTokens": TIERED_COMPLETION_TOKENS,
+                    "totalTokens": TIERED_PROMPT_TOKENS + TIERED_COMPLETION_TOKENS,
+                },
+                "metrics": {"latencyMs": 1},
+                "serviceTier": {"type": "priority"},
+            },
+        ),
+    )
+
+    assert await logging_obj.async_flush_passthrough_collected_chunks(collector=collector) is True
+    assert callback.kwargs is not None
+    assert callback.kwargs["response_cost"] == pytest.approx(_tier_priced_cost("_priority"))
+
+
 def _nova_invoke_text_stream(texts: list[str]) -> bytes:
     return b"".join(
         _invoke_chunk(event)
