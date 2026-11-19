@@ -2,6 +2,7 @@ import json
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
@@ -28,6 +29,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupp
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     defs_unpacked,
+    invalid_type_message,
     is_object_schema,
     sanitize_input_schema_for_anthropic,
     schema_fragment_ref,
@@ -178,6 +180,58 @@ _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
 NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
 NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
+
+
+def _is_json_object(value: object) -> bool:
+    return isinstance(value, Mapping)
+
+
+def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[str, object, str], ...]:
+    blocks: Final = parts_of(thinking_blocks)
+    match thinking_blocks:
+        case None:
+            return ()
+        case list() | tuple():
+            return tuple(
+                (f"messages[{index}].thinking_blocks[{position}]", block, "an object")
+                for position, block in enumerate(blocks)
+                if not _is_json_object(block)
+            )
+        case _:
+            return ((f"messages[{index}].thinking_blocks", thinking_blocks, "a list"),)
+
+
+def malformed_thinking_blocks_error(messages: Sequence[object]) -> AnthropicError | None:
+    assistant_turns: Final = (
+        (index, message) for index, message in enumerate(messages) if message_field(message, "role") == "assistant"
+    )
+    fault: Final = next(
+        chain.from_iterable(
+            _thinking_blocks_faults(index, message_field(message, "thinking_blocks"))
+            for index, message in assistant_turns
+        ),
+        None,
+    )
+    if fault is None:
+        return None
+    return AnthropicError(status_code=400, message=invalid_type_message(*fault))
+
+
+def without_malformed_thinking_blocks(message: AllMessageValues) -> AllMessageValues:
+    thinking_blocks: Final = message_field(message, "thinking_blocks")
+    if message_field(message, "role") != "assistant" or not _thinking_blocks_faults(0, thinking_blocks):
+        return message
+    blocks: Final = parts_of(thinking_blocks)
+    match thinking_blocks:
+        case list() | tuple():
+            kept: Final = tuple(block for block in blocks if _is_json_object(block))
+            return cast(  # cast-ok: dict spread keeps message shape
+                AllMessageValues, {**message, "thinking_blocks": kept}
+            )
+        case _:
+            return cast(  # cast-ok: dropping one key keeps message shape
+                AllMessageValues, {key: value for key, value in message.items() if key != "thinking_blocks"}
+            )
 
 
 def _tool_type(tool: object) -> str | None:
@@ -2363,6 +2417,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
         )
+
+        drop_params: Final = drops_unsupported_params(
+            _REQUEST_PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params")
+        )
+        thinking_blocks_error: Final = None if drop_params else malformed_thinking_blocks_error(parts_of(messages))
+        if thinking_blocks_error is not None:
+            raise thinking_blocks_error
+        if drop_params and messages:
+            messages = [  # rebind-ok: this function already rebinds messages for the tool-name rewrite
+                without_malformed_thinking_blocks(message) for message in messages
+            ]
 
         if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
