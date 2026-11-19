@@ -9,6 +9,7 @@ import {
   rollUpBreakdown,
   type UsageMetric,
 } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
+import { customerModelBreakdown } from "./customerUsageTotals";
 export interface CustomerUsageTotals {
   spend: number;
   tokens: number;
@@ -40,8 +41,7 @@ export const rankCustomerModels = (
     ...day,
     breakdown: {
       ...day.breakdown,
-      model_groups:
-        Object.keys(day.breakdown.model_groups).length > 0 ? day.breakdown.model_groups : day.breakdown.models,
+      model_groups: customerModelBreakdown(day),
     },
   }));
   return rankCustomerUsage(
@@ -164,6 +164,8 @@ export const mergeCustomerActivityPages = (
       total_failed_requests: total.failed_requests,
       total_cache_read_input_tokens: total.cache_read_input_tokens,
       total_cache_creation_input_tokens: total.cache_creation_input_tokens,
+      total_cache_cost: total.cache_cost ?? 0,
+      total_priced_cache_tokens: total.priced_cache_tokens ?? 0,
       total_compression_saved_tokens: total.compression_saved_tokens ?? 0,
       total_compression_savings_spend: total.compression_savings_spend ?? 0,
       total_prompt_caching_savings_spend: total.prompt_caching_savings_spend ?? 0,

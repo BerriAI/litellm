@@ -5468,6 +5468,8 @@ class BaseDailySpendTransaction(TypedDict):
     autorouter_savings_spend: NotRequired[float]
     guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
     customer_margin_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    cache_cost: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    priced_cache_tokens: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float
