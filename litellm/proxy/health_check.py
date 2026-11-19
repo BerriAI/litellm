@@ -6,7 +6,7 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from itertools import chain
@@ -421,7 +421,7 @@ def _resolved_deployment_ids(router: "Router", model_name: str) -> frozenset[str
 
 
 def _is_probe_tuning(key: str) -> bool:
-    return key in ("id", "mode") or key.startswith("health_check_")
+    return key in ("id", "mode", "base_model") or (key.startswith("health_check_") and key != "health_check_timeout")
 
 
 def _wildcard_probe(public_name: str, row: Mapping[str, object]) -> Mapping[str, object]:
@@ -467,58 +467,39 @@ class WildcardProbeScope:
     model_groups: AbstractSet[str] | None
     details: bool | None
     max_concurrency: int | None
+    deadline_seconds: float
 
 
-@dataclass(frozen=True, slots=True)
-class _WildcardProbeResults:
-    probes: Sequence[Mapping[str, object]]
-    healthy: Sequence[Mapping[str, object]]
-    unhealthy: Sequence[Mapping[str, object]]
-    seconds: float
+async def _save_wildcard_probes(prisma_client: "PrismaClient", checked_by: str, scope: WildcardProbeScope) -> None:
+    from litellm.proxy.health_endpoints._health_endpoints import save_background_health_checks_to_db
 
-
-_NO_WILDCARD_PROBE_RESULTS: Final = _WildcardProbeResults((), (), (), 0.0)
-
-
-async def _wildcard_probe_results(
-    scope: WildcardProbeScope | None, clock: Callable[[], float]
-) -> _WildcardProbeResults:
-    if scope is None:
-        return _NO_WILDCARD_PROBE_RESULTS
-    started: Final = clock()
     try:
         probes: Final = public_wildcard_probe_deployments(scope.public_names, scope.router, scope.model_groups)
         if not probes:
-            return _NO_WILDCARD_PROBE_RESULTS
-        healthy, unhealthy, _ = await _perform_health_check(list(probes), scope.details, scope.max_concurrency)
+            return
+        probe_start: Final = time.time()
+        healthy, unhealthy, _ = await asyncio.wait_for(
+            _perform_health_check(list(probes), scope.details, scope.max_concurrency), timeout=scope.deadline_seconds
+        )
     except Exception as e:
-        logger.warning("background_health_check_wildcard_probe_failed error=%s", str(e))
-        return _NO_WILDCARD_PROBE_RESULTS
-    return _WildcardProbeResults(probes, healthy, unhealthy, clock() - started)
+        logger.warning("background_health_check_wildcard_probe_failed error=%r", e)
+        return
+    await save_background_health_checks_to_db(
+        prisma_client, list(probes), healthy, unhealthy, probe_start, checked_by=checked_by
+    )
 
 
-async def probe_wildcards_and_save_background_health_checks(
+async def save_then_probe_public_wildcards(
+    save_regular_rows: Callable[[], Awaitable[bool]],
     prisma_client: "PrismaClient",
-    model_list: Sequence[Mapping[str, object]],
-    healthy_endpoints: Sequence[Mapping[str, object]],
-    unhealthy_endpoints: Sequence[Mapping[str, object]],
-    start_time: float,
     checked_by: str,
     scope: WildcardProbeScope | None,
-    clock: Callable[[], float] = time.time,
 ) -> bool:
-    """Save the cycle's rows plus any public wildcard probes; the probes' run time is kept out of the cycle's rows."""
-    from litellm.proxy.health_endpoints._health_endpoints import save_background_health_checks_to_db
-
-    results: Final = await _wildcard_probe_results(scope, clock)
-    return await save_background_health_checks_to_db(
-        prisma_client,
-        [*model_list, *results.probes],
-        [*healthy_endpoints, *results.healthy],
-        [*unhealthy_endpoints, *results.unhealthy],
-        start_time + results.seconds,
-        checked_by=checked_by,
-    )
+    """Save the cycle's rows, then probe and save public wildcard models; only the cycle's save decides the result."""
+    persisted: Final = await save_regular_rows()
+    if scope is not None:
+        await _save_wildcard_probes(prisma_client, checked_by, scope)
+    return persisted
 
 
 def _dependency_failure(

@@ -1,6 +1,7 @@
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1187,7 +1188,9 @@ def _wildcard_router(wildcard_info: dict[str, object]) -> litellm.Router:
 def test_public_wildcard_probe_deployments_probes_only_names_a_wildcard_alone_serves():
     from litellm.proxy.health_check import public_wildcard_probe_deployments
 
-    router: Final = _wildcard_router({"health_check_model": "bedrock/us.anthropic.claude-haiku-4-5"})
+    router: Final = _wildcard_router(
+        {"health_check_model": "bedrock/us.anthropic.claude-haiku-4-5", "health_check_timeout": 120}
+    )
 
     probes: Final = public_wildcard_probe_deployments(
         [_WILDCARD_SERVED, _WILDCARD_SERVED, _EXACT, _ALIAS, "openai/unserved"], router, None
@@ -1196,6 +1199,7 @@ def test_public_wildcard_probe_deployments_probes_only_names_a_wildcard_alone_se
     assert [(p["model_name"], p["litellm_params"]["model"]) for p in probes] == [(_WILDCARD_SERVED, _WILDCARD_SERVED)]
     assert probes[0]["litellm_params"]["aws_region_name"] == "us-east-1"
     assert "id" not in probes[0]["model_info"]
+    assert probes[0]["model_info"]["health_check_timeout"] == 120
     probe_request: Final = update_litellm_params_for_health_check(
         dict(probes[0]["model_info"]), dict(probes[0]["litellm_params"])
     )
@@ -1223,49 +1227,90 @@ def test_public_wildcard_probe_deployments_resolves_each_probe_mode_from_its_own
     )
 
 
-class _ClockAdvancingAnHourPerRead:
-    def __init__(self) -> None:
-        self.now = time.time()
-
-    def __call__(self) -> float:
-        self.now += 3600
-        return self.now
-
-
-@pytest.mark.asyncio
-async def test_probe_wildcards_and_save_keeps_probe_time_out_of_the_cycle_rows():
-    from litellm.proxy.health_check import WildcardProbeScope, probe_wildcards_and_save_background_health_checks
+def test_public_wildcard_probe_deployments_does_not_carry_the_wildcard_base_model():
+    from litellm.proxy.health_check import public_wildcard_probe_deployments
 
     router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "openai/*",
-                "litellm_params": {"model": "openai/*", "mock_response": "ok"},
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {"id": "wildcard", "base_model": "gpt-audio-1.5"},
+            }
+        ]
+    )
+
+    probes: Final = public_wildcard_probe_deployments(["openai/gpt-5.5"], router, None)
+
+    assert "modalities" not in update_litellm_params_for_health_check(
+        dict(probes[0]["model_info"]), dict(probes[0]["litellm_params"])
+    )
+
+
+def _openai_wildcard_router(litellm_params: dict[str, object]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", **litellm_params},
                 "model_info": {"id": "wildcard"},
             }
         ]
     )
-    prisma_client: Final = MagicMock()
-    prisma_client.db.query_raw = AsyncMock(return_value=[])
-    prisma_client.save_health_check_result = AsyncMock(return_value=object())
 
-    await probe_wildcards_and_save_background_health_checks(
+
+def _recording_prisma() -> MagicMock:
+    client = MagicMock()
+    client.db.query_raw = AsyncMock(return_value=[])
+    client.save_health_check_result = AsyncMock(return_value=object())
+    return client
+
+
+async def _save_then_probe(prisma_client: MagicMock, router: litellm.Router, deadline_seconds: float) -> bool:
+    from litellm.proxy.health_check import WildcardProbeScope, save_then_probe_public_wildcards
+
+    regular_save: Final = partial(
+        save_background_health_checks_to_db,
         prisma_client,
         [{"model_name": "exact", "litellm_params": {"model": "openai/exact"}, "model_info": {"id": "exact"}}],
         [{"model": "openai/exact", "model_id": "exact"}],
         [],
-        time.time(),
+        0.0,
+        checked_by="pod-1",
+    )
+    return await save_then_probe_public_wildcards(
+        regular_save,
+        prisma_client,
         "pod-1",
-        WildcardProbeScope(("openai/gpt-5.5",), router, None, True, None),
-        clock=_ClockAdvancingAnHourPerRead(),
+        WildcardProbeScope(("openai/gpt-5.5",), router, None, True, None, deadline_seconds),
     )
 
-    response_times: Final = {
-        call.kwargs["model_name"]: call.kwargs["response_time_ms"]
+
+@pytest.mark.asyncio
+async def test_save_then_probe_public_wildcards_saves_the_cycle_rows_first_then_times_probes_from_their_start():
+    prisma_client: Final = _recording_prisma()
+
+    persisted: Final = await _save_then_probe(prisma_client, _openai_wildcard_router({"mock_response": "ok"}), 60)
+
+    saved: Final = [
+        (call.kwargs["model_name"], call.kwargs["response_time_ms"])
         for call in prisma_client.save_health_check_result.await_args_list
-    }
-    assert sorted(response_times) == ["exact", "openai/gpt-5.5"]
-    assert all(ms < -3_000_000 for ms in response_times.values())
+    ]
+    assert persisted is True
+    assert [name for name, _ in saved] == ["exact", "openai/gpt-5.5"]
+    assert saved[0][1] > 1_000_000_000_000
+    assert 0 <= saved[1][1] < 60_000
+
+
+@pytest.mark.asyncio
+async def test_save_then_probe_public_wildcards_keeps_the_cycle_rows_when_probes_outlast_the_deadline():
+    prisma_client: Final = _recording_prisma()
+    router: Final = _openai_wildcard_router({"mock_response": "ok", "mock_delay": 30})
+
+    persisted: Final = await _save_then_probe(prisma_client, router, 0.05)
+
+    assert persisted is True
+    assert [call.kwargs["model_name"] for call in prisma_client.save_health_check_result.await_args_list] == ["exact"]
 
 
 def test_public_wildcard_probe_deployments_skips_a_wildcard_with_background_checks_disabled():
@@ -1294,17 +1339,19 @@ def test_aggregate_health_check_results_keeps_an_id_less_probe_off_a_deployment_
     model_list: Final = [
         {"model_name": "opus", "litellm_params": {"model": _WILDCARD_SERVED}, "model_info": {"id": "exact"}},
         {"model_name": _WILDCARD_SERVED, "litellm_params": {"model": _WILDCARD_SERVED}, "model_info": {}},
+        {"model_name": "blank-id", "litellm_params": {"model": "openai/blank"}, "model_info": {"id": ""}},
     ]
 
     result: Final = _aggregate_health_check_results(
         _build_model_param_to_info_mapping(model_list),
-        [{"model": _WILDCARD_SERVED, "model_id": "exact"}],
+        [{"model": _WILDCARD_SERVED, "model_id": "exact"}, {"model": "openai/blank"}],
         [{"model": _WILDCARD_SERVED, "error": "throttled"}],
     )
 
     assert {key: (value["healthy_count"], value["unhealthy_count"]) for key, value in result.items()} == {
         ("exact", "opus"): (1, 0),
         (None, _WILDCARD_SERVED): (0, 1),
+        ("", "blank-id"): (1, 0),
     }
 
 

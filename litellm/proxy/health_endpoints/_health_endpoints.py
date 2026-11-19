@@ -843,7 +843,9 @@ def _model_infos_for_endpoint(
     if not isinstance(model_param, str):
         return ()
     endpoint_model_id: Final = endpoint.get("model_id") or None
-    return tuple(info for info in model_param_to_info.get(model_param, []) if info["model_id"] == endpoint_model_id)
+    return tuple(
+        info for info in model_param_to_info.get(model_param, []) if (info["model_id"] or None) == endpoint_model_id
+    )
 
 
 def _aggregate_health_check_results(

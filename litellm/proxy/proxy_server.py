@@ -738,7 +738,7 @@ from litellm.proxy.health_check import (
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
     perform_health_check,
-    probe_wildcards_and_save_background_health_checks,
+    save_then_probe_public_wildcards,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
@@ -5112,19 +5112,23 @@ def _schedule_background_health_check_db_save(
         return
     import time as time_module
 
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        save_background_health_checks_to_db,
+    )
+
     checked_by: Final = shared_health_manager.pod_id if shared_health_manager is not None else "background_health_check"
     start_time: Final = time_module.time()
     save: Final = partial(
-        probe_wildcards_and_save_background_health_checks,
+        save_background_health_checks_to_db,
         prisma_client,
         model_list,
         healthy_endpoints,
         unhealthy_endpoints,
         start_time,
-        checked_by,
-        wildcard_scope,
+        checked_by=checked_by,
     )
-    asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
+    save_then_probe: Final = partial(save_then_probe_public_wildcards, save, prisma_client, checked_by, wildcard_scope)
+    asyncio.create_task(_window_gated_health_check_db_save(save_then_probe, pod_lock_manager, lock_ttl))
 
 
 def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
@@ -5432,8 +5436,9 @@ async def _run_background_health_check():
                     scoped_model_groups,
                     details_bool,
                     health_check_concurrency,
+                    health_check_interval,
                 )
-                if llm_router is not None and litellm.public_model_groups
+                if llm_router is not None
                 else None
             ),
         )

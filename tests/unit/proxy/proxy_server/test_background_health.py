@@ -768,7 +768,7 @@ async def test_schedule_background_health_check_db_save_saves_a_public_wildcard_
         model_list=[exact],
         healthy_endpoints=[{"model": served, "model_id": "exact"}],
         unhealthy_endpoints=[],
-        wildcard_scope=WildcardProbeScope((served,), router, None, True, None),
+        wildcard_scope=WildcardProbeScope((served,), router, None, True, None, 60),
     )
     await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
 
@@ -796,7 +796,7 @@ async def test_schedule_background_health_check_db_save_still_saves_regular_rows
         healthy_endpoints=[{"model": "openai/opus", "model_id": "exact"}],
         unhealthy_endpoints=[],
         wildcard_scope=WildcardProbeScope(
-            ("bedrock/us.anthropic.claude-opus-4-8",), _RegistryUnavailableRouter(), None, True, None
+            ("bedrock/us.anthropic.claude-opus-4-8",), _RegistryUnavailableRouter(), None, True, None, 60
         ),
     )
     await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
@@ -846,7 +846,7 @@ async def test_run_background_health_check_hands_public_model_groups_to_the_db_s
         await _run_background_health_check()
 
     assert scheduled["wildcard_scope"] == WildcardProbeScope(
-        ("bedrock/us.anthropic.claude-opus-4-8",), router, frozenset({"bedrock/*"}), False, 3
+        ("bedrock/us.anthropic.claude-opus-4-8",), router, frozenset({"bedrock/*"}), False, 3, 60
     )
 
 
