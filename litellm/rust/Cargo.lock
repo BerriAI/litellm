@@ -4050,6 +4050,7 @@ dependencies = [
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-resolve",
+ "litellm-redis-store",
  "litellm-redis-testing",
  "litellm-redis-types",
  "litellm-repositories",

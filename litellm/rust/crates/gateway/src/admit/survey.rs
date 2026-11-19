@@ -298,6 +298,7 @@ fn litellm(settings: &LiteLlmSettings) -> Vec<Box<str>> {
         drop_params: _,
         json_logs: _,
         set_verbose: _,
+        enable_redis_auth_cache: _,
         request_timeout,
         num_retries,
         cache,

@@ -1,4 +1,4 @@
-use litellm_python_compat::lenient::{IsTrue, StrBool, Truthy};
+use litellm_python_compat::lenient::{IsTrue, LaxBoolOr, StrBool, Truthy};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use serde_with::serde_as;
@@ -196,6 +196,7 @@ impl Default for GeneralSettings {
 }
 
 /// Callback entries can carry credentials inline, so only whether they are set is printed.
+#[serde_as]
 #[derive(Clone, Default, Deserialize, Redact)]
 #[serde(default)]
 pub struct LiteLlmSettings {
@@ -213,6 +214,8 @@ pub struct LiteLlmSettings {
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
     pub cache_params: Option<CacheSettings>,
+    #[serde_as(as = "LaxBoolOr<false>")]
+    pub enable_redis_auth_cache: bool,
     #[serde(deserialize_with = "one_or_many")]
     #[redact(fixed = 3)]
     pub callbacks: Option<Vec<Value>>,

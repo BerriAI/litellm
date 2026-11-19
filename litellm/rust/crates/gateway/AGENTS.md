@@ -31,7 +31,9 @@
 - Not judged yet: models and settings Python holds in its database, which it also reads when only the database turns `store_model_in_db` on, CLI flags Python was started with, a Redis only `REDIS_*` configures, and environment variables outside `Switch`
 
 ## Keys
-- With a database, `AppState::auth` authenticates the master key and a virtual key, in both modes. `StoredKeys` (`src/keys.rs`) reads the key's row from Postgres on every request, with no cache in front of it
+- With a database, `AppState::auth` authenticates the master key and a virtual key, in both modes. `StoredKeys` (`src/keys/mod.rs`) reads the key's row from Postgres on every request
+- With `litellm_settings.enable_redis_auth_cache` on and a coordination Redis, `StoredKeys` first reads the key Python's `UserApiKeyCache` wrote there (`src/keys/cached.rs`), and a miss reads Postgres. It only reads Redis, never keeps a copy in memory and never writes, because this process hears no evictions and Python fills the cache. The flag is read as a lax bool, so a quoted `"true"` that Python's `is True` leaves off still reads Redis, which then holds nothing
+- A cached key is Python's `UserAPIKeyAuth` dump. The auth fields beyond the row are named in `CachedKey` or `DESCRIBING`, and the rest must be exactly `KeyView`, so a field Python adds is a miss rather than a key served unchecked
 - The native app honors a key's expiry and its block and nothing else. `carried` takes the row apart column by column, and a key that holds anything else (a team, an owner, a budget, a limit, a model list, metadata) is `Forbidden`, which `admit` leaves to Python as `credential`. A column added to the row does not compile until it is honored or named
 - Honoring a column natively moves it out of `carried` in the same change. Never report a key active while a column it holds is not enforced
 - `admit` and the route's `authenticate` layer each check the caller, so an admitted virtual key costs two reads

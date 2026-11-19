@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::extract::FromRef;
 use litellm_config::{Config, Environment};
@@ -6,6 +6,10 @@ use litellm_db::Pools;
 use litellm_env::Lookup;
 use litellm_gateway_auth::{Auth, BearerOrXApiKey, keys::KeyLookup};
 use litellm_license::Entitlements;
+use litellm_redis_store::{
+    Remote,
+    auth_cache::{AuthCache, Settings},
+};
 use litellm_repositories::KeyRepository;
 
 use crate::{
@@ -40,8 +44,10 @@ impl AppState {
         let (database, keys) = db::connect(config, &resources.secrets)
             .await?
             .map(|(pools, repositories)| {
-                let keys: Arc<dyn KeyLookup> =
-                    Arc::new(StoredKeys(KeyRepository::new(repositories)));
+                let keys: Arc<dyn KeyLookup> = Arc::new(StoredKeys {
+                    repository: KeyRepository::new(repositories),
+                    cache: auth_cache(config, &redis),
+                });
                 (pools, keys)
             })
             .unzip();
@@ -71,6 +77,22 @@ impl AppState {
             database.close().await;
         }
     }
+}
+
+/// Python's `UserApiKeyCache` on the coordination Redis, which `enable_redis_auth_cache` attaches
+/// it to. The gateway only reads it, so no write ever takes the TTL.
+fn auth_cache(config: &Config, redis: &RedisClients) -> Option<AuthCache> {
+    const NEVER_WRITTEN: Duration = Duration::ZERO;
+    let client = redis.coordination.clone()?;
+    config.litellm_settings.enable_redis_auth_cache.then(|| {
+        AuthCache::new(
+            Some(Remote {
+                client,
+                default_ttl: NEVER_WRITTEN,
+            }),
+            Settings::default(),
+        )
+    })
 }
 
 impl FromRef<AppState> for RedisClients {

@@ -1,4 +1,5 @@
-//! The virtual keys the native app authenticates, read from the proxy's database on every request.
+//! The virtual keys the native app authenticates, read from Python's Redis auth cache when it
+//! shares one, and otherwise from the proxy's database on every request.
 //!
 //! The native app honors a key's expiry and its block and nothing else a key can carry, so it
 //! only authenticates a key that carries nothing else. Each column of the key's row is taken apart
@@ -12,7 +13,20 @@ use litellm_gateway_auth::{
     Error,
     keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture},
 };
+use litellm_redis_store::auth_cache::AuthCache;
 use litellm_repositories::{KeyRepository, KeyView, RawJson, Side};
+
+/// The name of the first of `fields` that holds something.
+macro_rules! carried {
+    ($($field:ident),+ $(,)?) => {
+        [$((stringify!($field), Carried::is_carried($field)),)+]
+            .into_iter()
+            .find(|(_, carried)| *carried)
+            .map(|(field, _)| field)
+    };
+}
+
+mod cached;
 
 /// The key type the proxy gives a key generated without one, which reaches every route.
 const DEFAULT_KEY_TYPE: &str = "default";
@@ -134,17 +148,11 @@ fn carried(key: &KeyView) -> Option<&'static str> {
         access_group_ids,
         object_permission_id,
     } = key;
-    macro_rules! named {
-        ($($column:ident),+ $(,)?) => {
-            [$((stringify!($column), Carried::is_carried($column)),)+]
-        };
-    }
     let other_key_type = key_type
         .as_deref()
         .is_some_and(|key_type| key_type != DEFAULT_KEY_TYPE);
-    [("key_type", other_key_type)]
-        .into_iter()
-        .chain(named![
+    other_key_type.then_some("key_type").or_else(|| {
+        carried![
             soft_budget_cooldown,
             models,
             aliases,
@@ -173,17 +181,17 @@ fn carried(key: &KeyView) -> Option<&'static str> {
             allowed_routes,
             access_group_ids,
             object_permission_id,
-        ])
-        .find(|(_, carried)| *carried)
-        .map(|(column, _)| column)
+        ]
+    })
 }
 
-/// `Err` names the column that holds something the native app does not honor.
-fn status(key: &KeyView) -> Result<KeyStatus, &'static str> {
+/// `Err` names the column, or the cached auth field in `also`, that holds something the native
+/// app does not honor.
+fn status(key: &KeyView, also: Option<&'static str>) -> Result<KeyStatus, &'static str> {
     if key.blocked == Some(true) {
         return Ok(KeyStatus::Revoked);
     }
-    match carried(key) {
+    match carried(key).or(also) {
         Some(column) => Err(column),
         None => Ok(KeyStatus::Active {
             expires_at: key.expires.map(|at| SystemTime::from(at.and_utc())),
@@ -191,20 +199,38 @@ fn status(key: &KeyView) -> Result<KeyStatus, &'static str> {
     }
 }
 
-/// The proxy's keys, each read from its database when asked for.
-pub(crate) struct StoredKeys(pub KeyRepository);
+/// The proxy's keys: what Python cached in the Redis `cache` it shares, else the database row.
+pub(crate) struct StoredKeys {
+    pub repository: KeyRepository,
+    pub cache: Option<AuthCache>,
+}
+
+impl StoredKeys {
+    async fn status(
+        &self,
+        hash: &KeyHash,
+    ) -> Result<Option<Result<KeyStatus, &'static str>>, Error> {
+        if let Some(cache) = &self.cache
+            && let Some(cached) = cached::read(cache, hash).await
+        {
+            return Ok(Some(status(&cached.row, cached.carried)));
+        }
+        let found = self
+            .repository
+            .find(hash.as_str(), Side::Read)
+            .await
+            .map_err(|error| Error::Unavailable(Source::new(error)))?;
+        Ok(found.map(|key| status(key.view(), None)))
+    }
+}
 
 impl KeyLookup for StoredKeys {
     fn lookup<'a>(&'a self, hash: &'a KeyHash) -> LookupFuture<'a> {
         Box::pin(async move {
-            let found = self
-                .0
-                .find(hash.as_str(), Side::Read)
-                .await
-                .map_err(|error| Error::Unavailable(Source::new(error)))?;
-            found
-                .map(|key| {
-                    status(key.view()).map_err(|column| {
+            self.status(hash)
+                .await?
+                .map(|status| {
+                    status.map_err(|column| {
                         tracing::debug!(
                             column,
                             "a virtual key holds what the native app does not honor"
@@ -335,7 +361,7 @@ mod tests {
         change(&mut key);
 
         assert_eq!(
-            status(&key),
+            status(&key, None),
             Ok(KeyStatus::Active {
                 expires_at: expires_at
                     .map(|second| SystemTime::UNIX_EPOCH + Duration::from_secs(second)),
@@ -351,7 +377,7 @@ mod tests {
         key.blocked = Some(true);
         change(&mut key);
 
-        assert_eq!(status(&key), Ok(KeyStatus::Revoked));
+        assert_eq!(status(&key, None), Ok(KeyStatus::Revoked));
     }
 
     #[rstest]
@@ -405,7 +431,7 @@ mod tests {
         let mut key = plain();
         change(&mut key);
 
-        assert_eq!(status(&key), Err(column));
+        assert_eq!(status(&key, None), Err(column));
     }
 
     #[rstest]
