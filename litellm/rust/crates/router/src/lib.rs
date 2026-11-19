@@ -39,7 +39,7 @@ fn string_list(extra: &ExtraParams, key: &str) -> Vec<String> {
 
 impl Router {
     pub fn from_config(config: &Config, catalog: &Catalog) -> Self {
-        let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref());
+        let drops_params_globally = config.litellm_settings.drop_params == Some(true);
         config
             .model_list
             .iter()

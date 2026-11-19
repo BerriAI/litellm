@@ -10,9 +10,11 @@ use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use litellm_router_types::RoutingStrategy;
+
 use crate::{
     cache::RouterCache,
-    config::{Op, RetryPolicy, RoutingStrategy},
+    config::{Op, RetryPolicy},
     error::{AttemptError, Error, FailureKind},
     fallback::Fallbacks,
     mock::MockFailure,
