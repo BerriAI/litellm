@@ -15,10 +15,11 @@ import litellm
 from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching import DualCache
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 
 @pytest.mark.asyncio
-async def test_default_budget_applied_to_end_user_without_budget():
+async def test_default_budget_applied_to_end_user_without_budget(rust_auth_stores: RustAuthStores):
     """
     Core scenario: End user without explicit budget gets default budget applied.
     This is the main use case - applying limits to all unbudgeted end users.
@@ -46,12 +47,8 @@ async def test_default_budget_applied_to_end_user_without_budget():
     }
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
-        return_value=MagicMock(dict=lambda: mock_end_user_data)
-    )
-    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
-        return_value=MagicMock(dict=lambda: default_budget.dict())
-    )
+    rust_auth_stores.end_user.rows[end_user_id] = mock_end_user_data
+    rust_auth_stores.budget.rows[default_budget.budget_id] = default_budget.model_dump()
 
     mock_cache = AsyncMock(spec=DualCache)
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -76,7 +73,7 @@ async def test_default_budget_applied_to_end_user_without_budget():
 
 
 @pytest.mark.asyncio
-async def test_explicit_budget_not_overridden_by_default():
+async def test_explicit_budget_not_overridden_by_default(rust_auth_stores: RustAuthStores):
     """
     Core scenario: End users with explicit budgets keep their budgets.
     The default should not override user-specific configurations.
@@ -104,9 +101,7 @@ async def test_explicit_budget_not_overridden_by_default():
     }
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
-        return_value=MagicMock(dict=lambda: mock_end_user_data)
-    )
+    rust_auth_stores.end_user.rows[end_user_id] = mock_end_user_data
 
     mock_cache = AsyncMock(spec=DualCache)
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -129,7 +124,7 @@ async def test_explicit_budget_not_overridden_by_default():
 
 
 @pytest.mark.asyncio
-async def test_budget_enforcement_blocks_over_budget_users():
+async def test_budget_enforcement_blocks_over_budget_users(rust_auth_stores: RustAuthStores):
     """
     Core scenario: Budget limits are actually enforced via _check_end_user_budget.
     Users who exceed their budget should be blocked.
@@ -161,12 +156,8 @@ async def test_budget_enforcement_blocks_over_budget_users():
     }
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
-        return_value=MagicMock(dict=lambda: mock_end_user_data)
-    )
-    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
-        return_value=MagicMock(dict=lambda: default_budget.dict())
-    )
+    rust_auth_stores.end_user.rows[end_user_id] = mock_end_user_data
+    rust_auth_stores.budget.rows[default_budget.budget_id] = default_budget.model_dump()
 
     mock_cache = AsyncMock(spec=DualCache)
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -199,7 +190,7 @@ async def test_budget_enforcement_blocks_over_budget_users():
 
 
 @pytest.mark.asyncio
-async def test_system_works_without_default_budget_configured():
+async def test_system_works_without_default_budget_configured(rust_auth_stores: RustAuthStores):
     """
     Core scenario: System continues to work when no default budget is configured.
     This ensures backward compatibility.
@@ -213,15 +204,13 @@ async def test_system_works_without_default_budget_configured():
         "spend": 5.0,
         "litellm_budget_table": None,
         "alias": None,
-        "allowed_model_region": None,
+        "allowed_model_region": "eu",
         "default_model": None,
         "blocked": False,
     }
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
-        return_value=MagicMock(dict=lambda: mock_end_user_data)
-    )
+    rust_auth_stores.end_user.rows[end_user_id] = mock_end_user_data
 
     mock_cache = AsyncMock(spec=DualCache)
     mock_cache.async_get_cache = AsyncMock(return_value=None)

@@ -154,6 +154,14 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                         payload.get("autorouter_savings_spend", 0) or 0
                     ) + daily_transaction.get("autorouter_savings_spend", 0)
 
+                    daily_transaction["guardrail_spend"] = (
+                        payload.get("guardrail_spend", 0) or 0
+                    ) + daily_transaction.get("guardrail_spend", 0)
+
+                    daily_transaction["customer_margin_spend"] = (
+                        payload.get("customer_margin_spend", 0) or 0
+                    ) + daily_transaction.get("customer_margin_spend", 0)
+
                     daily_transaction["total_response_time_ms"] = (
                         payload.get("total_response_time_ms", 0) or 0
                     ) + daily_transaction.get("total_response_time_ms", 0)

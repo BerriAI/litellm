@@ -11,7 +11,7 @@ from typing import Final, Protocol
 
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_caches
-from litellm.repositories.table_repositories import AccessGroupRepository
+from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 

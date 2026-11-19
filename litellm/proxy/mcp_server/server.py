@@ -10,6 +10,7 @@ import contextvars
 import hashlib
 import json
 import os
+import re
 import time
 import types
 from collections import Counter
@@ -81,9 +82,11 @@ from litellm.proxy.mcp_server.oauth_utils import (
     well_known_root_suffix,
 )
 from litellm.proxy.mcp_server.scope_challenge import (
+    LISTING_METHODS,
     SCOPE_RESPONSE_KEY,
     OAuthScopeResponse,
     finish_scope_response,
+    is_listing_request,
     is_tool_call_request,
 )
 from litellm.proxy.mcp_server.ui_session_utils import (
@@ -99,6 +102,7 @@ from litellm.proxy.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
     asgi_scope_fields,
     merge_mcp_headers,
+    string_field,
 )
 from litellm.types.mcp import (
     MCPAuth,
@@ -225,16 +229,13 @@ _SESSION_MANAGERS_INITIALIZED = False
 _INITIALIZATION_LOCK: Final = asyncio.Lock()
 
 
-def _jsonrpc_text_has_top_level_method(text: str) -> bool:
-    """Whether a (possibly truncated) JSON-RPC envelope has a ``method`` key at
-    the root object's top level.
+def _jsonrpc_text_top_level_key_end(text: str, key: str) -> int | None:
+    """Where the root object's top-level ``key`` ends in a (possibly truncated) JSON-RPC envelope.
 
-    Used to tell a request/notification (carries ``method``) apart from a
-    response (carries ``result``/``error`` and no top-level ``method``). A
-    response payload can itself nest a ``method`` field, so only keys at the
+    A response payload can itself nest a ``method`` field, so only keys at the
     root object's depth are inspected rather than searching the whole string.
-    Returns ``True`` only when a top-level ``method`` key is positively found;
-    truncation that hides it yields ``False``.
+    Returns an index only when the key is positively found; truncation that
+    hides it yields ``None``.
     """
     depth = 0
     in_string = False
@@ -243,7 +244,7 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
     reading_key = False
     expect_key = False
     key_chars: list[str] = []
-    for ch in text:
+    for index, ch in enumerate(text):
         if in_string:
             if escaped:
                 escaped = False
@@ -251,8 +252,8 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
                 escaped = True
             elif ch == '"':
                 in_string = False
-                if reading_key and depth == 1 and "".join(key_chars) == "method":
-                    return True
+                if reading_key and depth == 1 and "".join(key_chars) == key:
+                    return index + 1
             elif reading_key:
                 key_chars.append(ch)
             continue
@@ -276,7 +277,32 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
             expect_key = bool(in_object) and in_object[-1]
         elif ch == ":":
             expect_key = False
-    return False
+    return None
+
+
+def _jsonrpc_text_has_top_level_method(text: str) -> bool:
+    """Whether a (possibly truncated) JSON-RPC envelope has a top-level ``method`` key.
+
+    Used to tell a request/notification (carries ``method``) apart from a
+    response (carries ``result``/``error`` and no top-level ``method``).
+    """
+    return _jsonrpc_text_top_level_key_end(text, "method") is not None
+
+
+_JSONRPC_STRING_VALUE: Final = re.compile(r'\s*:\s*("(?:[^"\\]|\\.)*")')
+
+
+def _jsonrpc_text_method(text: str) -> str | None:
+    """The top-level ``method`` of a (possibly truncated) JSON-RPC envelope, when the cut leaves it whole."""
+    key_end: Final = _jsonrpc_text_top_level_key_end(text, "method")
+    value: Final = _JSONRPC_STRING_VALUE.match(text, key_end) if key_end is not None else None
+    if value is None:
+        return None
+    try:
+        method: Final = json.loads(value.group(1))
+    except ValueError:
+        return None
+    return method if isinstance(method, str) else None
 
 
 def _mcp_meta_trace_carrier(req_ctx: object) -> dict[str, str] | None:
@@ -1448,16 +1474,23 @@ if MCP_AVAILABLE:
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
-    def _admission_auth_body(body: bytes) -> bytes:
-        """Return only the JSON-RPC method for admission auth."""
+    def _admission_auth_body(body: bytes, scoped_to: Sequence[str] = ()) -> bytes:
+        """Return only the JSON-RPC method, and the tool name and server scope of a tools/call, for admission auth."""
         try:
             data: Final = TypeAdapter(dict[str, object]).validate_json(body)
         except (ValueError, TypeError):
-            return b"{}"
+            is_cut_tool_call: Final = (
+                len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                and _jsonrpc_text_method(body.decode("utf-8", errors="replace")) == "tools/call"
+            )
+            return json.dumps({"method": "tools/call"}).encode() if is_cut_tool_call else b"{}"
         method: Final = data.get("method")
         if not isinstance(method, str):
             return b"{}"
-        return json.dumps({"method": method}).encode()
+        tool_name: Final = string_field(data.get("params"), "name") if method == "tools/call" else None
+        if tool_name is None:
+            return json.dumps({"method": method}).encode()
+        return json.dumps({"method": method, "params": {"name": tool_name}, "mcp_servers": list(scoped_to)}).encode()
 
     def _is_initialize_request(body: bytes) -> bool:
         """
@@ -2470,6 +2503,27 @@ if MCP_AVAILABLE:
             ),
         )
 
+    def _is_listing_body(body: bytes) -> bool:
+        """A listing request, including one the routing peek cut off after its method."""
+        if is_listing_request(body):
+            return True
+        peek_cut: Final = len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+        return peek_cut and _jsonrpc_text_method(body.decode("utf-8", errors="replace")) in LISTING_METHODS
+
+    def _server_to_reauthorize(
+        mcp_servers: Sequence[str] | None, scoped_server_endpoint: bool, body: bytes, client_ip: str | None
+    ) -> str | None:
+        """The server a client addressed alone for a listing it can fix by authenticating again."""
+        if not scoped_server_endpoint or mcp_servers is None or len(mcp_servers) != 1 or not _is_listing_body(body):
+            return None
+        server: Final = operations.global_mcp_server_manager.get_mcp_server_by_identifier(
+            mcp_servers[0], client_ip=client_ip
+        )
+        reauthorizes: Final = (
+            server is not None and MCPServerManager.resolve_oauth2_flow_for_request(server).reauthorizes_in_client
+        )
+        return mcp_servers[0] if reauthorizes else None
+
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
@@ -2498,7 +2552,17 @@ if MCP_AVAILABLE:
                 receive = peek.receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
 
                 async def admission_auth_body() -> bytes:
-                    return _admission_auth_body(await peek.admission_body())
+                    return _admission_auth_body(
+                        await peek.admission_body(),
+                        scoped_to=MCPRequestHandler.extract_target_server_names_from_path(path)
+                        or tuple(
+                            name.strip()
+                            for name in StarletteRequest(scope)
+                            .headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME, "")
+                            .split(",")
+                            if name.strip()
+                        ),
+                    )
 
                 scope[MCP_PEEKED_BODY_SCOPE_KEY] = admission_auth_body
             (
@@ -2638,13 +2702,15 @@ if MCP_AVAILABLE:
                 await rejection(scope, receive, send)
                 return
 
+            reauthorize_as: Final = _server_to_reauthorize(mcp_servers, scoped_server_endpoint, body, _client_ip)
             scope_response: Final = (
                 OAuthScopeResponse(
                     send,
                     get_request_base_url(StarletteRequest(scope)),
                     get_route_relative_request_path(scope),
+                    reauthorize_as=reauthorize_as,
                 )
-                if is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                if is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES or reauthorize_as is not None
                 else None
             )
             if scope_response is not None:

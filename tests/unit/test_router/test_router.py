@@ -34,7 +34,12 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import RedisClusterCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
-from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
+from litellm.exceptions import (
+    GuardrailRaisedException,
+    MidStreamFallbackError,
+    ModifyResponseException,
+    RequestOverDeploymentTpmError,
+)
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -101,11 +106,12 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.types.utils import CallTypes, CredentialItem, Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
 from tests.unit.conftest import redis_cache_double
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 import traceback
 import inspect
 from typing import List, Optional
@@ -387,11 +393,7 @@ async def test_encrypted_content_affinity_takes_priority_over_user_key_affinity(
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await deployment_callback.cache.async_set_cache(
-            key=cache_key,
-            value={"model_id": "deployment-a"},
-            ttl=60,
-        )
+        await deployment_callback.pins.set(cache_key, {"model_id": "deployment-a"}, 60)
         encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
         request_kwargs = {
             "input": [{"type": "reasoning", "id": encoded_id}],
@@ -4698,10 +4700,11 @@ async def test_a_chat_pre_call_count_does_not_wait_behind_long_embedding_batches
         ],
         enable_pre_call_checks=True,
     )
-    batch: Final = ["word " * 2100] * 76
     batches: Final = tuple(
-        asyncio.create_task(router.aembedding(model="embed", input=batch))
-        for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+        asyncio.create_task(
+            router.aembedding(model="embed", input=[f"{batch} {text} " + "word " * 2100 for text in range(76)])
+        )
+        for batch in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
     )
     await asyncio.wait_for(_until_every_count_slot_is_taken(), timeout=30)
     chat: Final = asyncio.create_task(router.acompletion(model="chat", messages=[{"role": "user", "content": "hi"}]))
@@ -7966,6 +7969,172 @@ async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
 
     assert chat_route.call_count == 0
     assert batch_route.call_count == 20
+
+
+def _ordered(deployment: dict[str, object], order: int) -> dict[str, object]:
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "order": order}}
+
+
+_AZURE_FILE_CREATED: Final = {
+    "id": "file-batch-input",
+    "object": "file",
+    "bytes": 1,
+    "created_at": 0,
+    "filename": "input.jsonl",
+    "purpose": "batch",
+    "status": "processed",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("purpose", "uploaded_to"), [("batch", "batch-deployment"), ("fine-tune", "chat-deployment")])
+async def test_batch_file_upload_reaches_the_batch_deployment_when_the_chat_deployment_has_a_lower_order(
+    monkeypatch: pytest.MonkeyPatch, purpose: str, uploaded_to: str
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        routes: Final = {
+            deployment_id: respx_mock.post(host=f"{sku_host}.openai.azure.com").mock(
+                return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+            )
+            for deployment_id, sku_host in (("chat-deployment", "chat-sku"), ("batch-deployment", "batch-sku"))
+        }
+        uploaded: Final = await router.acreate_file(
+            model="gpt-mixed", purpose=purpose, file=BytesIO(json.dumps(batch_row).encode())
+        )
+
+    assert {deployment_id: route.call_count for deployment_id, route in routes.items()} == {
+        "chat-deployment": int(uploaded_to == "chat-deployment"),
+        "batch-deployment": int(uploaded_to == "batch-deployment"),
+    }
+    assert uploaded._hidden_params["model_file_id_mapping"] == {uploaded_to: "file-batch-input"}
+
+
+_AZURE_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "gpt-mixed",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "raised"), [(429, openai.RateLimitError), (500, openai.InternalServerError)])
+async def test_a_failed_batch_file_upload_tries_the_batch_deployment_once_and_leaves_chat_serving(
+    monkeypatch: pytest.MonkeyPatch, status: int, raised: type[Exception]
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(status, json={"error": {"code": str(status), "message": "upload refused"}})
+        )
+        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        with pytest.raises(raised):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+        for _ in range(3):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
+
+    assert batch_upload.call_count == 1
+    assert chat_completions.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "raised"), [(429, openai.RateLimitError), (401, openai.AuthenticationError)])
+async def test_a_batch_file_upload_the_batch_deployment_refuses_stays_off_chat_and_leaves_chat_serving(
+    monkeypatch: pytest.MonkeyPatch, status: int, raised: type[Exception]
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=2,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(status, json={"error": {"code": str(status), "message": "upload refused"}})
+        )
+        chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/files").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        with pytest.raises(raised, match="upload refused"):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+        await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+        for _ in range(3):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
+
+    assert (batch_upload.call_count, chat_upload.call_count, chat_completions.call_count) == (1, 0, 3)
+
+
+@pytest.mark.asyncio
+async def test_a_batch_file_upload_whose_batch_deployment_cools_down_after_the_pick_stays_off_chat(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+
+    class _ConcurrentBatchFailure(CustomLogger):
+        async def async_pre_call_check(self, deployment, parent_otel_span):
+            _cool_down(router, "batch-deployment")
+
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with (
+        patch.object(litellm, "callbacks", [_ConcurrentBatchFailure()]),  # test-quality-ok: router reads this global
+        respx.mock(assert_all_called=False) as respx_mock,
+    ):
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        with pytest.raises(RouterRateLimitError, match="No deployments available"):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+
+    assert (batch_upload.call_count, chat_upload.call_count) == (0, 0)
 
 
 def _azure_wildcard_deployment(sku_host: str, mode: str) -> dict[str, object]:
@@ -13125,11 +13294,13 @@ class TestMemberAutoRouterInference:
         )
         self.database = SimpleNamespace(
             db=SimpleNamespace(
-                litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=self.team)),
-                litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
                 litellm_accessgrouptable=SimpleNamespace(find_unique=AsyncMock()),
             )
         )
+        self.stores = install_rust_auth_stores(
+            monkeypatch, RustAuthStores(team=FakeTeamStore(rows={"router-team": self.team}))
+        )
+        self.teams = self.stores.team
         monkeypatch.setattr(proxy_server, "user_api_key_cache", self.cache)
         monkeypatch.setattr(proxy_server, "prisma_client", self.database)
 
@@ -13251,9 +13422,9 @@ class TestMemberAutoRouterInference:
         assert first.model == "permitted-model" and first.routing_decision is not None
         assert first.routing_decision["cause"] == "llm_classifier"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_teamtable.find_unique.await_count == 1
-        assert self.database.db.litellm_teammembership.find_unique.await_count == 1
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        assert len(self.teams.lookups) == 1
+        assert len(self.stores.team_membership.lookups) == 1
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={"members_with_roles": []}
         )
         await delete_cache_team_object(
@@ -13300,9 +13471,10 @@ class TestMemberAutoRouterInference:
                 )
             )
         )
-        self.database.db.litellm_teamtable.find_unique.return_value = (
-            None if state == "deleted" else self.team.model_copy(update={"blocked": state == "blocked"})
-        )
+        if state == "deleted":
+            del self.teams.rows["router-team"]
+        else:
+            self.teams.rows["router-team"] = self.team.model_copy(update={"blocked": state == "blocked"})
         if state == "unavailable":
             monkeypatch.setattr(proxy_server, "prisma_client", None)
         with pytest.raises(HTTPException) as error:
@@ -13334,7 +13506,7 @@ class TestMemberAutoRouterInference:
         from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
         from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if ceiling == "team" else self.team.models,
                 "organization_id": "router-org" if ceiling == "organization" else None,
@@ -13387,7 +13559,9 @@ class TestMemberAutoRouterInference:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("group_owner", ("team", "key"))
-    async def test_access_group_grants_are_cached_and_revoked(self, group_owner: str) -> None:
+    async def test_access_group_grants_are_cached_and_revoked(
+        self, group_owner: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
         group: Final = LiteLLM_AccessGroupTable(
@@ -13395,8 +13569,9 @@ class TestMemberAutoRouterInference:
             access_group_name="Router targets",
             access_model_names=["permitted-model"],
         )
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        stores: Final = self.stores
+        stores.access_group.seed("router-group", group)
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if group_owner == "team" else self.team.models,
                 "access_group_ids": ["router-group"] if group_owner == "team" else [],
@@ -13413,14 +13588,12 @@ class TestMemberAutoRouterInference:
         router: Final = self._router()
         assert (await self._route(router, request)).model == "permitted-model"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 1
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group.model_copy(
-            update={"access_model_names": []}
-        )
+        assert len(stores.access_group.lookups) == 1
+        stores.access_group.seed("router-group", group.model_copy(update={"access_model_names": []}))
         await evict_and_broadcast(cache_keys=("access_group_id:router-group",), user_api_key_cache=self.cache)
         with pytest.raises(ProxyException, match="is not available for this API key"):
             await self._route(router, request)
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 2
+        assert len(stores.access_group.lookups) == 2
 
     @pytest.mark.asyncio
     async def test_sdk_router_does_not_import_proxy_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -14204,6 +14377,29 @@ class TestAutoRouterTraceProvenance:
         assert retry.attributes["litellm.retry.count"] == 1
         assert "private-error-text" not in str(retry.attributes)
 
+    @pytest.mark.asyncio
+    async def test_retry_records_name_the_over_tpm_refusal_as_its_logs_do(
+        self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]"
+    ) -> None:
+        logger, exporter = _tracing
+        router: Final = Router(
+            model_list=[
+                self._marker("blue"),
+                {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+            ],
+        )
+        request: Final = {"metadata": {}}
+        refusal: Final = RequestOverDeploymentTpmError(message="over tpm", model="answer", llm_provider="openai")
+        with logger.tracer.start_as_current_span("request"):
+            await router.async_get_available_deployment(
+                model="traced-router", request_kwargs=request, messages=[{"role": "user", "content": "hello"}]
+            )
+            router.log_retry({**request, "model": "answer"}, refusal)
+        spans: Final = {span.name: span for span in exporter.get_finished_spans()}
+        retry: Final = next(event for event in spans["request"].events if event.name == "litellm.routing.retry")
+        assert retry.attributes["error.type"] == refusal.logged_error_class
+        assert request["metadata"]["previous_models"][-1]["exception_type"] == refusal.logged_error_class
+
 
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
@@ -14262,7 +14458,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -19938,11 +20134,13 @@ def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooli
 async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str, credential_kind: str
 ) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.types.router import AllowedFailsPolicy
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr("time.time", lambda: 1767225600.0)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
 
     def upstream(request: httpx.Request) -> httpx.Response:
         credential: Final = request.headers.get("authorization", request.headers.get("x-api-key", ""))
@@ -20331,3 +20529,22 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
 
     assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
+
+
+def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_team_only() -> None:
+    internal_name: Final = "model_name_team-a_row"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "x"},
+                "model_info": {"id": "team-row", "team_id": "team-a", "team_public_model_name": "public-chat"},
+            }
+        ]
+    )
+    registry: Final = router.registry()
+
+    assert [row["model_info"]["id"] for row in registry.deployments("public-chat", team_id="team-a")] == ["team-row"]
+    assert [row["model_info"]["id"] for row in registry.deployments(internal_name, team_id="team-a")] == ["team-row"]
+    assert list(registry.deployments("public-chat", team_id="team-b")) == []
+    assert list(registry.deployments("public-chat")) == []

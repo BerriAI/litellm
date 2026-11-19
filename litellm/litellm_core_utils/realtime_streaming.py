@@ -26,7 +26,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, json_contains
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import (
@@ -220,9 +220,13 @@ def _unscreened_audio_error_event(client_event_id: object) -> Mapping[str, objec
     }
 
 
+def _decode_json(payload: str) -> object:
+    return _DECODED_JSON.validate_python(json.loads(payload))
+
+
 def _decode_json_object(payload: str) -> Mapping[str, object]:
     """Decode a realtime frame into its top-level field mapping."""
-    return json.loads(payload)
+    return decoded_json_object(_decode_json(payload))
 
 
 _GUARDRAIL_TURN_DETECTION_GATE: Final[Mapping[str, object]] = MappingProxyType(
@@ -511,7 +515,7 @@ class RealTimeStreaming:
         self._held_client_content: tuple[str, ...] = ()
         self._held_client_content_bytes: int = 0
         self._held_client_content_deadline: float | None = None
-        self._replay_scope: Final = client_websocket_scope(websocket)
+        self._replay_scope: Final = client_websocket_scope(self.websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
@@ -533,7 +537,7 @@ class RealTimeStreaming:
         self._translation_usage_finalized = False
 
         # Detect whether the client is explicitly opting into the beta protocol.
-        self._client_wants_beta = self.detect_beta_header(websocket)
+        self._client_wants_beta = self.detect_beta_header(self.websocket)
         self._backend_uses_beta_protocol = not translation_session and (
             self._client_wants_beta if backend_uses_beta_protocol is None else backend_uses_beta_protocol
         )
@@ -674,7 +678,7 @@ class RealTimeStreaming:
         if not self._should_store_message(message_obj):
             return
         try:
-            event_type: Final = message_obj.get("type", "")
+            event_type: Final = decoded_json_object(message_obj).get("type", "")
             if event_type in self._SESSION_EVENT_TYPES:
                 typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)
             else:
@@ -1020,7 +1024,7 @@ class RealTimeStreaming:
                     sent = True
                     continue
                 try:
-                    msg_obj = _decode_json_object(msg)
+                    msg_obj = as_str_mapping(_decode_json(msg))
                 except (json.JSONDecodeError, TypeError):
                     msg_obj = None
                 if isinstance(msg_obj, dict) and self.provider_config.is_setup_message(msg_obj):
@@ -1162,13 +1166,15 @@ class RealTimeStreaming:
         return _session_update_frame(self._held_session_update or _NO_SESSION_FIELDS)
 
     async def _hold_session_update(self, message: str) -> None:
-        client_event: Final = _decode_json_object(message)
+        client_event: Final = _decode_json(message)
         if self._held_session_update_bytes + len(message.encode("utf-8")) > RealTimeStreaming._MAX_BUFFERED_BYTES:
             await self.websocket.send_text(
-                json.dumps(_HELD_SESSION_UPDATE_TOO_LARGE.error_event(client_event.get("event_id")))
+                json.dumps(
+                    _HELD_SESSION_UPDATE_TOO_LARGE.error_event(decoded_json_object(client_event).get("event_id"))
+                )
             )
             return
-        session: Final = client_event.get("session")
+        session: Final = decoded_json_object(client_event).get("session")
         update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
         held: Final = _merge_session_fields(self._held_session_update or _NO_SESSION_FIELDS, update)
         self._held_session_update = held
@@ -1182,7 +1188,7 @@ class RealTimeStreaming:
             _session_update_frame(session), self.model, None
         )
         return next(
-            (frame for frame in preview if isinstance(frame, str) and "setup" in _decode_json_object(frame)), None
+            (frame for frame in preview if isinstance(frame, str) and json_contains(_decode_json(frame), "setup")), None
         )
 
     def _leaves_applied_setup_unchanged(self, update: Mapping[str, object]) -> bool:
@@ -1194,7 +1200,7 @@ class RealTimeStreaming:
         return (
             applied_setup is not None
             and merged_setup is not None
-            and _decode_json_object(applied_setup) == _decode_json_object(merged_setup)
+            and _decode_json(applied_setup) == _decode_json(merged_setup)
         )
 
     async def _acknowledge_session_setup(self, session: Mapping[str, object]) -> None:
@@ -1522,8 +1528,8 @@ class RealTimeStreaming:
         ``return_new_content_delta_events`` modality lookup, ...).
         """
         try:
-            message_obj: Final = _decode_json_object(transformed_message)
-            if "setup" in message_obj:
+            message_obj: Final = _decode_json(transformed_message)
+            if json_contains(message_obj, "setup"):
                 self.session_configuration_request = transformed_message
         except (json.JSONDecodeError, TypeError):
             return
@@ -1852,7 +1858,7 @@ class RealTimeStreaming:
     def _parse_backend_event(raw_response: str) -> dict[str, object] | None:
         """Parse a backend frame once. Returns None for non-JSON or non-object frames."""
         try:
-            event: Final = _decode_json_object(raw_response)
+            event: Final = as_str_mapping(_decode_json(raw_response))
         except (json.JSONDecodeError, TypeError):
             return None
         return event if isinstance(event, dict) else None

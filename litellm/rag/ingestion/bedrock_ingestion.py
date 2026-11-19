@@ -14,11 +14,15 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_arn_prefix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import (
+    BEDROCK_KNOWLEDGE_BASE_INGESTION_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+)
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 
 if TYPE_CHECKING:
@@ -84,6 +88,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     - aws_role_name, aws_session_name, aws_profile_name
     - aws_web_identity_token, aws_sts_endpoint, aws_external_id
     """
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_KNOWLEDGE_BASE_INGESTION_SESSION_POLICY
 
     def __init__(
         self,

@@ -13,16 +13,12 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     linkName: "Models + Endpoints",
     content: { role: "heading", name: "Model Management" },
   },
-  api_ref: {
-    segment: "api-reference",
-    linkName: "API Reference",
-    content: { role: "heading", name: "OpenAI Compatible Proxy: API Reference" },
-  },
   "llm-playground": { segment: "playground", linkName: "Playground", content: { role: "tab", name: "Chat" } },
   projects: {
     segment: "projects",
     linkName: /^Projects(?: Beta)?$/,
     content: { role: "heading", name: "Projects" },
+    unlicensedText: "This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key here.",
   },
   "access-groups": {
     segment: "access-groups",
