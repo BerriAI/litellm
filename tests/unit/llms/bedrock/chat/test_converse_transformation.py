@@ -6,7 +6,7 @@ import os
 import re
 from collections.abc import Callable, Iterator, Mapping
 from itertools import chain
-from typing import Final
+from typing import Final, Literal, TypeAlias
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -5596,6 +5596,7 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
 
 
 _CALLER_TEXT: Final = {"verbosity": "low", "format": {"type": "json_schema", "strict": False}}
+_SetNativeStructuredOutput: TypeAlias = Callable[[str, Literal["legacy", "bedrock", "default"] | None], None]
 
 
 def _gpt_params_from_response_format(model: str) -> Mapping[str, object]:
@@ -5616,7 +5617,10 @@ def _gpt_params_from_caller_output_config(model: str) -> Mapping[str, object]:
 
 
 @pytest.mark.parametrize("native_params", [_gpt_params_from_response_format, _gpt_params_from_caller_output_config])
-def test_openai_gpt_native_json_schema_sets_text_format_strict(set_native_structured_output, native_params):
+def test_openai_gpt_native_json_schema_sets_text_format_strict(
+    set_native_structured_output: _SetNativeStructuredOutput,
+    native_params: Callable[[str], Mapping[str, object]],
+) -> None:
     model: Final = "global.openai.gpt-6-luna"
     set_native_structured_output(model, "legacy")
 
@@ -5645,7 +5649,9 @@ def test_openai_gpt_native_json_schema_sets_text_format_strict(set_native_struct
         ("us.amazon.nova-2-lite-v1:0", "bedrock/global.openai.gpt-6-luna", None),
     ],
 )
-def test_custom_named_deployment_takes_text_format_strict_from_base_model(model, base_model, expected_text):
+def test_custom_named_deployment_takes_text_format_strict_from_base_model(
+    model: str, base_model: str, expected_text: Mapping[str, object] | None
+) -> None:
     request: Final = AmazonConverseConfig()._transform_request(
         model=model,
         messages=[{"role": "user", "content": "Name the capital of France."}],
@@ -5657,7 +5663,9 @@ def test_custom_named_deployment_takes_text_format_strict_from_base_model(model,
     assert request.get("additionalModelRequestFields", {}).get("text") == expected_text
 
 
-def test_anthropic_native_json_schema_sends_no_text_field(set_native_structured_output):
+def test_anthropic_native_json_schema_sends_no_text_field(
+    set_native_structured_output: _SetNativeStructuredOutput,
+) -> None:
     model: Final = "us.anthropic.claude-opus-4-8"
     set_native_structured_output(model, "bedrock")
 
