@@ -8,9 +8,12 @@ runs every write through ``encrypt_value_helper`` (nacl SecretBox) and
 keeps a plain-base64 fallback on read so existing rows continue to work.
 """
 
+import asyncio
 import base64
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from itertools import count
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -48,14 +51,6 @@ from litellm.proxy._experimental.mcp_server.db import (
     store_user_credential,
     store_user_oauth_credential,
     update_mcp_server,
-)
-from litellm.proxy._types import LiteLLM_MCPServerTable, NewMCPServerRequest, UpdateMCPServerRequest
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    SecretMapDecodeError,
-    decode_secret_map,
-    decrypt_value_helper,
-    encrypt_secret_map,
-    encrypt_value_helper,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport
 
@@ -851,6 +846,33 @@ async def test_refusal_notes_each_refused_scope_once_on_the_saved_grant(credenti
     assert grant["needs_scopes"] == ["gist", "notifications", ""]
     assert (grant["access_token"], grant["refresh_token"], grant["scopes"]) == ("at-1", "rt-1", ["repo"])
     assert rows.rows[("alice", "srv-1")].updated_at == saved_at
+
+
+@pytest.mark.asyncio
+async def test_concurrent_scope_refusals_preserve_both_scopes(credentials_prisma: SimpleNamespace) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1")
+    find_unique: Final = rows.find_unique
+    read_barrier: Final = asyncio.Event()
+    read_count: Final = count()
+
+    async def find_same_initial_row(where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
+        row: Final = await find_unique(where)
+        read_index: Final = next(read_count)
+        if read_index < 2:
+            if read_index == 1:
+                read_barrier.set()
+            await read_barrier.wait()
+        return row
+
+    rows.find_unique = find_same_initial_row
+    await asyncio.gather(
+        record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "tools.read"),
+        record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "tools.write"),
+    )
+
+    grant: Final = await _saved_grant(credentials_prisma)
+    assert sorted(grant["needs_scopes"]) == ["tools.read", "tools.write"]
 
 
 @pytest.mark.asyncio
