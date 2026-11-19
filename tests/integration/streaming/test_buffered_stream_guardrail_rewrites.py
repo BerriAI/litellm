@@ -1,5 +1,6 @@
 import json
 import uuid
+from itertools import chain
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,35 @@ def _masking_guardrail(request: Request) -> Reply:
         return Reply(body=_json({"action": "NONE"}))
     rewrite: Final = {key: _masked(body[key]) for key in ("texts", "tool_calls") if key in body}
     return Reply(body=_json({"action": "GUARDRAIL_INTERVENED", **rewrite}))
+
+
+def _noma_rewrite(tool_calls: JsonValue, rewrite: str) -> JsonValue:
+    if not isinstance(tool_calls, list):
+        return tool_calls
+    if rewrite == "drop":
+        return []
+    return [{"type": "function"} for _ in tool_calls]
+
+
+def _noma_guardrail(rewrite: str):
+    def answer(request: Request) -> Reply:
+        assert request.target == "/litellm/guardrail", request.target
+        body: Final = JSON_OBJECT.validate_json(request.body)
+        inputs: Final = body.get("inputs")
+        assert isinstance(inputs, dict), body
+        if body.get("input_type") != "response" or _CANARY not in request.body.decode():
+            return Reply(body=_json({"action": "NONE"}))
+        return Reply(
+            body=_json(
+                {
+                    "action": "GUARDRAIL_INTERVENED",
+                    "texts": _masked(inputs.get("texts", [])),
+                    "tool_calls": _noma_rewrite(inputs.get("tool_calls", []), rewrite),
+                }
+            )
+        )
+
+    return answer
 
 
 def _bedrock_masking_guardrail(request: Request) -> Reply:
@@ -150,6 +180,20 @@ def _provider(request: Request) -> Reply:
     return Reply(status=404, body=_json({"error": f"unexpected target {target}"}))
 
 
+def _noma_entry(name: str, api_base: str, buffered: bool | None) -> dict[str, JsonValue]:
+    buffering: Final[dict[str, JsonValue]] = {} if buffered is None else {"streaming_buffer_until_moderated": buffered}
+    return {
+        "guardrail_name": name,
+        "litellm_params": {
+            "guardrail": "noma_v2",
+            "mode": "post_call",
+            "default_on": False,
+            "api_base": api_base,
+            **buffering,
+        },
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class _Rig:
     gateway: Gateway
@@ -160,6 +204,7 @@ class _Rig:
     anthropic_model: str
     policy: Wire
     bedrock_policy: Wire
+    pipeline_model: str
 
 
 @pytest.fixture(scope="module")
@@ -172,6 +217,8 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     with (
         wire_server(_masking_guardrail) as policy,
         wire_server(_bedrock_masking_guardrail) as bedrock_policy,
+        wire_server(_noma_guardrail("drop")) as noma_drop,
+        wire_server(_noma_guardrail("malformed")) as noma_malformed,
         wire_server(_provider) as upstream,
     ):
         config.write_text(
@@ -207,6 +254,29 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
                                 "aws_bedrock_runtime_endpoint": bedrock_policy.url,
                             },
                         },
+                        *(
+                            _noma_entry(name, url, buffered)
+                            for name, url, buffered in (
+                                ("flat-drop", noma_drop.url, True),
+                                ("flat-malformed", noma_malformed.url, True),
+                                ("pipeline-drop", noma_drop.url, None),
+                                ("pipeline-malformed", noma_malformed.url, None),
+                            )
+                        ),
+                    ],
+                    "policies": {
+                        f"policy-{rewrite}": {
+                            "guardrails": {"add": [f"pipeline-{rewrite}"]},
+                            "pipeline": {
+                                "mode": "post_call",
+                                "steps": [{"guardrail": f"pipeline-{rewrite}", "on_pass": "next", "on_fail": "block"}],
+                            },
+                        }
+                        for rewrite in ("drop", "malformed")
+                    },
+                    "policy_attachments": [
+                        {"policy": f"policy-{rewrite}", "tags": [f"policy-{rewrite}"]}
+                        for rewrite in ("drop", "malformed")
                     ],
                 }
             )
@@ -229,14 +299,16 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
                 ),
                 policy=policy,
                 bedrock_policy=bedrock_policy,
+                pipeline_model=scenario.model(api_base=upstream.url + "/v1", api_key="synthetic-openai-key"),
             )
 
 
-def _streamed_body(rig: _Rig, path: str, body: Mapping[str, JsonValue], guardrail: str) -> str:
+def _streamed_body(rig: _Rig, path: str, body: Mapping[str, JsonValue], guardrail: str | None) -> str:
+    selection: Final[dict[str, JsonValue]] = {} if guardrail is None else {"guardrails": [guardrail]}
     with rig.gateway.client.stream(
         "POST",
         path,
-        json={**body, "stream": True, "guardrails": [guardrail]},
+        json={**body, "stream": True, **selection},
         headers={"Authorization": f"Bearer {rig.gateway.key}"},
         timeout=httpx.Timeout(60),
     ) as response:
@@ -281,3 +353,40 @@ def test_masking_guardrail_that_releases_on_scan_holds_the_responses_stream_and_
     assert _CANARY in scans[0].body.decode()
     assert _CANARY not in streamed, streamed
     assert _MASK in streamed, streamed
+
+
+def _chat_text_and_tool_arguments(streamed: str) -> tuple[str, str]:
+    chunks: Final = tuple(
+        JSON_OBJECT.validate_json(line.removeprefix("data: "))
+        for line in streamed.splitlines()
+        if line.startswith("data: {")
+    )
+    deltas: Final = tuple(chain.from_iterable((choice["delta"] for choice in chunk["choices"]) for chunk in chunks))
+    tool_calls: Final = tuple(chain.from_iterable(delta.get("tool_calls") or () for delta in deltas))
+    text: Final = "".join(str(delta.get("content") or "") for delta in deltas)
+    return text, "".join(str((call.get("function") or {}).get("arguments") or "") for call in tool_calls)
+
+
+@pytest.mark.parametrize(
+    ("rewrite", "expected_text", "expected_arguments"),
+    [
+        pytest.param("drop", f"I will email {_CANARY} now.", f'{{"to": "{_CANARY}"}}', id="drops the tool call"),
+        pytest.param("malformed", f"I will email {_MASK} now.", f'{{"to": "{_CANARY}"}}', id="nameless tool call"),
+    ],
+)
+def test_undeliverable_tool_call_rewrite_reaches_the_client_the_same_on_the_flat_path_and_the_policy_engine(
+    rig: _Rig, rewrite: str, expected_text: str, expected_arguments: str
+) -> None:
+    prompt: Final[list[JsonValue]] = [{"role": "user", "content": "email jane"}]
+    flat: Final = _streamed_body(
+        rig, "/v1/chat/completions", {"model": rig.openai_model, "messages": prompt}, f"flat-{rewrite}"
+    )
+    pipeline: Final = _streamed_body(
+        rig,
+        "/v1/chat/completions",
+        {"model": rig.pipeline_model, "messages": prompt, "tags": [f"policy-{rewrite}"]},
+        None,
+    )
+
+    assert _chat_text_and_tool_arguments(pipeline) == (expected_text, expected_arguments), pipeline
+    assert _chat_text_and_tool_arguments(flat) == (expected_text, expected_arguments), flat

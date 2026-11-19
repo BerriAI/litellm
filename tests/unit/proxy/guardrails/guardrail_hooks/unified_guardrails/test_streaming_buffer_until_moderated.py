@@ -17,6 +17,7 @@ from collections.abc import Callable
 from typing import Any, AsyncGenerator, List, Literal, Optional
 
 import pytest
+from pydantic import BaseModel
 
 import litellm
 from litellm.integrations.custom_guardrail import (
@@ -44,6 +45,8 @@ from litellm.types.utils import (
     GenericGuardrailAPIInputs,
     ModelResponseStream,
     StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
 )
 
 BLOCK_MESSAGE = "Blocked by policy: this response was withheld."
@@ -1004,7 +1007,7 @@ def _rendered(items: list[Any]) -> list[str]:
         item.decode()
         if isinstance(item, bytes)
         else item.model_dump_json()
-        if isinstance(item, ModelResponseStream)
+        if isinstance(item, BaseModel)
         else json.dumps(item, sort_keys=True)
         for item in items
     ]
@@ -1155,3 +1158,65 @@ async def test_masking_guardrail_using_incremental_diff_warns_that_buffering_is_
     assert any(
         "streaming_buffer_until_moderated is disabled for masker" in record.getMessage() for record in caplog.records
     )
+
+
+def _text_completion_chunk(text: str, finish_reason: str | None = None) -> TextCompletionResponse:
+    return TextCompletionResponse(
+        id="cmpl-buffered",
+        created=1724900000,
+        model="gpt-3.5-turbo-instruct",
+        object="text_completion",
+        choices=[TextChoices(index=0, text=text, finish_reason=finish_reason)],
+    )
+
+
+def _text_completion_items() -> list[Any]:
+    return [
+        _text_completion_chunk("call "),
+        _text_completion_chunk(ORIGINAL_MARKER),
+        _text_completion_chunk(" now", finish_reason="stop"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_buffered_text_completion_stream_reaches_the_client_masked_as_through_a_policy_engine_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flat_guardrail = _MaskingGuardrail(guardrail_name="rewriter", event_hook="post_call")
+    pipeline_guardrail = _MaskingGuardrail(guardrail_name="rewriter", event_hook="post_call")
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_guardrail])
+
+    flat = _rendered(await _flat_path_output(flat_guardrail, "/v1/completions", _text_completion_items()))
+    pipeline = _rendered(await _policy_engine_output(pipeline_guardrail, "/v1/completions", _text_completion_items()))
+
+    assert flat == pipeline
+    assert MASKED_MARKER in "".join(flat) and ORIGINAL_MARKER not in "".join(flat), flat
+
+
+@pytest.mark.asyncio
+async def test_masking_guardrail_holds_a_text_completion_stream_and_releases_it_masked() -> None:
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
+    guardrail.streaming_buffer_release_on_scan = True
+    guardrail.streaming_sampling_rate = 1
+    request_data = {
+        "prompt": "hi",
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: list[Any] = []
+    released_before_each_chunk: list[int] = []
+
+    async def upstream() -> AsyncGenerator[TextCompletionResponse, None]:
+        for chunk in _text_completion_items():
+            released_before_each_chunk.append(len(collected))
+            yield chunk
+
+    async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/completions"),
+        response=upstream(),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+
+    assert released_before_each_chunk == [0, 0, 0], "a chunk reached the client before the end-of-stream scan"
+    assert "".join(chunk.choices[0].text or "" for chunk in collected) == f"call {MASKED_MARKER} now"
