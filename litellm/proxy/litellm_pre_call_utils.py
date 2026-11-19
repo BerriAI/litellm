@@ -22,7 +22,7 @@ from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -4984,9 +4984,18 @@ def _caller_anthropic_user_profile_id(params: Mapping[str, object]) -> str | Non
 _PROVIDER_SPECIFIC_HEADER: Final = TypeAdapter(ProviderSpecificHeader)
 
 
-def _valid_provider_specific_header(entry: object) -> ProviderSpecificHeader | None:
+class _CallerProviderSpecificHeader(TypedDict):
+    custom_llm_provider: ReadOnly[str]
+    extra_headers: ReadOnly[dict[str, str]]
+    native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
+
+
+_CALLER_PROVIDER_SPECIFIC_HEADER: Final = TypeAdapter(_CallerProviderSpecificHeader)
+
+
+def _caller_provider_specific_header(entry: object) -> ProviderSpecificHeader | None:
     try:
-        return _PROVIDER_SPECIFIC_HEADER.validate_python(entry)
+        return _PROVIDER_SPECIFIC_HEADER.validate_python(_CALLER_PROVIDER_SPECIFIC_HEADER.validate_python(entry))
     except PydanticValidationError:
         return None
 
@@ -5171,7 +5180,7 @@ def add_provider_specific_headers_to_request(
             if user_profile_id
             else (entry,)
             for entry in map(
-                _valid_provider_specific_header,
+                _caller_provider_specific_header,
                 _request_entries(
                     cast(  # cast-ok: widening an untyped dict value to object is always sound, it is validated next
                         object, data.get("provider_specific_header")
@@ -5182,7 +5191,7 @@ def add_provider_specific_headers_to_request(
         )
     )
     entries: Final = [*caller_entries, *scoped_headers]
-    if scoped_headers:
+    if entries:
         data["provider_specific_header"] = entries[0] if len(entries) == 1 else entries
     return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
 

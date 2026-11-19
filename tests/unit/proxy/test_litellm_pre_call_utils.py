@@ -1632,6 +1632,40 @@ async def test_a_callers_own_provider_specific_headers_reach_the_provider_beside
     assert forwarded == expected
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_headers", [{}, {"anthropic-beta": "beta-1"}], ids=["caller-entry-only", "beside-proxy-entries"]
+)
+async def test_the_router_isolates_the_deployment_on_a_callers_conditional_authorization(
+    request_headers: dict[str, str],
+) -> None:
+    from litellm.router_rust.invoke.shaping import forwarded_caller_authorization
+
+    updated: Final = await _request_data_added_by_the_proxy(
+        {
+            "extra_headers": {"x-trace": "1"},
+            "provider_specific_header": {
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"Authorization": "Bearer caller-token"},
+                "configured_credential_headers": ["x-trace"],
+            },
+        },
+        request_headers,
+        {},
+    )
+    sent: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        updated.get("provider_specific_header"),
+        "anthropic",
+        native_anthropic_messages=True,
+        model="claude-sonnet-5-5",
+        configured_headers=updated["extra_headers"],
+    )
+    isolated_on: Final = forwarded_caller_authorization(
+        updated, {"custom_llm_provider": "anthropic", "model": "claude-sonnet-5-5"}
+    )
+    assert sent.get("Authorization") == isolated_on == "Bearer caller-token"
+
+
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
     from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.litellm_logging import Logging
