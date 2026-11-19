@@ -1,5 +1,6 @@
 """A stored Responses chain keeps the system prompt an earlier turn sent as input, so a
-follow-up turn on that chain must not send the same prompt again as `instructions`."""
+follow-up turn on that chain must not send the same prompt again as `instructions`. A prompt too
+long for `instructions` goes in `input` instead."""
 
 from collections.abc import Iterator, Mapping
 from typing import Final
@@ -11,6 +12,8 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 
 _SYSTEM_ROLES: Final = frozenset({"system", "developer"})
+# OpenAI and Azure answer longer `instructions` with 400 string_above_max_length, counting code points (2026-11-19)
+RESPONSES_INSTRUCTIONS_MAX_LENGTH: Final = 1_048_576
 
 
 def _sent(request: Mapping[str, object], key: str) -> object:
@@ -21,12 +24,12 @@ def _sent(request: Mapping[str, object], key: str) -> object:
 def _continued_response_id(request: Mapping[str, object]) -> str | None:
     instructions: Final = _sent(request, "instructions")
     previous_response_id: Final = _sent(request, "previous_response_id")
-    if _sent(request, "truncation") == "auto":
-        # truncation may cut the stored system message, so the prompt stays in `instructions`
+    if not isinstance(instructions, str) or not instructions or not isinstance(previous_response_id, str):
         return None
-    if isinstance(instructions, str) and instructions and isinstance(previous_response_id, str):
-        return _upstream_response_id(previous_response_id, request.get("custom_llm_provider"))
-    return None
+    if _sent(request, "truncation") == "auto" and len(instructions) <= RESPONSES_INSTRUCTIONS_MAX_LENGTH:
+        # truncation may cut the stored system message, so a prompt that fits stays in `instructions`
+        return None
+    return _upstream_response_id(previous_response_id, request.get("custom_llm_provider"))
 
 
 def _upstream_response_id(response_id: str, provider: object) -> str | None:
@@ -117,7 +120,11 @@ def _without_instructions(request: Mapping[str, object], listed: object) -> Mapp
     if not texts or remaining is None:
         return request
     # a caller's own `instructions` follow the system text, and the first turn sent them without it
-    kept: Final = {"instructions": remaining} if remaining else {}
+    return _with_instructions(request, {"instructions": remaining} if remaining else {})
+
+
+def _with_instructions(request: Mapping[str, object], kept: Mapping[str, str]) -> Mapping[str, object]:
+    """`request` with `kept` in place of `instructions`, wherever the request carried them."""
     extra_body: Final = as_str_mapping(request.get("extra_body"))
     return {
         **{key: value for key, value in request.items() if key != "instructions"},
@@ -135,7 +142,32 @@ def _without_instructions(request: Mapping[str, object], listed: object) -> Mapp
     }
 
 
+def _with_long_instructions_in_input(request: Mapping[str, object]) -> Mapping[str, object]:
+    instructions: Final = _sent(request, "instructions")
+    input_items: Final = as_object_list(request.get("input"))
+    if (
+        not isinstance(instructions, str)
+        or len(instructions) <= RESPONSES_INSTRUCTIONS_MAX_LENGTH
+        or input_items is None
+    ):
+        return request
+    system_item: Final = {
+        "type": "message",
+        "role": "system",
+        "content": [{"type": "input_text", "text": instructions}],
+    }
+    return {**_with_instructions(request, {}), "input": [system_item, *input_items]}
+
+
 def without_stored_instructions(request: Mapping[str, object]) -> Mapping[str, object]:
+    return _with_long_instructions_in_input(_without_stored_instructions(request))
+
+
+async def awithout_stored_instructions(request: Mapping[str, object]) -> Mapping[str, object]:
+    return _with_long_instructions_in_input(await _awithout_stored_instructions(request))
+
+
+def _without_stored_instructions(request: Mapping[str, object]) -> Mapping[str, object]:
     response_id: Final = _continued_response_id(request)
     if response_id is None:
         return request
@@ -160,7 +192,7 @@ def without_stored_instructions(request: Mapping[str, object]) -> Mapping[str, o
     return _without_instructions(request, listed)
 
 
-async def awithout_stored_instructions(request: Mapping[str, object]) -> Mapping[str, object]:
+async def _awithout_stored_instructions(request: Mapping[str, object]) -> Mapping[str, object]:
     response_id: Final = _continued_response_id(request)
     if response_id is None:
         return request

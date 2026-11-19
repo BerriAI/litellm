@@ -31,8 +31,13 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.responses.stored_system_prompt import awithout_stored_instructions
+from litellm.responses.stored_system_prompt import (
+    RESPONSES_INSTRUCTIONS_MAX_LENGTH,
+    awithout_stored_instructions,
+    without_stored_instructions,
+)
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, StandardLoggingPayload, TextCompletionResponse
 
@@ -6241,12 +6246,15 @@ async def test_acompletion_follow_up_never_logs_the_stored_chain_lookup_as_a_cal
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "instructions", ["Stable prefix", "a" * RESPONSES_INSTRUCTIONS_MAX_LENGTH], ids=["short", "at_limit"]
+)
 async def test_follow_up_with_truncation_auto_keeps_instructions_without_reading_the_stored_chain(
-    monkeypatch: pytest.MonkeyPatch,
+    instructions: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     request: Final = {
-        "instructions": "Stable prefix",
+        "instructions": instructions,
         "previous_response_id": "resp_prior",
         "truncation": "auto",
         "custom_llm_provider": "openai",
@@ -6254,7 +6262,7 @@ async def test_follow_up_with_truncation_auto_keeps_instructions_without_reading
     }
     with respx.mock(assert_all_called=False) as router:
         chain: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
-            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item(instructions), _STORED_USER_TURN))
         )
         sent: Final = await awithout_stored_instructions(request)
     assert not chain.called
@@ -6369,6 +6377,98 @@ async def test_follow_up_reads_the_stored_chain_of_an_azure_deployment_with_its_
         )
     assert chain.calls[0].request.headers["authorization"] == "Bearer ad-token"
     assert "instructions" not in sent
+
+
+_OVER_LIMIT_PROMPT: Final = "a" * (RESPONSES_INSTRUCTIONS_MAX_LENGTH + 1)
+_USER_HI: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+_WIRE_RESPONSE: Final = {
+    "id": "resp_wire",
+    "object": "response",
+    "created_at": 1789788253,
+    "status": "completed",
+    "model": "gpt-6.2-sol",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_wire",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["acompletion", "completion"])
+@pytest.mark.parametrize(
+    ("length", "moves_to_input"),
+    [(RESPONSES_INSTRUCTIONS_MAX_LENGTH, False), (RESPONSES_INSTRUCTIONS_MAX_LENGTH + 1, True)],
+    ids=["at_limit_stays_in_instructions", "over_limit_goes_in_input"],
+)
+async def test_truncation_auto_sends_a_system_prompt_too_long_for_instructions_as_a_system_input_item(
+    length: int, moves_to_input: bool, sync: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    prompt: Final = "a" * length
+    call: Final = {
+        "model": "openai/responses/gpt-6.2-sol",
+        "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": "hi"}],
+        "api_key": "sk-test",
+        "extra_body": {"truncation": "auto"},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=_WIRE_RESPONSE)
+        )
+        if sync:
+            litellm.completion(**call)
+        else:
+            await litellm.acompletion(**call)
+    (call_sent,) = upstream.calls
+    sent: Final = json.loads(call_sent.request.content)
+    expected: Final = (None, [_system_input_item(prompt), _USER_HI]) if moves_to_input else (prompt, [_USER_HI])
+    assert (sent.get("instructions"), sent["input"]) == expected
+
+
+@pytest.mark.parametrize(
+    ("stored_items", "sent_input"),
+    [
+        ((_STORED_USER_TURN,), (_system_input_item(_OVER_LIMIT_PROMPT), _USER_HI)),
+        ((_system_input_item(_OVER_LIMIT_PROMPT), _STORED_USER_TURN), (_USER_HI,)),
+    ],
+    ids=["chain_lacks_the_prompt", "chain_already_holds_the_prompt"],
+)
+@pytest.mark.parametrize("in_extra_body", [False, True], ids=["top_level", "extra_body"])
+@pytest.mark.parametrize("truncation", [{}, {"truncation": "auto"}], ids=["no_truncation", "truncation_auto"])
+def test_follow_up_sends_a_prompt_too_long_for_instructions_in_input_only_when_the_chain_lacks_it(
+    stored_items: tuple[Mapping[str, object], ...],
+    sent_input: tuple[Mapping[str, object], ...],
+    in_extra_body: bool,
+    truncation: Mapping[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    instructions: Final = {"instructions": _OVER_LIMIT_PROMPT}
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=_stored_chain(*stored_items))
+        )
+        sent: Final = without_stored_instructions(
+            {
+                **({"extra_body": instructions} if in_extra_body else instructions),
+                **truncation,
+                "input": [_USER_HI],
+                "previous_response_id": "resp_prior",
+                "custom_llm_provider": "openai",
+                "api_key": "sk-test",
+            }
+        )
+    sent_instructions: Final = sent.get(
+        "instructions", (as_str_mapping(sent.get("extra_body")) or {}).get("instructions")
+    )
+    assert (sent_instructions, sent["input"]) == (None, list(sent_input))
 
 
 @pytest.mark.parametrize(
