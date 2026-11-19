@@ -791,6 +791,7 @@ async def acompletion(
     )
     from litellm.types.llms.openai import AllMessageValues
 
+    caller_model_info: Final = routed_model_info(caller_kwargs.get("model_info"))
     AnthropicCacheControlHook.maybe_seed_default_injection_points(
         non_default_params=kwargs,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
@@ -799,7 +800,8 @@ async def acompletion(
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=base_url or kwargs.get("api_base"),
-        model_info=routed_model_info(caller_kwargs.get("model_info")),
+        model_info=caller_model_info,
+        base_model=caller_kwargs.get("base_model") or (caller_model_info or {}).get("base_model"),
     )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
@@ -5983,6 +5985,9 @@ def completion(
 
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
+        developer_message_with_valid_cache_control,
+        developer_messages_for_a_prompt_caching_model,
+        developer_messages_within_the_cache_limits,
         routed_model_info,
     )
     from litellm.types.llms.openai import AllMessageValues
@@ -5996,6 +6001,7 @@ def completion(
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=base_url or kwargs.get("api_base"),
         model_info=routed_model_info(cast(object, model_info)),  # cast-ok: untyped kwargs
+        base_model=cast(object, base_model),  # cast-ok: untyped kwargs
     )
 
     prompt_applied_elsewhere: Final = prompt_management_applied(routing_kwargs) or fallbacks is not None
@@ -6091,7 +6097,7 @@ def completion(
             api_base=api_base,
             deployment_model_info=deployment_model_info,
         )
-        drop_unsupported_reasoning: Final = (
+        drop_unsupported_params: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
         )
         reasoning_model_group: Final = model_group_from_metadata(
@@ -6106,7 +6112,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             deployment_model_info=routing_kwargs.get("model_info"),
             model_group=reasoning_model_group,
-            drop_params=drop_unsupported_reasoning,
+            drop_params=drop_unsupported_params,
         )
         resolved_reasoning_effort: Final = chat_reasoning.effort.value
         resolved_output_config: Final = chat_reasoning.output_config
@@ -6128,7 +6134,7 @@ def completion(
             ),
             custom_llm_provider=custom_llm_provider,
             model=model,
-            drop_params=drop_unsupported_reasoning,
+            drop_params=drop_unsupported_params,
         )
         raise_if_hosted_tool_choice_unsupported(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
@@ -6189,9 +6195,36 @@ def completion(
             )
 
         if provider_config is not None:
+            typed_messages: Final = cast(  # cast-ok: completion types messages as a bare List
+                list[AllMessageValues], messages
+            )
+            checked_messages: Final = (
+                [developer_message_with_valid_cache_control(message) for message in typed_messages]
+                if drop_unsupported_params
+                else typed_messages
+            )
+            typed_tools: Final = cast(list[object] | None, tools)  # cast-ok: completion types tools as a bare List
             translated_messages: Final = list(
                 provider_config.translate_developer_role_to_system_role(
-                    messages=messages,
+                    messages=developer_messages_within_the_cache_limits(
+                        developer_messages_for_a_prompt_caching_model(
+                            checked_messages,
+                            model=model,
+                            custom_llm_provider=custom_llm_provider,
+                            model_info=deployment_model_info,
+                            base_model=base_model,
+                        ),
+                        MappingProxyType(
+                            {
+                                "tools": typed_tools,
+                                "cache_control": non_default_params.get("cache_control"),
+                                "extra_body": non_default_params.get("extra_body"),
+                                "cache_control_injection_points": non_default_params.get(
+                                    "cache_control_injection_points"
+                                ),
+                            }
+                        ),
+                    ),
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
@@ -6351,7 +6384,7 @@ def completion(
                 functions=functions_unsupported_model,
                 model=model,
                 llm_provider=custom_llm_provider,
-                drop_params=drop_unsupported_reasoning,
+                drop_params=drop_unsupported_params,
             )
 
         readable_messages: Final = _messages_readable_by_model(
@@ -6360,7 +6393,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_info=validated_model_info,
             base_model=deployment_base_model,
-            drop_params=drop_unsupported_reasoning,
+            drop_params=drop_unsupported_params,
             ensure_alternating_roles=ensure_alternating_roles,
             user_continue_message=user_continue_message,
             assistant_continue_message=assistant_continue_message,
@@ -6564,7 +6597,7 @@ def completion(
                 base_model=deployment_base_model,
                 api_base=api_base,
                 deployment_model_info=typed_deployment_model_info,
-                drop_params=drop_unsupported_reasoning,
+                drop_params=drop_unsupported_params,
                 additional_drop_params=routing_kwargs.get("additional_drop_params"),
             )
             reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)

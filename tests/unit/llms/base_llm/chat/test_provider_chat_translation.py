@@ -751,6 +751,342 @@ def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None
 
 
 @pytest.mark.parametrize(
+    ("case", "expected_system"),
+    [
+        pytest.param(
+            _BY_ID["anthropic_sonnet45"],
+            [{"type": "text", "text": "Be a good bot!", "cache_control": {"type": "ephemeral"}}],
+            id="anthropic_sonnet45",
+        ),
+        pytest.param(
+            _BY_ID["bedrock_invoke_haiku"],
+            [{"type": "text", "text": "Be a good bot!", "cache_control": {"type": "ephemeral"}}],
+            id="bedrock_invoke_haiku",
+        ),
+        pytest.param(
+            _BY_ID["bedrock_converse_haiku"],
+            [{"text": "Be a good bot!"}, {"cachePoint": {"type": "default"}}],
+            id="bedrock_converse_haiku",
+        ),
+    ],
+)
+@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop_params"])
+def test_developer_message_cache_control_survives_the_system_role_translation(
+    case: _Case, expected_system: list[JsonValue], drop_params: bool, respx_mock: MockRouter
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
+            "drop_params": drop_params,
+        },
+    )
+    assert _request_body(route)["system"] == expected_system
+
+
+@pytest.mark.parametrize(
+    ("case", "unmarked_system"),
+    [
+        pytest.param(
+            _BY_ID["anthropic_sonnet45"], [{"type": "text", "text": "Be a good bot!"}], id="anthropic_sonnet45"
+        ),
+        pytest.param(
+            _BY_ID["bedrock_invoke_haiku"], [{"type": "text", "text": "Be a good bot!"}], id="bedrock_invoke_haiku"
+        ),
+        pytest.param(_BY_ID["bedrock_converse_haiku"], [{"text": "Be a good bot!"}], id="bedrock_converse_haiku"),
+    ],
+)
+@pytest.mark.parametrize(
+    "malformed_mark",
+    [{"type": "ephemeral", "ttl": "2h"}, {"type": "persistent"}],
+    ids=["unknown_ttl", "unknown_type"],
+)
+def test_drop_params_drops_a_malformed_developer_cache_control(
+    case: _Case, unmarked_system: list[JsonValue], malformed_mark: dict[str, str], respx_mock: MockRouter
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": malformed_mark},
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
+            "drop_params": True,
+        },
+    )
+    assert _request_body(route)["system"] == unmarked_system
+
+
+_OPENAI_COMPATIBLE_UNMAPPED: Final = _openai_case(
+    "openai_compatible_unmapped",
+    "openai/offline-unmapped-model",
+    "https://openai-compatible.offline.test/v1/chat/completions",
+    extra={"api_base": "https://openai-compatible.offline.test/v1"},
+)
+
+
+_OPENAI_PROMPT_CACHING_MODEL: Final = next(
+    name
+    for name, entry in litellm.model_cost.items()
+    if entry.get("litellm_provider") == "openai" and entry.get("supports_prompt_caching") is True
+)
+
+
+@pytest.mark.parametrize(
+    ("deployment_fields", "keeps_developer_mark"),
+    [
+        ({}, False),
+        ({"model_info": {"supports_prompt_caching": True}}, True),
+        ({"model_info": {"supports_prompt_caching": False}}, False),
+        ({"base_model": _OPENAI_PROMPT_CACHING_MODEL}, True),
+        ({"model_info": {"base_model": _OPENAI_PROMPT_CACHING_MODEL}}, True),
+        ({"model_info": {"base_model": _OPENAI_PROMPT_CACHING_MODEL, "supports_prompt_caching": False}}, False),
+    ],
+    ids=[
+        "unmapped_model",
+        "deployment_declares_caching",
+        "deployment_declares_no_caching",
+        "base_model_caches",
+        "model_info_base_model_caches",
+        "declared_no_caching_outranks_base_model",
+    ],
+)
+@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop_params"])
+def test_a_developer_cache_control_reaches_only_a_model_that_caches_prompts(
+    deployment_fields: dict[str, JsonValue],
+    keeps_developer_mark: bool,
+    drop_params: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(_OPENAI_COMPATIBLE_UNMAPPED, respx_mock, "canned-openai-compatible")
+    _complete(
+        _OPENAI_COMPATIBLE_UNMAPPED,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                {"role": "user", "content": "Hi"},
+            ],
+            "drop_params": drop_params,
+            **deployment_fields,
+        },
+    )
+    unmarked: Final[dict[str, JsonValue]] = {"role": "system", "content": "Be a good bot!"}
+    assert _mapping(_items(_request_body(route)["messages"])[0]) == (
+        {**unmarked, "cache_control": {"type": "ephemeral"}} if keeps_developer_mark else unmarked
+    )
+
+
+_DEVELOPER_PARTS: Final[list[JsonValue]] = [{"type": "text", "text": "Be a good bot!"}]
+_MARKED_DEVELOPER_PARTS: Final[list[JsonValue]] = [{**_DEVELOPER_PARTS[0], "cache_control": {"type": "ephemeral"}}]
+
+
+@pytest.mark.parametrize(
+    "message_fields",
+    [{}, {"cache_control": {"type": "ephemeral"}}],
+    ids=["part_mark", "part_and_message_marks"],
+)
+@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop_params"])
+def test_a_developer_part_cache_control_the_client_set_is_sent_as_is(
+    message_fields: dict[str, JsonValue], drop_params: bool, respx_mock: MockRouter
+) -> None:
+    route: Final = _register(_OPENAI_COMPATIBLE_UNMAPPED, respx_mock, "canned-openai-compatible")
+    _complete(
+        _OPENAI_COMPATIBLE_UNMAPPED,
+        {
+            "messages": [
+                {"role": "developer", "content": _MARKED_DEVELOPER_PARTS, **message_fields},
+                {"role": "user", "content": "Hi"},
+            ],
+            "drop_params": drop_params,
+        },
+    )
+    assert _mapping(_items(_request_body(route)["messages"])[0]) == {
+        "role": "system",
+        "content": _MARKED_DEVELOPER_PARTS,
+    }
+
+
+@pytest.mark.parametrize(
+    ("deployment_fields", "sent_parts"),
+    [
+        ({}, _DEVELOPER_PARTS),
+        ({"model_info": {"supports_prompt_caching": True}}, _MARKED_DEVELOPER_PARTS),
+        ({"base_model": _OPENAI_PROMPT_CACHING_MODEL}, _MARKED_DEVELOPER_PARTS),
+    ],
+    ids=["unmapped_model", "deployment_declares_caching", "base_model_caches"],
+)
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_a_system_point_marks_developer_parts_only_for_a_model_that_caches_prompts(
+    deployment_fields: dict[str, JsonValue],
+    sent_parts: list[JsonValue],
+    asynchronous: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(_OPENAI_COMPATIBLE_UNMAPPED, respx_mock, "canned-openai-compatible")
+    params: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "developer", "content": _DEVELOPER_PARTS}, {"role": "user", "content": "Hi"}],
+        "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        **deployment_fields,
+    }
+    if asynchronous:
+        await _acomplete(_OPENAI_COMPATIBLE_UNMAPPED, params)
+    else:
+        _complete(_OPENAI_COMPATIBLE_UNMAPPED, params)
+    assert _mapping(_items(_request_body(route)["messages"])[0]) == {"role": "system", "content": sent_parts}
+
+
+def _user_message_with_marked_parts(marks: int) -> dict[str, JsonValue]:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": f"Question part {part}.", "cache_control": {"type": "ephemeral"}}
+            for part in range(marks)
+        ],
+    }
+
+
+_ANTHROPIC_SYSTEMS: Final = pytest.param(
+    _BY_ID["anthropic_sonnet45"],
+    [{"type": "text", "text": "Be a good bot!", "cache_control": {"type": "ephemeral"}}],
+    [{"type": "text", "text": "Be a good bot!"}],
+    id="anthropic_sonnet45",
+)
+_BEDROCK_CONVERSE_SYSTEMS: Final = pytest.param(
+    _BY_ID["bedrock_converse_haiku"],
+    [{"text": "Be a good bot!"}, {"cachePoint": {"type": "default"}}],
+    [{"text": "Be a good bot!"}],
+    id="bedrock_converse_haiku",
+)
+
+
+@pytest.mark.parametrize(("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS])
+@pytest.mark.parametrize(
+    ("user_marks", "keeps_developer_mark"), [(3, True), (4, False)], ids=["at_limit", "over_limit"]
+)
+def test_a_developer_cache_control_is_kept_only_within_the_four_mark_limit(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    user_marks: int,
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                _user_message_with_marked_parts(user_marks),
+            ],
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+@pytest.mark.parametrize(("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS])
+@pytest.mark.parametrize(
+    ("user_marks", "developer_mark", "tool_mark", "keeps_developer_mark"),
+    [
+        (2, {"type": "ephemeral"}, {"type": "ephemeral"}, True),
+        (3, {"type": "ephemeral"}, {"type": "ephemeral"}, False),
+        (0, {"type": "ephemeral"}, {"type": "ephemeral", "ttl": "5m"}, True),
+        (0, {"type": "ephemeral", "ttl": "1h"}, {"type": "ephemeral", "ttl": "5m"}, False),
+    ],
+    ids=["tool_mark_at_limit", "tool_mark_over_limit", "same_default_ttl", "one_hour_after_five_minutes"],
+)
+def test_a_developer_cache_control_counts_tool_marks_and_their_ttl(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    user_marks: int,
+    developer_mark: dict[str, JsonValue],
+    tool_mark: dict[str, JsonValue],
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": developer_mark},
+                _user_message_with_marked_parts(user_marks) if user_marks else {"role": "user", "content": "Hi"},
+            ],
+            "tools": [{**_WEATHER_TOOL, "cache_control": tool_mark}],
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+@pytest.mark.parametrize(("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS])
+@pytest.mark.parametrize(
+    ("developer_mark", "keeps_developer_mark"),
+    [({"type": "ephemeral"}, True), ({"type": "ephemeral", "ttl": "1h"}, False)],
+    ids=["same_ttl_as_the_tool_config_point", "one_hour_after_the_tool_config_point"],
+)
+def test_a_developer_cache_control_counts_the_tool_config_injection_point(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    developer_mark: dict[str, JsonValue],
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": developer_mark},
+                {"role": "user", "content": "Hi"},
+            ],
+            "tools": [dict(_WEATHER_TOOL)],
+            "cache_control_injection_points": [{"location": "tool_config"}],
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+@pytest.mark.parametrize(("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS])
+@pytest.mark.parametrize(
+    ("request_fields", "keeps_developer_mark"),
+    [
+        ({"cache_control": {"type": "ephemeral"}}, False),
+        ({"extra_body": {"cache_control": {"type": "ephemeral"}}}, False),
+        ({}, True),
+    ],
+    ids=["top_level_cache_control", "extra_body_cache_control", "no_outside_mark"],
+)
+def test_a_developer_cache_control_counts_marks_outside_messages_and_tools(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    request_fields: dict[str, JsonValue],
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                _user_message_with_marked_parts(3),
+            ],
+            **request_fields,
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+@pytest.mark.parametrize(
     "case",
     _pick(
         "bedrock_converse_gptoss",
