@@ -3,10 +3,9 @@
 
 use std::{sync::Arc, time::Duration};
 
-use crate::{
-    config::{Op, RoutingStrategy},
-    host::Capability,
-};
+use litellm_router_types::RoutingStrategy;
+
+use crate::{config::Op, host::Capability};
 
 /// What a host cannot serve, found when the router is built rather than partway through a call.
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]

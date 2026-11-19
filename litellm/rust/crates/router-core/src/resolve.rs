@@ -145,7 +145,7 @@ fn model_access_groups(
 
 fn routing_group_rows(
     registry: &Registry,
-    group: &crate::registry::RoutingGroupSpec,
+    group: &litellm_router_types::RoutingGroupSpec,
     team_id: Option<&str>,
 ) -> Vec<Arc<Deployment>> {
     crate::routing_groups::members(group, |member| {

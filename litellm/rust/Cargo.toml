@@ -154,6 +154,7 @@ tempfile = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
+struct-field-names-as-array = "0.3.0"
 url = "2.5.8"
 percent-encoding = "2.3"
 webpki-roots = "1.0.10"

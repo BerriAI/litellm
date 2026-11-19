@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Final
@@ -27,16 +27,21 @@ class RoutingPrefetch:
     @staticmethod
     @renamed_router_param("litellm_router_instance")
     def arm(
-        ctx: "RoutingContext", usage_selector: LowestTPMLoggingHandler_v2 | None, deployments: Sequence[object]
+        ctx: "RoutingContext",
+        usage_selector: LowestTPMLoggingHandler_v2 | None,
+        deployments: Sequence[object],
+        model_ids: Collection[str] | None = None,
     ) -> None:
-        RoutingPrefetch.arm_cooldowns(ctx)
+        RoutingPrefetch.arm_cooldowns(ctx, model_ids)
         if usage_selector is not None:
             routing_prefetch.arm(usage_selector.usage, _selector_counters(usage_selector, deployments))
 
     @staticmethod
-    def arm_cooldowns(ctx: "RoutingContext") -> None:
-        """The cooldown read routing takes later, declared on the request's native pre-call batch now."""
-        routing_prefetch.arm_cooldowns(ctx.health().cooldowns.cooldown_store, ctx.registry().names(kind="ids"))
+    def arm_cooldowns(ctx: "RoutingContext", model_ids: Collection[str] | None = None) -> None:
+        """The cooldown read routing takes later, declared on the request's native pre-call batch now. Every
+        deployment's when ``model_ids`` is not given."""
+        ids: Final = ctx.registry().names(kind="ids") if model_ids is None else sorted(model_ids)
+        routing_prefetch.arm_cooldowns(ctx.health().cooldowns.cooldown_store, ids)
 
     @staticmethod
     def armed() -> bool:
