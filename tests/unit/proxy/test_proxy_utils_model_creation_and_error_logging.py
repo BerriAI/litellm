@@ -825,7 +825,7 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
             litellm_call_id="failed-agent-call",
             function_id="a2a-chat",
         )
-        logging_obj.bill_as_a2a_agent(agent_id="my-agent-id", cost_per_query=0.05)
+        logging_obj.bill_as_a2a_agent(agent_id="my-agent-id", cost_per_query=0.05, price_entry=None)
         if fallback_also_failed:
             logging_obj.stop_billing_as_a2a_agent()
         agent_down: Final = InternalServerError(

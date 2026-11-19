@@ -1368,6 +1368,28 @@ async def test_route_a2a_agents_bill_the_callers_per_second_price_over_their_own
 
 
 @respx.mock
+async def test_route_a2a_agent_call_is_never_billed_at_a_price_an_earlier_call_set_for_the_same_backend_model(
+    httpx_transport: None,
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    registry: Final = _registry_with(_priced_dbx_agent("per-token", PER_TOKEN_PRICE))
+    registry.register_agent(_priced_dbx_agent("unpriced", {}))
+    await _billed_chat_call(registry, "per-token")
+    await _billed_chat_call(registry, "per-token", {"input_cost_per_token": 1.0, "output_cost_per_token": 1.0})
+
+    unpriced_cost, _, _ = await _billed_chat_call(registry, "unpriced")
+    started: Final = time.monotonic()
+    per_second_cost, _, _ = await _billed_chat_call(registry, "per-token", {"cost_per_second": 1e-06})
+    elapsed: Final = time.monotonic() - started
+
+    assert unpriced_cost is None
+    assert per_second_cost is not None
+    assert 0.0 < per_second_cost <= 1e-06 * elapsed
+
+
+@respx.mock
 async def test_route_a2a_bridge_agent_call_whose_oauth_token_request_fails_is_attributed_to_the_agent(
     httpx_transport: None,
 ) -> None:

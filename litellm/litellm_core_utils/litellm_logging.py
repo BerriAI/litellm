@@ -554,6 +554,7 @@ _AGENT_PRICE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[NonNegativeFloat
 class A2AAgentBilling:
     agent_id: str | None
     cost_per_query: object
+    price_entry: ModelInfo | None
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -591,6 +592,7 @@ class Logging(LiteLLMLoggingBaseClass):
     custom_pricing: bool = False
     a2a_agent_billing: A2AAgentBilling | None = None
     a2a_agent_cost_per_query: object = None
+    a2a_agent_price_entry: ModelInfo | None = None
     a2a_agent_id: str | None = None
     stream_options = None
     litellm_request_debug: bool = False
@@ -1828,8 +1830,10 @@ class Logging(LiteLLMLoggingBaseClass):
             return 0.0
         return (end_seconds - start_seconds) * 1000
 
-    def bill_as_a2a_agent(self, agent_id: str | None, cost_per_query: object) -> None:
-        self.a2a_agent_billing = A2AAgentBilling(agent_id=agent_id, cost_per_query=cost_per_query)
+    def bill_as_a2a_agent(self, agent_id: str | None, cost_per_query: object, price_entry: ModelInfo | None) -> None:
+        self.a2a_agent_billing = A2AAgentBilling(
+            agent_id=agent_id, cost_per_query=cost_per_query, price_entry=price_entry
+        )
         self.resume_billing_as_a2a_agent()
 
     def resume_billing_as_a2a_agent(self) -> None:
@@ -1837,6 +1841,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if billing is None:
             return
         self.a2a_agent_cost_per_query = billing.cost_per_query
+        self.a2a_agent_price_entry = billing.price_entry
         self.a2a_agent_id = billing.agent_id
         if billing.agent_id is not None:
             self.model_call_details["agent_id"] = billing.agent_id
@@ -1845,6 +1850,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.a2a_agent_id is not None:
             self.model_call_details.pop("agent_id", None)
         self.a2a_agent_cost_per_query = None
+        self.a2a_agent_price_entry = None
 
     def stop_attributing_to_a2a_agent(self) -> None:
         self.a2a_agent_id = None
@@ -1993,7 +1999,7 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        custom_pricing: Final = self.custom_pricing_for(priced_result)
+        custom_pricing: Final = self.a2a_agent_price_entry is not None or self.custom_pricing_for(priced_result)
 
         prompt: Final = self._prompt_for_cost_calculation()
 
@@ -2020,6 +2026,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "call_type": self.call_type,
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
+                "requested_model_info_override": self.a2a_agent_price_entry,
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
