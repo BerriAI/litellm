@@ -46,8 +46,8 @@ def listing_cache_key(route: str, user_api_key_dict: UserAPIKeyAuth, params: Map
     """One entry per caller and query.
 
     The scope holds every field the listing is filtered by: the credential hash, the
-    team, user, organization, role and agent, the key's and the team's models and access
-    groups, and the aliases the names are read through.
+    team, user, organization, role and agent, the user and team that invoked the agent, the
+    key's and the team's models and access groups, and the aliases the names are read through.
     """
     scope: Final = (
         user_api_key_dict.token,
@@ -55,6 +55,7 @@ def listing_cache_key(route: str, user_api_key_dict: UserAPIKeyAuth, params: Map
         user_api_key_dict.user_id,
         user_api_key_dict.org_id,
         user_api_key_dict.agent_id,
+        user_api_key_dict.agent_caller,
         str(user_api_key_dict.user_role),
         _names(user_api_key_dict.models),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # key.models is an untyped String[] column
         _names(user_api_key_dict.team_models),

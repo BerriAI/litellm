@@ -3,6 +3,7 @@ from typing import Final
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.types.agents import AgentCaller
 from litellm.proxy.model_listing_cache import (
     ListingScope,
     ModelListingCache,
@@ -56,6 +57,13 @@ def test_listing_cache_key_separates_every_field_the_listing_is_filtered_by(narr
     broad: Final = UserAPIKeyAuth(token="hash-a", team_id="team-1", user_id="user-1")
     narrow: Final = UserAPIKeyAuth(token="hash-a", team_id="team-1", user_id="user-1", **narrower)
     assert listing_cache_key("model_info_v1", broad, {}) != listing_cache_key("model_info_v1", narrow, {})
+
+
+def test_listing_cache_key_separates_the_user_and_team_that_invoked_the_agent() -> None:
+    broad: Final = UserAPIKeyAuth(token="hash-a", agent_id="agent-a")
+    narrow: Final = UserAPIKeyAuth(token="hash-a", agent_id="agent-a")
+    narrow.agent_caller = AgentCaller(user_id="user-2", team_id="team-1")  # set per request, after validation
+    assert listing_cache_key("model_group_info", broad, {}) != listing_cache_key("model_group_info", narrow, {})
 
 
 def test_listing_cache_scope_skips_a_caller_without_a_credential_hash() -> None:
