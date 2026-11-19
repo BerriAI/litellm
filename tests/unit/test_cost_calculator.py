@@ -6727,6 +6727,21 @@ def test_completion_cost_prices_responses_websocket_turns_per_service_tier():
     assert ws_cost == pytest.approx(_http_cost(100, 40, "default") + _http_cost(60, 10, "priority"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "default"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "priority"))
+    assert logging_obj.cost_breakdown is None
+
+    ws_cost_logged = completion_cost(
+        completion_response=normalized,
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses_websocket.value,
+        custom_llm_provider="openai",
+        litellm_logging_obj=logging_obj,
+    )
+
+    breakdown = logging_obj.cost_breakdown
+    assert ws_cost_logged == ws_cost
+    assert breakdown is not None
+    assert breakdown["service_tier"] == "priority"
+    assert breakdown["total_cost"] == pytest.approx(_http_cost(60, 10, "priority"))
 
 
 _TIERED_BATCH_MODEL: Final = "lit-tiered-batch-model"
