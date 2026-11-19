@@ -508,6 +508,7 @@ async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unch
         state="review photo-1",
         questions=_QUESTIONS,
         assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+        safety_identifier="end-user-1",
         api_base="https://proxy.example/v1",
         api_key="proxy-key",
     )
@@ -517,6 +518,7 @@ async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unch
     assert sent["model"] == "gemini/gemini-decision-1"
     assert sent["questions"] == _QUESTIONS
     assert sent["assets"] == {"photo-1": {"format": "png", "data_base64": "AA=="}}
+    assert sent["safety_identifier"] == "end-user-1"
     assert systemone_route.calls.last.request.headers["authorization"] == "Bearer proxy-key"
     assert response.answers["sentiment"].confidence == 0.8
 
