@@ -970,6 +970,39 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     response.aclose.assert_awaited_once()
 
 
+def test_moonshot_invoke_stream_reports_the_token_counts_bedrock_returns(_aws_test_credentials: None) -> None:
+    raw_stream: Final = b"".join(
+        _bedrock_event_stream_frame(chunk)
+        for chunk in (
+            _openai_stream_chunk({"role": "assistant", "content": "1, 2, 3"}),
+            {
+                **_openai_stream_chunk({}, "stop"),
+                "amazon-bedrock-invocationMetrics": {
+                    "inputTokenCount": 31,
+                    "outputTokenCount": 47,
+                    "invocationLatency": 207,
+                    "firstByteLatency": 120,
+                },
+            },
+        )
+    )
+    response: Final = MagicMock(status_code=200, headers={})
+    response.iter_bytes = lambda chunk_size=None: iter([raw_stream])
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=response)
+
+    stream: Final = litellm.completion(
+        model="bedrock/invoke/moonshot.kimi-k2-thinking",
+        messages=[{"role": "user", "content": "count to 3"}],
+        stream=True,
+        stream_options={"include_usage": True},
+        client=client,
+    )
+
+    usages: Final = [chunk.usage for chunk in stream if getattr(chunk, "usage", None) is not None]
+    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(31, 47)]
+
+
 def _truncated_frame() -> bytes:
     return _bedrock_event_stream_frame(_openai_stream_chunk({"role": "assistant"}))[:-8]
 
@@ -1020,7 +1053,7 @@ async def test_aiter_bytes_raises_when_a_200_body_decodes_to_no_events(body: byt
 
 
 def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
-    decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking", sync_stream=True)
+    decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking")
     stream: Final = decoder.iter_bytes(iter([_MOONSHOT_RAW_STREAM, _truncated_frame()]))
 
     chunks: Final = list(itertools.islice(stream, 4))
@@ -1034,7 +1067,7 @@ def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
 
 
 def test_iter_bytes_yields_a_complete_stream_without_raising() -> None:
-    decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking", sync_stream=True)
+    decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking")
 
     chunks: Final = list(decoder.iter_bytes(iter([_MOONSHOT_RAW_STREAM[:100], _MOONSHOT_RAW_STREAM[100:]])))
 

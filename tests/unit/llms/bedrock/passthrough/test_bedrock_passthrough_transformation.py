@@ -901,6 +901,90 @@ def test_invoke_stream_collector_keeps_usage_without_retaining_the_stream():
     )
 
 
+OPENAI_SHAPED_INVOKE_MODELS: Final = (
+    pytest.param("qwen.qwen3-32b-v1:0", id="qwen3"),
+    pytest.param("mistral.mistral-large-3-675b-instruct", id="mistral-large-3"),
+)
+OPENAI_SHAPED_PROMPT_TOKENS: Final = 11
+OPENAI_SHAPED_COMPLETION_TOKENS: Final = 14
+OPENAI_SHAPED_TEXTS: Final = ("Here you go:", "\n\n1\n2\n3\n4\n5")
+INVOCATION_METRICS: Final = {
+    "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": OPENAI_SHAPED_PROMPT_TOKENS,
+        "outputTokenCount": OPENAI_SHAPED_COMPLETION_TOKENS,
+        "invocationLatency": 207,
+        "firstByteLatency": 120,
+    }
+}
+
+
+def _openai_shaped_invoke_chunk(model: str, choices: list[dict], extra: Mapping[str, object]) -> bytes:
+    return _invoke_chunk(
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 1795084619,
+            "model": model,
+            "choices": choices,
+            **extra,
+        }
+    )
+
+
+def _openai_shaped_invoke_stream(model: str, include_usage: bool) -> bytes:
+    usage: Final = {
+        "prompt_tokens": OPENAI_SHAPED_PROMPT_TOKENS,
+        "completion_tokens": OPENAI_SHAPED_COMPLETION_TOKENS,
+        "total_tokens": OPENAI_SHAPED_PROMPT_TOKENS + OPENAI_SHAPED_COMPLETION_TOKENS,
+    }
+    last_text_extra: Final = {} if include_usage else INVOCATION_METRICS
+    return (
+        _openai_shaped_invoke_chunk(
+            model, [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}], {}
+        )
+        + _openai_shaped_invoke_chunk(
+            model, [{"index": 0, "delta": {"content": OPENAI_SHAPED_TEXTS[0]}, "finish_reason": None}], {}
+        )
+        + _openai_shaped_invoke_chunk(
+            model, [{"index": 0, "delta": {"content": OPENAI_SHAPED_TEXTS[1]}, "finish_reason": "stop"}], last_text_extra
+        )
+        + (_openai_shaped_invoke_chunk(model, [], {"usage": usage, **INVOCATION_METRICS}) if include_usage else b"")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", OPENAI_SHAPED_INVOKE_MODELS)
+@pytest.mark.parametrize("include_usage", [False, True], ids=["invocation-metrics-only", "include-usage"])
+async def test_openai_shaped_invoke_stream_passthrough_bills_the_tokens_bedrock_reports(
+    model: str, include_usage: bool
+) -> None:
+    endpoint: Final = f"/model/{model}/invoke-with-response-stream"
+    callback: Final = _CaptureAsyncSuccessCallback()
+    logging_obj: Final = _stream_logging_obj(endpoint, [callback], model=model)
+    collector: Final = BedrockPassthroughConfig().create_stream_collector(
+        model=model, custom_llm_provider="bedrock", endpoint=endpoint
+    )
+    _feed(collector, _openai_shaped_invoke_stream(model, include_usage), chunk_size=7)
+
+    response: Final = collector.build_logged_response(logging_obj)
+    await logging_obj.async_flush_passthrough_collected_chunks(collector=collector)
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "".join(OPENAI_SHAPED_TEXTS)
+    assert response.choices[0].finish_reason == "stop"
+    assert callback.kwargs is not None
+    standard_logging_object: Final = _STANDARD_LOGGING_OBJECT.validate_python(callback.kwargs["standard_logging_object"])
+    assert (standard_logging_object["prompt_tokens"], standard_logging_object["completion_tokens"]) == (
+        OPENAI_SHAPED_PROMPT_TOKENS,
+        OPENAI_SHAPED_COMPLETION_TOKENS,
+    )
+    prices: Final = litellm.model_cost[model]
+    assert callback.kwargs["response_cost"] == pytest.approx(
+        OPENAI_SHAPED_PROMPT_TOKENS * prices["input_cost_per_token"]
+        + OPENAI_SHAPED_COMPLETION_TOKENS * prices["output_cost_per_token"]
+    )
+
+
 def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
     collector = BedrockPassthroughConfig().create_stream_collector(
         model=CONVERSE_MODEL, custom_llm_provider="bedrock", endpoint=f"/model/{CONVERSE_MODEL}/rerank"
