@@ -47,6 +47,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
     end_user_cache_key,
+    model_access_group_registry_cache_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -9675,6 +9676,10 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         request_data: Final = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
         await proxy_server.user_api_key_cache.async_set_cache(
+            key=model_access_group_registry_cache_key(),
+            value=("fallback-group",),
+        )
+        await proxy_server.user_api_key_cache.async_set_cache(
             key=model_access_group_cache_key("fallback-group"),
             value=ModelAccessGroupBudget(access_group_name="fallback-group", spend=0.0, max_budget=10.0),
             model_type=ModelAccessGroupBudget,
@@ -9724,6 +9729,10 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         limiter, _ = await _real_model_budget_limiter(member_spend={"gpt-4o": 10.0})
         request_data: Final = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
+        await proxy_server.user_api_key_cache.async_set_cache(
+            key=model_access_group_registry_cache_key(),
+            value=("fallback-group",),
+        )
         await proxy_server.user_api_key_cache.async_set_cache(
             key=model_access_group_cache_key("fallback-group"),
             value=ModelAccessGroupBudget(access_group_name="fallback-group", spend=5.0, max_budget=5.0),
