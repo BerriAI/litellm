@@ -123427,5 +123427,22 @@
         "supports_video_input": false,
         "supports_vision": true,
         "supports_web_search": false
+    },
+    "gpt-live-1.1": {
+        "input_cost_per_second": 0.000833333333333,
+        "litellm_provider": "openai",
+        "mode": "realtime",
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
     }
 }
