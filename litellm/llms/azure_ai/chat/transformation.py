@@ -21,6 +21,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
+    AZURE_OPENAI_RESOURCE_HOST_SUFFIXES,
+    CHAT_COMPLETIONS_PATH,
+    OPENAI_V1_PATH,
     api_key_header_for_base,
     is_foundry_model_inference_base,
 )
@@ -345,6 +348,15 @@ class AzureAIStudioConfig(OpenAIConfig):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
+
+        requested_api_version: Final = query_params.get("api-version")
+        if (
+            original_url.host.endswith(AZURE_OPENAI_RESOURCE_HOST_SUFFIXES)
+            and original_url.path.rstrip("/") in ("", "/openai")
+            and (requested_api_version is None or BaseAzureLLM.is_azure_v1_api_version(requested_api_version))
+        ):
+            v1_chat_path: Final = "/" + "/".join((*OPENAI_V1_PATH, *CHAT_COMPLETIONS_PATH))
+            return str(original_url.copy_with(path=v1_chat_path, params=query_params))
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:
