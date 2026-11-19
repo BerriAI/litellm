@@ -79,6 +79,9 @@ else:
 BufferedSpendTransactions: TypeAlias = DBSpendUpdateTransactions | Mapping[str, BaseDailySpendTransaction]
 
 _SpendTransactionField: TypeAlias = Literal[
+    "app_list_transactions",
+    "app_customer_org_list_transactions",
+    "app_customer_member_list_transactions",
     "user_list_transactions",
     "end_user_list_transactions",
     "key_list_transactions",
@@ -96,6 +99,9 @@ _SpendTransactionField: TypeAlias = Literal[
 ]
 
 _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
+    "app_list_transactions",
+    "app_customer_org_list_transactions",
+    "app_customer_member_list_transactions",
     "user_list_transactions",
     "end_user_list_transactions",
     "key_list_transactions",
@@ -440,11 +446,11 @@ class RedisUpdateBuffer:
     async def _restore_spend_updates_to_in_memory_queues(
         db_spend_update_transactions: DBSpendUpdateTransactions | None,
         daily_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
-        daily_team_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
-        daily_org_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
-        daily_end_user_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
-        daily_agent_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
-        daily_customer_member_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None,
+        daily_team_spend_update_transactions: (dict[str, BaseDailySpendTransaction] | None),
+        daily_org_spend_update_transactions: (dict[str, BaseDailySpendTransaction] | None),
+        daily_end_user_spend_update_transactions: (dict[str, BaseDailySpendTransaction] | None),
+        daily_agent_spend_update_transactions: (dict[str, BaseDailySpendTransaction] | None),
+        daily_customer_member_spend_update_transactions: (Mapping[str, BaseDailySpendTransaction] | None),
         window_spend_update_transactions: tuple[WindowSpendTransaction, ...] | None,
         spend_update_queue: SpendUpdateQueue,
         daily_spend_update_queue: DailySpendUpdateQueue,
@@ -519,6 +525,18 @@ class RedisUpdateBuffer:
                 (
                     Litellm_EntityType.CUSTOMER_MEMBER,
                     db_spend_update_transactions.get("customer_member_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.APP,
+                    db_spend_update_transactions.get("app_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.APP_CUSTOMER_ORG,
+                    db_spend_update_transactions.get("app_customer_org_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.APP_CUSTOMER_MEMBER,
+                    db_spend_update_transactions.get("app_customer_member_list_transactions"),
                 ),
             ]
             for entity_type, entities in entity_entries:
@@ -1104,6 +1122,19 @@ class RedisUpdateBuffer:
             ),
             customer_member_list_transactions=_merged_entity_transactions(
                 list_of_transactions, "customer_member_list_transactions"
+            ),
+            **(
+                {
+                    "app_list_transactions": _merged_entity_transactions(list_of_transactions, "app_list_transactions"),
+                    "app_customer_org_list_transactions": _merged_entity_transactions(
+                        list_of_transactions, "app_customer_org_list_transactions"
+                    ),
+                    "app_customer_member_list_transactions": _merged_entity_transactions(
+                        list_of_transactions, "app_customer_member_list_transactions"
+                    ),
+                }
+                if any("app_list_transactions" in row for row in list_of_transactions)
+                else {}
             ),
         )
 

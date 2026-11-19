@@ -4,11 +4,15 @@ Unit tests for policy management endpoints.
 Tests apply_policies: resolving guardrails from policy names and applying them to inputs.
 """
 
+from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from starlette.requests import Request
 
+import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.management_endpoints.policy_endpoints import apply_policies
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -642,6 +646,44 @@ class TestApplyPoliciesDirectGuardrailNames:
         # Sorted order: direct_guardrail then from_policy; final output is from_policy
         assert result["inputs"] == first_output
         assert result["guardrail_errors"] == []
+
+
+class _VerdictCountingGuardrail(CustomGuardrail):
+    verdicts_seen: tuple[int, ...] = ()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        metadata: Final = request_data.get("metadata")
+        earlier_verdicts: Final = (
+            metadata.get("standard_logging_guardrail_information", []) if isinstance(metadata, dict) else []
+        )
+        self.verdicts_seen = (*self.verdicts_seen, len(earlier_verdicts))
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_each_batch_input_is_checked_without_verdicts_from_earlier_inputs() -> None:
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.policy_endpoints import endpoints
+
+    guardrail: Final = _VerdictCountingGuardrail(guardrail_name="counting")
+    litellm.logging_callback_manager.add_litellm_callback(guardrail)
+
+    await endpoints.test_policies_and_guardrails(
+        request=Request(scope={"type": "http", "method": "POST", "path": "/utils/test_policies_and_guardrails"}),
+        data=endpoints.TestPoliciesAndGuardrailsRequest(
+            guardrail_names=["counting"],
+            inputs_list=[{"texts": ["first input"]}, {"texts": ["second input"]}],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert guardrail.verdicts_seen == (0, 0)
 
 
 # ---------------------------------------------------------------------------

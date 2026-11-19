@@ -647,7 +647,7 @@ def _get_openai_compatible_provider_info(
         if provider_config is None:
             raise ValueError(f"Provider {custom_llm_provider} not found")
         config_class: Final = create_config_class(provider_config)
-        api_base, dynamic_api_key = config_class().get_openai_compatible_provider_info(api_base, api_key)
+        api_base, dynamic_api_key = config_class().get_model_provider_info(model, api_base, api_key)
         return model, custom_llm_provider, dynamic_api_key, api_base
 
     if custom_llm_provider == "perplexity":

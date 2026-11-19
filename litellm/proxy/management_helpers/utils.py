@@ -6,7 +6,7 @@ from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, ParamSpec, Protocol, TypeVar
+from typing import Any, Final, NoReturn, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
@@ -48,7 +48,7 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 
 _BUDGET_DATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -132,10 +132,14 @@ def _budget_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _Pri
 
 def reject_budget_windows(row: Mapping[str, object]) -> None:
     if row.get("budget_limits"):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Concurrent budget windows are currently supported only by customer hierarchies."},
-        )
+        raise_budget_windows_unsupported()
+
+
+def raise_budget_windows_unsupported() -> NoReturn:
+    raise HTTPException(
+        status_code=400,
+        detail={"error": "Concurrent budget windows are currently supported only by customer hierarchies."},
+    )
 
 
 async def validate_scalar_budget_attachment(
@@ -460,6 +464,8 @@ async def _resolve_member_budget_id(
     changes reach them; ``/team/member_update`` clones that row on first write.
     A lone ``budget_duration`` clones the default with the reset window
     overridden, or creates a window-only budget when there is no team default.
+    ``allowed_models`` with no cap creates a budget that takes the default's reset
+    window and leaves the cap to the default.
     With nothing set the member gets no budget, though ``add_new_member`` still writes its membership row.
     """
     has_explicit_limit: Final = max_budget_in_team is not None or allowed_models is not None
@@ -493,12 +499,32 @@ async def _resolve_member_budget_id(
         budget_data["max_budget"] = max_budget_in_team
     if allowed_models is not None:
         budget_data["allowed_models"] = allowed_models
-    if budget_duration is not None:
-        budget_data["budget_duration"] = budget_duration
-        budget_data["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
+    member_budget_duration: Final = budget_duration or (
+        await _team_default_budget_duration(prisma_client, default_team_budget_id, tx)
+        if max_budget_in_team is None and default_team_budget_id is not None
+        else None
+    )
+    if member_budget_duration is not None:
+        budget_data["budget_duration"] = member_budget_duration
+        budget_data["budget_reset_at"] = get_budget_reset_time(budget_duration=member_budget_duration)
     budget_table: Final[_PrismaBudgetTable] = _budget_table(prisma_client, tx)
     response: Final = await budget_table.create(data=budget_data)
     return response.budget_id
+
+
+async def _team_default_budget_duration(
+    prisma_client: PrismaClient, default_team_budget_id: str, tx: MemberWriteTx | None
+) -> str | None:
+    """The reset period a member with models of their own and no cap of their own must carry.
+
+    Their cap is read from the team default at auth time, but spend is only reset for a
+    member whose own budget row has a reset date.
+    """
+    default_budget: Final = await _budget_table(prisma_client, tx).find_unique(
+        where={"budget_id": default_team_budget_id}
+    )
+    duration: Final = default_budget.model_dump().get("budget_duration") if default_budget is not None else None
+    return duration if isinstance(duration, str) and duration else None
 
 
 async def _append_team_id_if_absent(
