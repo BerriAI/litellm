@@ -578,6 +578,7 @@ class DecisionsIRRequest:
     assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()
+    drop_params: bool = False
 
 
 @dataclass(frozen=True, slots=True)

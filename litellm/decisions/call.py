@@ -232,12 +232,16 @@ def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfi
     return provider_config
 
 
-def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
+def _ir_request(
+    request: DecisionsRequestFormat, safety_identifier: str | None, drop_params: bool
+) -> DecisionsIRRequest:
     match request:
         case DecisionsRequestBody():
-            return replace(systemone_request_to_ir(request), safety_identifier=safety_identifier)
+            return replace(
+                systemone_request_to_ir(request), safety_identifier=safety_identifier, drop_params=drop_params
+            )
         case OpenAIDecisionRequestBody():
-            return openai_request_to_ir(request)
+            return replace(openai_request_to_ir(request), drop_params=drop_params)
         case _:
             assert_never(request)
 
@@ -517,7 +521,7 @@ def prepare_call(
         )
 
     caller_ir_request: Final = _without_malformed_images(
-        _ir_request(request, request_safety_identifier), _drops_params(kwargs)
+        _ir_request(request, request_safety_identifier, _drops_params(kwargs)), _drops_params(kwargs)
     )
     if isinstance(caller_ir_request, _MalformedImages):
         raise litellm.BadRequestError(
