@@ -27,12 +27,13 @@ CONFIG: Final = (
 )
 
 
-def _assert_database_idle() -> None:
+def _assert_database_idle(database_url: str | None = None) -> None:
     assert (
         eventually(
             lambda: read_rows(
                 "SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()",
                 (),
+                database_url=database_url,
             ),
             lambda rows: not rows,
             seconds=5,
@@ -43,7 +44,7 @@ def _assert_database_idle() -> None:
     assert tuple(thread.name for thread in threading.enumerate() if thread.name.startswith("prisma-engine-")) == ()
 
 
-async def _assert_lifespan_closed() -> None:
+async def _assert_lifespan_closed(database_url: str | None = None) -> None:
     from litellm.proxy import proxy_server
 
     await asyncio.sleep(0)
@@ -58,7 +59,7 @@ async def _assert_lifespan_closed() -> None:
         )
         == ()
     )
-    await asyncio.to_thread(_assert_database_idle)
+    await asyncio.to_thread(_assert_database_idle, database_url)
 
 
 async def _assert_one_prisma_session(db: SupportsRawQueries) -> None:
@@ -68,7 +69,7 @@ async def _assert_one_prisma_session(db: SupportsRawQueries) -> None:
     assert len({batch[0]["pid"] for batch in sessions}) == 1, sessions
 
 
-async def _assert_gateway_pool_is_capped() -> None:
+async def _assert_gateway_pool_is_capped(database_url: str) -> None:
     from gateway.main import app
     from litellm.repositories.database import Database
 
@@ -79,7 +80,7 @@ async def _assert_gateway_pool_is_capped() -> None:
         assert database.native is not None
         for db in (database.prisma.writer_db, database.prisma.read_db):
             await _assert_one_prisma_session(cast(SupportsRawQueries, db))  # cast-ok: PrismaWrapper forwards query_raw
-    await _assert_lifespan_closed()
+    await _assert_lifespan_closed(database_url)
 
 
 async def _exercise_lifespans(mode: Mode) -> None:
@@ -87,7 +88,7 @@ async def _exercise_lifespans(mode: Mode) -> None:
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
 
     if mode == "gateway":
-        await _assert_gateway_pool_is_capped()
+        await _assert_gateway_pool_is_capped(os.environ["DATABASE_URL"])
         return
 
     expected: Final = UnsafeMasterKeyError if mode == "unsafe" else ValueError
