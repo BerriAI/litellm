@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   all_admin_roles,
+  availableRoleDisplayLabel,
   effectiveSessionRole,
   hasProxyWideSpendView,
   isAdminRole,
@@ -23,6 +24,16 @@ const orgWithMembers = (members: { user_id: string; user_role: string }[]): Orga
   ({ organization_id: "org-1", members }) as unknown as Organization;
 
 describe("roles", () => {
+  it.each([
+    ["proxy_admin_viewer", "Admin (View Only)", "Proxy Admin Viewer"],
+    ["internal_user_viewer", "Internal User (View Only)", "Internal User Viewer"],
+    ["custom_role", "Custom Role", "Custom Role"],
+    ["custom_role", "", "custom_role"],
+    ["", "", ""],
+  ])("labels the available role %s", (role, backendLabel, label) => {
+    expect(availableRoleDisplayLabel(role, backendLabel)).toBe(label);
+  });
+
   it.each([
     ["Admin Viewer", "Proxy Admin Viewer"],
     ["Internal Viewer", "Internal User Viewer"],

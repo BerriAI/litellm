@@ -808,7 +808,7 @@ describe("TeamInfoView - member budget reset prompt", () => {
     await user.click(screen.getByRole("tab", { name: "Settings" }));
     await user.click(await screen.findByRole("button", { name: /edit settings/i }));
     await user.click(screen.getByText("Team Member Settings"));
-    await screen.findByPlaceholderText("Max Budget (USD)");
+    await screen.findByPlaceholderText("Max Budget");
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
@@ -836,7 +836,7 @@ describe("TeamInfoView - member budget reset prompt", () => {
     await user.click(screen.getByRole("tab", { name: "Settings" }));
     await user.click(await screen.findByRole("button", { name: /edit settings/i }));
     await user.click(screen.getByText("Team Member Settings"));
-    fireEvent.change(await screen.findByPlaceholderText("Max Budget (USD)"), { target: { value: "7" } });
+    fireEvent.change(await screen.findByPlaceholderText("Max Budget"), { target: { value: "7" } });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());

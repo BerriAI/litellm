@@ -3074,7 +3074,7 @@
       "model": "Model",
       "selectModel": "Select model",
       "noModels": "No models found",
-      "maxSpend": "Max Budget (USD)",
+      "maxSpend": "Max Budget",
       "currentSpend": "Current window spend: $",
       "ofLimit": " of ${{limit}}",
       "fieldLabel": "Per-Model Budgets"
@@ -3110,7 +3110,7 @@
           "resetHint": "Resets on the 1st of every month at midnight UTC"
         }
       },
-      "maxSpend": "Max Budget (USD)",
+      "maxSpend": "Max Budget",
       "addWindow": "+ Add Budget Window"
     },
     "endUserBudgetSelect": {

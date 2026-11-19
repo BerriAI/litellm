@@ -1,5 +1,6 @@
 "use client";
 
+import { availableRoleDisplayLabel } from "@/utils/roles";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
 import * as React from "react";
@@ -426,8 +427,12 @@ export const DefaultUserSettingsForm = ({
     () =>
       Object.entries(possibleUIRoles ?? {})
         .filter(([role]) => role.includes("internal_user"))
-        .map(([role, meta]) => ({ value: role, label: meta.ui_label || role, description: meta.description ?? "" })),
-    [possibleUIRoles],
+        .map(([role, meta]) => ({
+          value: role,
+          label: availableRoleDisplayLabel(role, meta.ui_label),
+          description: meta.description ?? "",
+        })),
+    [possibleUIRoles, t],
   );
 
   const initialValues = React.useMemo(() => (data === undefined ? undefined : settingsToForm(data.values)), [data]);

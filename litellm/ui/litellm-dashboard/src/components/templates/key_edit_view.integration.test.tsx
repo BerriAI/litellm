@@ -1413,7 +1413,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const maxBudgetInput = await screen.findByPlaceholderText("Max Budget (USD)");
+    const maxBudgetInput = await screen.findByPlaceholderText("Max Budget");
     await userEvent.clear(maxBudgetInput);
     await userEvent.type(maxBudgetInput, "200");
 
@@ -1445,7 +1445,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const maxBudgetInput = await screen.findByPlaceholderText("Max Budget (USD)");
+    const maxBudgetInput = await screen.findByPlaceholderText("Max Budget");
     await userEvent.clear(maxBudgetInput);
 
     const submitButton = screen.getByRole("button", { name: /save changes/i });
@@ -1501,7 +1501,7 @@ describe("KeyEditView", () => {
           premiumUser={true}
         />,
       );
-      expect(await screen.findByPlaceholderText("Max Budget (USD)")).toHaveValue(5);
+      expect(await screen.findByPlaceholderText("Max Budget")).toHaveValue(5);
 
       rerender(
         <KeyEditView
@@ -1515,7 +1515,7 @@ describe("KeyEditView", () => {
         />,
       );
 
-      expect(await screen.findByPlaceholderText("Max Budget (USD)")).toHaveValue(99);
+      expect(await screen.findByPlaceholderText("Max Budget")).toHaveValue(99);
     });
 
     it("should say why the editor is locked when the proxy has no enterprise license", async () => {
