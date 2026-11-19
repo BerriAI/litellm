@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -595,3 +596,40 @@ def test_a_pull_request_changing_any_route_file_runs_the_terraform_provider_endp
     ).splitlines()
     assert route_files
     assert [name for name in route_files if not any(fnmatch.fnmatch(name, pattern) for pattern in triggers)] == []
+
+
+def _e2e_type_check_command(text: str, prefix: str) -> str:
+    match: Final = re.search(rf"^\s*{re.escape(prefix)}(basedpyright .+tests/e2e_harness)$", text, re.MULTILINE)
+    assert match is not None
+    return match.group(1)
+
+
+def test_make_and_ci_run_the_same_e2e_type_check() -> None:
+    assert _e2e_type_check_command((REPO_ROOT / "Makefile").read_text(), "$(UV_RUN) ") == _e2e_type_check_command(
+        WORKFLOW.read_text(), "uv run --no-sync "
+    )
+
+
+@pytest.mark.parametrize(
+    ("bad_file", "expected_to_pass"),
+    (("tests/e2e/generated/bad.py", True), ("tests/e2e_harness/bad.py", False)),
+)
+def test_e2e_type_check_uses_the_checkouts_own_config_not_one_in_a_parent_folder(
+    tmp_path: Path, bad_file: str, expected_to_pass: bool
+) -> None:
+    (tmp_path / "pyrightconfig.json").write_text('{"typeCheckingMode": "standard"}\n')
+    checkout: Final = tmp_path / "checkout"
+    (checkout / "tests" / "e2e_harness").mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text('[tool.pyright]\nexclude = ["tests/e2e/generated"]\n')
+    (checkout / "Makefile").write_text((REPO_ROOT / "Makefile").read_text())
+    (checkout / "tests" / "e2e_harness" / "ok.py").write_text("y: int = 1\n")
+    (checkout / bad_file).parent.mkdir(parents=True, exist_ok=True)
+    (checkout / bad_file).write_text('x: int = "not an int"\n')
+    proc: Final = subprocess.run(
+        ("make", "-s", "lint-e2e-basedpyright", "LINT_E2E_DEP_INSTALL=", "UV_RUN="),
+        cwd=checkout,
+        env={**os.environ, "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+    assert (proc.returncode == 0) is expected_to_pass, proc.stdout + proc.stderr
