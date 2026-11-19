@@ -45,6 +45,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _can_user_query_key_info,
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
@@ -87,6 +88,31 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_user_id", "owner_user_id", "expected"),
+    [
+        (None, None, False),
+        ("", "", False),
+        ("alice", None, False),
+        ("alice", "bob", False),
+        ("alice", "alice", True),
+    ],
+)
+async def test_key_info_access_by_owner_requires_a_real_shared_owner(
+    caller_user_id: str | None, owner_user_id: str | None, expected: bool
+) -> None:
+    auth: Final = UserAPIKeyAuth(
+        api_key="caller-key-hash", user_id=caller_user_id, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    other_key: Final = LiteLLM_VerificationToken(token="other-key-hash", user_id=owner_user_id)
+
+    assert (
+        await _can_user_query_key_info(user_api_key_dict=auth, key=other_key.token, key_info=other_key)
+        is expected
+    ), f"caller user_id={caller_user_id!r} reading key owned by {owner_user_id!r}"
 
 
 @pytest.mark.asyncio
