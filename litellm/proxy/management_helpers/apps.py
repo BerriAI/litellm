@@ -445,6 +445,7 @@ class AppStore:
         rows: Final = await self.apps.find_many(
             where={
                 "resource_type": definition.resource_type.value,
+                # bounded-ok: the apps granted to one caller through object permissions, one id per app
                 **({} if app_ids is None else {"app_id": {"in": sorted(app_ids)}}),
             },
             skip=offset,
