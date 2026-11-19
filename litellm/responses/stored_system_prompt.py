@@ -144,7 +144,7 @@ def _with_instructions(request: Mapping[str, object], kept: Mapping[str, str]) -
 
 def _with_long_instructions_in_input(request: Mapping[str, object]) -> Mapping[str, object]:
     instructions: Final = _sent(request, "instructions")
-    input_items: Final = as_object_list(request.get("input"))
+    input_items: Final = as_object_list(_sent(request, "input"))
     if (
         not isinstance(instructions, str)
         or len(instructions) <= RESPONSES_INSTRUCTIONS_MAX_LENGTH
@@ -156,7 +156,14 @@ def _with_long_instructions_in_input(request: Mapping[str, object]) -> Mapping[s
         "role": "system",
         "content": [{"type": "input_text", "text": instructions}],
     }
-    return {**_with_instructions(request, {}), "input": [system_item, *input_items]}
+    moved: Final = {"input": [system_item, *input_items]}
+    without_instructions: Final = _with_instructions(request, {})
+    extra_body: Final = as_str_mapping(without_instructions.get("extra_body"))
+    return {
+        **without_instructions,
+        **moved,
+        **({"extra_body": {**extra_body, **moved}} if extra_body is not None and "input" in extra_body else {}),
+    }
 
 
 def without_stored_instructions(request: Mapping[str, object]) -> Mapping[str, object]:

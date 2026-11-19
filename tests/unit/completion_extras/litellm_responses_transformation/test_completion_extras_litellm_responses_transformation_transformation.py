@@ -6471,6 +6471,23 @@ def test_follow_up_sends_a_prompt_too_long_for_instructions_in_input_only_when_t
     assert (sent_instructions, sent["input"]) == (None, list(sent_input))
 
 
+def test_a_prompt_too_long_for_instructions_reaches_a_caller_input_override_in_extra_body() -> None:
+    sent: Final = without_stored_instructions(
+        {
+            "instructions": _OVER_LIMIT_PROMPT,
+            "input": [_USER_HI],
+            "truncation": "auto",
+            "extra_body": {"input": [_USER_HI]},
+        }
+    )
+    expected_input: Final = [_system_input_item(_OVER_LIMIT_PROMPT), _USER_HI]
+    assert (sent.get("instructions"), sent["input"], sent["extra_body"]) == (
+        None,
+        expected_input,
+        {"input": expected_input},
+    )
+
+
 @pytest.mark.parametrize(
     ("content_block", "expected_content"),
     [
