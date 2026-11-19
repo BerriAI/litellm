@@ -7,6 +7,7 @@ import re
 import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from http import HTTPStatus
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -188,6 +189,32 @@ class _SupportsGetItem(Protocol):
 
 def attribute_or_none(source: object, name: str) -> object:
     return getattr(source, name, None)
+
+
+_HTTP_ERROR_STATUSES: Final = range(HTTPStatus.BAD_REQUEST, 600)
+
+
+def error_status_code(exc: object, default: int) -> int:
+    """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
+    the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
+    carried: Final = _http_error_status(attribute_or_none(exc, "status_code"))
+    if carried is not None:
+        return carried
+    stringified: Final = attribute_or_none(exc, "code")
+    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
+    return default if from_code is None else from_code
+
+
+def _http_error_status(value: object) -> int | None:
+    match value:
+        case bool():
+            return None
+        case int() if value in _HTTP_ERROR_STATUSES:
+            return value
+        case str() if len(value) == 3 and value.isascii() and value.isdigit() and int(value) in _HTTP_ERROR_STATUSES:
+            return int(value)
+        case _:
+            return None
 
 
 _Shape: Final = TypeVar("_Shape")

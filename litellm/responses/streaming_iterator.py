@@ -42,6 +42,7 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUn
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
+    error_status_code,
     process_response_headers,
     provider_reported_usage_cost,
     set_response_cost_in_hidden_params,
@@ -3220,8 +3221,10 @@ class ManagedResponsesWebSocketHandler:
             verbose_logger.debug("ManagedResponsesWS: failed to serialize chunk: %s", exc)
             return None
 
-    async def _send_error(self, message: str, error_type: str = "server_error") -> None:
-        await self._send_frame(json.dumps({"type": "error", "error": {"type": error_type, "message": message}}))
+    async def _send_error(self, message: str, error_type: str = "server_error", *, status: int) -> None:
+        await self._send_frame(
+            json.dumps({"type": "error", "status": status, "error": {"type": error_type, "message": message}})
+        )
 
     async def _send_frame(self, frame: str) -> None:
         with contextlib.suppress(Exception):
@@ -3325,7 +3328,7 @@ class ManagedResponsesWebSocketHandler:
         try:
             msg_obj: Final = _load_json_object(raw_message)
         except json.JSONDecodeError:
-            await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
+            await self._send_error("Invalid JSON in response.create event", "invalid_request_error", status=400)
             return None
         if msg_obj.get("type") != "response.create":
             # Silently ignore non-response.create messages (e.g. warmup pings)
@@ -3681,7 +3684,7 @@ class ManagedResponsesWebSocketHandler:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
-            await self._send_error(str(exc))
+            await self._send_error(str(exc), status=error_status_code(exc, 500))
             return
 
         self._save_turn_history(terminal_event, prior_history, current_messages)
@@ -3710,5 +3713,5 @@ class ManagedResponsesWebSocketHandler:
 
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: unexpected error: %s", exc)
-            await self._send_error(f"Internal server error: {exc}")
+            await self._send_error(f"Internal server error: {exc}", status=500)
         return self._failure
