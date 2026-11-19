@@ -171,6 +171,7 @@ async def test_azure_transcription_parses_response_formats(
         ("v1", litellm.AZURE_DEFAULT_API_VERSION),
         ("latest", litellm.AZURE_DEFAULT_API_VERSION),
         ("preview", litellm.AZURE_DEFAULT_API_VERSION),
+        ("none", litellm.AZURE_DEFAULT_API_VERSION),
     ],
 )
 async def test_azure_router_transcription_sends_the_deployment_api_version(
@@ -212,6 +213,7 @@ async def test_azure_router_transcription_sends_the_deployment_api_version(
         ("v1", litellm.AZURE_DEFAULT_API_VERSION),
         ("latest", litellm.AZURE_DEFAULT_API_VERSION),
         ("preview", litellm.AZURE_DEFAULT_API_VERSION),
+        ("none", litellm.AZURE_DEFAULT_API_VERSION),
         ("2025-03-01-preview", "2025-03-01-preview"),
     ],
 )
