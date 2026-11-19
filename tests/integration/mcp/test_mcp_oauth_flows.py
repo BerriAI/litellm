@@ -12,7 +12,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
 import httpx
 import jwt
@@ -697,6 +697,62 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
             )
             == []
         )
+
+
+@pytest.mark.parametrize(
+    ("response_issuer", "status", "lands_on"),
+    [
+        pytest.param("{authorization_server}", 302, CLIENT_REDIRECT, id="authorization_server_origin"),
+        pytest.param("{authorization_server}/another-tenant", 400, None, id="another_path_on_the_origin"),
+        pytest.param("http://127.0.0.1:9", 400, None, id="another_origin"),
+    ],
+)
+def test_callback_iss_is_checked_against_the_hand_set_authorization_url_when_no_issuer_is_configured(
+    gateway: Gateway, response_issuer: str, status: int, lands_on: str | None
+) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "iss" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            authorization_url=auth.issuer + "/authorize",
+            token_url=auth.issuer + "/token",
+            credentials={"client_id": "iss-client", "client_secret": "iss-secret", "scopes": ["tools.call"]},
+        )
+        key: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
+        registered: Final = gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        started: Final = gateway.client.get(
+            f"/{alias}/authorize",
+            params={
+                "client_id": str(_response_object(registered)["client_id"]),
+                "redirect_uri": CLIENT_REDIRECT,
+                "response_type": "code",
+                "state": "client-state",
+                "code_challenge": _Pkce(secrets.token_urlsafe(32)).challenge,
+                "code_challenge_method": "S256",
+                "scope": "tools.call",
+            },
+            headers={"x-litellm-api-key": key},
+        )
+        assert started.status_code in (302, 307), started.text
+        assert started.headers["location"].startswith(auth.issuer + "/authorize"), started.headers["location"]
+        consent: Final = httpx.get(started.headers["location"], follow_redirects=False)
+        assert consent.status_code == 302, consent.text
+        returned: Final = gateway.client.get(
+            consent.headers["location"].removeprefix(_base(gateway))
+            + "&"
+            + urlencode({"iss": response_issuer.format(authorization_server=auth.issuer)}),
+            headers={"x-litellm-api-key": key},
+            cookies=started.cookies,
+        )
+        assert returned.status_code == status, returned.text
+        assert "invalid_issuer" in returned.text if lands_on is None else returned.headers["location"].startswith(lands_on)
 
 
 @pytest.mark.timeout(600)

@@ -114,6 +114,7 @@ from litellm.proxy.mcp_server.oauth_utils import (
     asks_for_wildcard,
     build_upstream_authorize_url,
     build_upstream_oauth2_token_request,
+    canonicalize_url_identity,
     configured_proxy_base_url,
     get_cimd_client_id,
     get_cimd_document_url,
@@ -245,6 +246,7 @@ def encode_state_with_base_url(
     oauth_nonce: str | None = None,
     managed_scope: str | None = None,
     scope_user_id: str | None = None,
+    configured_authorization_endpoint: str | None = None,
 ) -> str:
     """
     Encode the base_url, original state, and PKCE parameters using encryption.
@@ -289,6 +291,7 @@ def encode_state_with_base_url(
         "dcr_client_secret": dcr_client_secret,
         "dcr_token_endpoint_auth_method": dcr_token_endpoint_auth_method,
         "expected_issuer": expected_issuer,
+        "configured_authorization_endpoint": configured_authorization_endpoint,
         "authorization_response_iss_parameter_supported": authorization_response_iss_parameter_supported,
     }
     state_json: Final = json.dumps(state_data, sort_keys=True)
@@ -1205,6 +1208,7 @@ async def authorize_with_server(
         if ephemeral_dcr_client
         else None,
         expected_issuer=resolved_server.issuer,
+        configured_authorization_endpoint=_configured_authorization_endpoint(resolved_server),
         authorization_response_iss_parameter_supported=resolved_server.authorization_response_iss_parameter_supported,
     )
     relay_state: Final = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
@@ -2707,11 +2711,45 @@ def _render_oauth_error_html(error: str, description: str | None) -> HTMLRespons
     return HTMLResponse(body, status_code=400)
 
 
+def _configured_authorization_endpoint(server: MCPServer) -> str | None:
+    """Discovery without an issuer cannot vouch for the authorization server's identity."""
+    configured_url: Final = server.configured_authorization_url
+    if configured_url is None or configured_url != server.effective_authorization_url:
+        return None
+    configured_token_url: Final = server.configured_token_url
+    if not configured_token_url or configured_token_url != server.effective_token_url:
+        return None
+    return canonicalize_url_identity(configured_url)
+
+
+def _is_origin_comparable_issuer(issuer: str) -> bool:
+    """Reject issuer syntax that URL parsers normalize or interpret inconsistently."""
+    if not all(char.isprintable() and not char.isspace() for char in issuer) or "?" in issuer or "#" in issuer:
+        return False
+    try:
+        parsed: Final = urlparse(issuer)
+        return (
+            parsed.scheme in ("http", "https")
+            and bool(parsed.hostname)
+            and "@" not in parsed.netloc
+            and (parsed.port is None or 0 <= parsed.port <= 65535)
+        )
+    except ValueError:
+        return False
+
+
 def _authorization_response_issuer_is_trusted(response_issuer: str | None, state_data: Mapping[str, object]) -> bool:
+    """Known issuers match exactly. Without one, the issuer must be a path prefix of the configured authorization URL."""
     expected_issuer: Final = state_data.get("expected_issuer")
     if response_issuer is None:
         return state_data.get("authorization_response_iss_parameter_supported") is not True
-    return isinstance(expected_issuer, str) and bool(expected_issuer) and response_issuer == expected_issuer
+    if isinstance(expected_issuer, str) and expected_issuer:
+        return response_issuer == expected_issuer
+    configured_endpoint: Final = state_data.get("configured_authorization_endpoint")
+    if not isinstance(configured_endpoint, str) or not _is_origin_comparable_issuer(response_issuer):
+        return False
+    issuer_identity: Final = canonicalize_url_identity(response_issuer)
+    return configured_endpoint == issuer_identity or configured_endpoint.startswith(issuer_identity + "/")
 
 
 @router.get("/callback")
@@ -2732,7 +2770,8 @@ async def callback(
       forwarded back to the validated client ``redirect_uri`` with the
       original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the
       authorization server sent one) matches the issuer /authorize sealed
-      into the state.
+      into the state. Without a known issuer, it must match the sealed origin of
+      the configured authorization URL.
     - An error response (``error``[+``error_description``/``error_uri``]), per
       RFC 6749 §4.1.2.1. When ``state`` is present and decodes to a trusted
       ``redirect_uri``, the error params are propagated back to the client so
@@ -2810,9 +2849,10 @@ async def callback(
         if not _authorization_response_issuer_is_trusted(iss, issuer_state):
             verbose_logger.warning(
                 "MCP /callback rejected an authorization response: RFC 9207 iss=%r does not match the "
-                "issuer this flow was sent to (%r)",
+                "issuer this flow was sent to (%r) or, with none known, the configured authorization URL (%r)",
                 iss,
                 issuer_state.get("expected_issuer"),
+                issuer_state.get("configured_authorization_endpoint"),
             )
             issuer_error_response: Final = _render_oauth_error_html(
                 "invalid_issuer",
