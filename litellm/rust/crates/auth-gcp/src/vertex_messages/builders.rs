@@ -5,10 +5,12 @@
 
 use std::sync::Arc;
 
+use litellm_auth_aws::AwsAuthService;
+
 use super::{
     compat_certificate_source,
     environment::GoogleEnvironment,
-    explicit_aws::{explicit_aws_credentials, uses_explicit_aws},
+    explicit_aws::explicit_aws_credentials,
     failure::{GoogleLoginFailure, PythonException},
     source::{ExternalAccountInfo, ServiceAccountInfo},
 };
@@ -54,9 +56,26 @@ pub(crate) fn service_account(
     )
 }
 
+/// An external account in `vertex_credentials` with LiteLLM's own `aws_*` keys, which Python's
+/// `_credentials_from_json` signs in with through `aws`.
+pub(crate) fn explicit_aws(
+    info: &ExternalAccountInfo,
+    environment: &Arc<dyn GoogleEnvironment>,
+    aws: &AwsAuthService,
+) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
+    build(
+        SdkCredentials::Programmatic(explicit_aws_credentials(
+            info,
+            environment.clone(),
+            aws.clone(),
+        )?),
+        PythonException::Malformed,
+    )
+}
+
 /// An external account as Python's `_credentials_from_json` builds it from `vertex_credentials`
-/// (`explicit`) or google-auth's `default()` builds it from a file: LiteLLM's explicit AWS login
-/// for its own `aws_*` keys, the backwards-compat certificate source, else Google's Rust SDK.
+/// (`explicit`) or google-auth's `default()` builds it from a file: the backwards-compat
+/// certificate source, else Google's Rust SDK. LiteLLM's explicit AWS login is [`explicit_aws`].
 pub(crate) fn external_account(
     info: &ExternalAccountInfo,
     environment: &Arc<dyn GoogleEnvironment>,
@@ -66,12 +85,6 @@ pub(crate) fn external_account(
         true => PythonException::Malformed,
         false => PythonException::DefaultCredentials,
     };
-    if explicit && uses_explicit_aws(info) {
-        return build(
-            SdkCredentials::Programmatic(explicit_aws_credentials(info, environment.clone())?),
-            unusable,
-        );
-    }
     let Some(source) = &info.credential_source else {
         return Err(GoogleLoginFailure::new(
             match explicit {

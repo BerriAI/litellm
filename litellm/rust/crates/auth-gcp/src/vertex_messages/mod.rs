@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 
+use litellm_auth_aws::AwsAuthService;
 use litellm_auth_types::{Error, ErrorDetail, VertexParams};
 use litellm_python_compat::truthy::first_truthy;
 use litellm_secret_value::SecretValue;
@@ -33,6 +34,7 @@ use crate::{
     GcpAuth, GcpAuthFuture, GcpTokenSource,
     identity::{CredentialCacheKey, SdkCredentials},
 };
+use explicit_aws::uses_explicit_aws;
 use failure::UnsignableKey;
 use source::{CredentialsJson, ExplicitCredentials, load_vertex_credentials_source};
 
@@ -142,6 +144,9 @@ impl GcpTokenSource for Login {
 pub struct VertexMessagesAuth {
     gcp: GcpAuth,
     environment: Arc<dyn GoogleEnvironment>,
+    /// The AWS login behind an external account's explicit `aws_*` keys, which resolves an
+    /// `aws_web_identity_token` reference such as `oidc/...` when it was given a resolver.
+    aws: AwsAuthService,
 }
 
 impl Default for VertexMessagesAuth {
@@ -174,7 +179,14 @@ impl VertexMessagesAuth {
         Self {
             gcp: GcpAuth::default(),
             environment,
+            aws: AwsAuthService::default(),
         }
+    }
+
+    /// Uses `aws` for an external account's explicit `aws_*` keys, as Bedrock uses it, so an
+    /// `aws_web_identity_token` reference resolves through the same web identity tokens.
+    pub fn with_aws(self, aws: AwsAuthService) -> Self {
+        Self { aws, ..self }
     }
 
     /// Python's `_ensure_access_token` for `vertex_ai`: `credentials` and `project` as
@@ -241,6 +253,9 @@ impl VertexMessagesAuth {
     /// account for any other type.
     fn explicit_source(&self, credentials: &CredentialsJson) -> Result<Login, GoogleLoginFailure> {
         let built = match &credentials.credentials {
+            ExplicitCredentials::ExternalAccount(info) if uses_explicit_aws(info) => {
+                builders::explicit_aws(info, &self.environment, &self.aws)
+            }
             ExplicitCredentials::ExternalAccount(info) => {
                 builders::external_account(info, &self.environment, true)
             }

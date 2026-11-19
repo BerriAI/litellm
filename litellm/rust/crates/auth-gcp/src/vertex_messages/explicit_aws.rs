@@ -92,36 +92,15 @@ pub(crate) fn uses_explicit_aws(info: &ExternalAccountInfo) -> bool {
 }
 
 /// The external account Google's Rust SDK exchanges the signed request for at STS, and then
-/// for the service account its impersonation URL names.
+/// for the service account its impersonation URL names. `aws` resolves the AWS credentials, and
+/// with them an `aws_web_identity_token` reference such as `oidc/...`, as Bedrock's login does.
 pub(crate) fn explicit_aws_credentials(
     info: &ExternalAccountInfo,
     environment: Arc<dyn GoogleEnvironment>,
+    aws: AwsAuthService,
 ) -> Result<ProgrammaticBuilder, GoogleLoginFailure> {
-    let keys = &info.aws;
-    let region = text(&keys.aws_region_name)
-        .ok_or_else(|| GoogleLoginFailure::new(PythonException::Value, MISSING_REGION))?;
-    let secret = |field: &Option<Option<String>>| text(field).map(SecretValue::new);
-    let config = AwsAuthConfig {
-        access_key_id: secret(&keys.aws_access_key_id),
-        secret_access_key: secret(&keys.aws_secret_access_key),
-        session_token: secret(&keys.aws_session_token),
-        region_name: Some(region.clone()),
-        session_name: text(&keys.aws_session_name),
-        profile_name: text(&keys.aws_profile_name),
-        role_name: text(&keys.aws_role_name),
-        web_identity_token: secret(&keys.aws_web_identity_token),
-        sts_endpoint: text(&keys.aws_sts_endpoint),
-        external_id: secret(&keys.aws_external_id),
-        ..AwsAuthConfig::default()
-    };
-    let audience = info.audience.clone().unwrap_or_default();
-    let subject = SignedCallerIdentity {
-        aws: AwsAuthService::default(),
-        config,
-        region,
-        audience: audience.clone(),
-        environment,
-    };
+    let subject = signed_caller_identity(info, environment, aws)?;
+    let audience = subject.audience.clone();
     let builder = ProgrammaticBuilder::new(Arc::new(subject))
         .with_audience(audience)
         .with_subject_token_type(info.subject_token_type.clone().unwrap_or_default());
@@ -139,6 +118,38 @@ pub(crate) fn explicit_aws_credentials(
             None => builder,
         },
     )
+}
+
+/// The subject token provider for the file's `aws_*` keys, refused without `aws_region_name`.
+fn signed_caller_identity(
+    info: &ExternalAccountInfo,
+    environment: Arc<dyn GoogleEnvironment>,
+    aws: AwsAuthService,
+) -> Result<SignedCallerIdentity, GoogleLoginFailure> {
+    let keys = &info.aws;
+    let region = text(&keys.aws_region_name)
+        .ok_or_else(|| GoogleLoginFailure::new(PythonException::Value, MISSING_REGION))?;
+    let secret = |field: &Option<Option<String>>| text(field).map(SecretValue::new);
+    let config = AwsAuthConfig {
+        access_key_id: secret(&keys.aws_access_key_id),
+        secret_access_key: secret(&keys.aws_secret_access_key),
+        session_token: secret(&keys.aws_session_token),
+        region_name: Some(region.clone()),
+        session_name: text(&keys.aws_session_name),
+        profile_name: text(&keys.aws_profile_name),
+        role_name: text(&keys.aws_role_name),
+        web_identity_token: secret(&keys.aws_web_identity_token),
+        sts_endpoint: text(&keys.aws_sts_endpoint),
+        external_id: secret(&keys.aws_external_id),
+        ..AwsAuthConfig::default()
+    };
+    Ok(SignedCallerIdentity {
+        aws,
+        config,
+        region,
+        audience: info.audience.clone().unwrap_or_default(),
+        environment,
+    })
 }
 
 /// The subject token of LiteLLM's explicit AWS login: a GetCallerIdentity request signed with
@@ -286,13 +297,90 @@ mod tests {
             project: "p",
             token: "t",
         });
-        let Err(failure) = explicit_aws_credentials(&aws_info(extra), environment) else {
+        let Err(failure) =
+            explicit_aws_credentials(&aws_info(extra), environment, AwsAuthService::default())
+        else {
             panic!("a credential without aws_region_name should not build");
         };
         assert_eq!(
             failure,
             GoogleLoginFailure::new(PythonException::Value, MISSING_REGION)
         );
+    }
+
+    /// The web identity tokens LiteLLM's secrets would mint: an `oidc/` reference becomes a token
+    /// and any other text comes back as it is.
+    #[derive(Debug)]
+    struct MintedTokens;
+
+    impl litellm_auth_aws::WebIdentityTokenSource for MintedTokens {
+        fn web_identity_token<'a>(
+            &'a self,
+            reference: &'a str,
+        ) -> litellm_auth_aws::WebIdentityTokenFuture<'a> {
+            Box::pin(async move {
+                Ok(Some(SecretValue::new(
+                    match reference.strip_prefix("oidc/") {
+                        Some(_) => "minted-oidc-token",
+                        None => reference,
+                    },
+                )))
+            })
+        }
+    }
+
+    /// An AWS STS endpoint that answers AssumeRoleWithWebIdentity and records each token sent.
+    async fn sts() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = sent.clone();
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(move |body: String| async move {
+                let form: std::collections::HashMap<String, String> =
+                    url::form_urlencoded::parse(body.as_bytes()).into_owned().collect();
+                assert_eq!(form["Action"], "AssumeRoleWithWebIdentity");
+                recorded.lock().unwrap().push(form["WebIdentityToken"].clone());
+                "<AssumeRoleWithWebIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><AssumeRoleWithWebIdentityResult><Credentials><AccessKeyId>web-access</AccessKeyId><SecretAccessKey>web-secret</SecretAccessKey><SessionToken>web-session</SessionToken><Expiration>2100-01-01T00:00:00Z</Expiration></Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>"
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, sent)
+    }
+
+    #[rstest]
+    #[case::oidc_reference("oidc/google/https://example.com", "minted-oidc-token")]
+    #[case::plain_token("plain-web-identity-token", "plain-web-identity-token")]
+    #[tokio::test]
+    async fn the_web_identity_token_is_resolved_before_it_reaches_sts(
+        #[case] configured: &str,
+        #[case] expected: &str,
+    ) {
+        let (endpoint, sent) = sts().await;
+        let info = aws_info(json!({
+            "aws_region_name": "us-east-1",
+            "aws_role_name": "arn:aws:iam::123456789012:role/vertex",
+            "aws_session_name": "vertex-session",
+            "aws_web_identity_token": configured,
+            "aws_sts_endpoint": endpoint,
+        }));
+        let environment = Arc::new(crate::vertex_messages::OnGce {
+            project: "p",
+            token: "t",
+        });
+        let subject = signed_caller_identity(
+            &info,
+            environment,
+            AwsAuthService::with_web_identity_tokens(Arc::new(MintedTokens)),
+        )
+        .unwrap();
+
+        let token = subject.subject_token().await.unwrap();
+
+        assert_eq!(*sent.lock().unwrap(), [expected]);
+        // The request is signed with the role's credentials STS granted for that token.
+        assert!(format!("{token:?}").contains("web-access"));
     }
 
     #[rstest]
