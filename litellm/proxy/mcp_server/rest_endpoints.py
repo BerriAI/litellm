@@ -50,11 +50,7 @@ from litellm.proxy.mcp_server.oauth_utils import (  # noqa: F401  # legacy modul
     _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     redact_mcp_resource_url,
 )
-from litellm.proxy.mcp_server.result_conversion import (
-    WireCompat,
-    complete_call_tool_result,
-    url_elicitation_as_error_result,
-)
+from litellm.proxy.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy.mcp_server.ui_session_utils import (
     acting_user_auth,
     build_effective_auth_contexts,
@@ -411,7 +407,7 @@ if MCP_AVAILABLE:
                 general_settings=general_settings,
             )
             _tool_start_time: Final = datetime.now()
-            virtual_execution: Final = handle_mcp_tool_call(
+            result: Final = await handle_mcp_tool_call(
                 tool_name=tool_arguments.get("tool_name", ""),
                 arguments=tool_arguments.get("arguments") or {},
                 user_api_key_dict=user_api_key_dict,
@@ -423,8 +419,8 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=virtual_logging_obj,
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
                 incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
+                flatten_url_elicitation=True,
             )
-            result: Final = await url_elicitation_as_error_result(virtual_execution)
         except Exception as e:
             virtual_request_data: Final = virtual_processor.data
             await _safe_fire_mcp_tool_call_failure_logging(
@@ -1271,7 +1267,7 @@ if MCP_AVAILABLE:
             else None
         )
         tool_start_time: Final = datetime.now()
-        execution: Final = execute_mcp_tool(
+        executed: Final = await execute_mcp_tool(
             name=tool_name,
             arguments=TypeAdapter(dict[str, object]).validate_python(tool_arguments),
             allowed_mcp_servers=list(allowed_mcp_servers),
@@ -1291,8 +1287,9 @@ if MCP_AVAILABLE:
             requested_server_id=canonical_server_id,
             incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
             guardrail_auth=guardrail_auth,
+            flatten_url_elicitation=True,
         )
-        return await url_elicitation_as_error_result(execution), tool_start_time
+        return executed, tool_start_time
 
     async def _rest_tool_call_server_and_auth(
         user_api_key_auth: UserAPIKeyAuth,

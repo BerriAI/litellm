@@ -143,6 +143,7 @@ from litellm.proxy.mcp_server.result_conversion import (
     handler_outcome,
     is_url_elicitation_required,
     to_call_tool_result,
+    url_elicitation_as_error_result,
 )
 from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_blocked
 from litellm.proxy.mcp_server.tool_registry import (
@@ -2161,6 +2162,7 @@ async def execute_mcp_tool(
     input_responses: InputResponses | None = None,
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+    flatten_url_elicitation: bool = False,
     **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
 ) -> CallToolResult | InputRequiredResult:
     context: Final = prepare_context(
@@ -2184,6 +2186,7 @@ async def execute_mcp_tool(
         logging_data=types.MappingProxyType(kwargs),
         input_responses=input_responses,
         request_state=request_state,
+        flatten_url_elicitation=flatten_url_elicitation,
     )
     return await GatewayOperations().execute(operation, context)
 
@@ -2206,6 +2209,7 @@ async def _execute_mcp_tool(
     input_responses: InputResponses | None = None,
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+    flatten_url_elicitation: bool = False,
     **kwargs: Any,
 ) -> CallToolResult | InputRequiredResult:
     """
@@ -2526,13 +2530,17 @@ async def _execute_mcp_tool(
             request_state=request_state,
             incoming_bearer_token=incoming_bearer_token,
         )
-        response = await _relay_guarded_url_elicitation(
-            managed_execution,
-            logging_obj=litellm_logging_obj,
-            original_auth=user_api_key_auth,
-            guardrail_auth=effective_guardrail_auth,
-            request_data=kwargs,
-            start_time=start_time,
+        response = await (
+            url_elicitation_as_error_result(managed_execution)
+            if flatten_url_elicitation
+            else _relay_guarded_url_elicitation(
+                managed_execution,
+                logging_obj=litellm_logging_obj,
+                original_auth=user_api_key_auth,
+                guardrail_auth=effective_guardrail_auth,
+                request_data=kwargs,
+                start_time=start_time,
+            )
         )
 
     # Fall back to local tool registry with original name (legacy support)
@@ -4132,6 +4140,7 @@ class GatewayOperations:
                     input_responses=operation.input_responses,
                     request_state=operation.request_state,
                     incoming_bearer_token=context.incoming_bearer_token,
+                    flatten_url_elicitation=operation.flatten_url_elicitation,
                     **operation.logging_data,
                 )
             case ListToolsRequest(params=params):

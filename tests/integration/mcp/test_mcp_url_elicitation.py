@@ -820,11 +820,18 @@ class SlowRefusal(CustomGuardrail):
             raise HTTPException(status_code=400, detail="refused by the during-call guardrail")
 
 
+class OutputCounter(CustomGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post("{sink}/guardrail", json={{"texts": inputs.get("texts")}})
+        return inputs
+
+
 class Rewriter(CustomLogger):
     async def async_post_mcp_tool_call_hook(self, kwargs, response_obj, start_time, end_time):
         texts = [block.text for block in response_obj.mcp_tool_call_response]
         async with httpx.AsyncClient(timeout=5) as client:
-            await client.post("{sink}", json={{"texts": texts}})
+            await client.post("{sink}/hook", json={{"texts": texts}})
         response_obj.mcp_tool_call_response = [
             TextContent(type="text", text=text.replace("{rewrite}", "{rewritten}")) for text in texts
         ]
@@ -857,7 +864,15 @@ def hooked(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, 
                                 "mode": "during_mcp_call",
                                 "default_on": True,
                             },
-                        }
+                        },
+                        {
+                            "guardrail_name": "output-counter",
+                            "litellm_params": {
+                                "guardrail": "elicitation_hooks.OutputCounter",
+                                "mode": "post_mcp_call",
+                                "default_on": True,
+                            },
+                        },
                     ],
                     "litellm_settings": {**config["litellm_settings"], "callbacks": ["elicitation_hooks.rewriter"]},
                 }
@@ -867,9 +882,12 @@ def hooked(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, 
             yield candidate, sink
 
 
-def _sunk_texts(sink: Wire, marker: str) -> list[list[str]]:
-    seen: Final = [json.loads(request.body)["texts"] for request in sink.drain()]
-    return [texts for texts in seen if marker in "".join(texts)]
+def _sunk_texts(sink: Wire, marker: str) -> dict[str, list[list[str]]]:
+    seen: Final = [(request.target, json.loads(request.body)["texts"]) for request in sink.drain()]
+    return {
+        stage: [texts for target, texts in seen if target == f"/{stage}" and marker in "".join(texts)]
+        for stage in ("guardrail", "hook")
+    }
 
 
 def test_blocking_during_call_guardrail_slower_than_the_elicitation_still_blocks_the_caller(
@@ -903,6 +921,59 @@ def test_post_tool_call_logger_hook_rewrites_the_relayed_elicitation_messages_on
         assert outcome.error is not None and json.loads(outcome.error) == _addressed_elicitation(
             nonce, REWRITTEN, REWRITE
         ), outcome.raw
-        assert _sunk_texts(sink, "Authorize to continue") == [
+        assert _sunk_texts(sink, "Authorize to continue")["hook"] == [
             [f"Authorize to continue for {REWRITE}.", f"Sign in as {REWRITE}."]
         ]
+
+
+SurfaceCall = Literal["rest", "rest_virtual", "mcp", "mcp_virtual"]
+
+
+@pytest.mark.parametrize("surface", ("rest", "rest_virtual", "mcp", "mcp_virtual"))
+def test_output_guardrail_and_post_tool_call_hook_each_see_one_url_elicitation_once_on_every_surface(
+    hooked: tuple[Gateway, Wire], surface: SurfaceCall
+) -> None:
+    gateway, sink = hooked
+    email: Final = f"once.{uuid.uuid4().hex[:8]}@example.com"
+    with scripted_peer(*_addressed_tools(email)) as upstream, gateway.scenario() as scenario:
+        alias: Final = "elicit" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, upstream, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity], "mcp_tool_search_enabled": True})
+        entry: Final[EntryPoint] = "rest" if surface.startswith("rest") else "mcp"
+        caller: Final = McpCaller(gateway, key, entry, alias)
+        nonce: Final = uuid.uuid4().hex
+        sink.drain()
+        outcome: Final = (
+            caller.call("mcp_tool_call", {"tool_name": f"{alias}-consent", "arguments": {"nonce": nonce}})
+            if surface.endswith("virtual")
+            else caller.call(f"{alias}-consent", {"nonce": nonce}, _server_arg(entry, identity))
+        )
+        elicitation: Final = _addressed_elicitation(nonce, email, email)
+        flattened: Final = [f"MCPError: {elicitation['message']}"]
+        relayed: Final = [str(elicitation["message"]), f"Sign in as {email}."]
+        assert outcome.status == 200 and outcome.error is not None, outcome.raw
+        assert (
+            (outcome.text, outcome.error) == (flattened[0], flattened[0])
+            if entry == "rest"
+            else json.loads(outcome.error) == elicitation
+        ), outcome.raw
+        assert _sunk_texts(sink, email) == {
+            "guardrail": [flattened if entry == "rest" else relayed],
+            "hook": [flattened if entry == "rest" else relayed],
+        }
+
+
+def test_output_guardrail_and_post_tool_call_hook_each_see_one_url_elicitation_once_through_the_proxy_call_tool(
+    hooked: tuple[Gateway, Wire],
+) -> None:
+    gateway, sink = hooked
+    email: Final = f"once.{uuid.uuid4().hex[:8]}@example.com"
+    with _granted(gateway, *_addressed_tools(email)) as (_, alias, _identity, key):
+        consent: Final = _proxy_tool_id(gateway, key, f"{alias}-consent")
+        nonce: Final = uuid.uuid4().hex
+        sink.drain()
+        relayed: Final = _proxy_call(gateway, key, "call_tool", {"tool_id": consent, "arguments": {"nonce": nonce}})
+        elicitation: Final = _addressed_elicitation(nonce, email, email)
+        assert relayed == {"jsonrpc": "2.0", "id": 1, "error": elicitation}, relayed
+        texts: Final = [str(elicitation["message"]), f"Sign in as {email}."]
+        assert _sunk_texts(sink, email) == {"guardrail": [texts], "hook": [texts]}

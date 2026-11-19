@@ -14,8 +14,7 @@ if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
 import httpx
 import pytest
 from fastapi import HTTPException
-from mcp import MCPError
-from mcp.types import INVALID_PARAMS, URL_ELICITATION_REQUIRED, CallToolResult, TextContent, Tool
+from mcp.types import CallToolResult, TextContent, Tool
 from starlette.requests import Request
 
 from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
@@ -3412,61 +3411,6 @@ class TestCallToolRestAPI:
         assert standard_logging_object["status"] == "failure"
         assert standard_logging_object["error_str"] == str(guardrail_error)
 
-    async def _call_tool_with_upstream_mcp_error(self, monkeypatch: pytest.MonkeyPatch, code: int) -> CallToolResult:
-        from litellm.proxy import proxy_server
-
-        server: Final = MagicMock()
-        server.server_id = "server-1"
-        server.alias = "server-1"
-        server.server_name = "server-1"
-        server.short_prefix = None
-        server.tool_name_to_display_name = None
-        server.name = "stub"
-
-        async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
-            return kwargs.get("data", {})
-
-        monkeypatch.setattr(
-            rest_endpoints,
-            "_resolve_allowed_mcp_servers_with_ip_filter",
-            AsyncMock(return_value=([server], "server-1")),
-        )
-        monkeypatch.setattr(
-            rest_endpoints,
-            "execute_mcp_tool",
-            AsyncMock(side_effect=MCPError(code=code, message="upstream refused", data={"elicitations": []})),
-        )
-        monkeypatch.setattr(
-            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
-        )
-        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
-        monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", AsyncMock(), raising=False)
-        return await rest_endpoints.call_tool_rest_api(
-            _build_request(
-                path="/mcp-rest/tools/call",
-                method="POST",
-                json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
-            ),
-            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call"),
-        )
-
-    async def test_upstream_url_elicitation_required_stays_an_error_text_result(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        result: Final = await self._call_tool_with_upstream_mcp_error(monkeypatch, URL_ELICITATION_REQUIRED)
-
-        assert result.is_error is True
-        assert result.content == [TextContent(type="text", text="MCPError: upstream refused")]
-
-    async def test_other_upstream_error_code_raised_by_the_tool_stays_an_internal_server_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        with pytest.raises(HTTPException) as raised:
-            await self._call_tool_with_upstream_mcp_error(monkeypatch, INVALID_PARAMS)
-
-        assert raised.value.status_code == 500
-        assert raised.value.detail["error"] == "internal_server_error"
-
     async def test_failure_logging_error_does_not_replace_guardrail_error(self, monkeypatch):
         from litellm.proxy import proxy_server
 
@@ -3580,70 +3524,6 @@ class TestCallToolRestAPI:
         assert exc_info.value.status_code == upstream_status
         assert exc_info.value.headers is not None
         assert exc_info.value.headers.get("www-authenticate") == challenge
-
-    async def _virtual_mcp_tool_call_with_upstream_mcp_error(
-        self, monkeypatch: pytest.MonkeyPatch, code: int
-    ) -> tuple[CallToolResult, AsyncMock, AsyncMock]:
-        import litellm.proxy.mcp_server.tool_search as tool_search_mod
-        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-
-        class _FakePreCall:
-            def __init__(self, data: dict[str, object]) -> None:
-                self.data: Final = data
-
-            async def common_processing_pre_call_logic(self, **kwargs: object) -> tuple[dict[str, object], MagicMock]:
-                return self.data, MagicMock()
-
-        async def fake_fire_logging(logging_obj: object, result: CallToolResult, *args: object, **kwargs: object):
-            return result
-
-        success_logging: Final = AsyncMock(side_effect=fake_fire_logging)
-        failure_logging: Final = AsyncMock()
-        monkeypatch.setattr(
-            tool_search_mod,
-            "handle_mcp_tool_call",
-            AsyncMock(side_effect=MCPError(code=code, message="upstream refused", data={"elicitations": []})),
-        )
-        monkeypatch.setattr(
-            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing", _FakePreCall, raising=False
-        )
-        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {}, raising=False)
-        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {}, raising=False)
-        monkeypatch.setattr(rest_endpoints, "_fire_mcp_tool_call_logging", success_logging, raising=False)
-        monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", failure_logging, raising=False)
-        result: Final = await rest_endpoints.call_tool_rest_api(
-            _build_request(
-                path="/mcp-rest/tools/call",
-                method="POST",
-                json_body={"name": "mcp_tool_call", "arguments": {"tool_name": "x", "arguments": {}}},
-            ),
-            user_api_key_dict=UserAPIKeyAuth(
-                object_permission=LiteLLM_ObjectPermissionTable(
-                    object_permission_id="search-scope", mcp_tool_search_enabled=True
-                )
-            ),
-        )
-        return result, success_logging, failure_logging
-
-    async def test_virtual_mcp_tool_call_keeps_upstream_url_elicitation_required_an_error_text_result(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        result, success_logging, failure_logging = await self._virtual_mcp_tool_call_with_upstream_mcp_error(
-            monkeypatch, URL_ELICITATION_REQUIRED
-        )
-
-        assert result.is_error is True
-        assert result.content == [TextContent(type="text", text="MCPError: upstream refused")]
-        assert (success_logging.await_count, failure_logging.await_count) == (1, 0)
-
-    async def test_virtual_mcp_tool_call_keeps_other_upstream_error_codes_an_internal_server_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        with pytest.raises(HTTPException) as raised:
-            await self._virtual_mcp_tool_call_with_upstream_mcp_error(monkeypatch, INVALID_PARAMS)
-
-        assert raised.value.status_code == 500
-        assert raised.value.detail["error"] == "internal_server_error"
 
     async def test_virtual_mcp_tool_call_guardrail_block_runs_failure_logging(self, monkeypatch):
         """A pre_mcp_call guardrail block on the virtual mcp_tool_call branch must write a failure
