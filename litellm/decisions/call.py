@@ -2,6 +2,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -18,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_urls_to_base64,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
@@ -55,6 +57,7 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsVideo,
     OpenAIDecisionInput,
+    OpenAIDecisionInputJSON,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
@@ -245,6 +248,24 @@ def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) 
 
 def _drops_params(kwargs: Mapping[str, object]) -> bool:
     return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
+
+
+def _is_json_input_part(part: object) -> bool:
+    match part:
+        case {"type": "input_json"} | OpenAIDecisionInputJSON():
+            return True
+        case _:
+            return False
+
+
+def request_carries_json_input(request_input: object) -> bool:
+    """A Decisions ``input`` holding an ``input_json`` part, as sent or as validated messages."""
+    contents: Final = (parts_of(message_field(message, "content")) for message in parts_of(request_input))
+    return any(map(_is_json_input_part, chain.from_iterable(contents)))
+
+
+def deployment_refuses_json_input(model: str, custom_llm_provider: str, call_kwargs: Mapping[str, object]) -> bool:
+    return not _drops_params(call_kwargs) and not _provider_config(model, custom_llm_provider).supports_json_input
 
 
 def _request_safety_identifier(

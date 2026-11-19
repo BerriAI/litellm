@@ -144,6 +144,10 @@ _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
         "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
     },
 }
+_OPENAI_PREDICATE_RESPONSE: Final[Mapping[str, object]] = {
+    **_OPENAI_RESPONSE,
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+}
 
 
 class _RecordingLogger(CustomLogger):
@@ -2358,7 +2362,7 @@ def _evidence_message(data: object) -> Mapping[str, object]:
     ids=("object", "array_of_objects"),
 )
 async def test_openai_receives_input_json_parts_as_sent(data: object, respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     await litellm.adecisions(
         model="openai/gpt-6-luna",
@@ -2376,7 +2380,7 @@ async def test_openai_receives_input_json_parts_as_sent(data: object, respx_mock
 async def test_input_json_shapes_openai_refuses_are_refused_before_http(
     data: object, respx_mock: respx.MockRouter
 ) -> None:
-    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
         await litellm.adecisions(
