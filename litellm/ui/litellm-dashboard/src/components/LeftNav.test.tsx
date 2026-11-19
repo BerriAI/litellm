@@ -393,6 +393,19 @@ describe("Sidebar (leftnav)", () => {
       showSSOBanner: false,
     };
 
+    it("hides the admin-only Customer Management pages from an Admin Viewer with no app grant", () => {
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
+      localStorage.setItem("litellm_plugin_mode", "customer-portal");
+      renderWithProviders(
+        <PluginModeProvider>
+          <Sidebar {...defaultProps} />
+        </PluginModeProvider>,
+      );
+      expect(screen.queryByRole("link", { name: "Customer organizations" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Apps" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Settings" })).not.toBeInTheDocument();
+    });
+
     it("hides Playground from Admin Viewer (cost-incurring action)", () => {
       mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
@@ -754,6 +767,15 @@ describe("Sidebar (leftnav)", () => {
     navState.pathname = "/ui/aria";
     renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
+  });
+
+  it.each(["/ui/lens", "/ui/lens/"])("shows only the workspace switcher, no gateway pages, at %s", (pathname) => {
+    navState.pathname = pathname;
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("button", { name: "Switch workspace, current: Lens" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Virtual Keys" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
+    expect(screen.queryByText("AI Gateway")).not.toBeInTheDocument();
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {

@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import AwareDatetime, ConfigDict, Field, model_validator
 
 from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
@@ -19,6 +19,7 @@ class AppResourceType(str, Enum):
 
 
 class AppMemberBudgetSource(str, Enum):
+    MEMBER_BUDGET = "member_budget"
     MEMBER_OVERRIDE = "member_override"
     CUSTOMER_DEFAULT = "customer_default"
     APP_DEFAULT = "app_default"
@@ -111,14 +112,31 @@ class AppOrganizationPut(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     tier_budget_id: str | None = None
+    budget_id: str | None = None
+    budget: Budget | None = None
     budget_override: Budget | None = None
+    budget_override_expires_at: AwareDatetime | None = None
     customer_member_budget: Budget | None = None
+
+    @model_validator(mode="after")
+    def exclusive_budget(self) -> "AppOrganizationPut":
+        if self.budget_id is not None and self.tier_budget_id is not None and self.budget_id != self.tier_budget_id:
+            raise ValueError("Choose one budget preset")
+        if (self.budget_id is not None or self.tier_budget_id is not None) and self.budget is not None:
+            raise ValueError("Choose a preset or a custom budget")
+        return self
 
 
 class AppMemberPut(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    budget: Budget | None = Field(
+        default=None,
+        description="Permanent budget for this app and customer member. Copies inherited policy on first edit. "
+        "Explicit null fields clear limits. Null budget returns to inheritance. Independent of temporary increases.",
+    )
     budget_override: Budget | None = None
+    budget_override_expires_at: AwareDatetime | None = None
 
 
 class AppOrganization(LiteLLMBaseModel):
@@ -133,6 +151,10 @@ class AppOrganization(LiteLLMBaseModel):
     )
     spend_reset_window: str | None = None
     tier_budget_id: str | None = None
+    budget_id: str | None = None
+    budget: Budget | None = None
+    budget_override: Budget | None = None
+    budget_override_expires_at: datetime | None = None
     budget_override_id: str | None = None
     customer_member_budget_id: str | None = None
     effective_budget: Budget | None = None
@@ -151,6 +173,10 @@ class AppMember(LiteLLMBaseModel):
     )
     spend_reset_window: str | None = None
     budget_override_id: str | None = None
+    budget_id: str | None = None
+    budget_override_expires_at: datetime | None = None
+    budget: Budget | None = None
+    budget_override: Budget | None = None
     effective_budget: Budget | None = None
     budget_source: AppMemberBudgetSource = AppMemberBudgetSource.NONE
 
