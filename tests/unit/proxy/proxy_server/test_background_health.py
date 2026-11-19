@@ -19,10 +19,10 @@ from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm.proxy.proxy_server as proxy_server
 from litellm.constants import BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME
-from litellm.proxy.health_check import WildcardProbeScope
 from litellm.router_api import RouterSettings
 from litellm.proxy.proxy_server import (
     _adaptive_router_flusher_loop,
@@ -744,39 +744,7 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
     assert probed["ids"] == ["listed-1", "listed-2"]
 
 
-@pytest.mark.asyncio
-async def test_schedule_background_health_check_db_save_saves_a_public_wildcard_model_under_its_own_name():
-    from litellm import Router
-
-    served: Final = "bedrock/us.anthropic.claude-opus-4-8"
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "bedrock/*",
-                "litellm_params": {"model": "bedrock/*", "mock_response": "ok"},
-                "model_info": {"id": "wildcard"},
-            }
-        ]
-    )
-    exact: Final = {"model_name": "opus", "litellm_params": {"model": served}, "model_info": {"id": "exact"}}
-    prisma_client: Final = MagicMock()
-    prisma_client.db.query_raw = AsyncMock(return_value=[])
-    prisma_client.save_health_check_result = AsyncMock(return_value=object())
-
-    _schedule_background_health_check_db_save(
-        prisma_client=prisma_client,
-        shared_health_manager=None,
-        model_list=[exact],
-        healthy_endpoints=[{"model": served, "model_id": "exact"}],
-        unhealthy_endpoints=[],
-        wildcard_scope=WildcardProbeScope((served,), router, None, True, None, 60),
-    )
-    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
-
-    assert sorted(
-        (call.kwargs["model_name"], call.kwargs["model_id"], call.kwargs["status"])
-        for call in prisma_client.save_health_check_result.await_args_list
-    ) == [(served, None, "healthy"), ("opus", "exact", "healthy")]
+_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 
 
 def _ignore_call(*_a: object, **_kw: object) -> None:
@@ -787,88 +755,17 @@ def _no_filter_kwargs(_general_settings: object) -> dict[str, object]:
     return {}
 
 
-class _RegistryUnavailableRouter:
-    def registry(self) -> NoReturn:
-        raise RuntimeError("registry unavailable")
+async def _stop_after_one_cycle(_seconds: float) -> NoReturn:
+    raise asyncio.CancelledError()
 
 
-@pytest.mark.asyncio
-async def test_schedule_background_health_check_db_save_still_saves_regular_rows_when_building_probes_raises():
-    prisma_client: Final = MagicMock()
-    prisma_client.db.query_raw = AsyncMock(return_value=[])
-    prisma_client.save_health_check_result = AsyncMock(return_value=object())
-
-    _schedule_background_health_check_db_save(
-        prisma_client=prisma_client,
-        shared_health_manager=None,
-        model_list=[{"model_name": "opus", "litellm_params": {"model": "openai/opus"}, "model_info": {"id": "exact"}}],
-        healthy_endpoints=[{"model": "openai/opus", "model_id": "exact"}],
-        unhealthy_endpoints=[],
-        wildcard_scope=WildcardProbeScope(
-            ("bedrock/us.anthropic.claude-opus-4-8",), _RegistryUnavailableRouter(), None, True, None, 60
-        ),
-    )
-    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
-
-    assert [
-        (call.kwargs["model_name"], call.kwargs["model_id"], call.kwargs["status"])
-        for call in prisma_client.save_health_check_result.await_args_list
-    ] == [("opus", "exact", "healthy")]
+async def _every_deployment_healthy(
+    model_list: list[dict[str, object]], *_a: object, **_kw: object
+) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
+    return [{"model": "m", "model_id": _MODEL_INFO.validate_python(m["model_info"])["id"]} for m in model_list], [], {}
 
 
-@pytest.mark.asyncio
-async def test_run_background_health_check_hands_public_model_groups_to_the_db_save(monkeypatch: pytest.MonkeyPatch):
-    import litellm
-
-    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
-    monkeypatch.setattr(proxy_server, "health_check_concurrency", 3)
-    monkeypatch.setattr(proxy_server, "health_check_details", False)
-    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
-    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
-    monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
-    monkeypatch.setattr(litellm, "public_model_groups", ["bedrock/us.anthropic.claude-opus-4-8"])
-    router: Final = SimpleNamespace(
-        settings=lambda: RouterSettings(background_health_check_model_groups=frozenset({"bedrock/*"}))
-    )
-    monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(proxy_server, "llm_model_list", [{"model_name": "bedrock/*", "model_info": {"id": "wc"}}])
-    monkeypatch.setattr(proxy_server, "health_check_results", {"healthy_endpoints": [], "unhealthy_endpoints": []})
-
-    async def _fake_direct(*_a: object, **_kw: object) -> tuple[list[object], list[object], dict[str, object]]:
-        return ([], [], {})
-
-    scheduled: Final[dict[str, object]] = {}
-
-    def _record_schedule(*_a: object, **kw: object) -> None:
-        scheduled.update(kw)
-
-    monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _fake_direct)
-    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _record_schedule)
-    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _ignore_call)
-    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", _no_filter_kwargs)
-
-    async def _stop_sleep(_seconds: float) -> NoReturn:
-        raise asyncio.CancelledError()
-
-    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_sleep)
-
-    with pytest.raises(asyncio.CancelledError):
-        await _run_background_health_check()
-
-    assert scheduled["wildcard_scope"] == WildcardProbeScope(
-        ("bedrock/us.anthropic.claude-opus-4-8",), router, frozenset({"bedrock/*"}), False, 3, 60
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "public_model_groups,warned",
-    [(["bedrock/us.anthropic.claude-opus-4-8"], False), (["bedrock/us.anthropic.claude-sonnet-4-6"], True)],
-)
-async def test_run_background_health_check_warns_only_when_model_groups_match_nothing_it_probes(
-    monkeypatch: pytest.MonkeyPatch, public_model_groups: list[str], warned: bool
-):
+def _one_cycle_with(monkeypatch: pytest.MonkeyPatch, router: object, public_model_groups: list[str]) -> None:
     import litellm
 
     monkeypatch.setattr(proxy_server, "health_check_interval", 60)
@@ -876,41 +773,81 @@ async def test_run_background_health_check_warns_only_when_model_groups_match_no
     monkeypatch.setattr(proxy_server, "health_check_details", True)
     monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
     monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
-    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
     monkeypatch.setattr(litellm, "public_model_groups", public_model_groups)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         proxy_server,
-        "llm_router",
-        SimpleNamespace(
-            settings=lambda: RouterSettings(
-                background_health_check_model_groups=frozenset({"bedrock/us.anthropic.claude-opus-4-8"})
-            )
-        ),
+        "llm_model_list",
+        [{"model_name": "explicit", "litellm_params": {"model": "openai/explicit"}, "model_info": {"id": "explicit"}}],
     )
-    monkeypatch.setattr(proxy_server, "llm_model_list", [{"model_name": "bedrock/*", "model_info": {"id": "wc"}}])
     monkeypatch.setattr(proxy_server, "health_check_results", {"healthy_endpoints": [], "unhealthy_endpoints": []})
-
-    async def _fake_direct(*_a: object, **_kw: object) -> tuple[list[object], list[object], dict[str, object]]:
-        return ([], [], {})
-
-    warnings: Final[list[str]] = []
-
-    def _record_warning(msg: str, *_a: object) -> None:
-        warnings.append(msg)
-
-    monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _fake_direct)
-    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _ignore_call)
-    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _ignore_call)
+    monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _every_deployment_healthy)
     monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", _no_filter_kwargs)
-    monkeypatch.setattr(proxy_server.verbose_proxy_logger, "warning", _record_warning)
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_after_one_cycle)
 
-    async def _stop_sleep(_seconds: float) -> NoReturn:
-        raise asyncio.CancelledError()
 
-    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_sleep)
+@pytest.mark.asyncio
+async def test_run_background_health_check_saves_public_wildcard_children_but_keeps_them_out_of_routing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm import Router
+
+    served: Final = "openai/gpt-5.5"
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wildcard"}},
+            {
+                "model_name": "explicit",
+                "litellm_params": {"model": "openai/explicit"},
+                "model_info": {"id": "explicit"},
+            },
+        ]
+    )
+    saved: Final[dict[str, object]] = {}
+    routed: Final[dict[str, object]] = {}
+
+    def _record_save(
+        _prisma: object, _manager: object, model_list: object, healthy: object, *_a: object, **_kw: object
+    ) -> None:
+        saved.update(model_list=model_list, healthy=healthy)
+
+    def _record_routing(healthy: object, *_a: object) -> None:
+        routed.update(healthy=healthy)
+
+    _one_cycle_with(monkeypatch, router, [served])
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _record_save)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _record_routing)
 
     with pytest.raises(asyncio.CancelledError):
         await _run_background_health_check()
 
-    assert any("matched no deployments" in msg for msg in warnings) is warned
+    saved_names: Final = TypeAdapter(list[dict[str, object]]).validate_python(saved["model_list"])
+    assert sorted(str(m["model_name"]) for m in saved_names) == ["explicit", served]
+    assert len(TypeAdapter(list[object]).validate_python(saved["healthy"])) == 2
+    assert routed["healthy"] == [{"model": "m", "model_id": "explicit"}]
+    assert proxy_server.health_check_results["healthy_endpoints"] == [{"model": "m", "model_id": "explicit"}]
+    assert proxy_server.health_check_results["healthy_count"] == 1
+
+
+class _RegistryUnavailableRouter:
+    def settings(self) -> RouterSettings:
+        return RouterSettings()
+
+    def registry(self) -> NoReturn:
+        raise RuntimeError("registry unavailable")
+
+
+@pytest.mark.asyncio
+async def test_run_background_health_check_keeps_checking_when_building_wildcard_children_raises(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _one_cycle_with(monkeypatch, _RegistryUnavailableRouter(), ["openai/gpt-5.5"])
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _ignore_call)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _ignore_call)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    assert proxy_server.health_check_results["healthy_endpoints"] == [{"model": "m", "model_id": "explicit"}]

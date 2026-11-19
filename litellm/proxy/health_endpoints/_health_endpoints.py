@@ -839,14 +839,17 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
 def _model_infos_for_endpoint(
     model_param_to_info: Mapping[str, list[Mapping[str, str | None]]], endpoint: Mapping[str, object]
 ) -> tuple[Mapping[str, str | None], ...]:
-    model_param: Final = endpoint.get("model")
-    if not isinstance(model_param, str):
-        return ()
-    model_infos: Final = model_param_to_info.get(model_param, [])
+    """By ``model_id`` when the endpoint has one, else by model string.
+
+    The check rewrites ``litellm_params.model`` in place (it strips ``bedrock/``), so a result read back from the
+    shared cache can carry a model string the local deployment list never had.
+    """
     endpoint_model_id: Final = endpoint.get("model_id")
-    if not endpoint_model_id:
-        return tuple(model_infos)
-    return tuple(info for info in model_infos if info["model_id"] == endpoint_model_id)
+    if endpoint_model_id:
+        all_infos: Final = chain.from_iterable(model_param_to_info.values())
+        return tuple(info for info in all_infos if info["model_id"] == endpoint_model_id)
+    model_param: Final = endpoint.get("model")
+    return tuple(model_param_to_info.get(model_param, [])) if isinstance(model_param, str) else ()
 
 
 def _aggregate_health_check_results(
@@ -871,39 +874,35 @@ def _aggregate_health_check_results(
 
     # Process healthy endpoints
     for endpoint in healthy_endpoints:
-        model_param = endpoint.get("model")
-        if model_param and model_param in model_param_to_info:
-            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
-                key = (model_info["model_id"], model_info["model_name"])
-                if key not in model_results:
-                    model_results[key] = {
-                        "model_name": model_info["model_name"],
-                        "model_id": model_info["model_id"],
-                        "healthy_count": 0,
-                        "unhealthy_count": 0,
-                        "error_message": None,
-                    }
-                model_results[key]["healthy_count"] += 1
+        for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
+            key = (model_info["model_id"], model_info["model_name"])
+            if key not in model_results:
+                model_results[key] = {
+                    "model_name": model_info["model_name"],
+                    "model_id": model_info["model_id"],
+                    "healthy_count": 0,
+                    "unhealthy_count": 0,
+                    "error_message": None,
+                }
+            model_results[key]["healthy_count"] += 1
 
     # Process unhealthy endpoints
     for endpoint in unhealthy_endpoints:
-        model_param = endpoint.get("model")
         error_message = endpoint.get("error")
-        if model_param and model_param in model_param_to_info:
-            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
-                key = (model_info["model_id"], model_info["model_name"])
-                if key not in model_results:
-                    model_results[key] = {
-                        "model_name": model_info["model_name"],
-                        "model_id": model_info["model_id"],
-                        "healthy_count": 0,
-                        "unhealthy_count": 0,
-                        "error_message": None,
-                    }
-                model_results[key]["unhealthy_count"] += 1
-                # Use the first error message encountered
-                if not model_results[key]["error_message"] and error_message:
-                    model_results[key]["error_message"] = str(error_message)[:500]
+        for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
+            key = (model_info["model_id"], model_info["model_name"])
+            if key not in model_results:
+                model_results[key] = {
+                    "model_name": model_info["model_name"],
+                    "model_id": model_info["model_id"],
+                    "healthy_count": 0,
+                    "unhealthy_count": 0,
+                    "error_message": None,
+                }
+            model_results[key]["unhealthy_count"] += 1
+            # Use the first error message encountered
+            if not model_results[key]["error_message"] and error_message:
+                model_results[key]["error_message"] = str(error_message)[:500]
 
     return model_results
 

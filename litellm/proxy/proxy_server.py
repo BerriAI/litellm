@@ -733,12 +733,13 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
-    WildcardProbeScope,
+    deployment_ids,
     filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
     perform_health_check,
-    save_then_probe_public_wildcards,
+    public_wildcard_children,
+    split_by_model_ids,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
@@ -5102,12 +5103,8 @@ def _schedule_background_health_check_db_save(
     unhealthy_endpoints: list,
     pod_lock_manager: PodLockManager | None = None,
     lock_ttl: int | None = None,
-    wildcard_scope: WildcardProbeScope | None = None,
 ) -> None:
-    """Fire-and-forget: persist health check results to DB if prisma is available.
-
-    Public wildcard models in ``wildcard_scope`` are probed inside this save, so their results reach only the DB.
-    """
+    """Fire-and-forget: persist health check results to DB if prisma is available."""
     if prisma_client is None:
         return
     import time as time_module
@@ -5127,24 +5124,7 @@ def _schedule_background_health_check_db_save(
         start_time,
         checked_by=checked_by,
     )
-
-    async def save_probe_rows(
-        probe_rows: Sequence[Mapping[str, object]],
-        probe_healthy: Sequence[Mapping[str, object]],
-        probe_unhealthy: Sequence[Mapping[str, object]],
-        probe_start_time: float,
-    ) -> bool:
-        return await save_background_health_checks_to_db(
-            prisma_client,
-            list(probe_rows),
-            list(probe_healthy),
-            list(probe_unhealthy),
-            probe_start_time,
-            checked_by=checked_by,
-        )
-
-    save_then_probe: Final = partial(save_then_probe_public_wildcards, save, save_probe_rows, wildcard_scope)
-    asyncio.create_task(_window_gated_health_check_db_save(save_then_probe, pod_lock_manager, lock_ttl))
+    asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
 
 
 def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
@@ -5269,6 +5249,19 @@ async def _adaptive_router_flusher_loop():
             verbose_proxy_logger.exception("adaptive_router flusher iteration failed")
 
 
+def _public_wildcard_children(
+    public_names: Iterable[str] | None,
+    router: Router | None,
+    has_db: bool,
+    model_groups: AbstractSet[str] | None,
+) -> tuple[tuple[Mapping[str, object], ...], frozenset[str]]:
+    """Background-check entries for public models only a wildcard serves, and their ids; none without a DB to save to."""
+    if router is None or not has_db or not public_names:
+        return (), frozenset()
+    children: Final = public_wildcard_children(public_names, router, model_groups)
+    return children, deployment_ids(children)
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -5332,12 +5325,14 @@ async def _run_background_health_check():
         scoped_model_groups = (
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
-        _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
-        if (
-            scoped_model_groups is not None
-            and not _llm_model_list
-            and scoped_model_groups.isdisjoint(litellm.public_model_groups or ())
-        ):
+        wildcard_children, wildcard_child_ids = _public_wildcard_children(
+            litellm.public_model_groups, llm_router, prisma_client is not None, scoped_model_groups
+        )
+        _llm_model_list = [
+            *filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups),
+            *wildcard_children,
+        ]
+        if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
                 "background_health_check_model_groups matched no deployments; groups=%s",
                 sorted(scoped_model_groups),
@@ -5411,18 +5406,22 @@ async def _run_background_health_check():
                 instrumentation_context,
             )
 
+        routing_healthy, child_healthy = split_by_model_ids(healthy_endpoints, wildcard_child_ids)
+        routing_unhealthy, child_unhealthy = split_by_model_ids(unhealthy_endpoints, wildcard_child_ids)
+
         # Update the global variable with the health check results
-        health_check_results["healthy_endpoints"] = healthy_endpoints
-        health_check_results["unhealthy_endpoints"] = unhealthy_endpoints
-        health_check_results["healthy_count"] = len(healthy_endpoints)
-        health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
+        health_check_results["healthy_endpoints"] = list(routing_healthy)
+        health_check_results["unhealthy_endpoints"] = list(routing_unhealthy)
+        health_check_results["healthy_count"] = len(routing_healthy)
+        health_check_results["unhealthy_count"] = len(routing_unhealthy)
         cycle_duration_ms = (time.monotonic() - cycle_start_time) * 1000
         verbose_proxy_logger.debug(
-            "background_health_check_cycle_complete cycle_id=%s model_count_enabled=%d healthy_count=%d unhealthy_count=%d duration_ms=%.2f interval_seconds=%s thread_count=%d rss_mb=%s",
+            "background_health_check_cycle_complete cycle_id=%s model_count_enabled=%d healthy_count=%d unhealthy_count=%d child_count=%d duration_ms=%.2f interval_seconds=%s thread_count=%d rss_mb=%s",
             cycle_id,
             model_count_enabled,
-            len(healthy_endpoints),
-            len(unhealthy_endpoints),
+            len(routing_healthy),
+            len(routing_unhealthy),
+            len(child_healthy) + len(child_unhealthy),
             cycle_duration_ms,
             health_check_interval,
             threading.active_count(),
@@ -5445,22 +5444,10 @@ async def _run_background_health_check():
             unhealthy_endpoints,
             pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             lock_ttl=health_check_interval,
-            wildcard_scope=(
-                WildcardProbeScope(
-                    public_names=tuple(litellm.public_model_groups or ()),
-                    router=llm_router,
-                    model_groups=scoped_model_groups,
-                    details=details_bool is not False,
-                    max_concurrency=health_check_concurrency if isinstance(health_check_concurrency, int) else None,
-                    deadline_seconds=health_check_interval,
-                )
-                if llm_router is not None
-                else None
-            ),
         )
 
         # Write health state to router cache for health-check-driven routing
-        _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id)
+        _write_health_state_to_router_cache(list(routing_healthy), list(routing_unhealthy), _exceptions_by_model_id)
 
         await asyncio.sleep(health_check_interval)
 

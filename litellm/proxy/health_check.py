@@ -6,13 +6,12 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+import uuid
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from contextlib import AbstractAsyncContextManager, nullcontext
-from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -420,6 +419,9 @@ def _resolved_deployment_ids(router: "Router", model_name: str) -> frozenset[str
     return frozenset(ident for entry in resolved if (ident := _deployment_id(entry)))
 
 
+_WILDCARD_CHILD_ID_NAMESPACE: Final = uuid.uuid5(uuid.NAMESPACE_URL, "litellm:public-wildcard-health-check")
+
+
 def _is_probe_tuning(key: str) -> bool:
     return key in ("id", "mode", "base_model") or (key.startswith("health_check_") and key != "health_check_timeout")
 
@@ -431,13 +433,16 @@ def _as_mapping(value: object) -> Mapping[str, object]:
         return MappingProxyType({})
 
 
-def _wildcard_probe(public_name: str, row: Mapping[str, object]) -> Mapping[str, object]:
+def _wildcard_child(public_name: str, wildcard_id: str, row: Mapping[str, object]) -> Mapping[str, object]:
+    """``row`` checked as ``public_name``, its id stable per wildcard and routed model across pods and cycles."""
+    params: Final = _as_mapping(row.get("litellm_params"))
     info: Final = _as_mapping(row.get("model_info"))
+    child_id: Final = uuid.uuid5(_WILDCARD_CHILD_ID_NAMESPACE, f"{wildcard_id}|{params.get('model')}")
     return {
         **row,
         "model_name": public_name,
-        "litellm_params": dict(_as_mapping(row.get("litellm_params"))),
-        "model_info": {k: v for k, v in info.items() if not _is_probe_tuning(k)},
+        "litellm_params": dict(params),
+        "model_info": {**{k: v for k, v in info.items() if not _is_probe_tuning(k)}, "id": str(child_id)},
     }
 
 
@@ -445,231 +450,58 @@ def _in_model_groups(public_name: str, row: Mapping[str, object], model_groups: 
     return model_groups is None or public_name in model_groups or row.get("model_name") in model_groups
 
 
-@dataclass(frozen=True, slots=True)
-class _WildcardProbe:
-    public_name: str
-    wildcard_id: str | None
-    deployment: Mapping[str, object]
-
-    @property
-    def group_key(self) -> str:
-        """Names share one probe only when the same wildcard deployment serves them the same model."""
-        return f"{self.wildcard_id}|{_deployment_model(self.deployment)}"
-
-
-def _wildcard_probes_for(
+def _wildcard_children_for(
     public_name: str, router: "Router", model_groups: AbstractSet[str] | None
-) -> tuple[_WildcardProbe, ...]:
+) -> tuple[Mapping[str, object], ...]:
     served_name: Final = router.registry().resolve(public_name, kind="alias") or public_name
     rows: Final = router.registry().deployments(served_name, source="wildcard")
-    if _resolved_deployment_ids(router, served_name) != frozenset(i for row in rows if (i := _deployment_id(row))):
+    ids: Final = tuple(_deployment_id(row) for row in rows)
+    if _resolved_deployment_ids(router, served_name) != frozenset(i for i in ids if i):
         return ()
-    eligible: Final = (row for row in rows if not _skips_health_checks(row))
+    eligible: Final = (
+        (row, wildcard_id) for row, wildcard_id in zip(rows, ids) if wildcard_id and not _skips_health_checks(row)
+    )
     return tuple(
-        _WildcardProbe(public_name, _deployment_id(row), _wildcard_probe(public_name, row))
-        for row in eligible
+        _wildcard_child(public_name, wildcard_id, row)
+        for row, wildcard_id in eligible
         if _in_model_groups(public_name, row, model_groups)
     )
 
 
-def _public_wildcard_probes(
-    public_names: Iterable[str], router: "Router", model_groups: AbstractSet[str] | None
-) -> tuple[_WildcardProbe, ...]:
-    return tuple(
-        chain.from_iterable(_wildcard_probes_for(name, router, model_groups) for name in dict.fromkeys(public_names))
-    )
-
-
-def public_wildcard_probe_deployments(
+def public_wildcard_children(
     public_names: Iterable[str], router: "Router", model_groups: AbstractSet[str] | None
 ) -> tuple[Mapping[str, object], ...]:
-    """One id-less probe per wildcard for each public name that only a wildcard serves."""
-    return tuple(probe.deployment for probe in _public_wildcard_probes(public_names, router, model_groups))
+    """A background-check entry per wildcard for each public name that only wildcards serve, under that name.
 
-
-_Endpoints: TypeAlias = Sequence[Mapping[str, object]]
-_ProbeTask: TypeAlias = "asyncio.Task[tuple[_Endpoints, _Endpoints]]"
-ProbeOne: TypeAlias = Callable[[Mapping[str, object], bool | None], Awaitable[tuple[_Endpoints, _Endpoints]]]
-ProbeOrder: TypeAlias = Callable[[Sequence[Mapping[str, object]]], Sequence[Mapping[str, object]]]
-WaitForDeadline: TypeAlias = Callable[
-    [Sequence[_ProbeTask], float], Awaitable[tuple[AbstractSet[_ProbeTask], AbstractSet[_ProbeTask]]]
-]
-
-
-_PROBE_RESULT_ADAPTER: Final = TypeAdapter(
-    tuple[tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...], object]
-)
-
-
-async def _probe_one(deployment: Mapping[str, object], details: bool | None) -> tuple[_Endpoints, _Endpoints]:
-    healthy, unhealthy, _ = _PROBE_RESULT_ADAPTER.validate_python(await _perform_health_check([deployment], details))
-    return healthy, unhealthy
-
-
-def _shuffled(probes: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
-    return random.sample(probes, len(probes))
-
-
-async def _wait_for_deadline(
-    tasks: Sequence[_ProbeTask], deadline_seconds: float
-) -> tuple[AbstractSet[_ProbeTask], AbstractSet[_ProbeTask]]:
-    return await asyncio.wait(tasks, timeout=deadline_seconds)
-
-
-@dataclass(frozen=True, slots=True)
-class WildcardProbeScope:
-    public_names: tuple[str, ...]
-    router: "Router"
-    model_groups: AbstractSet[str] | None
-    details: bool | None
-    max_concurrency: int | None
-    deadline_seconds: float
-    probe_one: ProbeOne = _probe_one
-    order: ProbeOrder = _shuffled
-    wait_for_deadline: WaitForDeadline = _wait_for_deadline
-    clock: Callable[[], float] = time.monotonic
-
-
-async def _bounded_probe(
-    scope: WildcardProbeScope,
-    deployment: Mapping[str, object],
-    limit: AbstractAsyncContextManager[object],
-    started: asyncio.Event,
-) -> tuple[_Endpoints, _Endpoints]:
-    async with limit:
-        started.set()
-        return await scope.probe_one(deployment, scope.details)
-
-
-def _timed_out(probe: Mapping[str, object], deadline_seconds: float) -> tuple[_Endpoints, _Endpoints]:
-    error: Final = f"health check did not finish within the health check interval ({deadline_seconds:g}s)"
-    return (), ({"model": _deployment_model(probe), "error": error},)
-
-
-def _probe_outcome(
-    probe: Mapping[str, object], task: _ProbeTask, started: asyncio.Event, timed_out: bool, deadline_seconds: float
-) -> tuple[_Endpoints, _Endpoints] | None:
-    if timed_out:
-        return _timed_out(probe, deadline_seconds) if started.is_set() else None
-    if task.cancelled() or task.exception() is not None:
-        return None
-    return task.result()
-
-
-async def _probe_outcomes_by_deadline(
-    scope: WildcardProbeScope, probes: Sequence[Mapping[str, object]], timeout_seconds: float
-) -> tuple[tuple[Mapping[str, object], tuple[_Endpoints, _Endpoints]], ...]:
-    """Each probe's endpoints; one that started but was still running at the deadline is reported unhealthy.
-
-    A probe still waiting for a concurrency slot at the deadline never ran, so it writes no row.
+    A failure here is logged and yields none, so it never stops the background loop that calls it.
     """
-    limit: Final = (
-        asyncio.Semaphore(scope.max_concurrency)
-        if scope.max_concurrency is not None and scope.max_concurrency > 0
-        else nullcontext()
-    )
-    ordered: Final = tuple(scope.order(probes))
-    started: Final = tuple(asyncio.Event() for _ in ordered)
-    tasks: Final = tuple(
-        asyncio.create_task(_bounded_probe(scope, probe, limit, event)) for probe, event in zip(ordered, started)
-    )
-    _, pending = await scope.wait_for_deadline(tasks, timeout_seconds)
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
-    if pending:
-        logger.warning(
-            "background_health_check_wildcard_probes_timed_out timed_out=%d probed=%d deadline_seconds=%s",
-            len(pending),
-            len(ordered),
-            scope.deadline_seconds,
-        )
-    return tuple(
-        (probe, outcome)
-        for probe, task, event in zip(ordered, tasks, started)
-        if (outcome := _probe_outcome(probe, task, event, task in pending, scope.deadline_seconds)) is not None
-    )
-
-
-def _probe_copy(probe: Mapping[str, object]) -> Mapping[str, object]:
-    return {**probe, "litellm_params": dict(_as_mapping(probe.get("litellm_params")))}
-
-
-def _one_probe_per_group(probes: Sequence[_WildcardProbe]) -> tuple[tuple[str, Mapping[str, object]], ...]:
-    """One probe per wildcard deployment and served model, run on a copy left free to change."""
-    first_by_key: Final = {probe.group_key: probe for probe in reversed(probes)}
-    keys: Final = dict.fromkeys(probe.group_key for probe in probes)
-    return tuple((key, _probe_copy(first_by_key[key].deployment)) for key in keys)
-
-
-def _group_key_of(probe: Mapping[str, object], groups: Sequence[tuple[str, Mapping[str, object]]]) -> str:
-    return next(key for key, copy in groups if copy is probe)
-
-
-def _keyed_by_group(endpoints: _Endpoints, group_key: str) -> _Endpoints:
-    return tuple({**endpoint, "model": group_key} for endpoint in endpoints)
-
-
-def _row_per_name_and_group(probes: Sequence[_WildcardProbe]) -> tuple[Mapping[str, object], ...]:
-    """What the save maps endpoints onto: each published name under every group serving it, keyed by group.
-
-    The save combines a name's rows by its usual rule, and a group key never matches another group's endpoints.
-    """
-    memberships: Final = dict.fromkeys((probe.public_name, probe.group_key) for probe in probes)
-    return tuple(
-        {"model_name": name, "litellm_params": {"model": group_key}, "model_info": {}}
-        for name, group_key in memberships
-    )
-
-
-SaveProbeRows: TypeAlias = Callable[[_Endpoints, _Endpoints, _Endpoints, float], Awaitable[bool]]
-
-
-async def _save_wildcard_probes(
-    save_probe_rows: SaveProbeRows, scope: WildcardProbeScope, timeout_seconds: float
-) -> None:
     try:
-        probes: Final = _public_wildcard_probes(scope.public_names, scope.router, scope.model_groups)
-        if not probes:
-            return
-        groups: Final = _one_probe_per_group(probes)
-        probe_start: Final = time.time()
-        outcomes: Final = await _probe_outcomes_by_deadline(scope, tuple(c for _, c in groups), timeout_seconds)
-    except Exception:
-        logger.exception("background_health_check_wildcard_probe_failed")
-        return
-    if not outcomes:
-        return
-    keyed: Final = tuple((_group_key_of(probe, groups), outcome) for probe, outcome in outcomes)
-    await save_probe_rows(
-        _row_per_name_and_group(probes),
-        tuple(chain.from_iterable(_keyed_by_group(healthy, key) for key, (healthy, _) in keyed)),
-        tuple(chain.from_iterable(_keyed_by_group(unhealthy, key) for key, (_, unhealthy) in keyed)),
-        probe_start,
-    )
-
-
-async def save_then_probe_public_wildcards(
-    save_regular_rows: Callable[[], Awaitable[bool]],
-    save_probe_rows: SaveProbeRows,
-    scope: WildcardProbeScope | None,
-) -> bool:
-    """Save the cycle's rows, then probe public wildcard models in what is left of the interval.
-
-    Probes run only when those rows were persisted, and only the cycle's save decides the result.
-    """
-    started: Final = scope.clock() if scope is not None else 0.0
-    persisted: Final = await save_regular_rows()
-    if not persisted or scope is None:
-        return persisted
-    remaining: Final = scope.deadline_seconds - (scope.clock() - started)
-    if remaining <= 0:
-        logger.warning(
-            "background_health_check_wildcard_probes_skipped no time left in the %ss interval", scope.deadline_seconds
+        return tuple(
+            chain.from_iterable(
+                _wildcard_children_for(name, router, model_groups) for name in dict.fromkeys(public_names)
+            )
         )
-        return persisted
-    await _save_wildcard_probes(save_probe_rows, scope, remaining)
-    return persisted
+    except Exception:
+        logger.exception("background_health_check_public_wildcard_children_failed")
+        return ()
+
+
+def deployment_ids(deployments: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    return frozenset(ident for deployment in deployments if (ident := _deployment_id(deployment)))
+
+
+_ENDPOINTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def split_by_model_ids(
+    endpoints: object, model_ids: AbstractSet[str]
+) -> tuple[tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
+    """``endpoints`` without, then with, a ``model_id`` in ``model_ids``."""
+    checked: Final = _ENDPOINTS_ADAPTER.validate_python(endpoints)
+    return (
+        tuple(e for e in checked if e.get("model_id") not in model_ids),
+        tuple(e for e in checked if e.get("model_id") in model_ids),
+    )
 
 
 def _dependency_failure(
