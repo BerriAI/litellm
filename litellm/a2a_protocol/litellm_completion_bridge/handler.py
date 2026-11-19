@@ -25,7 +25,7 @@ from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManag
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.interactions.agents.utils import merge_agent_headers
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import CustomPricingLiteLLMParams, ModelResponse
 
 # litellm_params key carrying the authenticated principal (hashed virtual key) so
 # A2A provider configs can scope provider-side state (e.g. LangFlow session memory)
@@ -44,6 +44,7 @@ _AGENT_ONLY_PARAMS: Final = frozenset(
         A2A_USER_API_KEY_HASH_PARAM,
     }
 )
+_CUSTOM_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
 
 
 def bridge_model_name(litellm_params: Mapping[str, object]) -> str:
@@ -106,7 +107,13 @@ class A2ACompletionBridgeHandler:
             "api_base": api_base,
             "stream": stream,
         }
-        completion_params.update(agent_completion_kwargs(litellm_params))
+        completion_params.update(
+            {
+                key: value
+                for key, value in agent_completion_kwargs(litellm_params).items()
+                if key not in _CUSTOM_PRICING_PARAMS
+            }
+        )
         # Apply forward metadata AFTER the litellm_params merge so the helper
         # sees any agent-owner-configured ``extra_body.metadata`` and can keep
         # those keys authoritative over the client-supplied A2A metadata.

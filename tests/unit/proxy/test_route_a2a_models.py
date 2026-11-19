@@ -21,6 +21,7 @@ import respx
 from fastapi import HTTPException
 
 import litellm
+from litellm.a2a_protocol.litellm_completion_bridge.handler import A2ACompletionBridgeHandler
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -1378,6 +1379,11 @@ async def test_route_a2a_agent_call_is_never_billed_at_a_price_an_earlier_call_s
     registry.register_agent(_priced_dbx_agent("unpriced", {}))
     await _billed_chat_call(registry, "per-token")
     await _billed_chat_call(registry, "per-token", {"input_cost_per_token": 1.0, "output_cost_per_token": 1.0})
+    await A2ACompletionBridgeHandler.handle_non_streaming(
+        request_id="a2a-per-token",
+        params={"message": {"role": "user", "parts": [{"kind": "text", "text": "ping"}], "messageId": "m-1"}},
+        litellm_params=dict(_priced_dbx_agent("per-token", PER_TOKEN_PRICE).litellm_params),
+    )
 
     unpriced_cost, _, _ = await _billed_chat_call(registry, "unpriced")
     started: Final = time.monotonic()
