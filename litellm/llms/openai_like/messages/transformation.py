@@ -144,7 +144,10 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         return False
 
     def _resolve_api_key(self, api_key: str | None) -> str | None:
-        return api_key or get_secret_str(self._provider.api_key_env) or litellm.api_key
+        provider_key: Final = api_key or get_secret_str(self._provider.api_key_env)
+        if self._provider.slug == "bettertoken":
+            return provider_key
+        return provider_key or litellm.api_key
 
     def _resolve_api_base(self, api_base: str | None) -> str:
         env_api_base: Final = get_secret_str(self._provider.api_base_env) if self._provider.api_base_env else None
@@ -160,13 +163,20 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict[str, str], str | None]:
+        resolved_key: Final = self._resolve_api_key(api_key)
+        if self._provider.slug == "bettertoken" and not resolved_key:
+            raise litellm.AuthenticationError(
+                message="Set BETTERTOKEN_API_KEY or pass api_key",
+                llm_provider="bettertoken",
+                model=model,
+            )
         return super().validate_anthropic_messages_environment(
             headers=headers,
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            api_key=self._resolve_api_key(api_key),
+            api_key=resolved_key,
             api_base=api_base,
         )
 
