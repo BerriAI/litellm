@@ -30,23 +30,27 @@ export const customerModelBreakdown = ({ breakdown }: DailyData) =>
   Object.keys(breakdown.model_groups).length > 0 ? breakdown.model_groups : breakdown.models;
 
 export function customerUsageTotals(days: readonly DailyData[]): CustomerUsageTotals {
-  return days.reduce((totals, day) => {
-    for (const [id, entity] of Object.entries(day.breakdown.entities)) {
-      const previous = totals.get(id) ?? EMPTY_CUSTOMER_USAGE;
-      const metrics = entity.metrics;
-      const next = {
-        spend: previous.spend + metrics.spend,
-        requests: previous.requests + metrics.api_requests,
-        tokens: previous.tokens + metrics.total_tokens,
-        inputTokens: previous.inputTokens + metrics.prompt_tokens,
-        outputTokens: previous.outputTokens + metrics.completion_tokens,
-        cacheReadTokens: previous.cacheReadTokens + (metrics.cache_read_input_tokens ?? 0),
-        cacheWriteTokens: previous.cacheWriteTokens + (metrics.cache_creation_input_tokens ?? 0),
-        cacheCost: previous.cacheCost + (metrics.cache_cost ?? 0),
-        pricedCacheTokens: previous.pricedCacheTokens + (metrics.priced_cache_tokens ?? 0),
-      };
-      totals.set(id, next);
-    }
-    return totals;
-  }, new Map<string, CustomerUsageTotal>());
+  return days.reduce<CustomerUsageTotals>(
+    (totals, day) =>
+      new Map([
+        ...totals,
+        ...Object.entries(day.breakdown.entities).map(([id, entity]) => {
+          const previous = totals.get(id) ?? EMPTY_CUSTOMER_USAGE;
+          const metrics = entity.metrics;
+          const next: CustomerUsageTotal = {
+            spend: previous.spend + metrics.spend,
+            requests: previous.requests + metrics.api_requests,
+            tokens: previous.tokens + metrics.total_tokens,
+            inputTokens: previous.inputTokens + metrics.prompt_tokens,
+            outputTokens: previous.outputTokens + metrics.completion_tokens,
+            cacheReadTokens: previous.cacheReadTokens + (metrics.cache_read_input_tokens ?? 0),
+            cacheWriteTokens: previous.cacheWriteTokens + (metrics.cache_creation_input_tokens ?? 0),
+            cacheCost: previous.cacheCost + (metrics.cache_cost ?? 0),
+            pricedCacheTokens: previous.pricedCacheTokens + (metrics.priced_cache_tokens ?? 0),
+          };
+          return [id, next] as const;
+        }),
+      ]),
+    new Map<string, CustomerUsageTotal>(),
+  );
 }
