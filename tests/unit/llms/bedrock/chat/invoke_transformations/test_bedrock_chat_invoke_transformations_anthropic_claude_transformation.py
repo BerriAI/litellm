@@ -1164,6 +1164,66 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
     assert result.get("anthropic_beta") == expected_betas
 
 
+@pytest.mark.parametrize(
+    ("search_tool", "expected_bedrock_tool"),
+    [
+        pytest.param(
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "tool_search_tool_bm25", "name": "tool_search_tool_bm25"},
+            id="bm25",
+        ),
+        pytest.param(
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {"type": "tool_search_tool_regex", "name": "tool_search_tool_regex"},
+            id="regex",
+        ),
+    ],
+)
+def test_bedrock_chat_invoke_sends_the_tool_search_tool_with_deferred_tools(
+    local_model_cost_map, local_beta_headers_config, search_tool, expected_bedrock_tool
+):
+    """#51556: the BM25 search tool was dropped while its deferred tools and beta still went out,
+    so Claude never found the deferred tools."""
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-opus-5"
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Where is parcel 1Z999AA10123456784?"}],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "max_tokens": 64,
+                "tools": [
+                    search_tool,
+                    {
+                        "type": "function",
+                        "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}},
+                    },
+                    {
+                        "type": "function",
+                        "defer_loading": True,
+                        "function": {
+                            "name": "lookup_package_tracking",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"tracking_number": {"type": "string"}},
+                            },
+                        },
+                    },
+                ],
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["tools"][0] == expected_bedrock_tool
+    assert [tool.get("name") for tool in result["tools"][1:]] == ["get_time", "lookup_package_tracking"]
+    assert result.get("anthropic_beta") == ["tool-search-tool-2025-10-19"]
+
+
 _REPLAYED_WEATHER_SEARCH: Final = {
     "role": "assistant",
     "content": None,
