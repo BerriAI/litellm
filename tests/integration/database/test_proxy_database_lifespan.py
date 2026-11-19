@@ -5,18 +5,19 @@ import sys
 import threading
 import uuid
 from pathlib import Path
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, cast
 
 import psutil
 import pytest
 
+from litellm.proxy.db.create_views import SupportsRawQueries
 from tests.integration._support.client import eventually
 from tests.integration._support.database import read_rows, scratch_database
 
 pytestmark: Final = pytest.mark.timeout(180)
 ROOT: Final = Path(__file__).resolve().parents[3]
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
-Mode: TypeAlias = Literal["late", "unsafe"]
+Mode: TypeAlias = Literal["late", "unsafe", "gateway"]
 CONFIG: Final = (
     "model_list: []\n"
     "general_settings:\n"
@@ -60,9 +61,34 @@ async def _assert_lifespan_closed() -> None:
     await asyncio.to_thread(_assert_database_idle)
 
 
+async def _assert_one_prisma_session(db: SupportsRawQueries) -> None:
+    sessions: Final = await asyncio.gather(
+        *(db.query_raw("SELECT pg_backend_pid() AS pid FROM pg_sleep(0.2)") for _ in range(4))
+    )
+    assert len({batch[0]["pid"] for batch in sessions}) == 1, sessions
+
+
+async def _assert_gateway_pool_is_capped() -> None:
+    from gateway.main import app
+    from litellm.repositories.database import Database
+
+    async with app.router.lifespan_context(app) as state:
+        assert state is not None
+        database: Final[object] = state["database"]
+        assert isinstance(database, Database)
+        assert database.native is not None
+        for db in (database.prisma.writer_db, database.prisma.read_db):
+            await _assert_one_prisma_session(cast(SupportsRawQueries, db))  # cast-ok: PrismaWrapper forwards query_raw
+    await _assert_lifespan_closed()
+
+
 async def _exercise_lifespans(mode: Mode) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+
+    if mode == "gateway":
+        await _assert_gateway_pool_is_capped()
+        return
 
     expected: Final = UnsafeMasterKeyError if mode == "unsafe" else ValueError
     match: Final = "master key" if mode == "unsafe" else "use_redis_transaction_buffer"
@@ -91,11 +117,15 @@ async def _exercise_lifespans(mode: Mode) -> None:
             await _assert_lifespan_closed()
 
 
-@pytest.mark.parametrize("mode", ("late", "unsafe"))
+@pytest.mark.parametrize("mode", ("late", "unsafe", "gateway"))
 @pytest.mark.parametrize("replica", (False, True), ids=("writer", "writer-and-reader"))
-def test_failed_startup_then_retry_releases_database_resources(tmp_path: Path, mode: Mode, replica: bool) -> None:
+def test_proxy_lifespan_releases_database_resources(tmp_path: Path, mode: Mode, replica: bool) -> None:
     config: Final = tmp_path / "config.yaml"
-    config.write_text(CONFIG + ("  use_redis_transaction_buffer: true\n" if mode == "late" else ""))
+    extras: Final = {
+        "late": "  use_redis_transaction_buffer: true\n",
+        "gateway": "  database_connection_pool_limit: 2\n",
+    }
+    config.write_text(CONFIG + extras.get(mode, ""))
     inherited: Final = {
         key: value
         for key, value in os.environ.items()
@@ -120,7 +150,7 @@ def test_failed_startup_then_retry_releases_database_resources(tmp_path: Path, m
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",
             "LITELLM_TELEMETRY_ENABLED": "false",
             "PRISMA_HEALTH_WATCHDOG_ENABLED": "true",
-            "PYTHONPATH": os.pathsep.join((str(ROOT), str(ROOT / "litellm" / "enterprise"))),
+            "PYTHONPATH": os.pathsep.join((str(ROOT), str(ROOT / "litellm/enterprise"), str(ROOT / "litellm/runtime"))),
             **({"DATABASE_URL_READ_REPLICA": database_url} if replica else {}),
         }
         schema: Final = subprocess.run(

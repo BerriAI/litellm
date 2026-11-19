@@ -682,7 +682,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
-from litellm.proxy.db.connection_budget import rust_connections
+from litellm.proxy.db.connection_budget import rust_connections, with_configured_connection_budget
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -1646,9 +1646,14 @@ def _forget_prisma_client() -> None:
 
 
 @asynccontextmanager
-async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+async def proxy_startup_event(
+    app: FastAPI, *, use_configured_pool_budget: bool = False
+) -> AsyncGenerator[ProxyLifespanState, None]:
     with GracefulShutdownManager.capture_sigterm():
-        async with AsyncExitStack() as resources, _proxy_lifespan(app, resources) as state:
+        async with (
+            AsyncExitStack() as resources,
+            _proxy_lifespan(app, resources, use_configured_pool_budget=use_configured_pool_budget) as state,
+        ):
             yield state
 
 
@@ -1676,7 +1681,9 @@ def register_prompt_cache_alerts(
 
 
 @asynccontextmanager
-async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGenerator[ProxyLifespanState, None]:
+async def _proxy_lifespan(
+    app: FastAPI, resources: AsyncExitStack, *, use_configured_pool_budget: bool
+) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
         prisma_client, \
         master_key, \
@@ -1778,7 +1785,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
 
-    enforce_fips_mode(general_settings_view())
+    settings: Final = general_settings_view()
+    enforce_fips_mode(settings)
+    if use_configured_pool_budget and prisma_client is None:
+        resources.enter_context(with_configured_connection_budget(settings.get("database_connection_pool_limit")))
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(

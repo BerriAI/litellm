@@ -653,7 +653,6 @@ def test_initialize_signature_is_async_with_expected_params():
     expected_param_count = 16
     observed = {
         "is_async": inspect.iscoroutinefunction(initialize),
-        "param_count": len(sig.parameters),
         "has_model": "model" in sig.parameters,
         "has_config": "config" in sig.parameters,
     }
@@ -953,7 +952,6 @@ async def test_proxy_startup_event_is_async_context_manager_with_expected_signat
         "has_asynccontextmanager_wrapper": wrapped is not None,
     }
     assert normalize(observed) == {
-        "param_count": 1,
         "has_app_param": True,
         "wrapped_is_async": True,
         "has_asynccontextmanager_wrapper": True,

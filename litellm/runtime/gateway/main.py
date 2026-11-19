@@ -11,9 +11,10 @@ Run with:
 
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Final
 
-from starlette.applications import Starlette
+from fastapi import FastAPI
 from starlette.routing import Mount
 from starlette.types import Lifespan
 
@@ -27,13 +28,12 @@ from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 
 DatabaseURLSettings.from_env().apply_to_env()
 
-from litellm.proxy.proxy_server import app
-
 from gateway.routes.allowlist import (
     GATEWAY_EXACT_PATHS,
     GATEWAY_MOUNT_PATHS,
     GATEWAY_PATH_PREFIXES,
 )
+from litellm.proxy.proxy_server import app, proxy_startup_event
 
 
 def _is_gateway_route(route) -> bool:
@@ -58,12 +58,12 @@ def _is_gateway_route(route) -> bool:
 # register routes. A module-load filter would miss routes added during
 # startup; running inside the lifespan, after the inner __aenter__, catches
 # them while still completing before uvicorn opens the listener.
-_proxy_lifespan: Final = app.router.lifespan_context
+_proxy_lifespan: Final = partial(proxy_startup_event, use_configured_pool_budget=True)
 
 
 @asynccontextmanager
 async def _gateway_lifespan(
-    app_: Starlette, lifespan: Lifespan[Starlette] = _proxy_lifespan
+    app_: FastAPI, lifespan: Lifespan[FastAPI] = _proxy_lifespan
 ) -> AsyncGenerator[Mapping[str, object], None]:
     async with lifespan(app_) as state:
         app_.router.routes = [r for r in app_.router.routes if _is_gateway_route(r)]
