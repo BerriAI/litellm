@@ -56,6 +56,11 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 
 
 GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+_YOUTUBE_VIDEO_URL: Final = re.compile(r"https?://(?:(?:www|m)\.)?(?:youtube\.com|youtu\.be)/")
+
+
+def gemini_fetches_url_itself(url: str) -> bool:
+    return url.startswith(GEMINI_FILES_API_URI_PREFIX) or _YOUTUBE_VIDEO_URL.match(url) is not None
 
 
 # https://cloud.google.com/vertex-ai/generative-ai/docs/image/configure-aspect-ratio

@@ -1549,12 +1549,12 @@ class GeminiMediaSource:
 
 
 def gemini_tool_media_needs_download(source: GeminiMediaSource) -> bool:
-    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX
+    from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
 
     return (
         source.inline_in_tool_result
         and source.url.startswith(("http://", "https://"))
-        and not source.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+        and not gemini_fetches_url_itself(source.url)
     )
 
 
@@ -1650,14 +1650,14 @@ def _gemini_tool_media_part(
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
 ) -> VertexPartType | None:
-    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX
+    from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
     from litellm.llms.vertex_ai.gemini.transformation import encode_gemini_media_source
 
     source: Final = gemini_media_source(content)
     if source is None:
         return None
     inline_only: Final = nested and custom_llm_provider not in ("vertex_ai", "vertex_ai_beta")
-    if inline_only and source.url.startswith(("gs://", GEMINI_FILES_API_URI_PREFIX)):
+    if inline_only and (source.url.startswith("gs://") or gemini_fetches_url_itself(source.url)):
         raise litellm.BadRequestError(
             message="Gemini tool results require inline media data. Use a data URL or input_audio for this file reference.",
             model=model or "",

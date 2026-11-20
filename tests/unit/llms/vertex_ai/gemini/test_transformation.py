@@ -10,7 +10,7 @@ import pytest
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -549,6 +549,11 @@ async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video
             },
             id="format-detail-and-metadata",
         ),
+        pytest.param(
+            {"type": "video_url", "video_url": {"url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}},
+            {"file_data": {"file_uri": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}},
+            id="youtube-link",
+        ),
     ],
 )
 def test_a_video_url_part_reaches_gemini_as_video(video_part: dict, expected_part: dict) -> None:
@@ -559,6 +564,88 @@ def test_a_video_url_part_reaches_gemini_as_video(video_part: dict, expected_par
     )
 
     assert contents[0]["parts"] == [{"text": "Describe the clip"}, expected_part]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+async def test_async_transform_lets_gemini_fetch_youtube_links_itself(
+    async_only_image_fetch, custom_llm_provider: str
+) -> None:
+    watch_link: Final = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+    short_link: Final = "https://youtu.be/aqz-KE-bpKQ"
+
+    body: Final = await transformation.async_transform_request_body(
+        gemini_api_key=None,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe these"},
+                    {"type": "video_url", "video_url": {"url": watch_link}},
+                    {"type": "file", "file": {"file_id": short_link}},
+                ],
+            }
+        ],
+        api_base=None,
+        model="gemini-3.8-flash",
+        client=None,
+        timeout=None,
+        extra_headers=None,
+        optional_params={},
+        logging_obj=Mock(),
+        custom_llm_provider=custom_llm_provider,
+        litellm_params={},
+        vertex_project="qa-project",
+        vertex_location="us-central1",
+        vertex_auth_header=None,
+    )
+
+    assert body["contents"][0]["parts"] == [
+        {"text": "Describe these"},
+        {"file_data": {"file_uri": watch_link}},
+        {"file_data": {"file_uri": short_link}},
+    ]
+    assert async_only_image_fetch.fetched == []
+
+
+def test_gemini_ai_studio_sync_completion_lets_gemini_fetch_youtube_links_itself(async_only_image_fetch) -> None:
+    watch_link: Final = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+    short_link: Final = "https://youtu.be/aqz-KE-bpKQ"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "A rabbit"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+
+    client: Final = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(handle))
+
+    litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe these"},
+                    {"type": "video_url", "video_url": {"url": watch_link}},
+                    {"type": "file", "file": {"file_id": short_link}},
+                ],
+            }
+        ],
+        api_key="fake-gemini-key",
+        client=client,
+    )
+
+    assert captured["body"]["contents"][0]["parts"] == [
+        {"text": "Describe these"},
+        {"file_data": {"file_uri": watch_link}},
+        {"file_data": {"file_uri": short_link}},
+    ]
 
 
 def test_gemini_completion_rejects_a_video_url_part_without_a_url_instead_of_dropping_it() -> None:

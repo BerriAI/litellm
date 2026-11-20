@@ -62,8 +62,8 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import LlmProviders
 
 from ..common_utils import (
-    GEMINI_FILES_API_URI_PREFIX,
     check_text_in_content,
+    gemini_fetches_url_itself,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
@@ -566,11 +566,9 @@ def process_gemini_media(
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
-        elif image_url.startswith(GEMINI_FILES_API_URI_PREFIX):
-            # Gemini Files API URIs — the file is already uploaded to Google's
-            # servers; pass the URI through as file_data without fetching it.
-            # These URLs return 403 when accessed directly, so we must not try
-            # to resolve their MIME type via HTTP.
+        elif gemini_fetches_url_itself(image_url):
+            # Gemini fetches Files API URIs and YouTube links itself. Fetching them here
+            # gets a 403 (Files API) or a YouTube HTML page, so pass the URI through.
             if format:
                 file_data = FileDataType(mime_type=format, file_uri=image_url)
             else:
@@ -1422,11 +1420,11 @@ def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:
 
 
 def _ai_studio_inlines(media: RemoteMedia) -> bool:
-    return not media.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+    return not gemini_fetches_url_itself(media.url)
 
 
 def _vertex_inlines(media: RemoteMedia) -> bool:
-    if media.url.startswith(GEMINI_FILES_API_URI_PREFIX):
+    if gemini_fetches_url_itself(media.url):
         return False
     return media.url.startswith("http://") or (
         _explicit_mime_type(media.fields) is None and get_image_mime_type_from_url(media.url) is None

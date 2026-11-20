@@ -2752,6 +2752,39 @@ def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
     assert result == {"function_response": {"name": "lookup", "response": {"ok": True}}}
 
 
+_YOUTUBE_LINK: Final = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+_YOUTUBE_TOOL_RESULT: Final = {
+    "role": "tool",
+    "name": "find_clip",
+    "content": [
+        {"type": "text", "text": '{"ok":true}'},
+        {"type": "video_url", "video_url": {"url": _YOUTUBE_LINK, "format": "video/mp4"}},
+    ],
+}
+
+
+def test_gemini_tool_result_youtube_video_reaches_vertex_by_reference() -> None:
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(
+            _YOUTUBE_TOOL_RESULT, None, custom_llm_provider="vertex_ai"
+        )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"file_data": {"mime_type": "video/mp4", "file_uri": _YOUTUBE_LINK}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_youtube_video_on_ai_studio_is_a_bad_request_instead_of_a_page_download() -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError, match="require inline media data"):
+        convert_to_gemini_tool_call_result(_YOUTUBE_TOOL_RESULT, None, custom_llm_provider="gemini")
+
+
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
     Test that Anthropic-native image blocks in tool_result list content are
