@@ -20452,7 +20452,7 @@ async def login(request: Request):
 
 
 @router.get("/login/resume", include_in_schema=False)
-async def login_resume(request: Request):
+async def login_resume(request: Request) -> RedirectResponse:
     """Send a browser that is signed in to the dashboard back to the return_to it asked for before sign-in"""
     from litellm.proxy.management_endpoints.ui_sso import read_return_to_cookie, sso_return_to_redirect
     from litellm.proxy.mcp_server.byok_oauth_endpoints import session_identity_from_cookie

@@ -18,7 +18,7 @@ SSO_FALLBACK_COOKIE: Final = "litellm_sso_fallback"
 
 @router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
 @router.get("/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)  # if mounted at root path
-async def get_ui_config(request: Request):
+async def get_ui_config(request: Request) -> UiDiscoveryEndpoints:
     from litellm.proxy.auth.auth_utils import has_user_setup_sso
     from litellm.proxy.proxy_server import general_settings
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
