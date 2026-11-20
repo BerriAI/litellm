@@ -33,6 +33,7 @@ import { cn } from "@/lib/cva.config";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
+import { GatewayLensNavigationProvider } from "@/components/lens/GatewayLensNavigation";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -181,31 +182,33 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         style={sidebarWidthStyle}
         className={cn("h-screen overflow-hidden bg-background max-md:h-dvh", sidebarProviderClassName)}
       >
-        <CloseMobileSidebarOnNavigation navigationKey={navigationKey} />
-        <AppSidebar />
-        <CommandPaletteProvider>
-          <SidebarInset className="min-w-0 overflow-hidden">
-            <DashboardHeader
-              accessToken={accessToken}
-              navigationTrigger={<SidebarTrigger className="size-11 md:hidden" />}
-              deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
-              deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
-            />
-            <DeploymentHealthBanner handle={deploymentHealthHandle} />
-            <DeploymentHealthPanel handle={deploymentHealthHandle} />
-            <UserBanner accessToken={accessToken} />
-            <div
-              className={
-                routeSegment === "aria"
-                  ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-                  : "min-h-0 min-w-0 flex-1 overflow-y-auto"
-              }
-            >
-              <TelemetryEnvBanner />
-              {children}
-            </div>
-          </SidebarInset>
-        </CommandPaletteProvider>
+        <GatewayLensNavigationProvider>
+          <CloseMobileSidebarOnNavigation navigationKey={navigationKey} />
+          <AppSidebar />
+          <CommandPaletteProvider>
+            <SidebarInset className="min-w-0 overflow-hidden">
+              <DashboardHeader
+                accessToken={accessToken}
+                navigationTrigger={<SidebarTrigger className="size-11 md:hidden" />}
+                deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+                deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
+              />
+              <DeploymentHealthBanner handle={deploymentHealthHandle} />
+              <DeploymentHealthPanel handle={deploymentHealthHandle} />
+              <UserBanner accessToken={accessToken} />
+              <div
+                className={
+                  routeSegment === "aria"
+                    ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+                    : "min-h-0 min-w-0 flex-1 overflow-y-auto"
+                }
+              >
+                <TelemetryEnvBanner />
+                {children}
+              </div>
+            </SidebarInset>
+          </CommandPaletteProvider>
+        </GatewayLensNavigationProvider>
       </SidebarProvider>
     </LiteAdminFrame>
   );
