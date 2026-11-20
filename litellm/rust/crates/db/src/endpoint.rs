@@ -99,9 +99,13 @@ impl Endpoint {
                 .ssl_client_key_from_pem(identity.key_pem.expose()),
             None => pgsslkey_as_pkcs8(options),
         };
-        match &self.ssl_root_cert {
+        let options = match &self.ssl_root_cert {
             Some(cert) => options.ssl_root_cert(cert),
             None => options,
+        };
+        match self.ssl_mode {
+            SslMode::Prefer | SslMode::Require => unchecked_root_cert(options),
+            SslMode::Disable | SslMode::VerifyCa | SslMode::VerifyFull => options,
         }
     }
 
@@ -129,16 +133,21 @@ impl Endpoint {
     }
 }
 
-/// The `PGSSLKEY` file sqlx reads, handed to it as PKCS#8 PEM, the only key form native-tls loads. libpq and rustls
-/// also load PKCS#1 and SEC1 keys. A file OpenSSL cannot read is left for sqlx to read and report, and so is a key
-/// that needs a password: OpenSSL gets an empty one instead of asking for it on the terminal.
+/// The `PGSSLKEY` file sqlx reads, handed to it as PKCS#8 PEM when native-tls cannot load it as it is: native-tls
+/// only loads a file that starts with a PKCS#8 PEM block, while libpq and rustls also load PKCS#1 and SEC1 keys. The
+/// `PGSSLCERT` file is read at the same moment, so a converted key keeps its certificate when the files are replaced
+/// later. A key native-tls loads, a file OpenSSL cannot read, and a key that needs a password are left for sqlx to
+/// read on each connection: OpenSSL gets an empty password instead of asking for it on the terminal.
 #[cfg(feature = "native-tls")]
 fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
-    match std::env::var_os("PGSSLKEY")
-        .and_then(|path| std::fs::read(path).ok())
-        .and_then(|pem| pkcs8_pem(&pem))
-    {
-        Some(key) => options.ssl_client_key_from_pem(key),
+    let read = |name: &str| std::env::var_os(name).and_then(|path| std::fs::read(path).ok());
+    match read("PGSSLKEY").and_then(|pem| pkcs8_pem(&pem)) {
+        Some(key) => match read("PGSSLCERT") {
+            Some(cert) => options
+                .ssl_client_cert_from_pem(cert)
+                .ssl_client_key_from_pem(key),
+            None => options.ssl_client_key_from_pem(key),
+        },
         None => options,
     }
 }
@@ -150,9 +159,51 @@ fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
 
 #[cfg(feature = "native-tls")]
 fn pkcs8_pem(pem: &[u8]) -> Option<Vec<u8>> {
+    if pem.starts_with(b"-----BEGIN PRIVATE KEY-----") {
+        return None;
+    }
     openssl::pkey::PKey::private_key_from_pem_passphrase(pem, b"")
         .and_then(|key| key.private_key_to_pem_pkcs8())
         .ok()
+}
+
+/// sqlx's native-tls handshake loads the root certificate even in the modes that do not check the server's
+/// certificate, so a `PGSSLROOTCERT` file that is missing or not PEM fails every connection, where rustls never reads
+/// it. sqlx cannot drop the file it read from the environment, so in those modes it gets a throwaway self-signed
+/// certificate in its place, which nothing is checked against.
+#[cfg(feature = "native-tls")]
+fn unchecked_root_cert(options: PgConnectOptions) -> PgConnectOptions {
+    static CERTIFICATE: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+    match CERTIFICATE.get_or_init(|| self_signed_pem().ok()) {
+        Some(pem) => options.ssl_root_cert_from_pem(pem.clone()),
+        None => options,
+    }
+}
+
+#[cfg(not(feature = "native-tls"))]
+fn unchecked_root_cert(options: PgConnectOptions) -> PgConnectOptions {
+    options
+}
+
+#[cfg(feature = "native-tls")]
+fn self_signed_pem() -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    use openssl::{
+        asn1::Asn1Time,
+        ec::{EcGroup, EcKey},
+        hash::MessageDigest,
+        nid::Nid,
+        pkey::PKey,
+        x509::X509,
+    };
+
+    let p256 = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?;
+    let key = PKey::from_ec_key(EcKey::generate(&p256)?)?;
+    let mut certificate = X509::builder()?;
+    certificate.set_pubkey(&key)?;
+    certificate.set_not_before(&*Asn1Time::days_from_now(0)?)?;
+    certificate.set_not_after(&*Asn1Time::days_from_now(1)?)?;
+    certificate.sign(&key, MessageDigest::sha256())?;
+    certificate.build().to_pem()
 }
 
 fn seconds(value: Option<f64>) -> Result<Option<Duration>, Error> {
@@ -361,6 +412,46 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
+    #[case::prefer(SslMode::Prefer, false)]
+    #[case::require(SslMode::Require, false)]
+    #[case::verify_full(SslMode::VerifyFull, true)]
+    #[tokio::test]
+    async fn reads_the_root_cert_only_when_the_server_certificate_is_checked(
+        #[case] ssl_mode: SslMode,
+        #[case] checked: bool,
+    ) -> Result<(), Box<dyn StdError>> {
+        let server = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let port = server.local_addr()?.port();
+        let accepts_tls_then_hangs_up = std::thread::spawn(move || -> std::io::Result<()> {
+            let (mut socket, _) = server.accept()?;
+            std::io::Read::read_exact(&mut socket, &mut [0; 8])?;
+            std::io::Write::write_all(&mut socket, b"S")
+        });
+        let options = Endpoint {
+            host: "127.0.0.1".to_owned(),
+            port,
+            ssl_mode,
+            ssl_root_cert: Some(PathBuf::from("/nonexistent/root.crt")),
+            ..endpoint()
+        }
+        .connect_options();
+
+        let error = <sqlx::PgConnection as sqlx::Connection>::connect_with(&options)
+            .await
+            .expect_err("the server hangs up before the handshake");
+        accepts_tls_then_hangs_up
+            .join()
+            .map_err(|_| "the server thread panicked")??;
+
+        let root_cert_missing = matches!(
+            &error,
+            sqlx::Error::Io(io) if io.kind() == std::io::ErrorKind::NotFound
+        );
+        assert_eq!(root_cert_missing, checked, "{error}");
+        Ok(())
+    }
+
     #[cfg(feature = "native-tls")]
     mod native_tls_client_key {
         use std::error::Error as StdError;
@@ -407,6 +498,14 @@ mod tests {
                 PKey::private_key_from_pem(&pkcs8)?.public_key_to_der()?,
                 PKey::private_key_from_pem(&original)?.public_key_to_der()?
             );
+            Ok(())
+        }
+
+        #[rstest]
+        fn leaves_a_key_native_tls_loads_to_sqlx() -> Result<(), Box<dyn StdError>> {
+            let pkcs8 = PKey::from_rsa(Rsa::generate(2048)?)?.private_key_to_pem_pkcs8()?;
+
+            assert_eq!(pkcs8_pem(&pkcs8), None);
             Ok(())
         }
 
