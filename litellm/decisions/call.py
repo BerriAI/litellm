@@ -35,7 +35,11 @@ from litellm.llms.base_llm.decisions.transformation import (
     without_json_input,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
+from litellm.llms.openai.decisions.transformation import (
+    ir_to_openai_response,
+    openai_input_to_ir,
+    openai_request_to_ir,
+)
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsAsset,
@@ -77,6 +81,8 @@ DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequest
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
+_OPENAI_INPUT_ADAPTER: Final[TypeAdapter[OpenAIDecisionInput]] = TypeAdapter(OpenAIDecisionInput)
+_EXTRA_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(Mapping[str, str] | None)
 _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
 )
@@ -264,8 +270,27 @@ def request_carries_json_input(request_input: object) -> bool:
     return any(map(_is_json_input_part, chain.from_iterable(contents)))
 
 
-def deployment_refuses_json_input(model: str, custom_llm_provider: str, call_kwargs: Mapping[str, object]) -> bool:
-    return not _drops_params(call_kwargs) and not _provider_config(model, custom_llm_provider).supports_json_input
+def routed_decision_input(request_input: object) -> DecisionsIRState | DecisionsIRMessages | None:
+    try:
+        return openai_input_to_ir(_OPENAI_INPUT_ADAPTER.validate_python(request_input))
+    except ValidationError:
+        return None
+
+
+def deployment_refuses_json_input(
+    model: str,
+    custom_llm_provider: str,
+    call_kwargs: Mapping[str, object],
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+) -> bool:
+    if not has_json_input(decision_input):
+        return False
+    provider_config: Final = _provider_config(model, custom_llm_provider)
+    if not _drops_params(call_kwargs):
+        return not provider_config.supports_json_input
+    extra_headers: Final = _EXTRA_HEADERS_ADAPTER.validate_python(call_kwargs.get("extra_headers"))
+    headers: Final = _outbound_headers(extra_headers, custom_llm_provider, call_kwargs)
+    return _leaves_no_input(_supported_input(decision_input, provider_config, headers))
 
 
 def _request_safety_identifier(
@@ -352,20 +377,28 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
     return not isinstance(question, DecisionsIRBoxQuestion)
 
 
+def _supported_input(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+    provider_config: BaseDecisionsConfig,
+    headers: Mapping[str, str],
+) -> DecisionsIRState | DecisionsIRMessages:
+    supported_images: Final = (
+        decision_input
+        if provider_config.supports_images_in(decision_input, headers)
+        else with_images_where(decision_input, _no_image)
+    )
+    return supported_images if provider_config.supports_json_input else without_json_input(supported_images)
+
+
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
     headers: Mapping[str, str],
     supports_box_questions: bool,
 ) -> DecisionsIRRequest:
-    supported_images: Final = (
-        ir_request.input
-        if provider_config.supports_images_in(ir_request.input, headers)
-        else with_images_where(ir_request.input, _no_image)
-    )
     return replace(
         ir_request,
-        input=supported_images if provider_config.supports_json_input else without_json_input(supported_images),
+        input=_supported_input(ir_request.input, provider_config, headers),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(

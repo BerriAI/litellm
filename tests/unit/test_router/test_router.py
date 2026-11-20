@@ -203,6 +203,7 @@ _TYPESAFE_DECISIONS_RESPONSE: Final[Mapping[str, object]] = {
 }
 _TICKET_PART: Final = {"type": "input_text", "text": "Refund the duplicate charge."}
 _EVIDENCE_PART: Final = {"type": "input_json", "data": {"order_id": "A1", "charges": [49, 49]}}
+_RECEIPT_PART: Final = {"type": "input_image", "image_url": "https://example.com/receipt.png"}
 _DAMAGED_QUESTIONS: Final = [
     {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
 ]
@@ -287,6 +288,56 @@ async def test_decisions_keep_the_leg_refusing_json_input_when_nothing_needs_it(
 
     assert route.call_count == 1
     assert "input_json" not in route.calls.last.request.content.decode()
+
+
+@pytest.mark.parametrize(
+    ("router_arguments", "request_extra"),
+    [({"default_litellm_params": {"drop_params": True}}, {}), ({}, {"drop_params": True})],
+    ids=["router-default-drop-params", "request-drop-params"],
+)
+@pytest.mark.parametrize(
+    "content",
+    [[_EVIDENCE_PART], [_RECEIPT_PART, _EVIDENCE_PART]],
+    ids=["only-json", "dropped-image-and-json"],
+)
+@pytest.mark.asyncio
+async def test_decisions_with_only_json_input_skip_the_leg_that_would_drop_it_all(
+    content: list[object],
+    router_arguments: dict[str, object],
+    request_extra: dict[str, object],
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+) -> None:
+    router: Final = _json_decisions_router(**router_arguments)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(5):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": content}],
+            questions=_DAMAGED_QUESTIONS,
+            **request_extra,
+        )
+
+    assert route.call_count == 5
+
+
+@pytest.mark.asyncio
+async def test_decisions_with_json_input_on_a_group_where_every_leg_refuses_it_name_input_json() -> None:
+    router: Final = Router(
+        model_list=[
+            _decisions_leg("typesafe-a", {"model": "typesafe/jev-1.13", "api_key": "k"}),
+            _decisions_leg("typesafe-b", {"model": "typesafe/jev-1.13", "api_key": "k"}),
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="input_json"):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": [_TICKET_PART, _EVIDENCE_PART]}],
+            questions=_DAMAGED_QUESTIONS,
+        )
 
 
 @pytest.mark.asyncio

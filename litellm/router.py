@@ -310,6 +310,7 @@ from litellm.router_utils.routing_groups import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.types.decisions import DecisionsIRMessages, DecisionsIRState
 from litellm.types.litellm_params import ControlOptions, RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -13551,7 +13552,10 @@ class Router:
 
     @staticmethod
     def _deployment_refuses_json_input(
-        deployment: DeploymentTypedDict, group: str, sent_kwargs: Mapping[str, object]
+        deployment: DeploymentTypedDict,
+        group: str,
+        sent_kwargs: Mapping[str, object],
+        decision_input: DecisionsIRState | DecisionsIRMessages,
     ) -> bool:
         from litellm.decisions.call import deployment_refuses_json_input
 
@@ -13560,7 +13564,7 @@ class Router:
         try:
             model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
             return deployment_refuses_json_input(
-                model, custom_llm_provider, {**deployment["litellm_params"], **sent_kwargs}
+                model, custom_llm_provider, {**deployment["litellm_params"], **sent_kwargs}, decision_input
             )
         except Exception as e:  # noqa: BLE001  # best-effort filter: a deployment it cannot resolve answers for itself
             verbose_router_logger.debug(
@@ -13573,12 +13577,15 @@ class Router:
     def _without_deployments_refusing_json_input(
         self, healthy_deployments: _RouteDeploymentsT, group: str, request_kwargs: object
     ) -> _RouteDeploymentsT:
-        from litellm.decisions.call import request_carries_json_input
+        from litellm.decisions.call import request_carries_json_input, routed_decision_input
 
         if _routed_call_type.get() not in _DECISIONS_CALL_TYPES or isinstance(healthy_deployments, Mapping):
             return healthy_deployments
         sent_request: Final = _LITELLM_PARAMS_ADAPTER.validate_python(request_kwargs)
         if not request_carries_json_input(sent_request.get("input")):
+            return healthy_deployments
+        decision_input: Final = routed_decision_input(sent_request.get("input"))
+        if decision_input is None:
             return healthy_deployments
         defaults: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
             self.default_litellm_params  # pyright: ignore[reportUnknownMemberType]  # untyped dict set in __init__
@@ -13592,6 +13599,7 @@ class Router:
                 cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
                 group,
                 sent_kwargs,
+                decision_input,
             )
         ]
         if not accepting:
