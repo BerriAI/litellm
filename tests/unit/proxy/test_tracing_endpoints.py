@@ -1138,6 +1138,76 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
 
 
 @pytest.mark.asyncio
+async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call_as_a_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy import proxy_server
+
+    _FakeLens.uploads.clear()
+    server: Final = HTTPServer(("127.0.0.1", 0), _FakeLens)
+    Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("LITELLM_LENS_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+
+    try:
+        async with manage_tracing(True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage))):
+            await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "user", "content": "list the files"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-ls",
+                                "type": "function",
+                                "function": {"name": "Bash", "arguments": '{"command": "ls"}'},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "call-ls", "content": "a.txt"},
+                ],
+                mock_response="one file",
+                litellm_session_id="session-1",
+                metadata={"user_agent": "claude-cli/2.1.329 (external, sdk-cli)"},
+            )
+            await asyncio.sleep(0.2)
+    finally:
+        server.shutdown()
+
+    resources: Final = tuple(
+        resource
+        for path, _, body in _FakeLens.uploads
+        if path == "/internal/traces" and body
+        for resource in ExportTraceServiceRequest.FromString(body).resource_spans
+    )
+    spans: Final = {span.name: span for resource in resources for scope in resource.scope_spans for span in scope.spans}
+    assert sorted(spans) == ["chat gpt-4o-mini", "execute_tool Bash"]
+    assert {
+        attribute.key: attribute.value.string_value
+        for resource in resources
+        for attribute in resource.resource.attributes
+        if attribute.key.startswith("lens.")
+    } == {"lens.session.capture": "true", "lens.session.attribute": "gen_ai.conversation.id"}
+    model_call: Final = {item.key: item.value.string_value for item in spans["chat gpt-4o-mini"].attributes}
+    assert (model_call["gen_ai.conversation.id"], model_call["gen_ai.agent.name"]) == ("session-1", "claude-code")
+    tool_step: Final = spans["execute_tool Bash"]
+    assert {item.key: item.value.string_value for item in tool_step.attributes} == {
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": "Bash",
+        "gen_ai.tool.call.id": "call-ls",
+        "gen_ai.tool.call.arguments": '{"command": "ls"}',
+        "gen_ai.tool.call.result": "a.txt",
+        "gen_ai.conversation.id": "session-1",
+        "gen_ai.agent.name": "claude-code",
+    }
+    assert tool_step.start_time_unix_nano == tool_step.end_time_unix_nano
+
+
+@pytest.mark.asyncio
 async def test_lens_without_a_gateway_trace_route_still_gets_cost_but_no_trace_exports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
