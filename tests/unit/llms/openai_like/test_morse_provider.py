@@ -148,3 +148,19 @@ def test_morse_chat_completion_request():
     assert body["max_completion_tokens"] == 64
     assert response.choices[0].message.content == "Hello from Morse"
     assert response.choices[0].message.reasoning_content == "Say hi"
+
+
+def test_morse_without_a_key_never_sends_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("MORSE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", "openai-test-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="MORSE_API_KEY"):
+            litellm.completion(
+                model="morse/z-ai/glm-5.3-flash",
+                messages=[{"role": "user", "content": "Say hello"}],
+            )
+
+    assert route.call_count == 0
