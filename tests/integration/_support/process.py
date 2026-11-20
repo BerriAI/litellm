@@ -1,18 +1,18 @@
 import json
-import threading
 import os
 import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
-from enum import Enum
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from ipaddress import IPv4Address
 from itertools import accumulate
 from pathlib import Path
@@ -805,7 +805,11 @@ def _proxy_environment(
         {
             **{name: value for name, value in inherited.items() if name not in removed},
             "LITELLM_MASTER_KEY": gateway.key,
-            "LITELLM_SALT_KEY": source.get("LITELLM_SALT_KEY", "sk-integration-salt"),
+            **(
+                {}
+                if "LITELLM_SALT_KEY" in removed
+                else {"LITELLM_SALT_KEY": source.get("LITELLM_SALT_KEY", "sk-integration-salt")}
+            ),
             "STORE_MODEL_IN_DB": "True",
             "PYTHON_DOTENV_DISABLED": "1",
             **overrides,

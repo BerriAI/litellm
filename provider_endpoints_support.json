@@ -3978,7 +3978,7 @@
         "image_generations": true,
         "image_edits": false,
         "audio_transcriptions": true,
-        "audio_speech": false,
+        "audio_speech": true,
         "rerank": true,
         "ocr": false,
         "search": false,

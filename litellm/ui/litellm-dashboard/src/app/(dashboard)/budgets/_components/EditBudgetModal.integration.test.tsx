@@ -56,8 +56,8 @@ describe("EditBudgetModal", () => {
     const custom = { budget_duration: "48h", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
     const existing = { ...EXISTING_BUDGET, max_budget: null, budget_duration: null, budget_limits: [custom] };
     renderModal(existing);
-    expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(3);
-    fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "4" } });
+    expect(screen.getByLabelText(/^Max Budget/)).toHaveValue(3);
+    fireEvent.change(screen.getByLabelText(/^Max Budget/), { target: { value: "4" } });
     await save(user);
     await waitFor(() => expect(network.write).toHaveBeenCalledTimes(1));
     expect(network.write.mock.calls[0][0]).toEqual({
@@ -69,7 +69,7 @@ describe("EditBudgetModal", () => {
   it("prefills every field from the existing budget", () => {
     renderModal();
 
-    expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(12.345);
+    expect(screen.getByLabelText(/^Max Budget/)).toHaveValue(12.345);
     expect(resetPeriod()).toHaveTextContent("per week");
     expect(screen.getByLabelText("Tokens per minute")).toHaveValue(1000);
     expect(screen.getByLabelText("Requests per minute")).toHaveValue(10);
@@ -104,7 +104,7 @@ describe("EditBudgetModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "42.567" } });
+    fireEvent.change(screen.getByLabelText(/^Max Budget/), { target: { value: "42.567" } });
     await chooseSelectOption(user, resetPeriod(), "per month");
     await save(user);
 
@@ -147,9 +147,9 @@ describe("EditBudgetModal", () => {
         budget_limits: [limit],
       };
       renderModal(row);
-      expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(amount);
+      expect(screen.getByLabelText(/^Max Budget/)).toHaveValue(amount);
       expect(resetPeriod()).toHaveTextContent(label);
-      fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "75" } });
+      fireEvent.change(screen.getByLabelText(/^Max Budget/), { target: { value: "75" } });
       await save(user);
       await waitFor(() => expect(network.write).toHaveBeenCalledTimes(1));
       expect(network.write.mock.calls[0][0]).toEqual({
@@ -168,13 +168,13 @@ describe("EditBudgetModal", () => {
     const row = { ...EXISTING_BUDGET, max_budget: 25, budget_duration: "24h", budget_limits: [limit] };
     renderModal(row);
 
-    expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(100);
+    expect(screen.getByLabelText(/^Max Budget/)).toHaveValue(100);
     expect(resetPeriod()).toHaveTextContent(label);
-    expect(screen.getByLabelText(/^Additional spend limit/)).toHaveValue(25);
+    expect(screen.getByLabelText(/^Additional Max Budget/)).toHaveValue(25);
     expect(screen.getByRole("combobox", { name: "Additional reset period" })).toHaveTextContent("per day");
 
-    fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "75" } });
-    fireEvent.change(screen.getByLabelText(/^Additional spend limit/), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText(/^Max Budget/), { target: { value: "75" } });
+    fireEvent.change(screen.getByLabelText(/^Additional Max Budget/), { target: { value: "0" } });
     await save(user);
     await waitFor(() => expect(network.write).toHaveBeenCalledTimes(1));
     expect(network.write.mock.calls[0][0]).toEqual({
@@ -198,11 +198,11 @@ describe("EditBudgetModal", () => {
     renderModal(row);
     expect(screen.getByLabelText(/^Monthly limit/)).toHaveValue(50);
     expect(screen.getByLabelText("Annual limit (USD)")).toHaveValue(500);
-    expect(screen.getByLabelText(/^Additional spend limit/)).toHaveValue(0);
+    expect(screen.getByLabelText(/^Additional Max Budget/)).toHaveValue(0);
     const scalarPeriod = screen.getByRole("combobox", { name: "Additional reset period" });
     expect(scalarPeriod).toHaveTextContent("hourly");
 
-    fireEvent.change(screen.getByLabelText(/^Additional spend limit/), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText(/^Additional Max Budget/), { target: { value: "" } });
     await chooseSelectOption(user, scalarPeriod, "in total");
     await save(user);
     await waitFor(() => expect(network.write).toHaveBeenCalledTimes(1));
@@ -260,8 +260,8 @@ describe("EditBudgetModal", () => {
     };
     renderModal(row);
     await chooseSelectOption(user, resetPeriod(), "per year");
-    expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(100);
-    fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "0" } });
+    expect(screen.getByLabelText(/^Max Budget/)).toHaveValue(100);
+    fireEvent.change(screen.getByLabelText(/^Max Budget/), { target: { value: "0" } });
     await save(user);
     await waitFor(() => expect(network.write).toHaveBeenCalledTimes(1));
     const expected = {
@@ -286,7 +286,7 @@ describe("EditBudgetModal", () => {
     };
     renderModal(row);
     await chooseSelectOption(user, resetPeriod(), "per month");
-    expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(10);
+    expect(screen.getByLabelText(/^Max Budget/)).toHaveValue(10);
     await save(user);
     await waitFor(() => expect(network.write).toHaveBeenCalledTimes(1));
     const expected = {

@@ -645,7 +645,10 @@ async def test_update_project_succeeds_when_cache_eviction_fails(monkeypatch):
     )
 
     assert response is updated_row
-    failing_cache.async_delete_cache.assert_awaited_once()
+    assert failing_cache.async_delete_cache.await_args_list == [
+        mock.call(key=f"project_id:{project_id}"),
+        mock.call(key=f'customer_app:["project", "{project_id}"]'),
+    ]
 
 
 @pytest.mark.asyncio
@@ -669,7 +672,10 @@ async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch)
             project_id=project_id, user_api_key_cache=UserApiKeyCache()
         )
 
-    mock_publish.assert_awaited_once_with(cache_key=f"project_id:{project_id}")
+    assert mock_publish.await_args_list == [
+        mock.call(cache_key=f"project_id:{project_id}"),
+        mock.call(cache_key=f'customer_app:["project", "{project_id}"]'),
+    ]
 
 
 def test_enforce_project_model_quota_missing_both_raises():
