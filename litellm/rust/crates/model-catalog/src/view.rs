@@ -5,11 +5,13 @@
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
+use litellm_cost::candidates::{CandidateTable, Lookup, NameForms, Registration, RowRef};
 use litellm_cost::price::Adjustments;
 use serde_json::Value;
 
 use crate::fallback::CapabilityRules;
 use crate::lower::{BilledPrices, billed_prices};
+use crate::resolve::{Candidates, Found, lookup};
 use crate::wire::{EntryWire, Fields};
 
 /// The fields that price a call without being a `*cost_per*token*` field, from main's `_NON_TOKEN_RATE_FIELDS`
@@ -49,21 +51,6 @@ pub struct KnownNames {
 pub struct PricingContext {
     pub rules: CapabilityRules,
     pub names: KnownNames,
-}
-
-/// Where a row came from. A `Registered` row is a deployment's row as the router registered it under its id
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum RowProvenance {
-    Catalog,
-    Registered,
-}
-
-/// A row to price: its key in the table, the provider it is billed as, and where it came from
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct RowRef {
-    pub key: String,
-    pub provider: String,
-    pub provenance: RowProvenance,
 }
 
 /// One row read and lowered the way main bills it, with `litellm_provider` replaced by the billed provider
@@ -126,20 +113,75 @@ impl<'a, V: CatalogView + ?Sized> CostLookup<'a, V> {
             row_ref: row_ref.clone(),
         })
     }
+}
 
-    /// The row the router registered under deployment id `id`, exactly as stored, billed as `provider`
-    pub fn deployment_row(&self, id: &str, provider: &str) -> Option<RowRef> {
-        self.table.contains(id).then(|| RowRef {
-            key: id.to_owned(),
-            provider: provider.to_owned(),
-            provenance: RowProvenance::Registered,
-        })
+/// The catalog's answers to litellm-cost's candidate walk. Only row facts cross: which key a name finds, whether a row
+/// declares a rate and what `register_model` wrote. Which rows to try, and in which order, is litellm-cost's
+impl<V: CatalogView + ?Sized> CandidateTable for CostLookup<'_, V> {
+    fn contains(&self, key: &str) -> bool {
+        self.table.contains(key)
+    }
+
+    fn lookup(&self, model: &str, provider: &str) -> Lookup {
+        match lookup(self.table, &self.context.rules, model, provider) {
+            Found::Row(key) => Lookup::Row(key),
+            Found::Rule(rule) => Lookup::Rule {
+                prices_anything: prices_anything(&rule),
+            },
+            Found::Missing => Lookup::Missing,
+        }
+    }
+
+    fn prices_anything(&self, key: &str) -> bool {
+        self.table
+            .fields(key)
+            .is_some_and(|row| prices_anything(&row))
+    }
+
+    fn registration(&self, key: &str) -> Registration {
+        let registered = self.table.registered_fields(key);
+        let Some(row) = self.table.fields(key).filter(|_| !registered.is_empty()) else {
+            return Registration::Unpriced;
+        };
+        let written: Fields = row
+            .iter()
+            .filter(|(field, value)| registered.contains(*field) && !value.is_null())
+            .map(|(field, value)| (field.clone(), value.clone()))
+            .collect();
+        match (
+            prices_anything(&written),
+            written
+                .keys()
+                .any(|field| field.starts_with("cache_") && field.contains("cost")),
+        ) {
+            (true, _) => Registration::Priced,
+            (false, true) => Registration::CacheRatesOnly,
+            (false, false) => Registration::Unpriced,
+        }
+    }
+
+    fn name_forms(&self, model: &str, provider: &str) -> NameForms {
+        let candidates = Candidates::potential(model, provider);
+        NameForms {
+            combined_model_name: candidates.combined_model_name,
+            split_model: candidates.split_model,
+            stripped_model_name: candidates.stripped_model_name,
+        }
+    }
+
+    fn is_provider(&self, name: &str) -> bool {
+        self.context.names.providers.contains(name)
+    }
+
+    fn is_renamed_model(&self, name: &str) -> bool {
+        self.context.names.renamed_models.contains(name)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use litellm_cost::call::InferenceGeo;
+    use litellm_cost::candidates::{RowProvenance, deployment_row};
     use litellm_cost::money::Multiplier;
     use litellm_cost::price::Uplift;
     use rstest::rstest;
@@ -197,7 +239,7 @@ mod tests {
         let table = table(&[("dep-1", json!({"input_cost_per_token": 1e-6}))]);
         let context = context(names(&[]));
 
-        let found = CostLookup::new(&table, &context).deployment_row(id, "anthropic");
+        let found = deployment_row(&CostLookup::new(&table, &context), id, "anthropic");
 
         assert_eq!(found.as_ref().map(|row| row.provenance), expected);
         assert_eq!(found.map(|row| row.key), expected.map(|_| id.to_owned()));

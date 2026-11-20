@@ -58,14 +58,15 @@ Catalog errors use one opaque `Error` with typed causes and JSON Pointer accesso
 
 `model_info.rs` holds types only. The functions over it land with its first caller
 
-`resolve/` turns a call into the rows main tries, in main's order. Each file is a port of named Python functions and says which
+`resolve/` holds the catalog's general lookups. Each file is a port of named Python functions and says which. Which rows a call bills, and in which order, is completion_cost's rule and lives in litellm-cost's `candidates`, never here
 
 - `names.rs` builds the seven names `get_model_info` tries for a known provider (`Candidates::potential`)
-- `bedrock.rs` reads Bedrock model id spellings. `litellm-llms` re-exports it, so the routes and the lookups share one copy
-- `cost.rs` is `CostLookup::candidates`, the `/v1/messages` Claude providers only (`CostProvider`). Any call main would price by another path is `AfterRows::Deferred` with its `Deferral`, so Python keeps pricing it. Rows before a deferral are still tried first, because main tries them first
+- `mod.rs` has `lookup`, the `get_model_info` walk over a `CatalogView`: the first name whose row's provider matches, else a capability rule when no name is a key
+- `bedrock.rs` reads Bedrock model id spellings (region paths, ARNs, base model). The routing prefix and cross-region profile spellings the billing walk needs live in `litellm_cost::candidates::bedrock`, and this file re-exports them. `litellm-llms` re-exports it, so the routes and the lookups share one copy
+- `candidate_walk.rs` tests litellm-cost's walk over this catalog against `cost_candidates.json`. The walk cannot see a catalog from litellm-cost, so its parity tests run here
 - `cost_candidates.json` is main's answer for each test case, captured once from `completion_cost` with `NativePrices` spied. Recapture it when main's selection changes on purpose, never to make a Rust change pass
 
-`view.rs` is everything resolving and pricing read from a host. `CostLookup` is the table and the context of one call, and `resolve/` is methods on it
+`view.rs` is everything resolving and pricing read from a host. `CostLookup` is the table and the context of one call, and it implements litellm-cost's `CandidateTable` with row facts only (which key a name finds, whether a row declares a rate, what `register_model` wrote)
 
 - `CatalogView` is the whole table interface: exact key, folded key, a row's fields, its `registered_fields`, and `lowered`, whose default lowers the row each time it is asked. A host that keeps lowerings overrides it
 - `PricingContext` is the immutable rest: the capability rules and `KnownNames`, the two lists only Python has, every provider name and the model names `get_model_info` renames

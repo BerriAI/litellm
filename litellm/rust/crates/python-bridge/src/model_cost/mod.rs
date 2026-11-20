@@ -551,14 +551,14 @@ def write(key, row):
 
     /// The input rate of the first row a call to `claude-opus-5-5` on Anthropic tries, read in one call's view
     fn priced_input_rate(snapshot: &CostSnapshot) -> Option<f64> {
-        let call = litellm_model_catalog::CallIdentity {
+        let call = litellm_cost::candidates::CallIdentity {
             provider: "anthropic".to_owned(),
             request_model: Some("claude-opus-5-5".to_owned()),
             response_model: Some("claude-opus-5-5".to_owned()),
             ..Default::default()
         };
         snapshot.lookup(|lookup| {
-            let candidates = lookup.candidates(&call);
+            let candidates = litellm_cost::candidates::candidates(lookup, &call);
             let row = lookup.row(candidates.rows.first()?)?;
             row.lowered.fields["input_cost_per_token"].as_f64()
         })

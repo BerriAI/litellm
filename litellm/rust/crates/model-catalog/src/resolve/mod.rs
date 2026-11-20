@@ -1,5 +1,6 @@
 mod bedrock;
-mod cost;
+#[cfg(test)]
+mod candidate_walk;
 mod image;
 mod names;
 
@@ -7,11 +8,12 @@ pub use bedrock::{
     bedrock_base_model, bedrock_model_name_from_arn, is_bedrock_cross_region_profile_of,
     split_bedrock_region_path, strip_bedrock_routing_prefix,
 };
-pub use cost::*;
 pub use image::*;
 
 use serde_json::Value;
 
+use crate::fallback::CapabilityRules;
+use crate::view::CatalogView;
 use crate::{Catalog, wire::Fields};
 
 const BACKFILL_MODES: [&str; 2] = ["chat", "responses"];
@@ -95,6 +97,57 @@ impl Catalog {
         };
         missing.into_iter().chain(fields.clone()).collect()
     }
+}
+
+/// What `get_model_info(model, provider)` finds in a table
+#[derive(Clone, Debug, PartialEq)]
+pub enum Found {
+    /// The first of the seven names whose row's provider matches, as its key
+    Row(String),
+    /// None of the names is a key, and a capability rule matches with these fields
+    Rule(Fields),
+    Missing,
+}
+
+/// Port of the `get_model_info` walk for a known provider: the first of the seven names whose row's provider matches,
+/// else a capability rule when none of the names is a key
+pub fn lookup<V: CatalogView + ?Sized>(
+    table: &V,
+    rules: &CapabilityRules,
+    model: &str,
+    provider: &str,
+) -> Found {
+    let candidates = Candidates::potential(model, provider);
+    let registered = candidates.in_lookup_order().find_map(|name| {
+        let key = table.find_key(name)?;
+        let row = table.fields(&key)?;
+        provider_matches(
+            row.get("litellm_provider").and_then(Value::as_str),
+            provider,
+        )
+        .then_some(key)
+    });
+    if let Some(key) = registered {
+        return Found::Row(key);
+    }
+    generalization(table, rules, &candidates).map_or(Found::Missing, Found::Rule)
+}
+
+/// Port of `_get_model_info_from_generalization`: rules lose to any name that is a key, whatever its provider
+fn generalization<V: CatalogView + ?Sized>(
+    table: &V,
+    rules: &CapabilityRules,
+    candidates: &Candidates,
+) -> Option<Fields> {
+    if candidates
+        .in_lookup_order()
+        .any(|name| table.find_key(name).is_some())
+    {
+        return None;
+    }
+    candidates
+        .in_lookup_order()
+        .find_map(|name| rules.matching(name))
 }
 
 /// Port of main's `_check_provider_match`: a row without a `litellm_provider` matches every provider
