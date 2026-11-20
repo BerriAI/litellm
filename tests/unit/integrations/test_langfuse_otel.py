@@ -1405,14 +1405,28 @@ class TestDerivedTraceFields:
 
         assert "langfuse.observation.output" not in attributes
 
-    def test_opted_out_logger_does_not_export_transcription_text(self) -> None:
+    def test_transcription_text_from_a_plain_mapping_is_observation_output(self) -> None:
+        attributes: Final = _emitted(
+            {"call_type": "atranscription", "litellm_params": {"metadata": {}}},
+            {"text": "hello world"},
+        )
+
+        assert json.loads(str(attributes["langfuse.observation.output"])) == {
+            "role": "assistant",
+            "content": "hello world",
+        }
+
+    def test_opted_out_logger_exports_only_the_redaction_marker_for_a_transcription(self) -> None:
         response: Final = TranscriptionResponse(text="hello world")
         redacted: Final = redacted_response_obj_for_custom_logger(response, CustomLogger(message_logging=False))
 
         attributes: Final = _emitted({"call_type": "transcription", "litellm_params": {"metadata": {}}}, redacted)
 
         assert "hello world" not in json.dumps({key: str(value) for key, value in attributes.items()})
-        assert "langfuse.observation.output" not in attributes
+        assert json.loads(str(attributes["langfuse.observation.output"])) == {
+            "role": "assistant",
+            "content": REDACTED_BY_LITELLM,
+        }
 
     def test_tags_merge_caller_request_and_default_tags_in_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_hit", "user_api_key_alias"])

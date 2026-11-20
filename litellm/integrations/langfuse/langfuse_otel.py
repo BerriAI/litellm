@@ -34,7 +34,7 @@ from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
-from litellm.types.utils import StandardCallbackDynamicParams, TranscriptionResponse
+from litellm.types.utils import StandardCallbackDynamicParams
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -674,9 +674,12 @@ def _tool_call_arguments(arguments: object) -> object:
 
 
 def _extract_transcription_output(response_obj: _Gettable) -> str | None:
-    if not isinstance(response_obj, TranscriptionResponse) or not response_obj.text:
+    # Duck-typed like the sibling extractors: a callback that opted out of message logging gets the
+    # transcription as a plain {"text": REDACTED_BY_LITELLM} mapping, which then shows as the marker.
+    text: Final = response_obj.get("text")
+    if not isinstance(text, str) or not text:
         return None
-    return safe_dumps({"role": "assistant", "content": response_obj.text})
+    return safe_dumps({"role": "assistant", "content": text})
 
 
 def _extract_output_items(response_obj: _Gettable) -> str | None:
