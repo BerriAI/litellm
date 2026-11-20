@@ -63,6 +63,10 @@ pub enum Error {
         "invalid OCR outputContentFormat, expected text or markdown. To drop unsupported params, set `litellm.drop_params = True`."
     )]
     OutputContentFormat,
+    #[error(
+        "unsupported OCR param {param}: {reason}. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    UnsupportedParam { param: String, reason: &'static str },
     #[error("OCR model cannot be a dot segment")]
     DotModel,
     #[error("OCR response exceeds the size limit of {limit} bytes")]
@@ -126,6 +130,8 @@ pub enum Error {
 pub enum PagesFault {
     #[error("page index is out of range")]
     OutOfRange,
+    #[error("page numbers start at 1")]
+    BelowFirstPage,
     #[error("negative page index")]
     Negative,
     #[error("expected only integers or only strings")]
@@ -205,6 +211,7 @@ impl Error {
             | Self::Pages(_)
             | Self::Features
             | Self::OutputContentFormat
+            | Self::UnsupportedParam { .. }
             | Self::DotModel
             | Self::TooLarge { .. }
             | Self::ResponseField { .. }
@@ -248,6 +255,7 @@ impl Error {
             | Self::Pages(_)
             | Self::Features
             | Self::OutputContentFormat
+            | Self::UnsupportedParam { .. }
             | Self::DotModel
             | Self::TooLarge { .. }
             | Self::ResponseField { .. }
@@ -298,6 +306,7 @@ impl Error {
             | Self::Pages(_)
             | Self::Features
             | Self::OutputContentFormat
+            | Self::UnsupportedParam { .. }
             | Self::DotModel
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
@@ -353,6 +362,7 @@ impl Error {
             | Self::Pages(_)
             | Self::Features
             | Self::OutputContentFormat
+            | Self::UnsupportedParam { .. }
             | Self::DotModel
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }

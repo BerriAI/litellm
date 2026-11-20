@@ -9702,6 +9702,30 @@ export interface paths {
         patch: operations["configure_app_budget_groups_management_v1_app_budget_groups_patch"];
         trace?: never;
     };
+    "/management/v1/app_customer_member_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get App Customer Member Budget Groups
+         * @description List reusable app × customer member budget groups and their revision. Independent of overall app, organization, and app × organization groups. Proxy admins only.
+         */
+        get: operations["get_app_customer_member_budget_groups_management_v1_app_customer_member_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure App Customer Member Budget Groups
+         * @description Save the complete app × customer member budget group list with its expected_revision. default_budget_template must be null. Assign per-app defaults through default_customer_member_budget_id. Existing groups retain omitted settings and reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_app_customer_member_budget_groups_management_v1_app_customer_member_budget_groups_patch"];
+        trace?: never;
+    };
     "/management/v1/app_customer_organization_budget_groups": {
         parameters: {
             query?: never;
@@ -28475,6 +28499,11 @@ export interface components {
              */
             customer_margin?: number | null;
             default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Default Customer Member Budget Id
+             * @description Linked app × customer member budget group used as this app's per-member default. Omit to preserve it, or send null to remove it. Send default_customer_member_budget instead for custom limits.
+             */
+            default_customer_member_budget_id?: string | null;
             /** Default Tier Budget Id */
             default_tier_budget_id?: string | null;
             /** Resource Id */
@@ -28539,6 +28568,11 @@ export interface components {
         AppMemberPut: {
             /** @description Permanent budget for this app and customer member. Copies inherited policy on first edit. Explicit null fields clear limits. Null budget returns to inheritance. Independent of temporary increases. */
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked app × customer member budget group. Omit to preserve it, or send null to inherit defaults. Send budget instead to fork the preset into private custom limits. Temporary increases remain independent.
+             */
+            budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
@@ -28585,6 +28619,11 @@ export interface components {
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
             customer_member_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Customer Member Budget Id
+             * @description Linked app × customer member budget group for members of this customer in this app. Omit to preserve it, or send null to inherit the app default. Send customer_member_budget for custom limits.
+             */
+            customer_member_budget_id?: string | null;
             /** Tier Budget Id */
             tier_budget_id?: string | null;
         };
@@ -28607,6 +28646,11 @@ export interface components {
              */
             customer_margin?: number | null;
             default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Default Customer Member Budget Id
+             * @description Linked app × customer member budget group used as this app's per-member default. Omit to preserve it, or send null to remove it. Send default_customer_member_budget instead for custom limits.
+             */
+            default_customer_member_budget_id?: string | null;
             /** Default Tier Budget Id */
             default_tier_budget_id?: string | null;
         };
@@ -34285,6 +34329,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Soft Budget Duration */
+            soft_budget_duration?: string | null;
             /**
              * Spend
              * @default 0
@@ -70342,6 +70388,59 @@ export interface operations {
         };
     };
     configure_app_budget_groups_management_v1_app_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_customer_member_budget_groups_management_v1_app_customer_member_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_app_customer_member_budget_groups_management_v1_app_customer_member_budget_groups_patch: {
         parameters: {
             query?: never;
             header?: never;

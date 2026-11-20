@@ -350,6 +350,8 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
         ("PATCH", "/app_customer_organization_budget_groups", {}),
         ("GET", "/app_budget_groups", None),
         ("PATCH", "/app_budget_groups", {}),
+        ("GET", "/app_customer_member_budget_groups", None),
+        ("PATCH", "/app_customer_member_budget_groups", {}),
         ("GET", "/customer_organizations/id", None),
         ("PATCH", "/customer_organizations/id", {}),
         ("DELETE", "/customer_organizations/id", None),
@@ -2433,7 +2435,9 @@ def test_explicit_organization_budget_selection_overrides_the_default(selection:
         assert created.json()["budget_is_shared"] is False
 
 
-@pytest.mark.parametrize("catalog", ("app_budget_groups", "app_customer_organization_budget_groups"))
+@pytest.mark.parametrize(
+    "catalog", ("app_budget_groups", "app_customer_organization_budget_groups", "app_customer_member_budget_groups")
+)
 def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions(catalog: str) -> None:
     http: Final = client()
     organization: Final = organization_groups(http, {"name": "Standard", "tpm_limit": 1000})

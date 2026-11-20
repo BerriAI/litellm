@@ -3924,7 +3924,7 @@ async def customer_accounting_counters(
     now: Final = utc_datetime(started_at) if started_at is not None else datetime.now(timezone.utc)
     return tuple(
         chain.from_iterable(
-            customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in scopes
+            customer_window_counters(scope.key, scope.entity_id, scope.accounting_limits(), now=now) for scope in scopes
         )
     )
 
@@ -3958,6 +3958,7 @@ async def accounting_window_keys(
             "entity_id": counter.entity_id,
             "window_duration": counter.window_duration,
             "window_start": counter.window_start.isoformat(),
+            **({"reset_at": counter.reset_at.isoformat()} if counter.reset_at is not None else {}),
         }
         for counter in customer_counters
         if counter.window_start is not None
@@ -4581,6 +4582,7 @@ async def _enqueue_window_spend_row_update(
                 window_start=window_start,
                 spend=increment,
                 started_at=request_started_at,
+                reset_at=reset_at,
             )
         )
     except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback

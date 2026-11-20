@@ -7,6 +7,7 @@ from math import isclose
 from typing import Final
 
 import httpx
+import psycopg
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
@@ -167,12 +168,12 @@ def _budget(gateway: Gateway, app_id: str, customer: Customer, maximum: float) -
     assert response.status_code == 200, response.text
 
 
-def _profile(gateway: Gateway) -> str:
-    current: Final = BudgetGroups.model_validate_json(gateway.request("GET", _PROFILES).content)
+def _profile(gateway: Gateway, catalog: str = _PROFILES) -> str:
+    current: Final = BudgetGroups.model_validate_json(gateway.request("GET", catalog).content)
     name: Final = f"profile-{uuid.uuid4().hex}"
     response: Final = gateway.request(
         "PATCH",
-        _PROFILES,
+        catalog,
         {
             "expected_revision": current.budget_groups_revision,
             "default_budget_template": None,
@@ -185,6 +186,41 @@ def _profile(gateway: Gateway) -> str:
     assert response.status_code == 200, response.text
     groups: Final = BudgetGroups.model_validate_json(response.content)
     return next(group.budget_id for group in groups.default_budgets if group.name == name)
+
+
+@pytest.mark.parametrize("scope", ("member", "organization"))
+def test_member_template_assignment_and_app_update_both_commit(app_gateway: Gateway, scope: str) -> None:
+    with app_gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=2) as pool:
+        customer: Final = _customer(scenario)
+        app_id, _ = _app(scenario, "all-proxy-models", "member-template")
+        profile: Final = _profile(app_gateway, "/management/v1/app_customer_member_budget_groups")
+        path, field = (
+            (f"customer_members/{customer.member}", "budget_id")
+            if scope == "member"
+            else (f"customer_organizations/{customer.organization}", "customer_member_budget_id")
+        )
+        assert app_gateway.database_url is not None
+        with psycopg.connect(app_gateway.database_url) as blocking:
+            blocking.execute(
+                'SELECT 1 FROM "LiteLLM_Config" WHERE param_name = %s FOR UPDATE', ("customer_app_definition",)
+            )
+            waiters: Final = lambda: app_gateway.rows(
+                "WITH RECURSIVE blocked(pid) AS (SELECT pid FROM pg_stat_activity "
+                "WHERE %s::int = ANY(pg_blocking_pids(pid)) UNION SELECT a.pid FROM pg_stat_activity a "
+                "JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))) SELECT count(*)::int AS waiting FROM blocked",
+                (str(blocking.info.backend_pid),),
+            )[0]["waiting"]
+            updating: Final = pool.submit(
+                app_gateway.request, "PATCH", f"{_APPS}/{app_id}", {"default_customer_member_budget_id": profile}
+            )
+            eventually(waiters, lambda count: count == 1)
+            assigning: Final = pool.submit(app_gateway.request, "PUT", f"{_APPS}/{app_id}/{path}", {field: profile})
+            eventually(waiters, lambda count: count == 2)
+            blocking.commit()
+        for response in (updating.result(timeout=15), assigning.result(timeout=15)):
+            assert response.status_code == 200, response.text
+        saved: Final = app_gateway.request("GET", f"{_APPS}/{app_id}/{path}")
+        assert saved.status_code == 200 and JSON_OBJECT.validate_json(saved.content)[field] == profile, saved.text
 
 
 def _chat(

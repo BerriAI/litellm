@@ -1729,7 +1729,10 @@ async def _bedrock_count_tokens(
             )
 
         # Get model parameters from router
-        litellm_params: Final = {"user_api_key_dict": user_api_key_dict}
+        litellm_params: Final = {
+            "user_api_key_dict": user_api_key_dict,
+            "litellm_metadata": get_passthrough_router_request_metadata(user_api_key_dict),
+        }
         resolved_model = model  # Default fallback
 
         deployments: Final = llm_router.registry().deployments(model) if llm_router else None
@@ -1742,7 +1745,7 @@ async def _bedrock_count_tokens(
 
             # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
             for key, value in model_litellm_params.items():
-                if key != "user_api_key_dict":
+                if key not in ("user_api_key_dict", "metadata", "litellm_metadata"):
                     litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
@@ -1960,7 +1963,10 @@ async def bedrock_proxy_route(
         raise HTTPException(status_code=400, detail={"error": e})
     prepped: Final = await run_aws_signing(
         sign_aws_json_post,
-        get_credentials=agent_runtime_aws.get_credentials,
+        get_credentials=partial(
+            agent_runtime_aws.get_credentials,
+            litellm_params={"litellm_metadata": get_passthrough_router_request_metadata(user_api_key_dict, request)},
+        ),
         service_name="bedrock",
         aws_region_name=aws_region_name,
         url=str(updated_url),
