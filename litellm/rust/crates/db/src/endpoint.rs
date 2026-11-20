@@ -130,7 +130,8 @@ impl Endpoint {
 }
 
 /// The `PGSSLKEY` file sqlx reads, handed to it as PKCS#8 PEM, the only key form native-tls loads. libpq and rustls
-/// also load PKCS#1 and SEC1 keys. A file OpenSSL cannot read is left for sqlx to read and report.
+/// also load PKCS#1 and SEC1 keys. A file OpenSSL cannot read is left for sqlx to read and report, and so is a key
+/// that needs a password: OpenSSL gets an empty one instead of asking for it on the terminal.
 #[cfg(feature = "native-tls")]
 fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
     match std::env::var_os("PGSSLKEY")
@@ -149,7 +150,7 @@ fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
 
 #[cfg(feature = "native-tls")]
 fn pkcs8_pem(pem: &[u8]) -> Option<Vec<u8>> {
-    openssl::pkey::PKey::private_key_from_pem(pem)
+    openssl::pkey::PKey::private_key_from_pem_passphrase(pem, b"")
         .and_then(|key| key.private_key_to_pem_pkcs8())
         .ok()
 }
@@ -370,6 +371,7 @@ mod tests {
             nid::Nid,
             pkey::PKey,
             rsa::Rsa,
+            symm::Cipher,
         };
         use rstest::rstest;
 
@@ -411,6 +413,15 @@ mod tests {
         #[rstest]
         fn leaves_a_file_openssl_cannot_read_to_sqlx() {
             assert_eq!(pkcs8_pem(b"not a key"), None);
+        }
+
+        #[rstest]
+        fn leaves_a_key_that_needs_a_password_to_sqlx() -> Result<(), Box<dyn StdError>> {
+            let encrypted = PKey::from_rsa(Rsa::generate(2048)?)?
+                .private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), b"secret")?;
+
+            assert_eq!(pkcs8_pem(&encrypted), None);
+            Ok(())
         }
     }
 }
