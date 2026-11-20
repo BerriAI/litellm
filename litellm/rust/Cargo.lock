@@ -4693,6 +4693,7 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-tracing",
+ "openssl",
  "parking_lot",
  "prost",
  "pyo3",

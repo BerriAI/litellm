@@ -23,6 +23,8 @@ mod router;
 mod routes;
 mod s3_log;
 mod secrets;
+#[cfg(feature = "fips")]
+mod tls_provider;
 mod tokenizer;
 
 #[pymodule(gil_used = true)]
@@ -147,7 +149,7 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         #[cfg(feature = "fips")]
-        let _ = rustls_openssl::default_provider().install_default();
+        let _ = crate::tls_provider::openssl_provider().install_default();
         #[cfg(not(feature = "fips"))]
         let _ = rustls::crypto::ring::default_provider().install_default();
         module.add(
@@ -352,7 +354,7 @@ mod tests {
             .expect("importing _native should install a process crypto provider");
         assert_eq!(
             format!("{installed:?}"),
-            format!("{:?}", rustls_openssl::default_provider())
+            format!("{:?}", crate::tls_provider::openssl_provider())
         );
     }
 }
