@@ -34,6 +34,7 @@ function singlePeriodPayload(
   existingLimits: BudgetWriteRequest["budget_limits"],
 ): BudgetWriteRequest {
   if (!existingLimits?.length) return scalar;
+  const custom = existingLimits.filter((limit) => !["1mo", "12mo"].includes(limit.budget_duration));
   if (dirty?.budget_duration) {
     if (values.additional_max_budget !== undefined) {
       const { max_budget: _max, budget_duration: _duration, ...other } = scalar;
@@ -43,15 +44,25 @@ function singlePeriodPayload(
         ...other,
         budget_limits:
           values.max_budget == null
-            ? null
-            : [{ ...existing, budget_duration: duration, max_budget: values.max_budget }],
+            ? custom.length
+              ? custom
+              : null
+            : [{ ...existing, budget_duration: duration, max_budget: values.max_budget }, ...custom],
       };
     }
-    return { ...scalar, max_budget: values.max_budget, budget_duration: values.budget_duration, budget_limits: null };
+    return {
+      ...scalar,
+      max_budget: values.max_budget,
+      budget_duration: values.budget_duration,
+      budget_limits: custom.length ? custom : null,
+    };
   }
   if (!dirty?.max_budget) return scalar;
   const { max_budget: _max, ...other } = scalar;
-  const duration = values.budget_duration === "30d" ? "1mo" : values.budget_duration;
+  const duration =
+    values.budget_duration === "30d" && existingLimits.some((limit) => limit.budget_duration === "1mo")
+      ? "1mo"
+      : values.budget_duration;
   const amount = values.max_budget;
   const limits = existingLimits.flatMap((limit) => {
     if (limit.budget_duration !== duration) return [limit];
@@ -81,6 +92,7 @@ function combinedPeriodPayload(
     budget_limits: [
       calendarLimit(monthly, values, dirty, "max_budget"),
       calendarLimit(annual, values, dirty, "annual_budget"),
+      ...(existingLimits?.filter((limit) => !["1mo", "12mo"].includes(limit.budget_duration)) ?? []),
     ],
   };
 }

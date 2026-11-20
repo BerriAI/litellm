@@ -27,6 +27,28 @@ const organization: Organization = {
 };
 
 describe("planCustomerBudgetGroups", () => {
+  it("keeps custom caps and their reset identity when calendar caps are edited or cleared", () => {
+    const custom = { budget_duration: "48h", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
+    const original = {
+      ...organization,
+      default_budgets: [{ ...organization.default_budgets[0], budget_limits: [custom] }],
+    };
+    const rows = customerBudgetGroupRows(original);
+    expect(planCustomerBudgetGroups(original, rows, "standard")).toMatchObject({ changed: false });
+    expect(planCustomerBudgetGroups(original, [{ ...rows[0], monthlyBudget: "5" }], "standard")).toMatchObject({
+      body: { default_budgets: [{ budget_limits: [{ budget_duration: "1mo", max_budget: 5 }, custom] }] },
+    });
+    const withCalendar = {
+      ...original,
+      default_budgets: [
+        { ...original.default_budgets[0], budget_limits: [...organization.default_budgets[0].budget_limits!, custom] },
+      ],
+    };
+    expect(planCustomerBudgetGroups(withCalendar, rows, "standard")).toMatchObject({
+      body: { default_budgets: [{ budget_limits: [custom] }] },
+    });
+  });
+
   it("should preserve an explicitly unset default while editing existing groups", () => {
     const original = { ...organization, default_budget_template_id: null };
     const rows = customerBudgetGroupRows(original);
