@@ -1322,3 +1322,67 @@ async def test_generic_api_logger_post_preserves_credentials_on_same_origin_redi
     assert second_req.headers.get("Authorization") == "Bearer secret-token"
     assert second_req.headers.get("Cookie") == "session=123"
     await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_switches_to_get_without_body_on_303_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requests: list[httpx.Request] = []  # mutable-ok: records mock requests
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        if request.url.path == "/v1/logs":
+            return httpx.Response(303, headers={"Location": "https://192.0.2.1/confirmation"})
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["192.0.2.1"])
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    logger: Final = GenericAPILogger(
+        endpoint="https://192.0.2.1/v1/logs",
+        headers={"Content-Type": "application/json"},
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    response: Final = await logger._send_single_post("https://192.0.2.1/v1/logs", '{"sensitive": "data"}')
+    assert response.status_code == 200
+    assert len(captured_requests) == 2
+    first_req: Final = captured_requests[0]
+    second_req: Final = captured_requests[1]
+    assert first_req.method == "POST"
+    assert first_req.content == b'{"sensitive": "data"}'
+    assert second_req.method == "GET"
+    assert second_req.content == b""
+    assert second_req.headers.get("Content-Type") is None
+    await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_preserves_body_on_308_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requests: list[httpx.Request] = []  # mutable-ok: records mock requests
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        if request.url.path == "/v1/logs":
+            return httpx.Response(308, headers={"Location": "https://192.0.2.1/v2/logs"})
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["192.0.2.1"])
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    logger: Final = GenericAPILogger(
+        endpoint="https://192.0.2.1/v1/logs",
+        headers={"Content-Type": "application/json"},
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    response: Final = await logger._send_single_post("https://192.0.2.1/v1/logs", '{"sensitive": "data"}')
+    assert response.status_code == 200
+    assert len(captured_requests) == 2
+    first_req: Final = captured_requests[0]
+    second_req: Final = captured_requests[1]
+    assert first_req.method == "POST"
+    assert second_req.method == "POST"
+    assert second_req.content == b'{"sensitive": "data"}'
+    await handler.close()
