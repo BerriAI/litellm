@@ -115,11 +115,16 @@ def mock_user_api_key_auth():
 
 @pytest.mark.parametrize("path", ("/customer/new", "/customer/update"))
 def test_customer_rejects_an_attached_budget_with_windows(
-    mock_prisma_client: MagicMock, mock_user_api_key_auth: object, path: str,
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: object,
+    path: str,
 ) -> None:
-    mock_prisma_client.db.litellm_budgettable.find_unique.return_value = BudgetWriteRequest.model_validate({
-        "budget_id": "combined", "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}],
-    })
+    mock_prisma_client.db.litellm_budgettable.find_unique.return_value = BudgetWriteRequest.model_validate(
+        {
+            "budget_id": "combined",
+            "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}],
+        }
+    )
     response: Final = client.post(path, json={"user_id": "customer", "budget_id": "combined"})
     assert response.status_code == 400, response.text
 
@@ -1497,3 +1502,38 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
         "end_user_id:c2",
         "end_user_restricted_registry",
     ]
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "payload"),
+    (
+        ("/customer/new", {"user_id": "cust-1"}),
+        ("/customer/update", {"user_id": "cust-1", "alias": "updated"}),
+        ("/customer/delete", {"user_ids": ["cust-1"]}),
+        ("/customer/block", {"user_ids": ["cust-1"]}),
+        ("/customer/unblock", {"user_ids": ["cust-1"]}),
+        ("/end_user/new", {"user_id": "cust-1"}),
+        ("/end_user/update", {"user_id": "cust-1", "alias": "updated"}),
+        ("/end_user/delete", {"user_ids": ["cust-1"]}),
+        ("/end_user/block", {"user_ids": ["cust-1"]}),
+        ("/end_user/unblock", {"user_ids": ["cust-1"]}),
+    ),
+)
+def test_customer_mutation_endpoints_reject_non_admin_roles(
+    endpoint: str,
+    payload: dict[str, object],
+) -> None:
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="internal-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    try:
+        response: Final = client.post(
+            endpoint,
+            json=payload,
+            headers={"Authorization": "Bearer non-admin"},
+        )
+        assert response.status_code == 401
+        assert "Admin-only endpoint" in response.text
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
