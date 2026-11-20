@@ -57643,7 +57643,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user messages whose content mixes input_text, input_image and input_json parts
                      */
                     input: string | {
                         /** Content */
@@ -57665,6 +57665,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
@@ -77612,7 +77624,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user messages whose content mixes input_text, input_image and input_json parts
                      */
                     input: string | {
                         /** Content */
@@ -77634,6 +77646,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role

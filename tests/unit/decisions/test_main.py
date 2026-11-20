@@ -144,6 +144,10 @@ _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
         "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
     },
 }
+_OPENAI_PREDICATE_RESPONSE: Final[Mapping[str, object]] = {
+    **_OPENAI_RESPONSE,
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+}
 
 
 class _RecordingLogger(CustomLogger):
@@ -2334,6 +2338,127 @@ async def test_dropping_the_only_malformed_input_images_is_rejected_before_http(
     assert not route.called
 
 
+_ORDER_EVIDENCE: Final[Mapping[str, object]] = MappingProxyType(
+    {"ticket": {"body": "Please refund the duplicate charge.", "attachment": None}, "order": {"charges": [49, 49]}}
+)
+_EVIDENCE_INSTRUCTION: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "input_text", "text": "Evaluate the ticket using the order evidence."}
+)
+
+
+def _evidence_message(data: object) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [dict(_EVIDENCE_INSTRUCTION), {"type": "input_json", "data": data}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("openai_default_base")
+@pytest.mark.parametrize(
+    "data",
+    (dict(_ORDER_EVIDENCE), [dict(_ORDER_EVIDENCE), {"refund": None}]),
+    ids=("object", "array_of_objects"),
+)
+async def test_openai_receives_input_json_parts_as_sent(data: object, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        input=[_evidence_message(data)],
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert json.loads(route.calls[0].request.content)["input"] == [_evidence_message(data)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("openai_default_base")
+@pytest.mark.parametrize("data", ("ticket 7", [1, 2]), ids=("string_data", "scalar_array_data"))
+async def test_input_json_shapes_openai_refuses_are_refused_before_http(
+    data: object, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            api_key="caller-key",
+            input=[_evidence_message(data)],
+            questions=_PREDICATE_QUESTIONS,
+            drop_params=True,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_input_json_is_refused_by_a_provider_without_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['input_json'\].*drop_params"):
+        await litellm.adecisions(
+            model="perplexity/pplx-decider-v1-27b",
+            api_key="caller-key",
+            input=[_evidence_message(dict(_ORDER_EVIDENCE))],
+            questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "url", "upstream_model"),
+    (
+        ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL, "pplx-decider-v1-27b"),
+        ("typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone", "jev-1.13"),
+    ),
+    ids=("perplexity", "typesafe"),
+)
+async def test_drop_params_drops_input_json_for_a_provider_without_it(
+    model: str, url: str, upstream_model: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model=model,
+        api_key="caller-key",
+        input=[_evidence_message(dict(_ORDER_EVIDENCE)), {"role": "user", "content": _SCREEN_TEXT}],
+        questions=_PREDICATE_QUESTIONS,
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": upstream_model,
+        "state": f"{_EVIDENCE_INSTRUCTION['text']}\n\n{_SCREEN_TEXT}",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_drop_params_refuses_input_with_only_input_json_for_a_provider_without_it(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="leaves no input to decide on"):
+        await litellm.adecisions(
+            model="perplexity/pplx-decider-v1-27b",
+            api_key="caller-key",
+            input=[{"role": "user", "content": [{"type": "input_json", "data": dict(_ORDER_EVIDENCE)}]}],
+            questions=_PREDICATE_QUESTIONS,
+            drop_params=True,
+        )
+
+    assert not route.called
+
+
 _MIB: Final = 1024 * 1024
 
 
@@ -3698,6 +3823,26 @@ def _vercel_response(model: str, provider_metadata: Mapping[str, object]) -> Map
 def vercel_gateway_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
     monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_refuse_input_json_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {})
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="input_json"):
+        await litellm.adecisions(
+            model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+            input=[_evidence_message(dict(_ORDER_EVIDENCE))],
+            questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert not route.called
 
 
 @pytest.mark.asyncio
