@@ -16163,7 +16163,11 @@ async def _tokenizer_or_provider_error(
     match tokenizer:
         case HuggingFaceTokenizerUnavailable():
             raise _provider_error_after_failed_estimate(
-                provider_failure, f"Hugging Face tokenizer {tokenizer.tokenizer} is unavailable"
+                provider_failure.with_hint(
+                    f"Could not load the Hugging Face tokenizer {tokenizer.tokenizer} to count tokens locally. "
+                    f"LiteLLM retries the load in {tokenizer.retry_in_seconds}s"
+                ),
+                f"Hugging Face tokenizer {tokenizer.tokenizer} is unavailable",
             )
         case BaseException() if not _answers_provider_error(tokenizer):
             raise tokenizer.with_traceback(None)

@@ -6603,7 +6603,7 @@ async def test_count_answers_503_naming_the_next_load_without_a_retry_after_head
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
-async def test_framed_count_answers_the_provider_error_while_the_hub_tokenizer_cannot_load(
+async def test_framed_count_answers_the_provider_status_naming_the_tokenizer_while_the_hub_tokenizer_cannot_load(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     counter: Final = _ScriptedCounter(
@@ -6620,7 +6620,13 @@ async def test_framed_count_answers_the_provider_error_while_the_hub_tokenizer_c
     with pytest.raises(ProxyException) as raised:
         await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
 
-    assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for llama")
+    retry_in: Final = re.fullmatch(
+        f"scripted 400 for llama\\. Could not load the Hugging Face tokenizer {re.escape(_LLAMA_3_HUB_TOKENIZER)} "
+        r"to count tokens locally\. LiteLLM retries the load in (\d+)s",
+        raised.value.message,
+    )
+    assert raised.value.code == "400"
+    assert retry_in is not None and 1 <= int(retry_in[1]) <= HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
     assert len(counter.calls) == 1
 
 
