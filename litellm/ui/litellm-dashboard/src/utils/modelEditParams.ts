@@ -16,6 +16,7 @@ const FORM_PARAMS = new Set([
   "cache_creation_input_token_cost",
   "cache_creation_input_token_cost_above_1hr",
   "litellm_credential_name",
+  "upstream_proxy",
   "cache_control_injection_points",
   "vector_store_ids",
   "guardrails",

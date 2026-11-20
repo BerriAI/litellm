@@ -938,6 +938,8 @@ from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.proxy.upstream_proxy_endpoints.endpoints import router as upstream_proxy_router
+from litellm.proxy.upstream_proxy_endpoints.store import sync_upstream_proxy_registry
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
@@ -9307,6 +9309,7 @@ class ProxyConfig:
             load_models: Final = self._should_load_db_object(object_type="models")
             new_models: Final = await self.get_models_from_db(prisma_client=prisma_client) if load_models else None
             await self.get_credentials(prisma_client=prisma_client)
+            await sync_upstream_proxy_registry(ConfigRepository(prisma_client))
             if load_models:
                 still_desired_ids = await self._update_llm_router(
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
@@ -23450,6 +23453,7 @@ app.include_router(tracing_endpoints.router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
+app.include_router(upstream_proxy_router)
 app.include_router(openai_passthrough_router)
 app.include_router(batches_router)
 app.include_router(openai_files_router)

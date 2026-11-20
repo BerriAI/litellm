@@ -22,6 +22,7 @@ import AllModelsPanel from "@/app/(dashboard)/models-and-endpoints/panels/AllMod
 import AutoRoutersTabPanel from "@/app/(dashboard)/models-and-endpoints/panels/AutoRoutersTabPanel";
 import AddModelPanel from "@/app/(dashboard)/models-and-endpoints/panels/AddModelPanel";
 import LlmCredentialsPanel from "@/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel";
+import UpstreamProxiesPanel from "@/app/(dashboard)/models-and-endpoints/panels/UpstreamProxiesPanel";
 import PassThroughPanel from "@/app/(dashboard)/models-and-endpoints/panels/PassThroughPanel";
 import HealthStatusPanel from "@/app/(dashboard)/models-and-endpoints/panels/HealthStatusPanel";
 import ModelRetrySettingsPanel from "@/app/(dashboard)/models-and-endpoints/panels/ModelRetrySettingsPanel";
@@ -35,6 +36,7 @@ const MODEL_TAB_SLUGS = [
   "add",
   "auto-routers",
   "llm-credentials",
+  "upstream-proxies",
   "pass-through",
   "health",
   "retry-settings",
@@ -55,6 +57,7 @@ const TAB_LABELS: Record<ModelTabSlug, ParseKeys> = {
   add: "modelsAndEndpoints.page.tabs.add",
   "auto-routers": "modelsAndEndpoints.page.tabs.autoRouters",
   "llm-credentials": "modelsAndEndpoints.page.tabs.llmCredentials",
+  "upstream-proxies": "modelsAndEndpoints.page.tabs.upstreamProxies",
   "pass-through": "modelsAndEndpoints.page.tabs.passThrough",
   health: "modelsAndEndpoints.page.tabs.health",
   "retry-settings": "modelsAndEndpoints.page.tabs.retrySettings",
@@ -73,6 +76,8 @@ const renderPanel = (key: string) => {
       return <AddModelPanel />;
     case "llm-credentials":
       return <LlmCredentialsPanel />;
+    case "upstream-proxies":
+      return <UpstreamProxiesPanel />;
     case "pass-through":
       return <PassThroughPanel />;
     case "health":
@@ -128,6 +133,7 @@ export default function ModelsAndEndpointsPage() {
       // viewer these write-only panels; only the raw-role isViewOnly separates them. Health Status
       // stays: it is the bucket's one read view, and viewers keep read parity with admins.
       ...(!isViewOnly && (isAdmin || isInternalUser) ? (["llm-credentials"] as const) : []),
+      ...(isAdmin ? (["upstream-proxies"] as const) : []),
       ...(isAdmin && !isViewOnly ? (["pass-through"] as const) : []),
       ...(isAdmin ? (["health"] as const) : []),
       ...(isAdmin && !isViewOnly
