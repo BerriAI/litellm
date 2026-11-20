@@ -9213,6 +9213,15 @@ def test_client_typesafe_danger_zone_headers_stay_off_other_providers(custom_llm
     assert _headers_forwarded_to(TYPESAFE_DANGER_ZONE_HEADERS, custom_llm_provider) == {}
 
 
+def _unsigned_jwt_segment(payload: Mapping[str, str | Mapping[str, str]]) -> str:
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+
+
+_UNSIGNED_CHATGPT_JWT: Final = ".".join(
+    (_unsigned_jwt_segment({"alg": "none"}), _unsigned_jwt_segment({"https://api.openai.com/auth": {}}), "")
+)
+
+
 @pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
 def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(authorization_header_name):
     assert add_provider_specific_headers_to_request(data={}, headers=_client_headers(authorization_header_name)) is True
@@ -9224,6 +9233,8 @@ def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(auth
         _client_headers(None),
         {"content-type": "application/json", "authorization": "Bearer sk-a-normal-key"},
         {"anthropic-beta": "claude-code-20250219", "authorization": "Bearer sk-ant-api03-a-configured-key"},
+        {"x-litellm-api-key": "Bearer sk-1234", "authorization": "sk-ant-oat01-never-forwarded"},
+        {"x-litellm-api-key": "Bearer sk-1234", "authorization": f"Bearer {_UNSIGNED_CHATGPT_JWT}"},
     ],
 )
 def test_add_provider_specific_headers_reports_no_oauth_credential_without_a_forwarded_token(headers):

@@ -22,6 +22,7 @@ import json
 import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -51,6 +52,7 @@ from tests.integration._support.database import read_rows
 from tests.integration._support.process import (
     OwnedProxy,
     UpstreamSlot,
+    WorkerHealthcheck,
     graceful_stop_seconds,
     owned_proxy_process,
     owned_upstream,
@@ -2447,34 +2449,39 @@ async def _first_frames(sockets: tuple[ClientConnection, ...]) -> tuple[dict[str
     return tuple([JSON_OBJECT.validate_json(await socket.recv()) for socket in sockets])
 
 
-async def _open_sessions(ws_base: str, model: str, key: str) -> tuple[ClientConnection, ...]:
+async def _open_sessions(
+    stack: AsyncExitStack, ws_base: str, model: str, key: str, count: int
+) -> tuple[ClientConnection, ...]:
     query: Final = f"model={model}&{TRANSCRIPTION_QUERY}"
     headers: Final = {"Authorization": f"Bearer {key}"}
     sockets: Final = tuple(
         [
-            await websockets.connect(f"{ws_base}/v1/realtime?{query}", additional_headers=headers)
-            for _ in range(OPEN_SESSIONS)
+            await stack.enter_async_context(
+                websockets.connect(f"{ws_base}/v1/realtime?{query}", additional_headers=headers)
+            )
+            for _ in range(count)
         ]
     )
     created: Final = await asyncio.wait_for(_first_frames(sockets), 60)
-    assert [event.get("type") for event in created] == ["session.created"] * OPEN_SESSIONS, created
+    assert [event.get("type") for event in created] == ["session.created"] * count, created
     return sockets
 
 
 async def _sessions_through_worker_kill(ws_base: str, model: str, key: str, owned: OwnedProxy) -> KillOutcome:
-    sockets: Final = await _open_sessions(ws_base, model, key)
-    try:
-        workers: Final = tuple(sorted(owned.worker_pids()))
-        assert len(workers) == WORKERS, workers
-        victim: Final = workers[0]
+    victim, survivor = sorted(owned.worker_pids())
+    half: Final = OPEN_SESSIONS // 2
+    async with AsyncExitStack() as stack:
+        with owned.suspended(survivor):
+            on_victim: Final = await _open_sessions(stack, ws_base, model, key, half)
+        with owned.suspended(victim):
+            on_survivor: Final = await _open_sessions(stack, ws_base, model, key, OPEN_SESSIONS - half)
         with owned.replacing_worker(victim) as kill:
             await asyncio.to_thread(kill)
             served: Final = await asyncio.wait_for(
-                asyncio.gather(*(_one_transcript_or_close(socket) for socket in sockets)), 60
+                asyncio.gather(*(_one_transcript_or_close(socket) for socket in (*on_victim, *on_survivor))), 60
             )
+        assert served == [False] * len(on_victim) + [True] * len(on_survivor), served
         return KillOutcome(served.count(True), served.count(False), victim)
-    finally:
-        await asyncio.gather(*(socket.close() for socket in sockets))
 
 
 async def _await_closes(sockets: tuple[ClientConnection, ...]) -> tuple[int, ...]:
@@ -2491,10 +2498,11 @@ async def _await_closes(sockets: tuple[ClientConnection, ...]) -> tuple[int, ...
 async def _sessions_through_proxy_shutdown(
     ws_base: str, model: str, key: str, shutdown: Callable[[], bool]
 ) -> tuple[int, ...]:
-    sockets: Final = await _open_sessions(ws_base, model, key)
-    stopped: Final = await asyncio.to_thread(shutdown)
-    assert stopped, "the owned proxy root did not stop within the graceful window"
-    return await _await_closes(sockets)
+    async with AsyncExitStack() as stack:
+        sockets: Final = await _open_sessions(stack, ws_base, model, key, OPEN_SESSIONS)
+        stopped: Final = await asyncio.to_thread(shutdown)
+        assert stopped, "the owned proxy root did not stop within the graceful window"
+        return await _await_closes(sockets)
 
 
 @pytest.mark.timeout(480)
@@ -2508,7 +2516,14 @@ def test_worker_kill_then_proxy_restart_keep_transcription_sessions_uninjected(
         blocked_after_kill: Final = _scripted(scenario, _transcription_scenario(BLOCKED_TRANSCRIPT))
         blocked_after_restart: Final = _scripted(scenario, _transcription_scenario(BLOCKED_TRANSCRIPT))
         key: Final = scenario.key()
-        with owned_proxy_process(gateway, tmp_path, _overrides(ca_bundle), config=config, workers=WORKERS) as owned:
+        with owned_proxy_process(
+            gateway,
+            tmp_path,
+            _overrides(ca_bundle),
+            config=config,
+            workers=WORKERS,
+            healthcheck=WorkerHealthcheck.LENIENT,
+        ) as owned:
             owned_url: Final = _owned_url(owned)
             model: Final = _named_deployment(
                 owned.gateway,
@@ -2536,7 +2551,6 @@ def test_worker_kill_then_proxy_restart_keep_transcription_sessions_uninjected(
             record_property(
                 "worker_kill", {"served": outcome.served, "closed": outcome.closed, "killed": outcome.killed_pid}
             )
-            assert outcome.served + outcome.closed == OPEN_SESSIONS, outcome
             with httpx.Client(base_url=owned_url, timeout=15, trust_env=False) as fresh:
                 readiness: Final = fresh.get("/health/readiness")
             assert readiness.status_code == 200, readiness.text
