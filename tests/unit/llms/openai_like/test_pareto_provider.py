@@ -82,6 +82,38 @@ def test_pareto_is_not_an_audio_transcription_provider() -> None:
     assert "pareto" not in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS
 
 
+def test_missing_pareto_key_is_rejected_before_the_openai_key_fallback(
+    pareto: SimpleProviderConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PARETO_API_KEY", raising=False)
+    monkeypatch.delenv("PARETO_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{pareto.base_url}/chat/completions").respond(json=CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="PARETO_API_KEY"):
+            litellm.completion(model=f"pareto/{GLM}", messages=[{"role": "user", "content": "hello"}])
+
+    assert route.call_count == 0
+
+
+def test_completion_uses_an_authenticated_client_without_pareto_env(
+    pareto: SimpleProviderConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openai import OpenAI
+
+    monkeypatch.delenv("PARETO_API_KEY", raising=False)
+    monkeypatch.delenv("PARETO_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with OpenAI(api_key="pareto-client-key", base_url=pareto.base_url) as client, respx.mock() as upstream:
+        route: Final = upstream.post(f"{pareto.base_url}/chat/completions").respond(json=CHAT_COMPLETION)
+        response: Final = litellm.completion(
+            model=f"pareto/{GLM}", messages=[{"role": "user", "content": "hello"}], client=client
+        )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer pareto-client-key"
+    assert response.choices[0].message.content == "hi"
+
+
 @respx.mock
 def test_completion_posts_to_pareto_chat_completions_with_bearer_key(
     pareto: SimpleProviderConfig, monkeypatch: pytest.MonkeyPatch
