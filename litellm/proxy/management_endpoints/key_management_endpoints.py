@@ -92,7 +92,7 @@ from litellm.proxy.common_utils.customer_usage import (
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_metadata_error
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
 from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
@@ -3114,7 +3114,7 @@ async def _write_key_update(
     existing_key_row: LiteLLM_VerificationToken,
     include: Mapping[str, object] | None = None,
 ) -> "prisma_models.LiteLLM_VerificationToken | None":
-    if "budget_limits" not in data:
+    if "budget_limits" not in data and "budget_duration" not in data:
         return await VerificationTokenRepository(prisma_client).table.update(
             where={"token": hashed_token}, data=data, include=include
         )
@@ -3132,7 +3132,7 @@ async def _update_key_row(
     update_values: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
 ) -> _KeyUpdateResult | None:
-    if "budget_limits" in update_values:
+    if "budget_limits" in update_values or "budget_duration" in update_values:
         hashed_token: Final = hash_token_if_needed(key)
         updated: Final = await _write_key_update(
             prisma_client,
@@ -3227,7 +3227,7 @@ async def prepare_key_update_data(
             non_default_values["budget_reset_at"] = None
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
             non_default_values["budget_duration"] = budget_duration
-            if not keeps_due_budget_reset(
+            if not keeps_budget_reset(
                 budget_duration, existing_key_row.budget_duration, existing_key_row.budget_reset_at
             ):
                 non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
@@ -7000,21 +7000,14 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
 def _window_with_reset_at(
     window: Mapping[str, object], stored_windows: Sequence[BudgetLimitEntry]
 ) -> Mapping[str, object]:
-    """A resubmitted window keeps its running period, so editing one window never restarts the others."""
+    """A cap edit keeps the saved schedule, including a reset waiting for the job."""
     duration: Final = str(window["budget_duration"])
-    now: Final = datetime.now(timezone.utc)
-    open_reset_at: Final = next(
-        (w.reset_at for w in stored_windows if w.budget_duration == duration and _is_open_reset_at(w.reset_at, now)),
+    saved_reset_at: Final = next(
+        (w.reset_at for w in stored_windows if w.budget_duration == duration and w.reset_at is not None),
         None,
     )
-    reset_at: Final = open_reset_at if open_reset_at is not None else get_budget_reset_time(budget_duration=duration)
+    reset_at: Final = saved_reset_at if saved_reset_at is not None else get_budget_reset_time(budget_duration=duration)
     return {**window, "reset_at": reset_at.isoformat()}
-
-
-def _is_open_reset_at(reset_at: datetime | None, now: datetime) -> bool:
-    if reset_at is None:
-        return False
-    return (reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)) > now
 
 
 def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str, object]:

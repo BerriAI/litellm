@@ -490,6 +490,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 403
         self.message = f"litellm.PermissionDeniedError: {message}"
@@ -499,7 +500,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(
-            self.message, response=response, body=None
+            self.message, response=response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):

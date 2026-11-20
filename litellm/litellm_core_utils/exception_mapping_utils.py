@@ -480,6 +480,15 @@ def _map_openai_exception(
                 litellm_debug_info=extra_information,
                 body=getattr(original_exception, "body", None),
             )
+        if invalid_request_status == 403:
+            raise PermissionDeniedError(
+                message=f"{exception_provider} - {message}",
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response if response is not None else _response_or_stub(original_exception, status_code=403),
+                litellm_debug_info=extra_information,
+                body=getattr(original_exception, "body", None),
+            )
         if invalid_request_status == 404:
             raise NotFoundError(
                 message=f"{exception_provider} - {message}",

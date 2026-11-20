@@ -11,7 +11,7 @@ from fastapi import Request
 
 import litellm
 from litellm.caching import DualCache
-from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_reservation_cache_key,
@@ -28,6 +29,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     _get_budget_counters,
     _get_team_member_budget_counter,
     count_request_input_tokens,
+    customer_window_counters,
     estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
@@ -790,3 +792,93 @@ def test_fixed_budget_window_requires_duration_and_reset_boundary(window: object
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
     assert fixed_budget_window(window) is None
+
+
+@pytest.mark.parametrize(
+    "duration,zone,expected",
+    (
+        ("daily", "Asia/Tokyo", "2026-07-16T00:00:00+09:00"),
+        ("1h", "Asia/Kolkata", "2026-07-15T16:00:00+05:30"),
+        ("45m", "UTC", "2026-07-15T10:45:00Z"),
+        ("5h", "UTC", "2026-07-15T15:00:00Z"),
+    ),
+)
+def test_created_customer_windows_keep_local_alignment_and_full_intervals(
+    duration: str, zone: str, expected: str
+) -> None:
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+    from litellm.models.budget import initialize_budget_limits
+
+    now: Final = datetime(2026, 7, 15, 10, 17, tzinfo=timezone.utc)
+    settings: Final = BudgetResetSettings(timezone=zone)
+    limits: Final = initialize_budget_limits((BudgetLimit(budget_duration=duration, max_budget=10),), settings, now)
+    first: Final = datetime.fromisoformat(expected)
+    interval: Final = timedelta(seconds=duration_in_seconds(duration))
+
+    assert limits[0].reset_at == first
+    for period in range(3):
+        current: Final = first + period * interval
+        counter: Final = customer_window_counters(
+            "customer_team", "schedule-team", limits, now=current, reset_settings=settings
+        )[0]
+        assert counter.window_start == current
+        assert counter.reset_at == current + interval
+
+
+@pytest.mark.parametrize(
+    "now,expected_start,expected_end",
+    (
+        ("2026-11-01T05:15:00Z", "2026-11-01T05:00:00Z", "2026-11-01T06:00:00Z"),
+        ("2026-11-01T06:15:00Z", "2026-11-01T06:00:00Z", "2026-11-01T07:00:00Z"),
+        ("2026-03-08T06:45:00Z", "2026-03-08T06:00:00Z", "2026-03-08T07:00:00Z"),
+    ),
+)
+def test_new_customer_hourly_window_includes_current_usage_through_dst(
+    now: str, expected_start: str, expected_end: str
+) -> None:
+    counter: Final = customer_window_counters(
+        "customer_team",
+        "hourly-team",
+        (BudgetLimit(budget_duration="1h", max_budget=1),),
+        now=datetime.fromisoformat(now),
+        reset_settings=BudgetResetSettings(timezone="America/New_York"),
+    )[0]
+
+    assert counter.window_start == datetime.fromisoformat(expected_start)
+    assert counter.reset_at == datetime.fromisoformat(expected_end)
+
+
+@pytest.mark.parametrize("days_after_reset", (0, 1, 2, 30))
+def test_expired_customer_elapsed_schedule_keeps_its_saved_anchor(days_after_reset: int) -> None:
+    saved_reset: Final = datetime(2026, 11, 1, 4, tzinfo=timezone.utc)
+    start: Final = saved_reset + timedelta(days=days_after_reset)
+    counter: Final = customer_window_counters(
+        "customer_team", "daily-team",
+        (BudgetLimit(budget_duration="12h", max_budget=1, reset_at=saved_reset),),
+        now=start + timedelta(minutes=1),
+        reset_settings=BudgetResetSettings(timezone="America/New_York"),
+    )[0]
+
+    assert counter.window_start == start
+    assert counter.reset_at == start + timedelta(hours=12)
+
+
+@pytest.mark.parametrize("duration", ("24h", "daily"))
+@pytest.mark.parametrize(
+    "now,start,end",
+    (
+        ("2026-11-01T04:01:00Z", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z"),
+        ("2026-11-01T12:00:00Z", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z"),
+        ("2026-11-02T05:01:00Z", "2026-11-02T05:00:00Z", "2026-11-03T05:00:00Z"),
+    ),
+)
+def test_expired_customer_daily_window_follows_local_midnight(duration: str, now: str, start: str, end: str) -> None:
+    counter: Final = customer_window_counters(
+        "customer_team", "daily-team",
+        (BudgetLimit(budget_duration=duration, max_budget=1, reset_at=datetime(2026, 11, 1, 4, tzinfo=timezone.utc)),),
+        now=datetime.fromisoformat(now),
+        reset_settings=BudgetResetSettings(timezone="America/New_York"),
+    )[0]
+
+    assert counter.window_start == datetime.fromisoformat(start)
+    assert counter.reset_at == datetime.fromisoformat(end)
