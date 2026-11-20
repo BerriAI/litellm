@@ -7,6 +7,7 @@ Extends the A2A SDK's card resolver to support multiple well-known paths.
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
@@ -46,6 +47,14 @@ def _discovery_status_code(failures: tuple[tuple[str, Exception], ...]) -> int:
         if isinstance(error, _HasStatusCode) and error.status_code is not None and error.status_code != 404
     )
     return statuses[0] if statuses else 404
+
+
+def _origin_of_sub_path_url(url: str) -> str | None:
+    """Return the origin of a URL that has a path, or None when the URL is already the origin."""
+    parts: Final = urlsplit(url)
+    if not parts.scheme or not parts.netloc or not parts.path.strip("/"):
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 def is_localhost_or_internal_url(url: str | None) -> bool:
@@ -212,6 +221,8 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
     - /.well-known/agent-card.json (standard)
     - /.well-known/agent.json (previous/alternative)
     - /agentCard/v1.0
+    When the base URL has a path (an endpoint such as /jsonrpc), the two well-known paths are
+    then tried at the origin, where A2A 1.0 §8.2 places the card.
     """
 
     if TYPE_CHECKING:
@@ -229,30 +240,45 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
                 http_kwargs=http_kwargs,
             )
 
+        origin: Final = _origin_of_sub_path_url(self.base_url)
+        origin_attempts: Final = (
+            () if origin is None else ((origin, AGENT_CARD_WELL_KNOWN_PATH), (origin, PREV_AGENT_CARD_WELL_KNOWN_PATH))
+        )
         return await self._get_agent_card_from_first_reachable_path(
-            paths=(AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH, FOUNDRY_AGENT_CARD_PATH),
+            attempts=(
+                (None, AGENT_CARD_WELL_KNOWN_PATH),
+                (None, PREV_AGENT_CARD_WELL_KNOWN_PATH),
+                (None, FOUNDRY_AGENT_CARD_PATH),
+                *origin_attempts,
+            ),
             http_kwargs=http_kwargs,
             failures=(),
         )
 
     async def _get_agent_card_from_first_reachable_path(
         self,
-        paths: tuple[str, ...],
+        attempts: tuple[tuple[str | None, str], ...],
         http_kwargs: Mapping[str, object] | None,
         failures: tuple[tuple[str, Exception], ...],
     ) -> "AgentCard":
-        if not paths:
+        """Try each (base, path) in order; a None base means the resolver's own base URL."""
+        if not attempts:
             raise A2AAgentCardDiscoveryError(
                 base_url=self.base_url,
                 failures=failures,
                 status_code=_discovery_status_code(failures),
             )
-        path: Final = paths[0]
+        base, path = attempts[0]
+        label: Final = path if base is None else f"{base}{path}"
         try:
-            verbose_logger.debug("Attempting to fetch agent card from %s%s", self.base_url, path)
-            return await super().get_agent_card(relative_card_path=path, http_kwargs=http_kwargs)
+            verbose_logger.debug("Attempting to fetch agent card from %s%s", base or self.base_url, path)
+            if base is None:
+                return await super().get_agent_card(relative_card_path=path, http_kwargs=http_kwargs)
+            return await _A2ACardResolver(httpx_client=self.httpx_client, base_url=base).get_agent_card(
+                relative_card_path=path, http_kwargs=http_kwargs
+            )
         except Exception as e:
-            verbose_logger.debug("Failed to fetch agent card from %s%s: %s", self.base_url, path, e)
+            verbose_logger.debug("Failed to fetch agent card from %s%s: %s", base or self.base_url, path, e)
             return await self._get_agent_card_from_first_reachable_path(
-                paths=paths[1:], http_kwargs=http_kwargs, failures=(*failures, (path, e))
+                attempts=attempts[1:], http_kwargs=http_kwargs, failures=(*failures, (label, e))
             )
