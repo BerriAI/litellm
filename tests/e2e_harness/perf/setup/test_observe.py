@@ -116,7 +116,7 @@ def test_large_bodies_report_client_percentiles_without_gating_them() -> None:
         ["client_total_seconds", "percentile", "95", "30.0000"],
     ]
     assert properties["perf_litellm_response_seconds_p50"] == 4.5
-    assert properties["perf_litellm_response_seconds_p50_limit"] == 4.7
+    assert properties["perf_litellm_response_seconds_p50_limit"] == 5.0
     assert properties["perf_cpu_seconds_per_request"] == 0.06
     assert properties["perf_cpu_seconds_per_request_limit"] == 0.09
 
@@ -124,7 +124,7 @@ def test_large_bodies_report_client_percentiles_without_gating_them() -> None:
 @pytest.mark.parametrize(
     ("response_ms", "cpu_seconds", "expected"),
     (
-        (4820.0, 0.06, ["litellm_response_seconds percentile 50: observed 4.8200 > limit 4.7000"]),
+        (5100.0, 0.06, ["litellm_response_seconds percentile 50: observed 5.1000 > limit 5.0000"]),
         (4500.0, 0.1, ["cpu_seconds_per_request: observed 0.1000 > limit 0.0900"]),
         (
             None,
