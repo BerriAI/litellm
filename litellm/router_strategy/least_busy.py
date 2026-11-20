@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from typing import Final, Protocol, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
@@ -50,6 +50,7 @@ class _ModelInfo(TypedDict, total=False):
 
 class _Metadata(TypedDict, total=False):
     model_group: ReadOnly[str | None]
+    deployment_model_name: ReadOnly[str | None]
     model_info: ReadOnly[_ModelInfo | None]
 
 
@@ -73,6 +74,7 @@ class _DeploymentModelInfo(TypedDict):
 
 class _Deployment(TypedDict):
     model_info: ReadOnly[_DeploymentModelInfo]
+    model_name: NotRequired[ReadOnly[str | None]]
 
 
 _CALL_KWARGS: Final = TypeAdapter(_CallKwargs)
@@ -93,6 +95,10 @@ def _request_count_key(model_group: str, deployment_id: str) -> str:
 
 def _model_group(metadata: _Metadata | None) -> str | None:
     return metadata.get("model_group") if metadata else None
+
+
+def _served_model_group(metadata: _Metadata | None) -> str | None:
+    return metadata.get("deployment_model_name") if metadata else None
 
 
 def _deployment_id(model_info: _ModelInfo | None) -> str | int | None:
@@ -117,7 +123,14 @@ def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
         return None
     litellm_params: Final = call.get("litellm_params") or _LitellmParams()
     routing_metadata: Final = (litellm_params.get("litellm_metadata"), litellm_params.get("metadata"))
-    model_group: Final = next((group for group in map(_model_group, routing_metadata) if group is not None), None)
+    model_group: Final = next(
+        (
+            group
+            for group in (*map(_served_model_group, routing_metadata), *map(_model_group, routing_metadata))
+            if group is not None
+        ),
+        None,
+    )
     deployment_id: Final = next(
         (
             deployment_id
@@ -155,14 +168,13 @@ def call_id_of(kwargs: Mapping[str, object]) -> str | None:
     return call_id if isinstance(call_id, str) else None
 
 
-def _deployment_ids(healthy_deployments: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+def _deployment_refs(
+    model_group: str, healthy_deployments: Sequence[Mapping[str, object]]
+) -> tuple[tuple[str, str], ...]:
     return tuple(
-        str(deployment["model_info"]["id"]) for deployment in _DEPLOYMENTS.validate_python(healthy_deployments)
+        (deployment.get("model_name") or model_group, str(deployment["model_info"]["id"]))
+        for deployment in _DEPLOYMENTS.validate_python(healthy_deployments)
     )
-
-
-def _request_count_keys(model_group: str, deployment_ids: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(_request_count_key(model_group, deployment_id) for deployment_id in deployment_ids)
 
 
 def _as_counts(values: Sequence[float | None]) -> tuple[int, ...]:
@@ -469,8 +481,9 @@ class LeastBusyLoggingHandler(CustomLogger):
         reserve: bool = False,
         call_id: str | None = None,
     ) -> Mapping[str, object] | None:
-        deployment_ids: Final = _deployment_ids(healthy_deployments)
-        keys: Final = _request_count_keys(model_group, deployment_ids)
+        refs: Final = _deployment_refs(model_group, healthy_deployments)
+        deployment_ids: Final = tuple(deployment_id for _, deployment_id in refs)
+        keys: Final = tuple(_request_count_key(*ref) for ref in refs)
         redis_cache: Final = self.router_cache.redis_cache
         if redis_cache is not None:
             try:
@@ -489,8 +502,9 @@ class LeastBusyLoggingHandler(CustomLogger):
         reserve: bool = False,
         call_id: str | None = None,
     ) -> Mapping[str, object] | None:
-        deployment_ids: Final = _deployment_ids(healthy_deployments)
-        keys: Final = _request_count_keys(model_group, deployment_ids)
+        refs: Final = _deployment_refs(model_group, healthy_deployments)
+        deployment_ids: Final = tuple(deployment_id for _, deployment_id in refs)
+        keys: Final = tuple(_request_count_key(*ref) for ref in refs)
         redis_cache: Final = self.router_cache.redis_cache
         if redis_cache is not None:
             try:

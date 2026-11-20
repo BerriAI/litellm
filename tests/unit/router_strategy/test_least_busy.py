@@ -513,6 +513,85 @@ async def test_router_spreads_requests_that_start_together(
     assert sorted(call.request.headers["authorization"] for call in route.calls) == sorted(one_per_deployment * 2)
 
 
+def _openai_deployment(group: str, model: str, deployment_id: str) -> dict[str, object]:
+    return {
+        "model_name": group,
+        "litellm_params": {"model": model, "api_key": f"key-{deployment_id}"},
+        "model_info": {"id": deployment_id},
+    }
+
+
+def _router_with_names_in_front_of_one_tier() -> Router:
+    return Router(
+        model_list=[
+            _openai_deployment("tier", "openai/gpt-4.1-mini", "tier-a"),
+            _openai_deployment("tier", "openai/gpt-4.1-mini", "tier-b"),
+            _openai_deployment("openai/*", "openai/*", "wildcard-a"),
+            _openai_deployment("openai/*", "openai/*", "wildcard-b"),
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "tier", "MEDIUM": "tier", "COMPLEX": "tier"}},
+                    "complexity_router_default_model": "tier",
+                },
+                "model_info": {"id": "smart-router"},
+            },
+        ],
+        model_group_alias={"alias": "tier"},
+        routing_strategy="least-busy",
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("busy_model", "next_model"),
+    [
+        ("smart-router", "smart-router"),
+        ("smart-router", "tier"),
+        ("tier", "smart-router"),
+        ("alias", "tier"),
+        ("tier", "alias"),
+        ("openai/gpt-4.1-mini", "openai/gpt-4.1-nano"),
+    ],
+)
+async def test_a_call_in_flight_keeps_its_deployment_busy_whatever_name_routed_it_there(
+    busy_model: str, next_model: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    busy_call_reached_provider: Final = asyncio.Event()
+    busy_call_may_finish: Final = asyncio.Event()
+
+    async def hold_the_first_call(_: httpx.Request) -> httpx.Response:
+        if not busy_call_reached_provider.is_set():
+            busy_call_reached_provider.set()
+            await busy_call_may_finish.wait()
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-least-busy",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=hold_the_first_call)
+    router: Final = _router_with_names_in_front_of_one_tier()
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    busy: Final = asyncio.create_task(router.acompletion(model=busy_model, messages=messages))
+    await busy_call_reached_provider.wait()
+    following: Final = await router.acompletion(model=next_model, messages=messages)
+    busy_call_may_finish.set()
+    held: Final = await busy
+
+    assert following._hidden_params["model_id"] != held._hidden_params["model_id"]
+
+
 class _ManualClock:
     def __init__(self) -> None:
         self.now = 0.0
