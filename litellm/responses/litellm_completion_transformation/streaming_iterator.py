@@ -1418,13 +1418,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                 self._merge_provider_specific_fields(src)
                                 self._reserve_web_search_indexes(src)
                                 self._queue_arrived_tool_search_outputs()
+                        self._queue_arrived_web_search_calls(chunk)
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
                             self._snapshot_chunk_for_stream_chunk_builder(chunk)
                         )
                         self._queue_reasoning_done_events_on_reasoning_end(chunk)
-                        self._queue_arrived_web_search_calls(chunk)
                         self._queue_chunk_events(chunk)
 
                     if self._pending_response_events:
@@ -1483,6 +1483,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             self._merge_provider_specific_fields(src)
                             self._reserve_web_search_indexes(src)
                             self._queue_arrived_tool_search_outputs()
+                    self._queue_arrived_web_search_calls(chunk)
                     self._ensure_output_item_for_chunk(chunk)
                     # Always snapshot before returning any pending events so that
                     # finish_reason (e.g. content_filter) is captured even when
@@ -1492,7 +1493,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._snapshot_chunk_for_stream_chunk_builder(cast(ModelResponseStream, chunk))
                     )
                     self._queue_reasoning_done_events_on_reasoning_end(chunk)
-                    self._queue_arrived_web_search_calls(chunk)
                     self._queue_chunk_events(chunk)
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)

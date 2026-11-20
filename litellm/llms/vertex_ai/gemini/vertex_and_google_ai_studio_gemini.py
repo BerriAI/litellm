@@ -1005,6 +1005,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return flag
         return True
 
+    def _supports_function_calling(self, model: str) -> bool:
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
+        bare: Final = model.split("/")[-1]
+        flags: Final = (
+            rows.get(candidate, {}).get("supports_function_calling")
+            for candidate in (f"{self._route}/{bare}", model, bare)
+        )
+        return next((flag for flag in flags if isinstance(flag, bool)), True)
+
+    @staticmethod
+    def _opts_out_of_server_side_tool_invocations(params: Mapping[str, object]) -> bool:
+        return any(
+            params.get(key) is False
+            for key in ("include_server_side_tool_invocations", "includeServerSideToolInvocations")
+        )
+
+    def _keeps_search_tools_with_functions(self, model: str, *param_sources: Mapping[str, object]) -> bool:
+        opted_out: Final = any(map(self._opts_out_of_server_side_tool_invocations, param_sources))
+        return not opted_out and self._is_gemini_3_or_newer(model) and self._supports_function_calling(model)
+
     @staticmethod
     def reject_unsupported_sampling_param(model: str, param: str, drop_params: bool) -> None:
         """Return under ``drop_params`` so the caller drops ``param``, else raise the client-side 400
@@ -1127,17 +1147,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             map(cls._is_search_tool, tools)
         )
 
+    @staticmethod
+    def _is_search_retrieval_tool(tool: object) -> bool:
+        return not {VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value, "google_search_retrieval"}.isdisjoint(
+            as_str_mapping(tool) or ()
+        )
+
     @classmethod
     def _drop_search_tools_mixed_with_functions(
         cls,
         optional_params: dict[str, object],  # mutable-ok: map_openai_params builds the request params in place
         keeps_search_tools: bool = False,
+        drops_search_retrieval: bool = False,
     ) -> None:
         """
         Drop search tools from optional_params when mixed with function declarations
         and include_server_side_tool_invocations is not enabled. A model that keeps
         search tools next to function declarations (Gemini 3+) keeps both and gets
-        include_server_side_tool_invocations set instead.
+        include_server_side_tool_invocations set instead, minus googleSearchRetrieval
+        under drop_params since Gemini 3+ rejects it.
 
         Runs after map_openai_params merges tools and web_search_options so both
         code paths (single _map_function call vs split tools + web_search_options)
@@ -1149,7 +1177,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ):
             return
         if keeps_search_tools:
-            optional_params["include_server_side_tool_invocations"] = True
+            cls._keep_search_tools_next_to_functions(optional_params, tools, drops_search_retrieval)
             return
 
         verbose_logger.warning(
@@ -1160,6 +1188,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "send a request without function calling tools."
         )
         optional_params["tools"] = [tool for tool in tools if not cls._is_search_tool(tool)]
+
+    @classmethod
+    def _keep_search_tools_next_to_functions(
+        cls,
+        optional_params: dict[str, object],  # mutable-ok: map_openai_params builds the request params in place
+        tools: Sequence[object],
+        drops_search_retrieval: bool,
+    ) -> None:
+        kept: Final = (
+            [tool for tool in tools if not cls._is_search_retrieval_tool(tool)] if drops_search_retrieval else tools
+        )
+        if len(kept) < len(tools):
+            verbose_logger.warning(
+                "Gemini 3+ does not support googleSearchRetrieval. Dropping it because drop_params is set, "
+                "use googleSearch instead."
+            )
+            optional_params["tools"] = kept
+        if cls._mixes_search_tools_with_functions(kept):
+            optional_params["include_server_side_tool_invocations"] = True
 
     @classmethod
     def drop_search_tools_mixed_with_functions(
@@ -2010,7 +2057,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             non_default_params, model=model, route=self._route, drop_params=drop_params
         )
         self._apply_include_server_side_tool_invocations(request_params, optional_params)
-        keeps_search_tools_with_functions: Final = self._is_gemini_3_or_newer(model)
+        keeps_search_tools_with_functions: Final = self._keeps_search_tools_with_functions(
+            model,
+            cast(Mapping[str, object], request_params),  # cast-ok: map_openai_params keys request params by name
+            cast(Mapping[str, object], optional_params),  # cast-ok: map_openai_params keys request params by name
+        )
         supports_sampling_params: Final = self.supports_sampling_params(model)
         drops_logprobs: Final = self._drops_logprobs(model, drop_params, allowed_openai_params)
         for param, value in request_params.items():
@@ -2157,6 +2208,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self._drop_search_tools_mixed_with_functions(
             cast(dict[str, object], optional_params),  # cast-ok: map_openai_params keys request params by name
             keeps_search_tools_with_functions,
+            drops_search_retrieval=drops_unsupported_params(drop_params),
         )
 
         return optional_params
