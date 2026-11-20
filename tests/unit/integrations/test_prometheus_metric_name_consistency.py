@@ -60,6 +60,7 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
     assert SpendLogCleanupMetrics.rows_remaining is not None
     assert SpendLogCleanupMetrics.batch_failures is not None
     assert SpendLogCleanupMetrics.runs is not None
+    assert SpendLogCleanupMetrics.storage_bytes is not None
     in_flight: Final = InFlightRequestsMiddleware._get_gauge()
     assert in_flight is not None
     services: Final = PrometheusServicesLogger()
@@ -72,6 +73,7 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
         SpendLogCleanupMetrics.rows_remaining,
         SpendLogCleanupMetrics.batch_failures,
         SpendLogCleanupMetrics.runs,
+        SpendLogCleanupMetrics.storage_bytes,
         in_flight,
         services.redis_breaker_state,
         services.redis_breaker_transitions,
@@ -133,12 +135,15 @@ def test_isolated_metric_families_restore_the_registry_and_keep_lazy_owners_live
         assert "litellm_unrelated_sentinel" not in families
         assert "litellm_admission_admitted_requests" in families
         assert "litellm_in_flight_requests" in families
+        assert "litellm_spend_log_storage_bytes" in families
         assert not any(gauge in REGISTRY._collector_to_names for gauge in gauges_registered_by_an_earlier_test)
     after: Final = _registered_collectors()
     assert all(after[collector] == names for collector, names in before.items())
     lazy_owned: Final = _lazy_owner_collectors()
     assert frozenset(after) - frozenset(before) <= frozenset(lazy_owned)
     assert all(collector in after for collector in lazy_owned)
+    with _isolated_litellm_metric_families(monkeypatch) as repeated_families:
+        assert repeated_families == families
 
 
 def _dashboard_expressions(path: Path) -> tuple[str, ...]:
