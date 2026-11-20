@@ -478,14 +478,15 @@ class AzureAIStudioConfig(OpenAIConfig):
             query_params["api-version"] = api_version
 
         requested_api_version: Final = query_params.get("api-version")
-        v1_root: Final = foundry_v1_root(original_url) or (
-            OPENAI_V1_PATH
-            if (
-                is_openai_v1_resource_base(original_url)
-                and (requested_api_version is None or BaseAzureLLM.is_azure_v1_api_version(requested_api_version))
-            )
-            else None
-        )
+        resource_base: Final = is_openai_v1_resource_base(original_url)
+        if (
+            resource_base
+            and requested_api_version is not None
+            and not BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
+        ):
+            deployment_chat_path: Final = "/" + "/".join(("openai", "deployments", model, *CHAT_COMPLETIONS_PATH))
+            return str(original_url.copy_with(path=deployment_chat_path, params=query_params))
+        v1_root: Final = foundry_v1_root(original_url) or (OPENAI_V1_PATH if resource_base else None)
         if v1_root is not None:
             v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
             if foundry_project_root(original_url):
