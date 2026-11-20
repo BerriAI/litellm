@@ -6,14 +6,17 @@ mod table;
 
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use litellm_host_python::to_py;
+use litellm_cost::adjust::CostConfig;
+use litellm_host_python::{from_py_argument, to_py};
 use litellm_model_catalog::{
-    CostMap, IntegrityLimits, Landed, Pass, Placed, PricingContext, Provenance, RegistrationTable,
-    Registrations, Store, write_pass,
+    CapabilityRules, CostMap, FallbackRule, IntegrityLimits, Landed, Pass, Placed, PricingContext,
+    Provenance, RegistrationTable, Registrations, Store, write_pass,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyMapping};
+
+use crate::cost::{self, NativeRateCard, NativeReceipt};
 
 pub(crate) use fetch::{NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched};
 use live::LiveDict;
@@ -34,6 +37,19 @@ impl Inputs {
             registrations: self.registrations.map(|kept| kept.clone_ref(py)),
         }
     }
+}
+
+/// The capability rules of the host's `fallback_generalizations` list. A rule that does not read as one is skipped,
+/// as the host skips it
+fn capability_rules(rules: &Bound<'_, PyAny>) -> CapabilityRules {
+    let read: Vec<FallbackRule> = rules
+        .try_iter()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|rule| from_py_argument(&rule).ok())
+        .collect();
+    CapabilityRules::new(&read)
 }
 
 /// The cost map's inputs, the name index over `litellm.model_cost` and its pricing snapshots
@@ -281,28 +297,74 @@ impl NativeModelCostMap {
         let Provenance { revision, etag } = self.read_inputs().cost_map.provenance().clone();
         NativeProvenance { revision, etag }
     }
+
+    /// Prices a token call from the facts in `document`, `None` when Python prices it the old way. `row` is a price
+    /// row the caller passes for this call alone
+    #[pyo3(signature = (document, row=None))]
+    fn price(
+        &self,
+        py: Python<'_>,
+        document: &Bound<'_, PyAny>,
+        row: Option<&Bound<'_, PyMapping>>,
+    ) -> PyResult<Option<NativeReceipt>> {
+        self.cost_snapshot(py)?
+            .lookup(|lookup| cost::price(py, lookup, document, row))
+    }
+
+    /// The legacy budget hold and the input cost floor of a request. `rows` are the model info mappings its shapes
+    /// read by index
+    fn bound(
+        &self,
+        py: Python<'_>,
+        document: &Bound<'_, PyAny>,
+        rows: Vec<Bound<'_, PyMapping>>,
+    ) -> PyResult<(Option<f64>, Option<f64>)> {
+        self.cost_snapshot(py)?
+            .lookup(|lookup| cost::bound(lookup, document, &rows))
+    }
+
+    /// The rate card of the row under exactly `key`
+    fn rates(&self, py: Python<'_>, key: &str) -> PyResult<Option<NativeRateCard>> {
+        Ok(self
+            .cost_snapshot(py)?
+            .lookup(|lookup| cost::rates(lookup, key)))
+    }
+
+    /// `cost` after the configured discount and margin
+    #[pyo3(signature = (cost, provider, model=None, region=None))]
+    fn adjust(
+        &self,
+        py: Python<'_>,
+        cost: f64,
+        provider: Option<&str>,
+        model: Option<&str>,
+        region: Option<&str>,
+    ) -> PyResult<(f64, f64, f64, f64, f64, f64)> {
+        Ok(cost::adjust(
+            self.cost_snapshot(py)?.config(),
+            cost,
+            provider,
+            model,
+            region,
+        ))
+    }
 }
 
 impl NativeModelCostMap {
     /// The pricing snapshot of the published table at its current generation, built only when the generation moved
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the cost bridge stacked on this change prices through it"
-        )
-    )]
     pub(crate) fn cost_snapshot(&self, py: Python<'_>) -> PyResult<Arc<CostSnapshot>> {
-        let (rows, generation) = host::generation(py)?;
-        self.snapshots.at(generation, || {
-            let rules = self
-                .read_inputs()
-                .cost_map
-                .catalog()
-                .capability_rules()
-                .clone();
-            let names = host::known_names(py)?;
-            Ok((self.index_over(&rows), PricingContext { rules, names }))
+        let read = host::generation(py)?;
+        let (discounts, margins) = cost::adjustment_config(&read.discounts, &read.margins)?;
+        let config = CostConfig { discounts, margins };
+        self.snapshots.at(read.generation, config, |config| {
+            Ok((
+                self.index_over(&read.rows),
+                PricingContext {
+                    rules: capability_rules(&read.rules),
+                    names: host::known_names(py)?,
+                    config: Arc::new(config),
+                },
+            ))
         })
     }
 
@@ -538,7 +600,7 @@ rows = {"claude-opus-5-5": Row(litellm_provider="anthropic", input_cost_per_toke
 writes = [0]
 
 def generation():
-    return rows, id(rows), len(rows), writes[0], 0, 0
+    return rows, (id(rows), len(rows), writes[0], 0), ({}, {}, [])
 
 def known_names():
     return frozenset({"anthropic"}), frozenset()
@@ -559,7 +621,7 @@ def write(key, row):
         };
         snapshot.lookup(|lookup| {
             let candidates = litellm_cost::candidates::candidates(lookup, &call);
-            let row = lookup.row(candidates.rows.first()?)?;
+            let row = lookup.row(&candidates.rows.first()?.row)?;
             row.lowered.fields["input_cost_per_token"].as_f64()
         })
     }

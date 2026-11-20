@@ -46,6 +46,7 @@ mod fallback;
 mod lower;
 mod model;
 mod model_info;
+mod pricing;
 mod register;
 mod resolve;
 mod store;
