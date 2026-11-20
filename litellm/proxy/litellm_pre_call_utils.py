@@ -1550,7 +1550,7 @@ def _dynamically_disabled_backends(
     disabled: Final = metadata.get("litellm_disabled_callbacks") if metadata else None
     if not isinstance(disabled, list):
         return frozenset()
-    return frozenset(name.lower() for name in disabled if isinstance(name, str))
+    return frozenset(name.strip().lower() for name in disabled if isinstance(name, str))
 
 
 def bind_v2_request_scope(

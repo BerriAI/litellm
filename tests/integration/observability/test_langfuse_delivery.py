@@ -22,6 +22,7 @@ from integration._support.client import (
     Scenario,
     eventually,
     gateway_from_environment,
+    held,
     object_value,
     string_value,
 )
@@ -379,7 +380,7 @@ def test_key_metadata_disabled_callbacks_stops_the_global_langfuse_callback_for_
             received.extend(destination.drain())
             return tuple(span.name for span in _spans(received) if span.name.startswith(marker))
 
-        names: Final = eventually(exported, lambda values: marker + "-control" in values, seconds=20)
+        names: Final = held(exported, lambda values: sorted(values) == [marker + "-control"], holding=5, seconds=30)
         assert sorted(names) == [marker + "-control"], names
 
 
