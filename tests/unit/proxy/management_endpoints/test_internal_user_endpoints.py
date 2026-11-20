@@ -2605,12 +2605,12 @@ async def test_user_status_update_refreshes_cached_user(
     ("request_fields", "role_default_duration", "stored_reset_at", "moves_reset"),
     [
         ({"budget_duration": "30d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), False),
-        ({"budget_duration": "30d"}, None, datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ({"budget_duration": "30d"}, None, datetime(2099, 1, 1, tzinfo=timezone.utc), False),
         ({"budget_duration": "7d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), True),
         ({"user_role": LitellmUserRoles.INTERNAL_USER}, "30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
     ],
 )
-async def test_user_update_keeps_a_due_budget_reset_when_the_duration_is_resent(
+async def test_user_update_keeps_existing_budget_reset_when_the_duration_is_resent(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
     request_fields: dict[str, object],

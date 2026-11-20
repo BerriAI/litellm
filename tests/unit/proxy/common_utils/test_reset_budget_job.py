@@ -1271,9 +1271,7 @@ def _run_reset_at_fixed_now(job, fixed_now):
     """Run the budget-table reset with `now` pinned for reset-time math."""
     from unittest.mock import patch
 
-    with patch("litellm.proxy.common_utils.timezone_utils.datetime") as mock_dt:
-        mock_dt.now.return_value = fixed_now
-        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+    with patch(f"{__name__}._FROZEN_NOW", fixed_now):
         asyncio.run(job.reset_budget_for_litellm_budget_table())
 
 
@@ -4577,12 +4575,24 @@ class _EndUserLedger:
         self.advances = 0
         self.stale_due_budgets: list[types.SimpleNamespace] | None = None
         replica: Final = [types.SimpleNamespace(**vars(budget)) for budget in self.budgets.values()]
+
+        async def find_stored_budget(*, where: Mapping[str, str]) -> types.SimpleNamespace | None:
+            return next((budget for budget in replica if budget.budget_id == where["budget_id"]), None)
+
         self.client = types.SimpleNamespace(
+            tx=self._transaction,
             writer_db=types.SimpleNamespace(
-                litellm_budgettable=types.SimpleNamespace(find_many=self._find_budgets),
+                litellm_budgettable=types.SimpleNamespace(
+                    find_many=self._find_budgets,
+                    find_unique=lambda where: _async_value(self.budgets.get(where["budget_id"])),
+                    update=self._write_budget,
+                ),
+                tx=self._transaction,
+                query_raw=AsyncMock(return_value=[]),
             ),
             db=types.SimpleNamespace(
                 litellm_budgettable=types.SimpleNamespace(
+                    find_unique=find_stored_budget,
                     find_many=lambda where: _async_value(
                         [budget for budget in replica if _row_matches(vars(budget), where)]
                     ),
@@ -4602,6 +4612,10 @@ class _EndUserLedger:
             ),
             get_data=self._due_budgets,
         )
+
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[types.SimpleNamespace]:
+        yield self.client.writer_db
 
     def spend(self) -> dict[str, _Cell]:
         return {user_id: row["spend"] for user_id, row in self.rows.items()}
@@ -6241,3 +6255,33 @@ async def test_reset_budget_for_litellm_team_members_called():
     assert len(team_member_writes) == 1
     assert team_member_writes[0]["where"]["budget_id"]["in"] == ["budget1"]
     assert team_member_writes[0]["data"] == {"spend": 0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "duration,saved,expected",
+    (
+        ("45m", "2026-07-15T11:30:00Z", "2026-07-15T12:15:00Z"),
+        ("5h", "2026-07-16T01:00:00Z", "2026-07-16T06:00:00Z"),
+        ("45s", "2026-07-15T10:18:30Z", "2026-07-15T10:19:15Z"),
+    ),
+)
+async def test_scalar_and_inline_elapsed_resets_keep_a_full_interval(
+    duration: str, saved: str, expected: str
+) -> None:
+    boundary: Final = datetime.fromisoformat(saved)
+    now: Final = boundary + timedelta(seconds=1)
+    settings: Final = BudgetResetSettings()
+    key: Final = LiteLLM_VerificationToken(
+        token="interval-key", spend=10, max_budget=10, budget_duration=duration, budget_reset_at=boundary
+    )
+
+    scalar: Final = await ResetBudgetJob._reset_budget_for_key(key, now, settings)
+    inline: Final = ResetBudgetJob._next_window_reset(
+        {"budget_duration": duration, "reset_at": saved}, now, settings
+    )
+
+    assert scalar is not None
+    assert scalar.spend == 0
+    assert scalar.budget_reset_at == datetime.fromisoformat(expected)
+    assert inline == scalar.budget_reset_at

@@ -3296,6 +3296,8 @@ async def test_upsert_team_member_budget_table_clears_duration_kept_budget(mock_
     team_table = MagicMock(spec=LiteLLM_TeamTable)
     team_table.metadata = {"team_member_budget_id": "existing_budget_123"}
 
+    mock_db_client.tx.return_value.__aenter__.return_value = mock_db_client.db
+    mock_db_client.db.query_raw = AsyncMock(return_value=[])
     mock_db_client.db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     mock_db_client.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     mock_db_client.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
@@ -12308,6 +12310,8 @@ async def test_upsert_team_member_model_max_budget_updates_default_budget_and_ev
     budget_cache: Final = MagicMock()
     budget_cache.async_delete_cache = AsyncMock()
     prisma: Final = MagicMock()
+    prisma.tx.return_value.__aenter__.return_value = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     prisma.db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
@@ -12364,6 +12368,8 @@ async def test_update_team_clears_explicitly_null_member_model_budget_and_evicts
     updated.litellm_model_table = None
     update_budget_response: Final = MagicMock(budget_id="member-budget-1")
     prisma: Final = MagicMock()
+    prisma.tx.return_value.__aenter__.return_value = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     prisma.db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
@@ -12424,6 +12430,8 @@ async def test_update_team_persists_member_model_budget_to_default_budget_row(
     updated.litellm_model_table = None
     update_budget_response: Final = MagicMock(budget_id="member-budget-1")
     prisma: Final = MagicMock()
+    prisma.tx.return_value.__aenter__.return_value = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     prisma.db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
@@ -13621,12 +13629,12 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     [
         ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
         ("30d", datetime(2020, 1, 1), False),
-        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), False),
         ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
         ("30d", None, True),
     ],
 )
-def test_set_budget_reset_at_keeps_a_due_reset_when_the_duration_is_resent(
+def test_set_budget_reset_at_keeps_existing_reset_when_the_duration_is_resent(
     stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
 ) -> None:
     from litellm.proxy._types import UpdateTeamRequest

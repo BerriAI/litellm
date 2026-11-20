@@ -138,7 +138,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_auth_cache_key,
@@ -231,6 +231,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
 from litellm.proxy.management_helpers.utils import (
     MemberWriteTx,
     add_new_member,
+    budget_windows_json,
     management_endpoint_wrapper,
 )
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
@@ -3161,7 +3162,7 @@ async def patch_team(
 
 def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_team: LiteLLM_TeamTable) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
-    if data.budget_duration is not None and not keeps_due_budget_reset(
+    if data.budget_duration is not None and not keeps_budget_reset(
         data.budget_duration, existing_team.budget_duration, existing_team.budget_reset_at
     ):
         updated_kv["budget_reset_at"] = get_budget_reset_time(budget_duration=data.budget_duration)
@@ -3169,12 +3170,7 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_tea
         updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
-        initialized_windows: Final = []
-        for window in data.budget_limits:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-            initialized_windows.append(w)
-        updated_kv["budget_limits"] = json.dumps(initialized_windows)
+        updated_kv["budget_limits"] = budget_windows_json(data.budget_limits, existing_team.budget_limits)
 
 
 async def handle_update_object_permission(

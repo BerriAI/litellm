@@ -54,7 +54,7 @@ from litellm.proxy.auth.password_policy import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     object_permission_cache_key,
@@ -1704,7 +1704,7 @@ async def _update_single_user_helper(
         if (
             "budget_reset_at" in non_default_values
             and isinstance(non_default_values["budget_duration"], str)
-            and keeps_due_budget_reset(
+            and keeps_budget_reset(
                 non_default_values["budget_duration"],
                 existing_user_row.budget_duration,
                 existing_user_row.budget_reset_at,
