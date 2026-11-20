@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use litellm_python_compat::Value;
-use litellm_redis_store::auth_cache::{AuthCache, Settings};
+use litellm_redis_store::auth_cache::{AuthCache, AuthObject, Settings};
 use pyo3::prelude::*;
 
 use super::{
@@ -14,6 +14,192 @@ use crate::redis::client::NativeRedisClient;
 
 fn values(values: Vec<Option<Value>>) -> Vec<Option<PyValue>> {
     values.into_iter().map(|value| value.map(PyValue)).collect()
+}
+
+/// One object the auth cache holds; `key` is the wire key `main` writes for it.
+#[pyclass(frozen, eq, hash, from_py_object, name = "AuthObject")]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PyAuthObject(AuthObject);
+
+#[pymethods]
+impl PyAuthObject {
+    #[staticmethod]
+    fn virtual_key(hashed_token: String) -> Self {
+        Self(AuthObject::Key(hashed_token))
+    }
+
+    #[staticmethod]
+    fn user(user_id: String) -> Self {
+        Self(AuthObject::User(user_id))
+    }
+
+    #[staticmethod]
+    fn team(team_id: String) -> Self {
+        Self(AuthObject::Team(team_id))
+    }
+
+    #[staticmethod]
+    fn team_alias(team_alias: String) -> Self {
+        Self(AuthObject::TeamAlias(team_alias))
+    }
+
+    #[staticmethod]
+    fn team_membership(team_id: String, user_id: String) -> Self {
+        Self(AuthObject::TeamMembership { team_id, user_id })
+    }
+
+    #[staticmethod]
+    fn team_membership_reservation(user_id: String, team_id: String) -> Self {
+        Self(AuthObject::TeamMembershipReservation { user_id, team_id })
+    }
+
+    #[staticmethod]
+    fn org(org_id: String) -> Self {
+        Self(AuthObject::Org(org_id))
+    }
+
+    #[staticmethod]
+    fn org_with_budget(org_id: String) -> Self {
+        Self(AuthObject::OrgWithBudget(org_id))
+    }
+
+    #[staticmethod]
+    fn org_with_budget_last_known(org_id: String) -> Self {
+        Self(AuthObject::OrgWithBudgetLastKnown(org_id))
+    }
+
+    #[staticmethod]
+    fn org_alias(org_alias: String) -> Self {
+        Self(AuthObject::OrgAlias(org_alias))
+    }
+
+    #[staticmethod]
+    fn project(project_id: String) -> Self {
+        Self(AuthObject::Project(project_id))
+    }
+
+    #[staticmethod]
+    fn end_user(end_user_id: String) -> Self {
+        Self(AuthObject::EndUser(end_user_id))
+    }
+
+    #[staticmethod]
+    fn end_user_restricted_registry() -> Self {
+        Self(AuthObject::EndUserRestrictedRegistry)
+    }
+
+    #[staticmethod]
+    fn end_user_validation(end_user_id: String) -> Self {
+        Self(AuthObject::EndUserValidation(end_user_id))
+    }
+
+    #[staticmethod]
+    fn customer_member(customer_member_id: String) -> Self {
+        Self(AuthObject::CustomerMember(customer_member_id))
+    }
+
+    #[staticmethod]
+    fn customer_org_alias(customer_org_alias: String) -> Self {
+        Self(AuthObject::CustomerOrgAlias(customer_org_alias))
+    }
+
+    #[staticmethod]
+    fn customer_app_definition() -> Self {
+        Self(AuthObject::CustomerAppDefinition)
+    }
+
+    #[staticmethod]
+    fn default_end_user_budget(budget_id: String) -> Self {
+        Self(AuthObject::DefaultEndUserBudget(budget_id))
+    }
+
+    #[staticmethod]
+    fn team_member_default_budget(budget_id: String) -> Self {
+        Self(AuthObject::TeamMemberDefaultBudget(budget_id))
+    }
+
+    #[staticmethod]
+    fn tag(tag_name: String) -> Self {
+        Self(AuthObject::Tag(tag_name))
+    }
+
+    #[staticmethod]
+    fn tag_registry() -> Self {
+        Self(AuthObject::TagRegistry)
+    }
+
+    #[staticmethod]
+    fn model_access_group(access_group_name: String) -> Self {
+        Self(AuthObject::ModelAccessGroup(access_group_name))
+    }
+
+    #[staticmethod]
+    fn model_access_group_registry() -> Self {
+        Self(AuthObject::ModelAccessGroupRegistry)
+    }
+
+    #[staticmethod]
+    fn access_group(access_group_id: String) -> Self {
+        Self(AuthObject::AccessGroup(access_group_id))
+    }
+
+    #[staticmethod]
+    fn access_group_rule_name(name: String) -> Self {
+        Self(AuthObject::AccessGroupRuleName(name))
+    }
+
+    #[staticmethod]
+    fn object_permission(object_permission_id: String) -> Self {
+        Self(AuthObject::ObjectPermission(object_permission_id))
+    }
+
+    #[staticmethod]
+    fn user_object_permission(user_id: String) -> Self {
+        Self(AuthObject::UserObjectPermission(user_id))
+    }
+
+    #[staticmethod]
+    fn agent_object_permission(agent_id: String) -> Self {
+        Self(AuthObject::AgentObjectPermission(agent_id))
+    }
+
+    #[staticmethod]
+    fn managed_vector_store(vector_store_id: String) -> Self {
+        Self(AuthObject::ManagedVectorStore(vector_store_id))
+    }
+
+    /// `jwt_key_mapping_cache_key`: an empty issuer is the issuer-agnostic scope.
+    #[staticmethod]
+    #[pyo3(signature = (claim_name, claim_value, issuer = None))]
+    fn jwt_key_mapping(claim_name: String, claim_value: String, issuer: Option<String>) -> Self {
+        Self(AuthObject::JwtKeyMapping {
+            issuer: issuer.filter(|issuer| !issuer.is_empty()),
+            claim_name,
+            claim_value,
+        })
+    }
+
+    #[staticmethod]
+    fn agent_identity(tenant_id: String, client_id: String) -> Self {
+        Self(AuthObject::AgentIdentity {
+            tenant_id,
+            client_id,
+        })
+    }
+
+    #[staticmethod]
+    fn global_proxy_spend() -> Self {
+        Self(AuthObject::GlobalProxySpend)
+    }
+
+    #[getter]
+    fn key(&self) -> String {
+        self.0.key()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("AuthObject({:?})", self.0)
+    }
 }
 
 /// `UserApiKeyCache` with `enable_redis_auth_cache` on. The sync methods back `DualCache`'s sync
@@ -45,7 +231,7 @@ impl NativeAuthCache {
     }
 
     /// `request` answers a key its pre-call reads already found absent without another `GET`.
-    #[pyo3(signature = (key, request = None))]
+    #[pyo3(signature = (key, request))]
     fn get<'py>(
         &self,
         py: Python<'py>,
@@ -79,33 +265,38 @@ impl NativeAuthCache {
         Ok(())
     }
 
-    #[pyo3(signature = (key, value, ttl_seconds = None))]
+    /// `request` reads the key again from now on, though one of its reads found it absent.
+    #[pyo3(signature = (key, value, ttl_seconds, request))]
     fn set<'py>(
         &self,
         py: Python<'py>,
         key: String,
         value: PyValue,
         ttl_seconds: Option<f64>,
+        request: Option<&NativeRequestRedis>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let ttl = ttl(ttl_seconds)?;
+        let request = request.map(|request| request.0.clone());
         redis_async(py, "async_set_cache", kind_error, async move {
-            store.set(&key, value.0, ttl).await
+            store.set(request.as_ref(), &key, value.0, ttl).await
         })
     }
 
-    #[pyo3(signature = (key, value, ttl_seconds = None))]
+    #[pyo3(signature = (key, value, ttl_seconds, request))]
     fn set_sync(
         &self,
         py: Python<'_>,
         key: String,
         value: PyValue,
         ttl_seconds: Option<f64>,
+        request: Option<&NativeRequestRedis>,
     ) -> PyResult<()> {
         let store = self.0.clone();
         let ttl = ttl(ttl_seconds)?;
+        let request = request.map(|request| request.0.clone());
         redis_sync(py, "set_cache", kind_error, async move {
-            store.set_str(&key, value.0, ttl).await
+            store.set_str(request.as_ref(), &key, value.0, ttl).await
         })
     }
 
@@ -117,7 +308,7 @@ impl NativeAuthCache {
     }
 
     /// The Redis write alone, `False` when a delete on any pod voided `lease`.
-    #[pyo3(signature = (key, lease, value, ttl_seconds = None))]
+    #[pyo3(signature = (key, lease, value, ttl_seconds, request))]
     fn set_leased<'py>(
         &self,
         py: Python<'py>,
@@ -125,12 +316,16 @@ impl NativeAuthCache {
         lease: Option<String>,
         value: PyValue,
         ttl_seconds: Option<f64>,
+        request: Option<&NativeRequestRedis>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let ttl = ttl(ttl_seconds)?;
+        let request = request.map(|request| request.0.clone());
         redis_async(py, "async_set_cache", kind_error, async move {
             Ok::<_, litellm_redis_store::Error>(
-                store.set_leased(&key, lease.as_deref(), value.0, ttl).await,
+                store
+                    .set_leased(request.as_ref(), &key, lease.as_deref(), value.0, ttl)
+                    .await,
             )
         })
     }
@@ -169,12 +364,13 @@ impl NativeAuthCache {
         ))
     }
 
-    #[pyo3(signature = (entries, ttl_seconds = None))]
+    #[pyo3(signature = (entries, ttl_seconds, request))]
     fn set_many<'py>(
         &self,
         py: Python<'py>,
         entries: Vec<(String, PyValue)>,
         ttl_seconds: Option<f64>,
+        request: Option<&NativeRequestRedis>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let entries = entries
@@ -182,8 +378,9 @@ impl NativeAuthCache {
             .map(|(key, value)| (key, value.0))
             .collect();
         let ttl = ttl(ttl_seconds)?;
+        let request = request.map(|request| request.0.clone());
         redis_async(py, "async_set_cache_pipeline", kind_error, async move {
-            store.set_many(entries, ttl).await
+            store.set_many(request.as_ref(), entries, ttl).await
         })
     }
 

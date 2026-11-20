@@ -16,7 +16,7 @@ import {
   customerEntityDailyData,
   type CustomerUsageRow,
 } from "./customerUsageData";
-import { customerUsageTotals, EMPTY_CUSTOMER_USAGE } from "./customerUsageTotals";
+import { customerUsageTotals, EMPTY_CUSTOMER_USAGE, type CustomerUsageTotal } from "./customerUsageTotals";
 
 type Organization = components["schemas"]["Organization"];
 type Team = components["schemas"]["Team"];
@@ -203,6 +203,53 @@ export const customerAppSpendCall = async (request: CustomerUsageRequest & { app
     monthlySpend: monthly.metadata.total_spend,
     yearlySpend: yearly.metadata.total_spend,
     tokenDetails: customerUsageTotals(selected.results).get(id) ?? EMPTY_CUSTOMER_USAGE,
+  };
+};
+
+export const customerAppsUsageCall = async (
+  appIds: readonly string[],
+  includeOverall: boolean,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal">,
+) => {
+  const scopes = includeOverall ? [null, ...appIds] : appIds;
+  const totals = await batches(scopes, async (appId) => {
+    const { metadata } = mergeCustomerActivityPages(
+      await activityPages("customer_organizations", [], { ...request, appId }),
+    );
+    const usage: CustomerUsageTotal = {
+      spend: metadata.total_spend,
+      requests: metadata.total_api_requests,
+      tokens: metadata.total_tokens,
+      inputTokens: metadata.total_prompt_tokens,
+      outputTokens: metadata.total_completion_tokens,
+      cacheReadTokens: metadata.total_cache_read_input_tokens ?? 0,
+      cacheWriteTokens: metadata.total_cache_creation_input_tokens ?? 0,
+      cacheCost: metadata.total_cache_cost ?? 0,
+      pricedCacheTokens: metadata.total_priced_cache_tokens ?? 0,
+    };
+    return [appId, usage] as const;
+  });
+  return new Map(totals);
+};
+
+export const customerAppUsageCall = async (
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal"> & { appId: string },
+) => {
+  const usage = mergeCustomerActivityPages(await activityPages("customer_organizations", [], request));
+  return {
+    ...usage,
+    results: usage.results.map((day) => ({
+      ...day,
+      breakdown: {
+        ...day.breakdown,
+        entities: Object.fromEntries(
+          Object.entries(day.breakdown.entities).map(([id, value]) => [
+            id === "Unassigned" && !("alias" in value.metadata) ? "" : id,
+            value,
+          ]),
+        ),
+      },
+    })),
   };
 };
 

@@ -266,7 +266,7 @@ describe("useAuthorized", () => {
     });
 
     expect(result.current.userRole).toBe("Admin");
-    expect(result.current.userRoleLabel).toBe("Admin Viewer");
+    expect(result.current.userRoleLabel).toBe("Proxy Admin Viewer");
     expect(result.current.isViewOnly).toBe(true);
     expect(replaceMock).not.toHaveBeenCalled();
     expect(clearTokenCookiesMock).not.toHaveBeenCalled();

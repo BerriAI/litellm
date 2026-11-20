@@ -25,11 +25,11 @@ from uuid import uuid4
 import httpx
 from pydantic import ConfigDict, JsonValue, TypeAdapter
 
+from litellm.integrations.clickhouse.spend_log_types import SpendLogRecord
+from litellm.integrations.lens.generated.types import AllQueryScope, Trace
+from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
+from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.rust_bridge.clickhouse import spend_storage_config
-from litellm.tracing.generated.types import AllQueryScope, Trace
-from litellm.tracing.remote import LensConnection, RemoteTraceStore
-from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing.types import SpendLogRecord
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
