@@ -2842,7 +2842,10 @@ class ComplexityRouter(CustomLogger):
             {"role": "user", "content": user_content},
         ]
         content, classifier_cost = await self._call_classifier_model(
-            messages_for_call, request_kwargs, encrypted_task=encrypted_task
+            messages_for_call,
+            request_kwargs,
+            max_output_tokens=llm_config.max_output_tokens,
+            encrypted_task=encrypted_task,
         )
         try:
             raw_tier: Final = _LabeledTierClassification.model_validate_json(extract_classifier_json(content)).tier
@@ -3020,7 +3023,10 @@ class ComplexityRouter(CustomLogger):
                 **classifier_payload,
                 **(
                     MappingProxyType(
-                        {"max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens}
+                        {
+                            **dict.fromkeys(OUTPUT_TOKEN_CEILING_PARAMS),
+                            "max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens,
+                        }
                     )
                     if max_output_tokens is not None
                     else EMPTY_MAPPING

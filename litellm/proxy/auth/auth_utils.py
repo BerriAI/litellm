@@ -2849,6 +2849,8 @@ def get_model_from_request(
     """
     if request_dispatched_to_pass_through_endpoint(request):
         return None
+    if route in LiteLLMRoutes.compliance_check_routes.value:
+        return None
 
     handler_request_data: Final = _MODEL_REQUEST_DATA.validate_python(request_data)
     handler_path_params: Final = read_request_path_params(request) if request is not None else path_params
