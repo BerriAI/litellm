@@ -987,6 +987,56 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         ]
 
     @pytest.mark.asyncio
+    async def test_input_guardrail_rewrite_of_raw_server_and_mcp_tool_use_blocks_lands_on_their_input(self):
+        handler: Final = OpenAIChatCompletionsHandler()
+        data: Final = {
+            "messages": [
+                {"role": "user", "content": "look up jane"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Checking."},
+                        {"type": "server_tool_use", "id": "srvtoolu_01Raw", "name": "web_fetch", "input": _FETCH_INPUT},
+                        {
+                            "type": "mcp_tool_use",
+                            "id": "mcptoolu_01Wiki",
+                            "name": "ask_question",
+                            "server_name": "deepwiki",
+                            "input": {"repoName": "jane/notes", "query": "where is jane"},
+                        },
+                        {
+                            "type": "mcp_tool_result",
+                            "tool_use_id": "mcptoolu_01Wiki",
+                            "is_error": False,
+                            "content": [{"type": "text", "text": "jane is in Paris"}],
+                        },
+                    ],
+                    "tool_calls": [_server_tool_call("toolu_01Weather", "get_weather", {"city": "Paris"})],
+                    "provider_specific_fields": {
+                        "server_tool_calls": [_server_tool_call("srvtoolu_01Search", "web_search", _SEARCH_INPUT)]
+                    },
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data, QueryRedactingGuardrail(guardrail_name="redact"))
+
+        assistant: Final = data["messages"][1]
+        assert [(block["type"], block.get("input")) for block in assistant["content"]] == [
+            ("text", None),
+            ("server_tool_use", {"url": "[REDACTED]"}),
+            ("mcp_tool_use", {"repoName": "jane/notes", "query": "[REDACTED]"}),
+            ("mcp_tool_result", None),
+        ]
+        assert assistant["content"][2]["server_name"] == "deepwiki"
+        assert _tool_call_ids_names_and_arguments(assistant["provider_specific_fields"]["server_tool_calls"]) == [
+            ("srvtoolu_01Search", "web_search", '{"query": "[REDACTED]"}')
+        ]
+        assert _tool_call_ids_names_and_arguments(assistant["tool_calls"]) == [
+            ("toolu_01Weather", "get_weather", '{"city": "Paris"}')
+        ]
+
+    @pytest.mark.asyncio
     async def test_input_guardrail_rewrite_of_a_replayed_server_web_call_reaches_its_hosted_copy(self):
         handler: Final = OpenAIChatCompletionsHandler()
         data: Final = {

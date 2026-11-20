@@ -2460,8 +2460,19 @@ class _TextBlock(LiteLLMBaseModel):
     text: str
 
 
+class _RawServerToolUse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["server_tool_use", "mcp_tool_use"]
+    id: str
+    name: str
+    input: Mapping[str, JsonValue]
+
+
 _WEB_SEARCH_TOOL_RESULT_ADAPTER: Final = TypeAdapter(_ReplayedWebSearchToolResult)
 _SERVER_TOOL_USE_ADAPTER: Final = TypeAdapter(_ReplayedServerToolUse)
+_RAW_SERVER_TOOL_USE_ADAPTER: Final = TypeAdapter(_RawServerToolUse)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _flattenable_web_search_tool_result(block: object) -> _ReplayedWebSearchToolResult | None:
@@ -2491,6 +2502,44 @@ def anthropic_server_tool_call_params(message: object) -> tuple[ChatCompletionAs
         return _SERVER_TOOL_CALLS_ADAPTER.validate_python(fields.get("server_tool_calls", ()) if fields else ())
     except ValidationError:
         return ()
+
+
+def raw_server_tool_use_calls(message: object) -> tuple[tuple[int, ChatCompletionAssistantToolCall], ...]:
+    return tuple(
+        (block_idx, call)
+        for block_idx, block in enumerate(parts_of(message_field(message, "content")))
+        if (call := _raw_server_tool_use_call(block)) is not None
+    )
+
+
+def _raw_server_tool_use_call(block: object) -> ChatCompletionAssistantToolCall | None:
+    try:
+        use: Final = _RAW_SERVER_TOOL_USE_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+    return ChatCompletionAssistantToolCall(
+        id=use.id, type="function", function={"name": use.name, "arguments": json.dumps(use.input)}
+    )
+
+
+def write_raw_server_tool_use_inputs(message: object, arguments_by_block: Mapping[int, str]) -> None:
+    content: Final = message_field(message, "content")
+    if not arguments_by_block or not isinstance(message, dict) or not isinstance(content, list):
+        return
+    message["content"] = [  # rebind-ok: a guardrail rewrite must land on the request it scanned
+        _with_raw_server_tool_use_input(block, arguments_by_block.get(block_idx))
+        for block_idx, block in enumerate(parts_of(content))
+    ]
+
+
+def _with_raw_server_tool_use_input(block: object, arguments: str | None) -> object:
+    if arguments is None or not isinstance(block, dict):
+        return block
+    try:
+        rewritten_input: Final = _JSON_OBJECT.validate_json(arguments)
+    except ValidationError:
+        return block
+    return block if block.get("input") == rewritten_input else {**block, "input": rewritten_input}
 
 
 def anthropic_server_tool_calls(message: object) -> tuple[ChatCompletionMessageToolCall, ...]:

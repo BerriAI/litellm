@@ -33,8 +33,10 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chun
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     changed_server_tool_call_arguments,
+    raw_server_tool_use_calls,
     write_anthropic_hosted_web_call_arguments,
     write_anthropic_server_tool_calls,
+    write_raw_server_tool_use_inputs,
     write_request_server_tool_calls,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
@@ -161,9 +163,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 scan_only_tool_results=scan_only_tool_results,
             )
         )
+        raw_server_tool_use_tasks: Final = tuple(
+            _input_raw_server_tool_use_tasks(
+                structured_messages or [],
+                skip_system_message=skip_system,
+                skip_tool_message=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
+            )
+        )
         tool_calls_with_server_calls: Final = [
             *tool_calls_to_check,
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
+            *(_server_tool_call_input(call) for _, call in raw_server_tool_use_tasks),
         ]
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -249,6 +260,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         messages=structured_messages or [],
                         guardrailed_tool_calls=guardrailed_tool_calls[len(tool_calls_to_check) :],
                         task_mappings=tuple(mapping for mapping, _ in server_tool_call_tasks),
+                    )
+                    _write_raw_server_tool_use_inputs(
+                        messages=structured_messages or [],
+                        guardrailed_tool_calls=guardrailed_tool_calls[
+                            len(tool_calls_to_check) + len(server_tool_call_tasks) :
+                        ],
+                        task_mappings=tuple(mapping for mapping, _ in raw_server_tool_use_tasks),
                     )
 
         elif (
@@ -1516,6 +1534,62 @@ def _input_server_tool_call_tasks(
             continue
         for server_idx, server_tool_call in enumerate(anthropic_server_tool_call_params(message)):
             yield (msg_idx, server_idx), server_tool_call
+
+
+def _input_raw_server_tool_use_tasks(
+    messages: Sequence[Mapping[str, object]],
+    *,
+    skip_system_message: bool,
+    skip_tool_message: bool,
+    scan_only_tool_results: bool,
+) -> Iterator[tuple[tuple[int, int], ChatCompletionAssistantToolCall]]:
+    for msg_idx, message in enumerate(messages):
+        if role_out_of_guardrail_scope(
+            str(message.get("role") or "").lower(),
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        ):
+            continue
+        for block_idx, raw_call in raw_server_tool_use_calls(message):
+            yield (msg_idx, block_idx), raw_call
+
+
+def _write_raw_server_tool_use_inputs(
+    messages: Sequence[object],
+    guardrailed_tool_calls: Sequence[object],
+    task_mappings: Sequence[tuple[int, int]],
+) -> None:
+    arguments_by_task: Final = MappingProxyType(
+        {
+            task: arguments
+            for task, guardrailed in zip(task_mappings, guardrailed_tool_calls)
+            if (arguments := _guardrailed_tool_call_arguments(guardrailed)) is not None
+        }
+    )
+    for msg_idx in sorted(frozenset(msg_idx for msg_idx, _ in task_mappings)):
+        write_raw_server_tool_use_inputs(
+            messages[msg_idx],
+            _message_block_arguments(arguments_by_task, msg_idx),
+        )
+
+
+def _message_block_arguments(arguments_by_task: Mapping[tuple[int, int], str], msg_idx: int) -> Mapping[int, str]:
+    return MappingProxyType(
+        {
+            block_idx: arguments
+            for (task_msg_idx, block_idx), arguments in arguments_by_task.items()
+            if task_msg_idx == msg_idx
+        }
+    )
+
+
+def _guardrailed_tool_call_arguments(guardrailed: object) -> str | None:
+    try:
+        function: Final = _TOOL_CALL_FUNCTION_ADAPTER.validate_python(stream_item_field(guardrailed, "function"))
+    except ValidationError:
+        return None
+    return function.get("arguments")
 
 
 def _server_tool_call_tasks(
