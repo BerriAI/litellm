@@ -810,6 +810,7 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
                     call_type="completion",
                 )
 
+    @pytest.mark.parametrize("extra_fields", [{}, {"messages": []}], ids=["input_only", "with_empty_messages"])
     @pytest.mark.parametrize("on_flagged_action", ["block", "monitor"])
     @pytest.mark.parametrize(
         "verdict",
@@ -820,7 +821,7 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
         ids=["sanitized_text", "sanitized_messages"],
     )
     @pytest.mark.asyncio
-    async def test_redact_blocks_input_json_requests_in_every_mode(self, on_flagged_action, verdict):
+    async def test_redact_blocks_input_json_requests_in_every_mode(self, on_flagged_action, verdict, extra_fields):
         g = _make_guardrail(event_hook="pre_call", on_flagged_action=on_flagged_action)
         request_input = [
             {
@@ -831,7 +832,7 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
                 ],
             }
         ]
-        data = {"input": request_input}
+        data = {"input": request_input, **extra_fields}
         cisco_resp = _redact_response(**verdict, rules=({"rule_name": "PII"},))
 
         with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):

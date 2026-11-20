@@ -1441,7 +1441,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             sanitized_messages = sanitized_messages[:-1] or None
         uses_input: Final = "input" in request_data and "messages" not in request_data
         request_input: Final[object] = request_data.get("input")
-        if uses_input and self._carries_json_part(request_input):
+        if self._carries_json_part(request_input):
             return False
         has_instructions: Final = request_data.get("instructions") is not None
         instructions_redacted = False
