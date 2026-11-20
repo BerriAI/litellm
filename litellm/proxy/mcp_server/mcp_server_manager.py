@@ -101,6 +101,7 @@ from litellm.proxy.common_utils.user_api_key_cache import get_management_object_
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap_at_startup,
 )
+from litellm.proxy.mcp_server.auth.auth_profile_grants import caller_auth_profile_grants
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401  # legacy module exports
     MCPRequestHandler,
     MCPServerAccess,
@@ -112,7 +113,6 @@ from litellm.proxy.mcp_server.auth_profile_selection import (
     AuthProfileGrantSource,
     AuthProfileOwnerSource,
     effective_server_for,
-    no_auth_profile_grants,
     record_auth_profile,
     without_profile_credential_headers,
 )
@@ -2219,7 +2219,7 @@ class MCPServerManager:
         discovery_clock: Callable[[], float] = time.monotonic,
         catalog_clock: Callable[[], float] = time.monotonic,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
-        auth_profile_grants: AuthProfileGrantSource = no_auth_profile_grants,
+        auth_profile_grants: AuthProfileGrantSource = caller_auth_profile_grants,
         auth_profile_owners: AuthProfileOwnerSource | None = None,
     ) -> None:
         self._auth_profile_grants = auth_profile_grants

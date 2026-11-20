@@ -23940,3 +23940,29 @@ async def test_a_forwarded_caller_authorization_never_rides_beside_a_profile_on_
     )
 
     assert upstream.calls("tools/call") == ("",), upstream.requests
+
+
+async def test_a_key_whose_permission_row_grants_a_profile_calls_with_that_profile_by_default() -> None:
+    from litellm.proxy.mcp_server.outbound_credentials.client_credentials import ClientCredentialsTokenSource
+    from litellm.proxy.mcp_server.outbound_credentials.resolver import UpstreamCredentialProvider
+
+    upstream: Final = AnalyticsUpstream()
+    server: Final = profiled_analytics_server()
+    manager: Final = MCPServerManager(
+        cred_provider=UpstreamCredentialProvider(
+            client_credentials_source=ClientCredentialsTokenSource(BotTokenEndpoint())
+        ),
+        upstream_transport=httpx2.MockTransport(upstream.respond),
+    )
+    manager.registry[server.server_id] = server
+    manager.tool_name_to_mcp_server_name_mapping["analytics-get_issue"] = server.server_id
+    granted_key: Final = UserAPIKeyAuth(
+        api_key="hashed-bot-key",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-bot", mcp_servers=["analytics"], mcp_auth_profiles=["ana-bots"]
+        ),
+    )
+
+    await manager.call_tool(server_name="analytics", name="get_issue", arguments={}, user_api_key_auth=granted_key)
+
+    assert upstream.calls("tools/call") == ("Bearer bot-app-token-1",), upstream.requests

@@ -23,6 +23,7 @@ pub struct ObjectPermission {
     search_tools: Vec<String>,
     mcp_tool_search_enabled: Option<bool>,
     skills: Vec<String>,
+    mcp_auth_profiles: Vec<String>,
 }
 
 pub(super) async fn find_object_permission(
@@ -65,9 +66,9 @@ mod tests {
             INSERT INTO "LiteLLM_ObjectPermissionTable"
                 (object_permission_id, mcp_servers, mcp_access_groups, mcp_tool_permissions, vector_stores,
                  agents, agent_access_groups, models, blocked_tools, mcp_toolsets, search_tools,
-                 mcp_tool_search_enabled, skills)
+                 mcp_tool_search_enabled, skills, mcp_auth_profiles)
             VALUES ('perm-full', '{s1,s2}', '{g1}', '{"s1": ["t1"]}', '{v1}', '{a1}', '{ag1}', '{m1}', '{bt}',
-                    '{ts}', '{st}', true, '{sk}')
+                    '{ts}', '{st}', true, '{sk}', '{tickets-bots}')
             "#,
         )
         .execute(&mut *tx)
@@ -93,6 +94,7 @@ mod tests {
                 "search_tools": ["st"],
                 "mcp_tool_search_enabled": true,
                 "skills": ["sk"],
+                "mcp_auth_profiles": ["tickets-bots"],
             })
         );
         Ok(())
@@ -112,8 +114,8 @@ mod tests {
         )]
         sqlx::query(
             r#"
-            INSERT INTO "LiteLLM_ObjectPermissionTable" (object_permission_id, mcp_servers, models, skills)
-            VALUES ('perm-null', NULL, NULL, NULL)
+            INSERT INTO "LiteLLM_ObjectPermissionTable" (object_permission_id, mcp_servers, models, skills, mcp_auth_profiles)
+            VALUES ('perm-null', NULL, NULL, NULL, NULL)
             "#,
         )
         .execute(&mut *tx)
@@ -124,8 +126,13 @@ mod tests {
             .ok_or("row missing")?;
 
         assert_eq!(
-            (found.mcp_servers, found.models, found.skills),
-            (vec![], vec![], vec![])
+            (
+                found.mcp_servers,
+                found.models,
+                found.skills,
+                found.mcp_auth_profiles
+            ),
+            (vec![], vec![], vec![], vec![])
         );
         Ok(())
     }

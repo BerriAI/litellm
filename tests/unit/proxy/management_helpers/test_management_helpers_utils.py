@@ -1665,3 +1665,57 @@ async def test_add_new_member_gives_a_new_user_the_default_budget_windows(new_me
         in (resets_before_call[window["budget_duration"]], resets_after_call[window["budget_duration"]])
         for window in windows
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_grants", "expected_permission"),
+    [
+        ([], {"object_permission_id": "perm-1", "mcp_servers": ["analytics"]}),
+        (
+            ["ana-bots"],
+            {"object_permission_id": "perm-1", "mcp_servers": ["analytics"], "mcp_auth_profiles": ["ana-bots"]},
+        ),
+    ],
+)
+async def test_key_info_shows_auth_profile_grants_only_when_the_row_has_them(
+    stored_grants: list[str], expected_permission: dict[str, object]
+) -> None:
+    from litellm.proxy.management_helpers.object_permission_utils import attach_object_permission_to_dict
+
+    row: Final = MagicMock()
+    row.model_dump.return_value = {
+        "object_permission_id": "perm-1",
+        "mcp_servers": ["analytics"],
+        "mcp_auth_profiles": stored_grants,
+    }
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=row)
+
+    result: Final = await attach_object_permission_to_dict(
+        data_dict={"token": "hashed", "object_permission_id": "perm-1"}, prisma_client=prisma_client
+    )
+
+    assert result == {"token": "hashed", "object_permission_id": "perm-1", "object_permission": expected_permission}
+
+
+def test_team_and_agent_permission_payloads_omit_auth_profile_grants_they_do_not_set() -> None:
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.types.agents import AgentResponse
+
+    stored_row: Final = {"object_permission_id": "perm-1", "mcp_servers": ["analytics"], "mcp_auth_profiles": []}
+
+    assert LiteLLM_ObjectPermissionTable.model_validate(stored_row).model_dump(exclude_none=True) == {
+        "object_permission_id": "perm-1",
+        "mcp_servers": ["analytics"],
+        "mcp_access_groups": [],
+        "vector_stores": [],
+        "agents": [],
+        "agent_access_groups": [],
+        "models": [],
+        "blocked_tools": [],
+        "search_tools": [],
+    }
+    assert AgentResponse(
+        agent_id="a", agent_name="a", agent_card_params={}, object_permission=stored_row
+    ).object_permission == {"object_permission_id": "perm-1", "mcp_servers": ["analytics"]}

@@ -8,7 +8,7 @@ can adopt the type without violating the SDK-must-not-import-from-proxy
 layering rule.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -27,3 +27,9 @@ class ObjectPermissionDict(TypedDict, total=False):
     mcp_tool_search_enabled: bool | None
     skills: ReadOnly[list[str] | None]
     apps: ReadOnly[Sequence[str] | None]
+
+
+def without_empty_auth_profile_grants(permission: Mapping[str, object]) -> Mapping[str, object]:
+    if permission.get("mcp_auth_profiles"):
+        return permission
+    return {key: value for key, value in permission.items() if key != "mcp_auth_profiles"}
