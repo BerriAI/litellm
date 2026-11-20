@@ -1,6 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
+import { createSerializer } from "nuqs";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -18,6 +19,9 @@ import type { BudgetGroups } from "../../customers/_components/customerBudgetGro
 import { appSurchargeField, appSurchargeValue, type App, type AppResource } from "./appForms";
 import { invalidateAppBudgets } from "./appApi";
 import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
+import { customerAppParsers } from "../../customers/_components/CustomerHierarchyNavigation";
+
+const appHref = createSerializer(customerAppParsers);
 
 const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default_budgets"]) => {
   const customSource = app?.budget ? "custom" : "inherit";
@@ -134,9 +138,12 @@ export default function AppSettingsForm({
       <a href={`${uiHref("customers/settings")}?tab=overall-app`} className="text-xs text-primary hover:underline">
         {t("apps.manageOverallProfiles")}
       </a>
-      {onClose && (
+      {onClose && app && (
         <div className="border-t pt-6">
-          <a href={`${uiHref("customers/settings")}?tab=app-member`} className="text-sm text-primary hover:underline">
+          <a
+            href={appHref(uiHref("apps/budget-groups"), { app_id: app.app_id })}
+            className="text-sm text-primary hover:underline"
+          >
             {t("apps.manageMemberProfiles")}
           </a>
         </div>

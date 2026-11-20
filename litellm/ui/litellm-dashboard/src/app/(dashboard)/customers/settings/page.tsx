@@ -9,9 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { uiHref } from "@/utils/uiHref";
 
-import CustomerBudgetCatalog, { budgetGroupCatalogs as catalogs } from "../_components/CustomerBudgetCatalog";
+import CustomerBudgetCatalog, { budgetGroupCatalogs } from "../_components/CustomerBudgetCatalog";
 
-const budgetGroupTab = parseAsStringLiteral(["organization", "app", "overall-app", "app-member"])
+const catalogs = budgetGroupCatalogs.filter(({ scope }) => scope !== "app-member");
+const budgetGroupTab = parseAsStringLiteral(catalogs.map(({ scope }) => scope))
   .withDefault("organization")
   .withOptions({ history: "push" });
 

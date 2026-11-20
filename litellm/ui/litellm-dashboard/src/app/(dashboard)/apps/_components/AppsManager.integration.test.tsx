@@ -204,7 +204,7 @@ describe("Gateway app definition", () => {
     fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     expect(screen.getByRole("link", { name: "Manage per-member defaults and budget groups" })).toHaveAttribute(
       "href",
-      `${uiHref("customers/settings")}?tab=app-member`,
+      `${uiHref("apps/budget-groups")}?app_id=app-chat`,
     );
     await expectSavedBudget(user, { rpm_limit: 0 });
   });
