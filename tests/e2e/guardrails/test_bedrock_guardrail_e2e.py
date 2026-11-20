@@ -260,7 +260,7 @@ class TestBedrockGuardrail:
 
         prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
         blocked = poll_until_blocked_stream(
-            lambda: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128)
+            lambda: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=1024)
         )
         _assert_policy_block(blocked, "streamed /chat/completions")
         error = _blocked_stream_error(blocked)
