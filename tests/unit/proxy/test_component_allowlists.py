@@ -231,21 +231,21 @@ def test_backend_mount_paths_defined():
         "BACKEND_MOUNT_PATHS must contain at least one Mount path"
 
 
-def test_swagger_mount_in_backend_allowlist():
-    """The /swagger Mount must be in BACKEND_MOUNT_PATHS."""
-    assert "/swagger" in BACKEND_MOUNT_PATHS, \
-        "/swagger Mount path must be in BACKEND_MOUNT_PATHS"
+def test_scalar_mount_in_backend_allowlist():
+    """The /scalar Mount must be in BACKEND_MOUNT_PATHS."""
+    assert "/scalar" in BACKEND_MOUNT_PATHS, \
+        "/scalar Mount path must be in BACKEND_MOUNT_PATHS"
 
 
-def test_backend_keeps_swagger_mount():
+def test_backend_keeps_scalar_mount():
     """Verify that Mounts in BACKEND_MOUNT_PATHS are kept on the backend."""
     backend_mounts = {
         getattr(r, "path")
         for r in app.router.routes
         if isinstance(r, Mount) and getattr(r, "path", None) in BACKEND_MOUNT_PATHS
     }
-    assert "/swagger" in backend_mounts, \
-        "/swagger Mount is expected on the proxy app and should be in BACKEND_MOUNT_PATHS"
+    assert "/scalar" in backend_mounts, \
+        "/scalar Mount is expected on the proxy app and should be in BACKEND_MOUNT_PATHS"
 
 
 def test_backend_drops_non_allowlisted_mounts():
@@ -308,9 +308,9 @@ def test_backend_serves_metrics_after_startup_when_enabled(enabled: bool) -> Non
             assert "litellm_postgres_failed_requests_total 2.0\n" in response.text
 
 
-def test_gateway_drops_ui_and_swagger_mounts():
-    """UI static and swagger Mounts must still be trimmed from the gateway."""
-    for path in ("/ui", "/_next", "/litellm-asset-prefix/_next", "/swagger"):
+def test_gateway_drops_ui_and_scalar_mounts():
+    """UI static and scalar Mounts must still be trimmed from the gateway."""
+    for path in ("/ui", "/_next", "/litellm-asset-prefix/_next", "/scalar"):
         assert not _is_gateway_route(Mount(path, app=make_asgi_app())), \
             f"Mount {path} must not be served by the gateway"
 

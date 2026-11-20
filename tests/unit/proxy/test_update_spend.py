@@ -1,7 +1,6 @@
 import asyncio
 from unittest.mock import Mock
 from typing import Final
-from litellm.proxy.utils import get_redoc_url, get_docs_url
 
 import pytest
 from fastapi import Request

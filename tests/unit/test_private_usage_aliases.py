@@ -998,8 +998,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
     ),
     (
         "litellm.proxy.proxy_server",
-        "_get_redoc_url",
-        "get_redoc_url",
     ),
     (
         "litellm.proxy.proxy_server",
@@ -4049,8 +4047,6 @@ PROXY_ALIAS_CASES: Final = (
     (
         "litellm.proxy.utils",
         "",
-        "_get_redoc_url",
-        "get_redoc_url",
         False,
     ),
     (

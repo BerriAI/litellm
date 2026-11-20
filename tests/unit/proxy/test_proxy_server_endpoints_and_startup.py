@@ -6988,6 +6988,7 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
 
     docs_url = get_docs_url()
     root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
+    monkeypatch.setattr(app.router, "routes", list(app.routes))
 
     # Remove any existing "/" route that might interfere
     routes_to_remove = []
@@ -15744,97 +15745,54 @@ async def test_load_config_rejects_a_non_positive_user_api_key_cache_max_size(tm
     assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
 
 
-def test_docs_redoc_openapi_are_reachable_by_default():
-    """
-    LIT-6745: the interactive/machine-readable docs surfaces are on by
-    default (the customer-facing production toggle is opt-in, not opt-out).
-    """
+def test_scalar_and_openapi_are_reachable_by_default():
     client = TestClient(app)
 
-    assert client.get("/redoc").status_code == 200
-    openapi_response = client.get("/openapi.json")
-    assert openapi_response.status_code == 200
-    assert "paths" in openapi_response.json()
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'src="/scalar/scalar-1.81.0.js"' in response.text
+    assert 'data-openapi-url="/openapi.json"' in response.text
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").json()["paths"]
 
 
-def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
-    """
-    LIT-6745: pins the actual `FastAPI(docs_url=..., redoc_url=..., openapi_url=...)`
-    construction in proxy_server.py to _get_docs_url/_get_redoc_url/_get_openapi_url,
-    so a hardcoded or drifted value at that call site fails this test even though
-    the helpers themselves are covered separately.
-    """
-    from litellm.proxy import utils as proxy_utils
+def _build_app_with_docs_env():
+    from litellm.proxy.scalar_reference import mount_scalar_reference
+    from litellm.proxy.utils import get_docs_url, get_openapi_url
 
-    assert app.docs_url == proxy_utils._get_docs_url()
-    assert app.redoc_url == proxy_utils._get_redoc_url()
-    assert app.openapi_url == proxy_utils._get_openapi_url()
+    docs_app = FastAPI(docs_url=None, redoc_url=None, openapi_url=get_openapi_url())
+    mount_scalar_reference(docs_app, get_docs_url())
+    return docs_app
 
 
-def _build_app_with_docs_env(monkeypatch, *, disabled: bool) -> FastAPI:
-    from litellm.proxy import utils as proxy_utils
+def test_scalar_uses_custom_urls_under_proxy_prefix(monkeypatch):
+    monkeypatch.setenv("DOCS_URL", "/reference")
+    monkeypatch.setenv("OPENAPI_URL", "/schema.json")
+    client = TestClient(_build_app_with_docs_env(), root_path="/gateway")
+
+    response = client.get("/gateway/reference")
+    assert response.status_code == 200
+    assert 'src="/gateway/scalar/scalar-1.81.0.js"' in response.text
+    assert 'data-openapi-url="/gateway/schema.json"' in response.text
+    assert 'data-server-url="/gateway"' in response.text
+    assert client.get("/gateway/schema.json").status_code == 200
+    assert client.get("/gateway/scalar/scalar-1.81.0.js").status_code == 200
+
+
+@pytest.mark.parametrize("flag", ("NO_DOCS", "NO_OPENAPI"))
+def test_scalar_is_unavailable_when_either_surface_is_disabled(monkeypatch, flag):
     from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 
-    for flag in ("DOCS_URL", "REDOC_URL", "OPENAPI_URL"):
-        monkeypatch.delenv(flag, raising=False)
-    for flag in ("NO_DOCS", "NO_REDOC", "NO_OPENAPI"):
-        if disabled:
-            monkeypatch.setenv(flag, "True")
-        else:
-            monkeypatch.delenv(flag, raising=False)
+    monkeypatch.delenv("DOCS_URL", raising=False)
+    monkeypatch.delenv("OPENAPI_URL", raising=False)
+    monkeypatch.setenv(flag, "True")
+    docs_app = _build_app_with_docs_env()
+    docs_app.include_router(health_router)
+    client = TestClient(docs_app)
 
-    # Mirrors the exact FastAPI() construction in proxy_server.py, so this
-    # exercises the real gating mechanism rather than a reimplementation of it.
-    app_under_test = FastAPI(
-        docs_url=proxy_utils._get_docs_url(),
-        redoc_url=proxy_utils._get_redoc_url(),
-        openapi_url=proxy_utils._get_openapi_url(),
-    )
-    app_under_test.include_router(health_router)
-    return app_under_test
-
-
-def test_docs_endpoints_enabled_when_env_unset(monkeypatch):
-    app_under_test = _build_app_with_docs_env(monkeypatch, disabled=False)
-    assert app_under_test.docs_url == "/"
-    assert app_under_test.redoc_url == "/redoc"
-    assert app_under_test.openapi_url == "/openapi.json"
-
-    client = TestClient(app_under_test)
-    assert client.get(app_under_test.docs_url).status_code == 200
-    assert client.get(app_under_test.redoc_url).status_code == 200
-    assert client.get(app_under_test.openapi_url).status_code == 200
-
-
-def test_no_docs_no_redoc_no_openapi_disable_every_documentation_surface(monkeypatch):
-    """
-    LIT-6745: NO_DOCS, NO_REDOC and NO_OPENAPI must each 404 their surface
-    with no schema in the body, so a production/air-gapped deployment can
-    restrict every doc route consistently.
-    """
-    app_under_test = _build_app_with_docs_env(monkeypatch, disabled=True)
-    assert app_under_test.docs_url is None
-    assert app_under_test.redoc_url is None
-    assert app_under_test.openapi_url is None
-
-    client = TestClient(app_under_test)
-    for route in ("/", "/redoc", "/openapi.json"):
-        response = client.get(route)
-        assert response.status_code == 404
-        assert "openapi" not in response.text.lower()
-        assert "paths" not in response.text.lower()
-
-
-def test_disabling_docs_does_not_disable_other_routes(monkeypatch):
-    """
-    LIT-6745: disabling the doc surfaces must not affect inference/management
-    routes, since NO_DOCS/NO_REDOC/NO_OPENAPI only remove the routes FastAPI
-    itself auto-registers for docs_url/redoc_url/openapi_url.
-    """
-    app_under_test = _build_app_with_docs_env(monkeypatch, disabled=True)
-    client = TestClient(app_under_test)
-
-    assert client.get("/redoc").status_code == 404
+    assert client.get("/").status_code == 404
+    assert client.get("/scalar/scalar-1.81.0.js").status_code == 404
+    assert client.get("/openapi.json").status_code == (404 if flag == "NO_OPENAPI" else 200)
     assert client.get("/health/liveliness").status_code == 200
 
 

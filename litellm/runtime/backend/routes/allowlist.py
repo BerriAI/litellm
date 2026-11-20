@@ -158,8 +158,6 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
         "/alerts",
         "/openapi.json",
         "/docs",
-        "/docs/oauth2-redirect",
-        "/redoc",
         "/fallback/login",
         "/mcp",  # bare spelling of the aggregate MCP endpoint; /mcp/ prefix covers the rest
     }
@@ -169,7 +167,7 @@ BACKEND_MOUNT_PATHS: frozenset[str] = frozenset(
     {
         "/admin",
         "/metrics",
-        "/swagger",  # API documentation static assets belong to the backend
+        "/scalar",  # API documentation static assets belong to the backend
         "/mcp",  # lazily-mounted MCP sub-app serves on the backend component
     }
 )

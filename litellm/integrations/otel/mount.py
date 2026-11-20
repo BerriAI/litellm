@@ -36,9 +36,8 @@ _DEFAULT_EXCLUDED_ROUTES: Final = (
     "/litellm-asset-prefix",  # hashed UI asset bundles
     "/_next",  # Next.js static JS/CSS chunks (root-level mount)
     "/ui",  # admin UI single-page app
-    "/swagger",  # static Swagger UI assets
-    "/docs",  # FastAPI Swagger docs page
-    "/redoc",  # FastAPI ReDoc docs page
+    "/scalar",  # static API reference assets
+    "/docs",  # API reference page
     "/openapi.json",  # OpenAPI schema
     "favicon",  # /favicon.ico + /get_favicon
     "/.well-known",  # UI config discovery

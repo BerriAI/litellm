@@ -115,6 +115,7 @@ def create_app(container: Container, license_check: License) -> FastAPI:
         version="1",
         lifespan=_Lifespan(container),
         docs_url=f"{container.settings.api_prefix}/docs",
+        redoc_url=None,
         openapi_url=f"{container.settings.api_prefix}/openapi.json",
     )
     app.add_middleware(ControlPlaneRequestSizeLimitMiddleware)
