@@ -72232,6 +72232,26 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "meragpt/restyler-1": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "meragpt",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 2048,
+        "mode": "chat",
+        "output_cost_per_token": 1.6e-07,
+        "source": "https://meragpt.com/v1/models",
+        "supports_native_streaming": true
+    },
+    "meragpt/fanout-1": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "meragpt",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 160,
+        "mode": "chat",
+        "output_cost_per_token": 1.6e-07,
+        "source": "https://meragpt.com/v1/models",
+        "supports_native_streaming": true
+    },
     "together_ai/Qwen/Qwen3.8-Flash": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "together_ai",
