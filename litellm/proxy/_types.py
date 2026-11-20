@@ -2594,6 +2594,8 @@ class SpendLogsMetadataFields(BaseModel):
 
 DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
 
+RequiredCustomerHeaders: TypeAlias = tuple[Annotated[str, Field(pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")], ...]
+
 
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
@@ -2987,6 +2989,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description=(
             "Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. "
             "Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence."
+        ),
+    )
+    required_customer_headers: RequiredCustomerHeaders = Field(
+        default=(),
+        description=(
+            "Request header names that must each have a non-blank value on authenticated inference requests. "
+            "Use the actual header names, including any custom customer header names. Header names are "
+            "case-insensitive. Missing headers return HTTP 403 even if the caller uses a JWT. "
+            "An empty list (the default) requires no headers. This does not change how customer identity is resolved."
         ),
     )
     supported_db_objects: list[SupportedDBObjectType] | None = Field(

@@ -130,6 +130,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
+    check_required_customer_headers,
     customer_identity_from_request,
     resolve_customer_hierarchy,
 )
@@ -3176,6 +3177,16 @@ async def _authorize_authenticated_request(
     return (recovered or billing_auth) if billing_auth is not user_api_key_auth_obj else recovered
 
 
+def _check_required_inference_customer_headers(
+    headers: Mapping[str, object], route: str, settings: Mapping[str, object]
+) -> None:
+    required_headers: Final = settings.get("required_customer_headers")
+    if required_headers is None or not RouteChecks.runs_inference_checks(route) or RouteChecks.is_info_route(route):
+        return
+    if not RustAuth.is_public_route(route, core.proxy_settings()):
+        check_required_customer_headers(headers, required_headers)
+
+
 async def _authorize_authenticated_request_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
@@ -3210,13 +3221,15 @@ async def _authorize_authenticated_request_checks(
         )
 
         request_headers: Final = _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request))
+        settings: Final = cast(  # cast-ok: proxy settings are a string-keyed dict without type parameters
+            "Mapping[str, object]", general_settings
+        )
+        _check_required_inference_customer_headers(request_headers, route, settings)
         customer_identity: Final = customer_identity_from_request(
             request_headers,
             user_api_key_auth_obj.jwt_claims,
             litellm_jwtauth,
-            general_settings=cast(  # cast-ok: proxy settings are a string-keyed dict without type parameters
-                "Mapping[str, object]", general_settings
-            ),
+            general_settings=settings,
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         received_at: Final = getattr(getattr(request, "state", None), "litellm_received_at", None)

@@ -7599,6 +7599,7 @@ class ProxyConfig:
                         "access_group_rules",
                         "customer_org_alias_header",
                         "customer_member_id_header",
+                        "required_customer_headers",
                     )
                     if name in typed_general_settings
                 }

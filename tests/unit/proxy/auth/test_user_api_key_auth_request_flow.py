@@ -1939,6 +1939,76 @@ async def test_jwt_customer_budget_rate_limits_reach_enforcement(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("method", "path", "required", "headers", "missing"),
+    [
+        ("POST", "/chat/completions", ["X-Tenant-ID"], [], "X-Tenant-ID"),
+        ("POST", "/chat/completions", ["X-Tenant-ID"], [(b"x-tenant-id", b"   ")], "X-Tenant-ID"),
+        ("POST", "/chat/completions", ["X-User-ID"], [(b"x-litellm-customer-member-id", b"member")], "X-User-ID"),
+        ("POST", "/chat/completions", ["X-Tenant-ID", "X-User-ID"], [(b"x-tenant-id", b"tenant")], "X-User-ID"),
+        ("POST", "/chat/completions", ["X-Tenant-ID"], [(b"x-tenant-id", b"tenant")], None),
+        ("POST", "/chat/completions", ["X-User-ID"], [(b"x-user-id", b"member")], None),
+        (
+            "POST",
+            "/chat/completions",
+            ["X-Tenant-ID", "X-User-ID"],
+            [(b"x-tenant-id", b"tenant"), (b"x-user-id", b"member")],
+            None,
+        ),
+        ("POST", "/chat/completions", [], [], None),
+        ("GET", "/model/info", ["X-Tenant-ID", "X-User-ID"], [], None),
+    ],
+)
+async def test_signed_jwt_does_not_replace_required_customer_headers(
+    monkeypatch: pytest.MonkeyPatch,
+    jwt_proxy: Callable[[LiteLLM_JWTAuth], None],
+    method: str,
+    path: str,
+    required: list[str],
+    headers: list[tuple[bytes, bytes]],
+    missing: str | None,
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.setattr(server, "prisma_client", prisma_with_empty_config())
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "premium_user", True)
+    monkeypatch.setattr(server, "master_key", "customer-headers-master")
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(
+        server,
+        "general_settings",
+        {
+            "enable_jwt_auth": True,
+            "disable_budget_reservation": True,
+            "customer_org_alias_header": "X-Tenant-ID",
+            "customer_member_id_header": "X-User-ID",
+            "required_customer_headers": required,
+        },
+    )
+    jwt_proxy(
+        LiteLLM_JWTAuth(
+            admin_jwt_scope="proxy-admin",
+            admin_allowed_routes=["openai_routes", "info_routes"],
+            customer_org_alias_jwt_field="customer.org",
+        )
+    )
+    token: Final = _signed_jwt({"scope": "proxy-admin", "sub": "jwt-user"})
+    request: Final = Request({"type": "http", "method": method, "path": path, "headers": headers, "query_string": b""})
+    request._body = b'{"model":"test-model"}' if method == "POST" else b""
+
+    if missing is None:
+        auth: Final = await user_api_key_auth(request=request, api_key=f"Bearer {token}")
+        assert (auth.user_role, auth.customer_hierarchy) == (LitellmUserRoles.PROXY_ADMIN, None)
+        return
+    with pytest.raises(ProxyException) as error:
+        await user_api_key_auth(request=request, api_key=f"Bearer {token}")
+    assert (error.value.code, error.value.param) == ("403", missing)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "method, path, expect_rejected",
     [
         ("GET", "/v1/videos/{video_id}", False),
