@@ -12073,17 +12073,19 @@ def test_key_disabled_callbacks_resolve_to_the_same_names_for_dispatch_and_otel_
     from litellm.enterprise.litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
     )
+    from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
     from litellm.proxy.litellm_pre_call_utils import (
         _dynamically_disabled_backends,  # pyright: ignore[reportPrivateUsage]  # fan-out has no public seam
     )
 
     stored: Final = [" LangFuse", "Langsmith "]
     key: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"litellm_disabled_callbacks": stored})
+    headers: Final = {X_LITELLM_DISABLE_CALLBACKS: "none"}
     with patch("litellm.proxy.proxy_server.premium_user", True):
-        fan_out: Final = _dynamically_disabled_backends(key, {})
-    no_request_params: Final[dict[str, object]] = {}
+        fan_out: Final = _dynamically_disabled_backends(key, headers)
+    request_params: Final[dict[str, object]] = {"proxy_server_request": {"headers": headers}}
     dispatch: Final = EnterpriseCallbackControls.get_disabled_callbacks(  # pyright: ignore[reportUnknownMemberType]  # untyped
-        no_request_params, initialize_standard_callback_dynamic_params({"litellm_disabled_callbacks": stored})
+        request_params, initialize_standard_callback_dynamic_params({"litellm_disabled_callbacks": stored})
     )
     assert dispatch is not None
-    assert fan_out == frozenset(dispatch) == {"langfuse", "langsmith"}
+    assert fan_out == frozenset(dispatch) == {"none", "langfuse", "langsmith"}

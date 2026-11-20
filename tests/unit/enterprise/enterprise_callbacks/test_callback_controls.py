@@ -208,6 +208,18 @@ class TestEnterpriseCallbackControls:
         assert result is False
         assert caplog.records == []
 
+    def test_header_adds_to_the_key_list_and_cannot_re_enable_what_the_key_disabled(self, mock_premium_user) -> None:
+        litellm_params: Final = {"proxy_server_request": {"headers": {X_LITELLM_DISABLE_CALLBACKS: "none, Datadog"}}}
+        key_disabled: Final = StandardCallbackDynamicParams(litellm_disabled_callbacks=["langfuse"])
+
+        disabled: Final = tuple(
+            name
+            for name in ("langfuse", "datadog", "s3_v2")
+            if EnterpriseCallbackControls.is_callback_disabled_dynamically(name, litellm_params, key_disabled)
+        )
+
+        assert disabled == ("langfuse", "datadog")
+
     def test_callback_not_disabled_when_header_none(
         self, mock_premium_user, mock_request_headers
     ):

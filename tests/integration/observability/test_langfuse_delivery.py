@@ -358,7 +358,7 @@ def test_key_metadata_disabled_callbacks_stops_the_global_langfuse_callback_for_
         disabled_key: Final = scenario.key(metadata={"litellm_disabled_callbacks": ["langfuse"]})
         control_key: Final = scenario.key()
 
-        def chat(key: str, name: str) -> None:
+        def chat(key: str, name: str, headers: Mapping[str, str] | None = None) -> None:
             response: Final = candidate.request(
                 "POST",
                 "/v1/chat/completions",
@@ -369,10 +369,12 @@ def test_key_metadata_disabled_callbacks_stops_the_global_langfuse_callback_for_
                     "cache": {"no-cache": True},
                 },
                 key=key,
+                headers=headers,
             )
             assert response.status_code == 200, response.text
 
         chat(disabled_key, marker + "-disabled")
+        chat(disabled_key, marker + "-header-none", {"x-litellm-disable-callbacks": "none"})
         chat(control_key, marker + "-control")
         received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
 
