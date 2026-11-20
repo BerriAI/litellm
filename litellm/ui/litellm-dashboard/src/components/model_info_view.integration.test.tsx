@@ -958,6 +958,29 @@ describe("ModelInfoView", () => {
     expect(resave).not.toHaveProperty("litellm_params_to_remove");
   });
 
+  it("sends a rate edited in the Model Info JSON after an earlier save through the dedicated cost input", async () => {
+    const displayedModel = {
+      ...defaultModelData,
+      model_info: { ...defaultModelData.model_info, key: "azure/gpt-5.4", input_cost_per_token: 0.000001 },
+    };
+    mockUseModelsInfo.mockReturnValue({ data: { data: [displayedModel] }, isLoading: false });
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: /input cost/i }), { target: { value: "5" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledOnce());
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Model Info" }), {
+      target: { value: JSON.stringify({ ...displayedModel.model_info, input_cost_per_token: 0.000009 }) },
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledTimes(2));
+
+    expect(mockModelPatchUpdateCall.mock.calls[1][1].litellm_params.input_cost_per_token).toBe(0.000009);
+  });
+
   describe("PTU cost attribution gate", () => {
     const ptuModelData = {
       ...defaultModelData,

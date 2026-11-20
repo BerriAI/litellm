@@ -66,4 +66,26 @@ describe("editedModelInfoPricing", () => {
       ),
     ).toEqual({ input_cost_per_token_above_272k_tokens: 20 });
   });
+
+  it("returns a per-second rate and a regional uplift edited in Model Info", () => {
+    expect(
+      editedModelInfoPricing(
+        { ...loadedModelInfo, cost_per_second: 5, regional_endpoint_uplift_multiplier: 1.1 },
+        loadedModelInfo,
+        {},
+        {},
+      ),
+    ).toEqual({ cost_per_second: 5, regional_endpoint_uplift_multiplier: 1.1 });
+  });
+
+  it("keeps a Model Info edit to a rate the LiteLLM Params box cannot set", () => {
+    expect(
+      editedModelInfoPricing(
+        { ...loadedModelInfo, input_cost_per_token: 10 },
+        loadedModelInfo,
+        { input_cost_per_token: 7 },
+        {},
+      ),
+    ).toEqual({ input_cost_per_token: 10 });
+  });
 });

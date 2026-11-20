@@ -374,12 +374,16 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
     defaultValues: toModelEditFormValues(localModelData, isWildcardModel),
   });
 
-  const storedExtraParams = JSON.stringify(editableModelExtraParams(localModelData?.litellm_params ?? {}), null, 2);
+  const storedFormValues = React.useMemo(
+    () => toModelEditFormValues(localModelData, isWildcardModel),
+    [localModelData, isWildcardModel],
+  );
   React.useEffect(() => {
     if (!isEditing) {
-      form.setValue("litellm_extra_params", storedExtraParams);
+      form.reset(storedFormValues);
+      touchedRef.current = new Set<string>();
     }
-  }, [form, isEditing, storedExtraParams]);
+  }, [form, isEditing, storedFormValues]);
 
   const submit = (event: React.FormEvent<HTMLFormElement>) =>
     form.handleSubmit(async (values) => {

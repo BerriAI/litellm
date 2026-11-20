@@ -36,7 +36,7 @@ export const parseModelExtraParams = (value: string | undefined): Record<string,
   }
 };
 
-const PRICING_KEY = /_cost|_above_\d+k?_tokens(_batches)?$/;
+const PRICING_KEY = /_cost|^cost_per_second$|_uplift_multiplier|_above_\d+k?_tokens(_batches)?$/;
 
 /**
  * Rates the operator changed in the Model Info JSON, as the litellm_params overrides they stand for.
@@ -58,6 +58,6 @@ export const editedModelInfoPricing = (
       (entry): entry is [string, number] =>
         isRate(entry[0], entry[1]) &&
         entry[1] !== loadedModelInfo[entry[0]] &&
-        !(entry[0] in editedParams && editedParams[entry[0]] !== loadedParams[entry[0]]),
+        !(!FORM_PARAMS.has(entry[0]) && entry[0] in editedParams && editedParams[entry[0]] !== loadedParams[entry[0]]),
     ),
   );
