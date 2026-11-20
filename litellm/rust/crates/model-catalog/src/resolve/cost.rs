@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::Candidates;
 use super::bedrock::is_bedrock_cross_region_profile_of;
-use crate::snapshot::{LiveTable, RowProvenance, RowRef, Snapshot, prices_anything};
+use crate::view::{CatalogView, CostLookup, RowProvenance, RowRef, prices_anything};
 use crate::wire::Fields;
 
 /// Model names main prices by another path: an Azure Model Router fee, Together AI categories, Replicate run time
@@ -103,7 +103,7 @@ enum Step {
     Defer(Deferral),
 }
 
-impl<T: LiveTable> Snapshot<T> {
+impl<V: CatalogView + ?Sized> CostLookup<'_, V> {
     /// The rows main would try to price `call` with, in its order
     pub fn candidates(&self, call: &CallIdentity) -> CandidateRows {
         match self.cost_candidates(call) {
@@ -227,7 +227,11 @@ impl<T: LiveTable> Snapshot<T> {
             (true, _) => call
                 .deployment_id
                 .as_deref()
-                .filter(|id| self.fields(id).is_some_and(|row| prices_anything(&row)))
+                .filter(|id| {
+                    self.table
+                        .fields(id)
+                        .is_some_and(|row| prices_anything(&row))
+                })
                 .or(call.request_model.as_deref()),
             (false, priced) => priced,
         };
@@ -280,7 +284,7 @@ impl<T: LiveTable> Snapshot<T> {
     /// Port of `_cost_map_model_name`
     fn cost_map_model_name(&self, model: &str, provider: &str, region: Option<&str>) -> String {
         let first_segment = model.split('/').next().unwrap_or(model);
-        if self.names.providers.contains(first_segment) {
+        if self.context.names.providers.contains(first_segment) {
             return model.to_owned();
         }
         let prefix = match region {
@@ -304,7 +308,7 @@ impl<T: LiveTable> Snapshot<T> {
         let tail = &segments[head_len..];
         let strippable = tail
             .iter()
-            .position(|segment| self.names.providers.contains(*segment))
+            .position(|segment| self.context.names.providers.contains(*segment))
             .unwrap_or(tail.len());
         let last_start = strippable.min(tail.len().saturating_sub(1));
         (0..=last_start)
@@ -369,7 +373,7 @@ impl<T: LiveTable> Snapshot<T> {
         let candidates = Candidates::potential(model, provider);
         let registered = candidates.in_lookup_order().find_map(|name| {
             let key = self.table.find_key(name)?;
-            let row = self.fields(&key)?;
+            let row = self.table.fields(&key)?;
             super::provider_matches(
                 row.get("litellm_provider").and_then(Value::as_str),
                 provider,
@@ -393,7 +397,7 @@ impl<T: LiveTable> Snapshot<T> {
         }
         candidates
             .in_lookup_order()
-            .find_map(|name| self.rules.matching(name))
+            .find_map(|name| self.context.rules.matching(name))
     }
 
     /// Port of `_is_unpriced_generalized_candidate`
@@ -405,7 +409,10 @@ impl<T: LiveTable> Snapshot<T> {
     /// Port of `_resolves_to_rates`
     fn resolves_to_rates(&self, model: &str, provider: &str) -> bool {
         match self.lookup(model, provider) {
-            Lookup::Row(key) => self.fields(&key).is_some_and(|row| prices_anything(&row)),
+            Lookup::Row(key) => self
+                .table
+                .fields(&key)
+                .is_some_and(|row| prices_anything(&row)),
             Lookup::Rule(rule) => prices_anything(&rule),
             Lookup::Missing => false,
         }
@@ -414,7 +421,10 @@ impl<T: LiveTable> Snapshot<T> {
     /// Port of `_declares_rates` over a lookup: a key whose own row prices anything
     fn declares_rates(&self, lookup: &Lookup) -> bool {
         match lookup {
-            Lookup::Row(key) => self.fields(key).is_some_and(|row| prices_anything(&row)),
+            Lookup::Row(key) => self
+                .table
+                .fields(key)
+                .is_some_and(|row| prices_anything(&row)),
             Lookup::Rule(_) | Lookup::Missing => false,
         }
     }
@@ -434,8 +444,8 @@ impl<T: LiveTable> Snapshot<T> {
         ];
         keys.into_iter()
             .find_map(|key| {
-                let registered = self.registered_fields(&key);
-                let row = self.fields(&key).filter(|_| !registered.is_empty())?;
+                let registered = self.table.registered_fields(&key);
+                let row = self.table.fields(&key).filter(|_| !registered.is_empty())?;
                 let written: Fields = row
                     .iter()
                     .filter(|(field, value)| registered.contains(*field) && !value.is_null())
@@ -457,7 +467,7 @@ impl<T: LiveTable> Snapshot<T> {
 
     fn priced_elsewhere(&self, name: &str) -> bool {
         let lower = name.to_lowercase();
-        self.names.renamed_models.contains(name)
+        self.context.names.renamed_models.contains(name)
             || OTHER_PATHS.iter().any(|path| lower.contains(path))
     }
 }
@@ -481,9 +491,10 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::snapshot::{KnownNames, TableRow};
+    use crate::CostMap;
     use crate::store::Store;
-    use crate::test_support::{TestRow, TestRows, bundled_rows, names, snapshot};
+    use crate::test_support::{TestRow, TestRows, bundled_rows, context, names};
+    use crate::view::{KnownNames, PricingContext};
 
     /// Main's answers for realistic `/v1/messages` calls, captured once, see `captured_from` in the file
     #[derive(Deserialize)]
@@ -547,21 +558,42 @@ mod tests {
         serde_json::from_str(include_str!("cost_candidates.json")).expect("the fixture parses")
     });
 
-    static MAIN: LazyLock<Snapshot<Store<TestRows>>> = LazyLock::new(|| {
+    static FIXTURE_CONTEXT: LazyLock<PricingContext> = LazyLock::new(|| {
+        context(KnownNames {
+            providers: FIXTURE.known_names.providers.iter().cloned().collect(),
+            renamed_models: FIXTURE.known_names.renamed_models.iter().cloned().collect(),
+        })
+    });
+
+    static MAIN_TABLE: LazyLock<Store<TestRows>> = LazyLock::new(|| {
         let registered = FIXTURE.registered.iter().map(|(key, row)| {
             (
                 key.clone(),
                 TestRow::new(row.fields.clone(), row.registered_fields.clone()),
             )
         });
-        snapshot(
-            TestRows(bundled_rows().0.into_iter().chain(registered).collect()),
-            KnownNames {
-                providers: FIXTURE.known_names.providers.iter().cloned().collect(),
-                renamed_models: FIXTURE.known_names.renamed_models.iter().cloned().collect(),
-            },
-        )
+        Store::new(TestRows(
+            bundled_rows().0.into_iter().chain(registered).collect(),
+        ))
     });
+
+    /// Main's table as the fixture captured it: the bundled document plus the rows its router registered
+    fn main() -> CostLookup<'static, Store<TestRows>> {
+        CostLookup::new(&MAIN_TABLE, &FIXTURE_CONTEXT)
+    }
+
+    fn fixture_call(identity: &FixtureIdentity) -> CallIdentity {
+        CallIdentity {
+            provider: identity.provider.clone(),
+            request_model: identity.request_model.clone(),
+            response_model: identity.response_model.clone(),
+            base_model: identity.base_model.clone(),
+            custom_pricing: identity.custom_pricing,
+            deployment_id: identity.deployment_id.clone(),
+            region: identity.region.clone(),
+            ..CallIdentity::default()
+        }
+    }
 
     fn call(provider: &str, request: &str, response: &str) -> CallIdentity {
         CallIdentity {
@@ -633,22 +665,12 @@ mod tests {
             .iter()
             .find(|case| case.name == name)
             .expect("the case is in the fixture");
-        let identity = &case.identity;
-        let found = MAIN.candidates(&CallIdentity {
-            provider: identity.provider.clone(),
-            request_model: identity.request_model.clone(),
-            response_model: identity.response_model.clone(),
-            base_model: identity.base_model.clone(),
-            custom_pricing: identity.custom_pricing,
-            deployment_id: identity.deployment_id.clone(),
-            region: identity.region.clone(),
-            ..CallIdentity::default()
-        });
+        let found = main().candidates(&fixture_call(&case.identity));
         let rows_main_tried: Vec<&str> = case
             .tried
             .iter()
             .map(String::as_str)
-            .take_while(|key| MAIN.table.contains(key))
+            .take_while(|key| CatalogView::contains(&*MAIN_TABLE, key))
             .collect();
         let main_went_past_rows =
             rows_main_tried.len() < case.tried.len() || case.after_tried == "returned";
@@ -656,7 +678,7 @@ mod tests {
             .billed_key
             .as_deref()
             .zip(case.billed_provider.as_deref())
-            .filter(|(key, _)| MAIN.table.contains(key));
+            .filter(|(key, _)| CatalogView::contains(&*MAIN_TABLE, key));
 
         assert_eq!(keys(&found.rows), rows_main_tried);
         assert_eq!(
@@ -670,6 +692,26 @@ mod tests {
                 .map(|row| (row.key.as_str(), row.provider.as_str())),
             main_billed
         );
+    }
+
+    /// The Rust host's `Catalog` and Python's table of the same document resolve every call to the same rows
+    #[rstest]
+    fn the_rust_hosts_catalog_resolves_like_pythons_table_of_the_same_document() {
+        let cost_map = CostMap::bundled();
+        let python = Store::new(bundled_rows());
+        let resolved = |table: &dyn CatalogView| -> Vec<CandidateRows> {
+            let lookup = CostLookup::new(table, &FIXTURE_CONTEXT);
+            FIXTURE
+                .cases
+                .iter()
+                .map(|case| lookup.candidates(&fixture_call(&case.identity)))
+                .collect()
+        };
+
+        let from_catalog = resolved(cost_map.catalog());
+
+        assert_eq!(from_catalog, resolved(&python));
+        assert!(from_catalog.iter().any(|found| !found.rows.is_empty()));
     }
 
     #[rstest]
@@ -691,17 +733,15 @@ mod tests {
                 .collect(),
             registration.registered.keys().cloned().collect(),
         );
-        let snapshot = snapshot(
-            TestRows(
-                rows.0
-                    .into_iter()
-                    .chain([(registration.key.clone(), written)])
-                    .collect(),
-            ),
-            names(&["anthropic", "bedrock"]),
-        );
+        let table = Store::new(TestRows(
+            rows.0
+                .into_iter()
+                .chain([(registration.key.clone(), written)])
+                .collect(),
+        ));
+        let context = context(names(&["anthropic", "bedrock"]));
 
-        let found = snapshot.candidates(&CallIdentity {
+        let found = CostLookup::new(&table, &context).candidates(&CallIdentity {
             custom_pricing,
             ..call(
                 "bedrock",
@@ -725,7 +765,7 @@ mod tests {
 
     #[rstest]
     fn a_custom_priced_deployment_row_comes_first_as_registered() {
-        let found = MAIN.candidates(&CallIdentity {
+        let found = main().candidates(&CallIdentity {
             custom_pricing: true,
             deployment_id: Some("dep-claude-custom".to_owned()),
             ..call("anthropic", "claude-opus-5-5", "claude-opus-5-5")
@@ -789,7 +829,7 @@ mod tests {
         #[case] deferral: Deferral,
     ) {
         assert_eq!(
-            MAIN.candidates(&call),
+            main().candidates(&call),
             CandidateRows {
                 rows: Vec::new(),
                 then: AfterRows::Deferred(deferral),
@@ -830,17 +870,19 @@ mod tests {
                 .collect(),
             registered.keys().cloned().collect(),
         );
-        let snapshot = snapshot(
-            TestRows(
-                rows.0
-                    .into_iter()
-                    .chain([(REGISTERED.to_owned(), written)])
-                    .collect(),
-            ),
-            names(&["anthropic", "bedrock"]),
-        );
+        let table = Store::new(TestRows(
+            rows.0
+                .into_iter()
+                .chain([(REGISTERED.to_owned(), written)])
+                .collect(),
+        ));
+        let context = context(names(&["anthropic", "bedrock"]));
 
-        let found = snapshot.candidates(&call("bedrock", REGISTERED, "claude-opus-5-5"));
+        let found = CostLookup::new(&table, &context).candidates(&call(
+            "bedrock",
+            REGISTERED,
+            "claude-opus-5-5",
+        ));
 
         assert_eq!(
             found

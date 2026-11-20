@@ -1,9 +1,11 @@
 //! Calls into `litellm.rust_bridge.host.model_cost`
 
-use litellm_model_catalog::{Generation, KnownNames};
+use litellm_model_catalog::KnownNames;
 use pyo3::call::PyCallArgs;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
+
+use super::snapshot::Generation;
 
 pub(crate) const MODULE: &str = "litellm.rust_bridge.host.model_cost";
 

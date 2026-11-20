@@ -13,8 +13,9 @@
 - `install` touches no state until `CostMap::read` succeeds. `NativeRejected` means nothing changed
 - `register` keeps a registration only after its pass finished, so an exception in a host call keeps nothing
 - `rows=None` writes each entry into whichever table is published at that moment and never reports a swap
-- `cost_snapshot` is the pricing view of the published table, a model-catalog `Snapshot` over the same name index. `host::generation` reads the table and its generation in one call, and the snapshot is rebuilt only when that moves
-  - `LiveRow` is the `TableRow`. Its identity is the row object's address, and the snapshot cache holds the row so the address is not reused
-  - `invalidate` also forgets the cached rows, so `changed_in_place()` and every registration pass reread them
+- `cost_snapshot` is the pricing view of the published table, a `CostSnapshot` in `snapshot.rs` over the same name index. `host::generation` reads the table and its generation in one call, and the snapshot is rebuilt only when that moves. Model-catalog's `CostLookup` only reads it through `CatalogView`, so every Python-shaped concern (generation, swap, row cache) lives here
+  - `CostSnapshot::lookup` hands one pricing call a `CallView`, which reads each row from Python once, so the call sees one version of every row it reads
+  - Lowerings are kept by row key and billed provider together with the fields they were lowered from, and reused only while the row reads exactly those fields. A row replaced or edited in place is lowered again on the next call, with no `changed_in_place()` needed
+  - `invalidate` drops the current snapshot along with the name index, so the next call reads the rules and names again
   - Tests that install a fake host module hold `HOST_MODULE`, since Python can switch threads while one runs
 - `fetch_blocking` runs on a throwaway runtime with an unpooled client so an importing process can still fork. `fetch` is for workers after the fork
