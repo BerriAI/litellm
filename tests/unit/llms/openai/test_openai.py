@@ -42,7 +42,7 @@ from litellm.types.utils import (
     PromptTokensDetails,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -926,7 +926,7 @@ _QUERY_SECRET: Final = "query-secret"
     ("status_code", "mapped_error", "body"),
     (
         (400, litellm.BadRequestError, _REFUSAL_BODY),
-        (403, litellm.APIError, _REFUSAL_BODY),
+        (403, litellm.PermissionDeniedError, _REFUSAL_BODY),
         (408, litellm.Timeout, _REFUSAL_BODY),
         (408, litellm.Timeout, _GATEWAY_TIMEOUT_BODY),
         (409, litellm.APIError, _REFUSAL_BODY),
@@ -1830,7 +1830,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -2700,6 +2700,83 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
     assert [message["role"] for message in messages] == expected_roles
 
 
+class _ChatCompletionOnlyAgenticLoop(CustomLogger):
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return isinstance(response, ModelResponse) and response.choices[0].finish_reason == "tool_calls", {}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> ModelResponse:
+        return ModelResponse(
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "order shipped"}}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_runs_a_callback_that_only_implements_the_chat_completion_agentic_loop(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_ChatCompletionOnlyAgenticLoop()])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://openai-compatible.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-lookup",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_lookup",
+                                    "type": "function",
+                                    "function": {"name": "lookup_order", "arguments": '{"order_id": "42"}'},
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Where is order 42?"}],
+        tools=[{"type": "function", "function": {"name": "lookup_order", "parameters": {"type": "object"}}}],
+        api_key="sk-test",
+        api_base="https://openai-compatible.example/v1",
+    )
+
+    assert response.choices[0].message.content == "order shipped"
+
+
 @pytest.mark.asyncio
 async def test_sync_batch_list_given_an_async_client_returns_a_page_the_caller_can_await(
     http_backend: ModuleType,
@@ -2738,3 +2815,119 @@ async def test_sync_batch_list_given_an_async_client_returns_a_page_the_caller_c
         )
 
         assert [(batch.id, batch.status) for batch in (await page).data] == [("batch_5f8dac", "pending")]
+
+
+_STREAM_CHUNK_BASE: Final = {
+    "id": "chatcmpl-decode",
+    "object": "chat.completion.chunk",
+    "created": 1700000000,
+    "model": "gpt-5.5",
+}
+_STREAM_CHUNK_PAYLOADS: Final = (
+    {
+        **_STREAM_CHUNK_BASE,
+        "system_fingerprint": "fp_1",
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "hi"}, "logprobs": None, "finish_reason": None}
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": ""}},
+                        {"index": 1, "type": None, "function": {"arguments": None}},
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 2,
+            "total_tokens": 11,
+            "prompt_tokens_details": {"cached_tokens": 3},
+            "cost": 0.5,
+        },
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "a"},
+                "logprobs": {"content": [{"token": "a", "logprob": 0, "bytes": [97], "top_logprobs": []}]},
+                "finish_reason": "stop",
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "provider": "upstream",
+        "citations": ["https://e.example"],
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "", "reasoning_content": "think", "provider_specific_fields": {"k": 1}},
+                "finish_reason": None,
+                "stop_reason": 128009,
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "created": "1700000000",
+        "choices": [{"index": 0, "delta": {"content": "numeric string"}, "finish_reason": None}],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "object": "chat.completion",
+        "choices": [{"index": 0, "delta": {"content": "loose"}, "finish_reason": "eos"}],
+    },
+    {**_STREAM_CHUNK_BASE, "created": 1700000000.5, "choices": [{"index": "0", "delta": None}]},
+)
+
+
+def _model_state(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return (
+            type(value),
+            {key: _model_state(item) for key, item in value.__dict__.items()},
+            {key: _model_state(item) for key, item in (value.__pydantic_extra__ or {}).items()},
+            frozenset(value.model_fields_set & type(value).model_fields.keys()),
+        )
+    if isinstance(value, list):
+        return [_model_state(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _model_state(item) for key, item in value.items()}
+    return (type(value), value)
+
+
+@pytest.mark.asyncio
+async def test_streamed_chat_chunks_decode_exactly_like_the_sdk_for_strict_and_loose_payloads():
+    from openai._models import construct_type
+    from openai.types.chat import ChatCompletionChunk
+
+    body: Final = b"".join(f"data: {json.dumps(p)}\n\n".encode() for p in _STREAM_CHUNK_PAYLOADS) + b"data: [DONE]\n\n"
+    transport: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+    )
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        _, stream = await OpenAIChatCompletion().make_openai_chat_completion_request(
+            openai_aclient=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            data={"model": "gpt-5.5", "messages": [{"role": "user", "content": "q"}], "stream": True},
+            timeout=10,
+            logging_obj=MagicMock(),
+        )
+        decoded: Final = [chunk async for chunk in stream]
+
+    assert [_model_state(chunk) for chunk in decoded] == [
+        _model_state(construct_type(type_=ChatCompletionChunk, value=payload)) for payload in _STREAM_CHUNK_PAYLOADS
+    ]

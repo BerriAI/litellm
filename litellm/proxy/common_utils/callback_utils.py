@@ -14,11 +14,13 @@ from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
+    CALLBACK_CONFIG_METADATA_SLOTS,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -26,12 +28,15 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
+from litellm.proxy._types import CALLBACK_VAR_NAMES, CommonProxyErrors, LiteLLMPromptInjectionParams
+from litellm.proxy.common_utils.callback_config_validation import object_sequence, string_keyed
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -52,7 +57,7 @@ _CALLBACK_VAR_ENCRYPTED_PREFIX: Final = CALLBACK_VAR_ENCRYPTED_PREFIX
 # Metadata slots that hold operator-configured callback and secret-manager setup
 # (and therefore integration credentials). Resolved from UserAPIKeyAuth during
 # pre-call setup, never read back off the copies stamped into request metadata.
-_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings", "secret_manager_settings"})
+_CALLBACK_CONFIG_SLOTS: Final = CALLBACK_CONFIG_METADATA_SLOTS
 
 blue_color_code: Final = "\033[94m"
 reset_color_code: Final = "\033[0m"
@@ -89,6 +94,10 @@ class _CallbackNotDispatchable:
 
 
 _CallbackLoadError: TypeAlias = _CallbackResolvedToClass | _CallbackNotDispatchable
+
+
+class _PresidioOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _classify_loaded_callback(entry: str, loaded: object) -> CustomLogger | Callable[..., object] | _CallbackLoadError:
@@ -153,6 +162,18 @@ def initialize_callbacks_on_proxy(
     if isinstance(value, list):
         imported_list: Final[list[Any]] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
+            if callback == "customer_budget_webhook":
+                from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
+
+                imported_list.append(
+                    CustomerBudgetWebhook.from_config(
+                        string_keyed(_LOADED_CALLBACK.validate_python(callback_specific_params)).get(
+                            "customer_budget_webhook"
+                        )
+                    )
+                )
+                continue
+
             if isinstance(callback, str) and callback == "compression_interception":
                 from litellm.integrations.compression_interception.handler import (
                     CompressionInterceptionLogger,
@@ -191,15 +212,15 @@ def initialize_callbacks_on_proxy(
                 if presidio_logging_only is not None:
                     presidio_logging_only = bool(presidio_logging_only)  # validate boolean given
 
-                _presidio_params = {}
+                _presidio_params: Mapping[str, object] = {}
                 if "presidio" in callback_specific_params and isinstance(callback_specific_params["presidio"], dict):
                     _presidio_params = callback_specific_params["presidio"]
 
-                params: dict[str, Any] = {
+                params: Mapping[str, object] = {
                     "logging_only": presidio_logging_only,
                     **_presidio_params,
                 }
-                pii_masking_object = OPTIONAL_PresidioPIIMasking(**params)
+                pii_masking_object = OPTIONAL_PresidioPIIMasking(**_PresidioOptions(**params))
                 imported_list.append(pii_masking_object)
             elif isinstance(callback, str) and callback == "llamaguard_moderations":
                 try:
@@ -233,7 +254,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(_secret_detection_object)
             elif isinstance(callback, str) and callback == "openai_moderations":
                 try:
-                    from enterprise.enterprise_hooks.openai_moderation import (
+                    from litellm.enterprise.enterprise_hooks.openai_moderation import (
                         ENTERPRISE_OpenAI_Moderation,
                     )
                 except ImportError:
@@ -268,7 +289,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(aporia_guardrail_object)
             elif isinstance(callback, str) and callback == "google_text_moderation":
                 try:
-                    from enterprise.enterprise_hooks.google_text_moderation import (
+                    from litellm.enterprise.enterprise_hooks.google_text_moderation import (
                         ENTERPRISE_GoogleTextModeration,
                     )
                 except ImportError:
@@ -297,7 +318,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(llm_guard_moderation_obj)
             elif isinstance(callback, str) and callback == "blocked_user_check":
                 try:
-                    from enterprise.enterprise_hooks.blocked_user_list import (
+                    from litellm.enterprise.enterprise_hooks.blocked_user_list import (
                         ENTERPRISE_BlockedUserList,
                     )
                 except ImportError:
@@ -312,7 +333,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(blocked_user_list)
             elif isinstance(callback, str) and callback == "banned_keywords":
                 try:
-                    from enterprise.enterprise_hooks.banned_keywords import (
+                    from litellm.enterprise.enterprise_hooks.banned_keywords import (
                         ENTERPRISE_BannedKeywords,
                     )
                 except ImportError:
@@ -546,6 +567,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         "_pipeline_managed_guardrails",
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
         CONSUMED_REQUEST_TAGS_METADATA_KEY,
         BAGGAGE_MAPPED_TAGS_METADATA_KEY,
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
@@ -694,7 +716,7 @@ def add_guardrail_response_to_standard_logging_object(
     return standard_logging_object
 
 
-def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict:
+def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict[str, object]:
     """Process a single callback and return its data with environment variables"""
     env_vars: Final = CustomLogger.get_callback_env_vars(_callback)
 
@@ -734,6 +756,47 @@ def decrypt_callback_vars(metadata: object) -> Any:
     Legacy plaintext rows pass through unchanged (decrypt failure → original).
     """
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
+
+
+def decrypted_callback_metadata(metadata: object) -> object:
+    return _transform_callback_vars(metadata, _decrypt_or_passthrough)
+
+
+def decrypted_logging_entries(metadata: object) -> object:
+    return string_keyed(decrypted_callback_metadata(metadata)).get("logging")
+
+
+def key_logging_entries(metadata: object) -> tuple[Mapping[str, object], ...] | None:
+    entries: Final = decrypted_logging_entries(metadata)
+    if entries is None:
+        return None
+    return tuple(resolved for entry in _logging_objects(entries) if (resolved := _with_credential(entry)) is not None)
+
+
+def _logging_objects(entries: object) -> tuple[Mapping[str, object], ...]:
+    items: Final = () if entries in ("", {}) else object_sequence(entries)
+    if items is None or not all(isinstance(item, Mapping) for item in items):
+        raise TypeError(f"key metadata.logging must be a list of objects, got {type(entries).__name__}")
+    return tuple(string_keyed(item) for item in items)
+
+
+def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None:
+    credential_name: Final = entry.get("litellm_credential_name")
+    if not isinstance(credential_name, str):
+        return entry
+    credential_vars: Final = {
+        name: str(value)
+        for name, value in CredentialAccessor.get_credential_values(credential_name).items()
+        if name in CALLBACK_VAR_NAMES and value is not None
+    }
+    if not credential_vars:
+        verbose_proxy_logger.error(
+            "Ignoring key logging entry for %s: credential %r is not defined or holds no logging values",
+            entry.get("callback_name"),
+            credential_name,
+        )
+        return None
+    return {**entry, "callback_vars": {**credential_vars, **string_keyed(entry.get("callback_vars"))}}
 
 
 def _transform_callback_vars(metadata: object, transform: Callable[[str, object], object]) -> object:
@@ -784,6 +847,8 @@ def _encrypt_if_plaintext(key: str, value: object) -> object:
         # No salt key / master key configured — leave the value as-is rather
         # than crash the write. Dev environments without LITELLM_SALT_KEY hit
         # this path; production always has a master key so encryption proceeds.
+        if fips_mode_active():
+            raise
         return value
 
 

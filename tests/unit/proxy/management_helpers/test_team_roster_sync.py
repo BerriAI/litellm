@@ -29,6 +29,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     TeamGone,
     sync_team_roster,
 )
+from tests.unit.proxy.rust_auth_stores import JwtMapping, RustAuthStores, install_rust_auth_stores
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
@@ -38,6 +39,11 @@ _STRINGS: Final = TypeAdapter(list[str])
 _FILTER: Final = TypeAdapter(dict[str, object])
 _FILTERS: Final = TypeAdapter(list[dict[str, object]])
 _MEMBERS: Final = TypeAdapter(list[Member])
+
+
+@pytest.fixture(autouse=True)
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 class _UserRow(BaseModel):
@@ -172,7 +178,6 @@ class _Db:
         memberships: Sequence[tuple[str, str]],
         tokens: Sequence[Mapping[str, object]],
         budgets: Sequence[Mapping[str, object]],
-        jwt_mappings: Sequence[Mapping[str, object]],
         team_deleted_before_update: bool = False,
     ) -> None:
         self.litellm_usertable = _UserTable(ledger, users)
@@ -183,7 +188,6 @@ class _Db:
         self.litellm_verificationtoken = _Rows("verificationtoken", ledger, tokens)
         self.litellm_deletedverificationtoken = _Rows("deletedverificationtoken", ledger)
         self.litellm_budgettable = _Rows("budgettable", ledger, budgets)
-        self.litellm_jwtkeymapping = _Rows("jwtkeymapping", ledger, jwt_mappings)
 
 
 class _Tx:
@@ -222,7 +226,6 @@ class _FakePrisma:
         memberships: Sequence[tuple[str, str]] = (),
         tokens: Sequence[Mapping[str, object]] = (),
         budgets: Sequence[Mapping[str, object]] = (),
-        jwt_mappings: Sequence[Mapping[str, object]] = (),
         fail_commit: bool = False,
         replica_teams: Sequence[LiteLLM_TeamTable] | None = None,
         team_deleted_before_update: bool = False,
@@ -230,10 +233,10 @@ class _FakePrisma:
         """``db`` is the routed client, which a read replica may serve; ``writer_db`` is the writer."""
         self.ledger = _Ledger()
         self.writer_db = _Db(
-            self.ledger, users, teams, memberships, tokens, budgets, jwt_mappings, team_deleted_before_update
+            self.ledger, users, teams, memberships, tokens, budgets, team_deleted_before_update
         )
         self.db = (
-            _Db(self.ledger, users, replica_teams, memberships, tokens, budgets, jwt_mappings)
+            _Db(self.ledger, users, replica_teams, memberships, tokens, budgets)
             if replica_teams is not None
             else self.writer_db
         )
@@ -518,7 +521,9 @@ async def test_added_members_link_the_team_member_budget_when_the_team_names_one
 
 
 @pytest.mark.asyncio
-async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_them():
+async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_them(
+    rust_auth_stores: RustAuthStores,
+):
     prisma = _FakePrisma(
         users=[_user("alice", TEAM), _user("bob", TEAM, "t2")],
         teams=[_team(_member("alice"), _member("bob"))],
@@ -528,7 +533,9 @@ async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_th
             {"token": "k-bob-personal", "user_id": "bob"},
             {"token": "k-alice", "user_id": "alice", "team_id": TEAM},
         ],
-        jwt_mappings=[{"token": "k-bob", "jwt_claim_name": "sub", "jwt_claim_value": "bob-claim", "jwt_issuer": None}],
+    )
+    rust_auth_stores.jwt_key_mapping.mappings.append(
+        JwtMapping(token="k-bob", jwt_claim_name="sub", jwt_claim_value="bob-claim")
     )
     jwt_key = jwt_key_mapping_cache_key("sub", "bob-claim", None)
     cache = _cache_with("k-bob", "k-alice", jwt_key, "bob")

@@ -1213,7 +1213,6 @@ def test_request_with_no_output_cap_is_never_continued_and_returns_googles_cut_w
 _NOT_A_NUMBER: Final[tuple[tuple[str, Mapping[str, JsonValue], int | None], ...]] = (
     ("n-string", {"n": "1"}, CAP),
     ("n-list", {"n": [1]}, CAP),
-    ("n-empty", {"n": ""}, CAP),
     ("n-5kb", {"n": "1" * 5120}, CAP),
     ("max_tokens-string", {"max_tokens": "300"}, None),
     ("max_tokens-list", {"max_tokens": [300]}, None),

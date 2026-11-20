@@ -25,13 +25,15 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth import jwt as proxy_jwt
 from litellm.proxy.auth.auth_checks import check_model_access_helper, check_tools_allowlist
-from litellm.proxy.auth.handle_jwt import JWTAuthManager
+from litellm.proxy.auth.core import proxy_settings
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import (
     CodexCatalogRow,
     bundled_codex_models,
+    codex_catalog_byte_limit,
     codex_catalog_etag,
     codex_entry_names_default_reasoning_level,
     merged_codex_catalog,
@@ -192,27 +194,15 @@ def _key_may_call_litellm_responses(user_api_key_dict: UserAPIKeyAuth) -> bool:
 async def _jwt_policy_admits_litellm_responses(
     gateway_token: str, model: str, request_headers: Mapping[str, str]
 ) -> bool:
-    from litellm.proxy.proxy_server import (
-        general_settings_view,
-        jwt_handler,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
     try:
-        _ = await JWTAuthManager.auth_builder(
-            api_key=gateway_token,
-            jwt_handler=jwt_handler,
-            request_data={"model": model},
-            general_settings=dict(general_settings_view()),
-            route=_LITELLM_RESPONSES_PATH,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=None,
-            proxy_logging_obj=proxy_logging_obj,
-            request_headers=request_headers,
-            request_method="POST",
+        _ = await proxy_jwt.authorize(
+            proxy_settings(),
+            gateway_token,
+            _LITELLM_RESPONSES_PATH,
+            "POST",
+            headers=request_headers,
+            model=model,
+            provisioning=True,
         )
     except Exception:  # noqa: BLE001  # any JWT policy refusal keeps the caller on ChatGPT's models
         return False
@@ -685,8 +675,13 @@ async def _catalog(
     etag: Final = None if upstream_etag is None else await _remembered_models_etag(caller, upstream_etag, rows, cache)
     if not rows:
         return upstream
+    client_version: Final = request.query_params.get("client_version")
     merged: Final = await asyncio.to_thread(
-        merged_codex_catalog, upstream_body, rows, client_version=request.query_params.get("client_version")
+        merged_codex_catalog,
+        upstream_body,
+        rows,
+        byte_limit=codex_catalog_byte_limit(client_version),
+        client_version=client_version,
     )
     return _with_etag(upstream, merged if merged is not None else upstream_body, etag)
 

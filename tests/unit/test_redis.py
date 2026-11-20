@@ -248,6 +248,38 @@ def test_async_host_port_pool_preserves_credential_provider_identity(clean_redis
     assert pool.connection_kwargs["credential_provider"] is provider
 
 
+@pytest.mark.parametrize(
+    "ssl_settings",
+    [
+        pytest.param({"ssl": False, "ssl_check_hostname": False}, id="saved_by_cache_settings_form"),
+        pytest.param({"ssl": "false", "ssl_check_hostname": "false"}, id="environment_strings"),
+        pytest.param({"ssl_check_hostname": False}, id="ssl_unset"),
+        pytest.param(
+            {"ssl": False, "ssl_cert_reqs": "none", "ssl_ca_certs": "/unused/ca.pem", "ssl_certfile": "/unused/c.pem"},
+            id="leftover_tls_fields",
+        ),
+    ],
+)
+def test_async_host_port_pool_opens_a_plaintext_connection_when_ssl_is_off(
+    clean_redis_environment: None, ssl_settings: dict[str, bool | str]
+) -> None:
+    pool: Final = get_redis_connection_pool(host="redis-host", port=6379, **ssl_settings)
+
+    assert pool is not None
+    connection: Final = pool.make_connection()
+    assert type(connection) is async_redis.Connection
+    assert (connection.host, connection.port) == ("redis-host", 6379)
+
+
+def test_async_host_port_pool_keeps_ssl_settings_on_a_tls_connection(clean_redis_environment: None) -> None:
+    pool: Final = get_redis_connection_pool(host="redis-host", port=6379, ssl=True, ssl_check_hostname=False)
+
+    assert pool is not None
+    connection: Final = pool.make_connection()
+    assert isinstance(connection, async_redis.SSLConnection)
+    assert connection.check_hostname is False
+
+
 def test_async_url_pool_preserves_credential_provider_identity(clean_redis_environment):
     provider = _StubCredentialProvider()
 
@@ -2069,7 +2101,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
 
 @pytest.mark.skipif(
     redis.VERSION != (5, 3, 1),
-    reason="the Rust interpreter in litellm-rust/crates/redis-resolve pins redis-py 5.3.1, per its AGENTS.md",
+    reason="the Rust interpreter in litellm/rust/crates/redis-resolve pins redis-py 5.3.1, per its AGENTS.md",
 )
 @pytest.mark.parametrize(
     ("kwargs", "environment", "merged", "expected"),
@@ -3347,7 +3379,7 @@ def test_redis_settings_resolve_like_the_rust_resolver_expects(monkeypatch, kwar
     assert outcome == expected
 
 
-_REDIS_RESOLVE: Final = Path(__file__).parents[2] / "litellm-rust/crates/redis-resolve"
+_REDIS_RESOLVE: Final = Path(__file__).parents[2] / "litellm/rust/crates/redis-resolve"
 _REDIS_PY_KWARGS: Final = json.loads((_REDIS_RESOLVE / "redis-py-kwargs.json").read_text())
 
 

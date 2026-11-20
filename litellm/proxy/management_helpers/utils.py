@@ -1,21 +1,25 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
+import json
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, ParamSpec, Protocol, TypeVar
+from typing import Any, Final, NoReturn, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from typing_extensions import LiteralString
 
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     BudgetNewRequest,
     DeleteCustomerRequest,
@@ -44,7 +48,7 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 
 _BUDGET_DATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -100,7 +104,14 @@ class _PrismaTeamMembershipTable(Protocol):
     ) -> _PrismaRecord: ...
 
 
-class MemberWriteTx(Protocol):
+class BudgetWriteTx(Protocol):
+    """Where `resolve_member_budget_id` reads and writes budgets when the caller owns the transaction."""
+
+    @property
+    def litellm_budgettable(self) -> _PrismaBudgetTable: ...
+
+
+class MemberWriteTx(BudgetWriteTx, Protocol):
     """Transaction surface `add_new_member` writes through when the caller owns one.
 
     A caller already holding a transaction, and with it a pooled connection plus that
@@ -112,9 +123,6 @@ class MemberWriteTx(Protocol):
     def litellm_usertable(self) -> _PrismaUserTable: ...
 
     @property
-    def litellm_budgettable(self) -> _PrismaBudgetTable: ...
-
-    @property
     def litellm_teammembership(self) -> _PrismaTeamMembershipTable: ...
 
 
@@ -122,8 +130,69 @@ def _user_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _Prism
     return tx.litellm_usertable if tx is not None else UserRepository(prisma_client).table
 
 
-def _budget_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _PrismaBudgetTable:
+def _budget_table(prisma_client: PrismaClient, tx: BudgetWriteTx | None) -> _PrismaBudgetTable:
     return tx.litellm_budgettable if tx is not None else BudgetRepository(prisma_client).table
+
+
+def reject_budget_windows(row: Mapping[str, object]) -> None:
+    if row.get("budget_limits"):
+        raise_budget_windows_unsupported()
+
+
+def raise_budget_windows_unsupported() -> NoReturn:
+    raise HTTPException(
+        status_code=400,
+        detail={"error": "Concurrent budget windows are currently supported only by customer hierarchies."},
+    )
+
+
+async def validate_scalar_budget_attachment(
+    prisma_client: PrismaClient, budget_id: str | None, tx: MemberWriteTx | None = None
+) -> _PrismaBudgetRecord | None:
+    if budget_id is None:
+        return
+    table: Final = (
+        tx.litellm_budgettable
+        if tx is not None
+        else require_attributes(
+            attribute_or_none(prisma_client.writer_db, "litellm_budgettable"), _PrismaBudgetTable, "find_unique"
+        )
+    )
+    row: Final = await table.find_unique(where={"budget_id": budget_id})
+    if row is not None:
+        reject_budget_windows(row.model_dump())
+    return row
+
+
+_UNSUPPORTED_BUDGET_REFERENCES: Final = """SELECT EXISTS (
+    SELECT 1 FROM "LiteLLM_VerificationToken" WHERE budget_id = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_EndUserTable" WHERE budget_id = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_OrganizationTable" WHERE budget_id = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_ProjectTable" WHERE budget_id = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_TagTable" WHERE budget_id = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_ModelAccessGroupBudgetTable" WHERE budget_id = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_TeamMembership" WHERE budget_id = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_OrganizationMembership" WHERE budget_id = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_TeamTable" WHERE metadata->>'team_member_budget_id' = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_VerificationToken" WHERE metadata->>'end_user_budget_id' = $1
+) AS referenced"""
+_BUDGET_REFERENCE_ROWS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+class _BudgetReferenceReader(Protocol):
+    async def query_raw(self, query: LiteralString, *args: str) -> object: ...
+
+
+async def validate_budget_windows_update(db: object, budget_id: str) -> None:
+    reader: Final = require_attributes(db, _BudgetReferenceReader, "query_raw")
+    rows: Final = _BUDGET_REFERENCE_ROWS.validate_python(
+        await reader.query_raw(_UNSUPPORTED_BUDGET_REFERENCES, budget_id)
+    )
+    if litellm.max_end_user_budget_id == budget_id or any(row.get("referenced") is True for row in rows):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Detach non-customer-hierarchy consumers before adding concurrent budget windows."},
+        )
 
 
 def _team_membership_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _PrismaTeamMembershipTable:
@@ -167,6 +236,35 @@ async def _create_user_row(
     return await prisma_client.insert_data(data=user_data, table_name="user")
 
 
+BUDGET_WINDOWS_ADAPTER: Final = TypeAdapter(tuple[BudgetLimitEntry, ...])
+
+
+def budget_windows_json(requested: Sequence[BudgetLimitEntry] | None, stored: Sequence[BudgetLimitEntry] | None) -> str:
+    if not requested:
+        return json.dumps(None)
+    stored_reset_at: Final = MappingProxyType(
+        {window.budget_duration: window.reset_at for window in stored or () if window.reset_at is not None}
+    )
+    return json.dumps(
+        [
+            {
+                **window.model_dump(),
+                "reset_at": (
+                    stored_reset_at.get(window.budget_duration)
+                    or get_budget_reset_time(budget_duration=window.budget_duration)
+                ).isoformat(),
+            }
+            for window in requested
+        ]
+    )
+
+
+def initial_budget_windows_json(raw_windows: object) -> str:
+    return budget_windows_json(
+        None if raw_windows is None else BUDGET_WINDOWS_ADAPTER.validate_python(raw_windows), stored=None
+    )
+
+
 def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) -> dict[str, object]:
     user_info: Final = litellm.default_internal_user_params or {}
 
@@ -183,7 +281,14 @@ def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) 
     for k, v in returned_dict.items():
         if v is not None:
             non_null_dict[k] = v
-    return non_null_dict
+    return {
+        **non_null_dict,
+        **(
+            {"budget_limits": initial_budget_windows_json(user_info["budget_limits"])}
+            if "budget_limits" in user_info
+            else {}
+        ),
+    }
 
 
 async def handle_budget_for_entity(
@@ -233,6 +338,7 @@ async def handle_budget_for_entity(
 
     # Check if budget_id is explicitly provided in the data
     data_budget_id: Final[str | None] = getattr(data, "budget_id", None)
+    await validate_scalar_budget_attachment(prisma_client, data_budget_id)
 
     # Case 1: Creating new entity - no existing budget_id
     if existing_budget_id is None:
@@ -241,7 +347,7 @@ async def handle_budget_for_entity(
             return data_budget_id
         elif _budget_data:
             # Create a new budget with the provided fields
-            budget_row: Final = LiteLLM_BudgetTable(**_budget_data)
+            budget_row: Final = LiteLLM_BudgetTable.model_validate(dict(_budget_data))
             new_budget_data: Final = prisma_client.jsonify_object(budget_row.model_dump(exclude_none=True))
 
             _budget: Final[_PrismaBudgetRecord] = await BudgetRepository(prisma_client).table.create(
@@ -262,7 +368,7 @@ async def handle_budget_for_entity(
         # If budget fields are provided, update the existing budget
         if _budget_data:
             await update_budget(
-                budget_obj=BudgetNewRequest(budget_id=existing_budget_id, **_budget_data),
+                budget_obj=BudgetNewRequest.model_validate({"budget_id": existing_budget_id, **_budget_data}),
                 user_api_key_dict=user_api_key_dict,
             )
 
@@ -296,7 +402,7 @@ async def _clone_team_default_budget_for_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     budget_duration_override: str | None = None,
-    tx: MemberWriteTx | None = None,
+    tx: BudgetWriteTx | None = None,
 ) -> str | None:
     """
     Create a new budget row that copies the values from the team's default
@@ -317,6 +423,7 @@ async def _clone_team_default_budget_for_member(
         return None
 
     default_budget_dict: Final = default_budget.model_dump()
+    reject_budget_windows(default_budget_dict)
     cloned_data: Final[dict] = {
         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -343,7 +450,7 @@ async def _clone_team_default_budget_for_member(
     return new_budget.budget_id
 
 
-async def _resolve_member_budget_id(
+async def resolve_member_budget_id(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
@@ -351,7 +458,7 @@ async def _resolve_member_budget_id(
     allowed_models: list[str] | None,
     budget_duration: str | None,
     default_team_budget_id: str | None,
-    tx: MemberWriteTx | None = None,
+    tx: BudgetWriteTx | None = None,
 ) -> str | None:
     """
     Resolve the budget a new team member should be linked to.
@@ -361,6 +468,8 @@ async def _resolve_member_budget_id(
     changes reach them; ``/team/member_update`` clones that row on first write.
     A lone ``budget_duration`` clones the default with the reset window
     overridden, or creates a window-only budget when there is no team default.
+    ``allowed_models`` with no cap creates a budget that takes the default's reset
+    window and leaves the cap to the default.
     With nothing set the member gets no budget, though ``add_new_member`` still writes its membership row.
     """
     has_explicit_limit: Final = max_budget_in_team is not None or allowed_models is not None
@@ -369,6 +478,8 @@ async def _resolve_member_budget_id(
         default_budget: Final = await _budget_table(prisma_client, tx).find_unique(
             where={"budget_id": default_team_budget_id}
         )
+        if default_budget is not None:
+            reject_budget_windows(default_budget.model_dump())
         return default_team_budget_id if default_budget is not None else None
 
     if not has_explicit_limit and default_team_budget_id is not None:
@@ -392,12 +503,35 @@ async def _resolve_member_budget_id(
         budget_data["max_budget"] = max_budget_in_team
     if allowed_models is not None:
         budget_data["allowed_models"] = allowed_models
-    if budget_duration is not None:
-        budget_data["budget_duration"] = budget_duration
-        budget_data["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
+    member_budget_duration: Final = budget_duration or (
+        await _team_default_budget_duration(prisma_client, default_team_budget_id, tx)
+        if max_budget_in_team is None and default_team_budget_id is not None
+        else None
+    )
+    if member_budget_duration is not None:
+        budget_data["budget_duration"] = member_budget_duration
+        budget_data["budget_reset_at"] = get_budget_reset_time(budget_duration=member_budget_duration)
     budget_table: Final[_PrismaBudgetTable] = _budget_table(prisma_client, tx)
     response: Final = await budget_table.create(data=budget_data)
     return response.budget_id
+
+
+_resolve_member_budget_id: Final = resolve_member_budget_id
+
+
+async def _team_default_budget_duration(
+    prisma_client: PrismaClient, default_team_budget_id: str, tx: BudgetWriteTx | None
+) -> str | None:
+    """The reset period a member with models of their own and no cap of their own must carry.
+
+    Their cap is read from the team default at auth time, but spend is only reset for a
+    member whose own budget row has a reset date.
+    """
+    default_budget: Final = await _budget_table(prisma_client, tx).find_unique(
+        where={"budget_id": default_team_budget_id}
+    )
+    duration: Final = default_budget.model_dump().get("budget_duration") if default_budget is not None else None
+    return duration if isinstance(duration, str) and duration else None
 
 
 async def _append_team_id_if_absent(

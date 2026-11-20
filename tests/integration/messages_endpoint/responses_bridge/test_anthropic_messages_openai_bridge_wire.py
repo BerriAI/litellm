@@ -114,8 +114,13 @@ def test_midturn_system_correction_is_forwarded_to_openai_responses(gateway: Gat
         assert request.headers["authorization"] == f"Bearer {_API_KEY}"
         body: Final = _JSON_OBJECT.validate_json(request.body)
         assert body["model"] == _BACKEND
-        assert body["instructions"] == "You are a coding agent."
+        assert "instructions" not in body, body
         assert body["input"] == [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "You are a coding agent."}],
+            },
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Fix the failing test."}]},
             {
                 "type": "message",

@@ -10,11 +10,13 @@ from litellm.caching.redis_batch import Batch
 from litellm.redis.stores._route import post_call_request, ready, route
 from litellm.redis.stores.spend_counters.handle import SpendCountersHandle
 from litellm.redis.stores.spend_counters.types import (
+    COMMITTED_COUNTER_PREFIX,
     END_USER_COUNTER_PREFIX,
     SPEND_COUNTER_PREFIX,
     SPEND_COUNTERS_TARGET,
     SpendIncrement,
     SpendReading,
+    committed_counter,
     end_user_counter,
     is_unavailable,
     key_counter,
@@ -28,18 +30,21 @@ from litellm.redis.stores.spend_counters.types import (
     team_member_counter,
     team_window_counter,
     user_counter,
+    user_window_counter,
 )
 
 if TYPE_CHECKING:
     from litellm.redis.stores.connection import RedisStores
 
 __all__ = [
+    "COMMITTED_COUNTER_PREFIX",
     "END_USER_COUNTER_PREFIX",
     "SPEND_COUNTERS_TARGET",
     "SPEND_COUNTER_PREFIX",
     "SpendCounterStore",
     "SpendIncrement",
     "SpendReading",
+    "committed_counter",
     "end_user_counter",
     "is_unavailable",
     "key_counter",
@@ -53,6 +58,7 @@ __all__ = [
     "team_member_counter",
     "team_window_counter",
     "user_counter",
+    "user_window_counter",
 ]
 
 
@@ -73,6 +79,10 @@ class SpendCounterStore:
             self._handle.attach(redis.client)
 
     @property
+    def handle(self) -> SpendCountersHandle:
+        return self._handle
+
+    @property
     def redis_ttl(self) -> float | None:
         """The TTL every Redis write gives a counter, None when there is no Redis."""
         return self._handle.redis_ttl_seconds
@@ -80,6 +90,11 @@ class SpendCounterStore:
     @property
     def has_redis(self) -> bool:
         return self._handle.has_redis
+
+    def set_committed_ttl(self, ttl: float) -> None:
+        """The least TTL a Redis write gives a committed twin, which keeps it past the DB write that holds its
+        charges."""
+        self._handle.set_committed_ttl(ttl)
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def read(self, counter: str) -> SpendReading:
@@ -105,12 +120,11 @@ class SpendCounterStore:
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     def increment_many_post_call(self, increments: Sequence[SpendIncrement]) -> bool:
-        """Declares the increments on the request's post-call batch, False when there is no Redis or request.
-        Each total lands in memory once the batch goes out; a counter whose increment failed is dropped everywhere."""
+        """Declares the increments on the request's post-call batch, False when there is no Redis or request. Each
+        total lands in memory once the batch goes out; a counter whose increment failed is dropped everywhere. The
+        request tracks a committed charge until it lands, which ``tracked_writes_settled`` reports."""
         request: Final = post_call_request() if self.has_redis and increments else None
-        if request is None:
-            return False
-        return self._handle.increment_many_post_call(request, increments)
+        return request is not None and self._handle.increment_many_post_call(request, increments)
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def set_max(self, counter: str, spend: float) -> float | None:

@@ -97,7 +97,9 @@ def _comparable(span: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _expected_generation(route: respx.Route, fixture_name: str, trace_id: str) -> dict[str, object]:
+def _expected_generation(
+    route: respx.Route, fixture_name: str, trace_id: str, cost_total: float | None = None
+) -> dict[str, object]:
     otel_trace_id: Final = resolve_trace_id(trace_id)
     generations: Final = tuple(
         span
@@ -108,7 +110,14 @@ def _expected_generation(route: respx.Route, fixture_name: str, trace_id: str) -
     )
     assert len(generations) == 1
     expected_path: Final = Path(__file__).with_name("langfuse_expected_request_body") / fixture_name
-    expected: Final = TypeAdapter(dict[str, object]).validate_python(json.loads(expected_path.read_text()))
+    fixture: Final = TypeAdapter(dict[str, object]).validate_python(json.loads(expected_path.read_text()))
+    fixture_attributes: Final = TypeAdapter(dict[str, object]).validate_python(fixture["attributes"])
+    priced_attributes: Final = (
+        fixture_attributes
+        if cost_total is None
+        else {**fixture_attributes, "langfuse.observation.cost_details": {"total": cost_total}}
+    )
+    expected: Final = {**fixture, "attributes": priced_attributes}
     actual: Final = _comparable(generations[0])
     expected_comparable: Final = _comparable(expected)
     assert actual == expected_comparable, json.dumps(
@@ -355,6 +364,12 @@ async def test_langfuse_logging_completion_with_bedrock_llm_response(
     langfuse_export: tuple[respx.Route, str],
 ) -> None:
     route, trace_id = langfuse_export
+    profile: Final = litellm.get_model_info(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0", custom_llm_provider="bedrock"
+    )
+    input_rate: Final = profile["input_cost_per_token"]
+    output_rate: Final = profile["output_cost_per_token"]
+    assert isinstance(input_rate, float) and isinstance(output_rate, float)
     response: Final = litellm.ModelResponse(
         choices=[],
         usage=litellm.Usage(prompt_tokens=10, completion_tokens=10, total_tokens=20),
@@ -373,7 +388,9 @@ async def test_langfuse_logging_completion_with_bedrock_llm_response(
     )
     await _flush_langfuse()
     assert route.call_count == 1
-    _expected_generation(route, "completion_with_bedrock_call.json", trace_id)
+    _expected_generation(
+        route, "completion_with_bedrock_call.json", trace_id, cost_total=10 * input_rate + 10 * output_rate
+    )
 
 
 @pytest.mark.asyncio

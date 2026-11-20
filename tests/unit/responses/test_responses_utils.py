@@ -13,7 +13,7 @@ from litellm.responses.litellm_completion_transformation.transformation import L
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.utils import ModelInfo, Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 
 
 class TestResponsesAPIRequestUtils:
@@ -45,6 +45,30 @@ class TestResponsesAPIRequestUtils:
         assert result["max_output_tokens"] == 100
         assert "prompt" in result
         assert result["prompt"] == {"id": "pmpt_123"}
+
+    def test_get_optional_params_responses_api_forwards_a_param_a_tuple_allowlist_names(self):
+        result: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-4o",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                {"temperature": 0.7, "custom_flag": "on"}  # pyright: ignore[reportCallIssue]  # an unsupported key is the input under test
+            ),
+            allowed_openai_params=("custom_flag",),
+        )
+
+        assert result == {"temperature": 0.7, "custom_flag": "on"}
+
+    def test_get_optional_params_responses_api_reads_a_bare_string_allowlist_as_one_param_name(self):
+        result: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-4o",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                {"temperature": 0.7, "custom_flag": "on"}  # pyright: ignore[reportCallIssue]  # an unsupported key is the input under test
+            ),
+            allowed_openai_params="custom_flag",
+        )
+
+        assert result == {"temperature": 0.7, "custom_flag": "on"}
 
     def test_get_optional_params_responses_api_unsupported_param(self):
         """Test that unsupported parameters raise an error"""
@@ -984,7 +1008,7 @@ def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
         "cache_read_input_token_cost": 5e-07,
         "explicit_cache_read_input_token_cost": 2.5e-07,
     }
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     try:
         chat_usage = Usage(
             prompt_tokens=1000,
@@ -1012,4 +1036,4 @@ def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
             litellm.model_cost.pop(model, None)
         else:
             litellm.model_cost[model] = previous_row
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)

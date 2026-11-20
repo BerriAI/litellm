@@ -34,6 +34,7 @@ from litellm.types.router import (
     DeploymentTypedDict,
     FallbackAccessCheck,
     FallbackBudgetCheck,
+    FallbackRateLimitCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     ModelGroupInfo,
@@ -49,6 +50,7 @@ from litellm.types.utils import GenericBudgetConfigType
 
 if TYPE_CHECKING:
     from litellm.router_rust.core import RustCore
+    from litellm.router_utils.dynamic_queue_router import DynamicQueueSettings
 
 
 # ``Router(...)``'s parameters, their defaults and its docstring: ``router_arguments`` binds a call
@@ -75,6 +77,7 @@ def _router_init(
     ## SCHEDULER ##
     polling_interval: float | None = None,
     default_priority: int | None = None,
+    dynamic_queue: "DynamicQueueSettings | Mapping[str, object] | None" = None,
     ## RELIABILITY ##
     num_retries: int | None = None,
     max_fallbacks: int | None = None,  # max fallbacks to try before exiting the call. Defaults to 5.
@@ -120,9 +123,11 @@ def _router_init(
     enable_mid_stream_fallback_continuation: bool = False,
     fallback_access_check: FallbackAccessCheck | None = None,
     fallback_budget_check: FallbackBudgetCheck | None = None,
+    fallback_rate_limit_check: FallbackRateLimitCheck | None = None,
     auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     session_affinity_repin_on_failover: bool = False,
     _host: PythonHost = python_host,
+    enable_cross_model_group_collision_check: bool | None = None,
 ) -> None:
     """
     Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -139,6 +144,7 @@ def _router_init(
         client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.
         polling_interval: (Optional[float]): frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms.
         default_priority: (Optional[int]): the priority given to every chat or text completion request that sets no 'priority' of its own; '.acompletion()' and '.atext_completion()' queue it through the scheduler. Default is None.
+        dynamic_queue: (Optional[dict]): opt-in per-deployment queuing for async non-streaming chat completions, shared across workers through the router's Redis. A provider 429 or 529 congests the deployment the router picked, and later requests picked onto it wait for its turn in priority order. Keys: 'enabled' (False), 'queue_timeout' (seconds a request may wait in total across its attempts, default 30), 'max_waiting' (waiters per deployment, a whole number from 1 to 64, required when enabled). Enabled, it needs 'default_priority'; the scheduler admits every request as before, and a request it admits then waits in the queue only where an attempt goes out on a congested deployment. A request that runs out of queue time gets the usual timeout error and a full queue answers 503 with the code 'queue_full'; when the queue's Redis is unavailable, requests are routed as they would be without the queue. Default is None.
         num_retries (Optional[int]): Number of retries for failed requests. Defaults to 2.
         timeout (Optional[float]): Timeout for requests. Defaults to None.
         default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.
@@ -163,9 +169,11 @@ def _router_init(
             whose deployment is in cooldown or removed. Async routes only. Defaults to False. Applied at startup.
         ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
         enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+        enable_cross_model_group_collision_check (Optional[bool]): When True, a request naming a raw `litellm_params.model` string (with or without `specific_deployment`) whose eligible deployments belong to more than one model group is refused with a 400 instead of load-balanced across those groups. When None, read from the `LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK` environment variable. Defaults to off.
         enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
         fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
+        fallback_rate_limit_check (Optional[FallbackRateLimitCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over its per-model rate limit is skipped. Defaults to None (rate limits are not re-checked on fallback).
     Returns:
         Router: An instance of the litellm.Router class.
 
@@ -231,11 +239,29 @@ def _class_descriptor(cls: type, name: str) -> bool:
 
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Awaitable
     from typing import ParamSpec, overload
 
+    import httpx
+    from openai.pagination import AsyncCursorPage
+    from openai.types.beta.assistant import Assistant
+    from openai.types.beta.assistant_deleted import AssistantDeleted
+    from openai.types.beta.threads.message import Message as OpenAIMessage
+    from openai.types.file_deleted import FileDeleted
+
+    from litellm.files.types import FileContentStreamingResult
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
-    from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+    from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
+    from litellm.types.llms.openai import (
+        AllMessageValues,
+        HttpxBinaryResponseContent,
+        OpenAIFileObject,
+        ResponsesAPIResponse,
+        Thread,
+    )
+    from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, LiteLLMFineTuningJob, ModelResponse
+    from litellm.types.vector_stores import VectorStoreCreateResponse
 
     _P: Final = ParamSpec("_P")
 
@@ -278,6 +304,28 @@ if TYPE_CHECKING:
         async def acreate_file(self, model: str, **kwargs: object) -> OpenAIFileObject: ...  # pyright: ignore[reportIncompatibleMethodOverride]  # see acompletion
         async def acreate_batch(self, model: str, **kwargs: object) -> LiteLLMBatch: ...  # pyright: ignore[reportIncompatibleMethodOverride]  # see acompletion
         async def aretrieve_batch(self, model: str | None = None, **kwargs: object) -> LiteLLMBatch: ...  # pyright: ignore[reportIncompatibleMethodOverride]  # see acompletion
+
+        aget_assistants: Callable[..., Awaitable[AsyncCursorPage[Assistant]]]
+        acreate_assistants: Callable[..., Awaitable[Assistant]]
+        adelete_assistant: Callable[..., Awaitable[AssistantDeleted]]
+        acreate_thread: Callable[..., Awaitable[Thread]]
+        aget_thread: Callable[..., Awaitable[Thread]]
+        a_add_message: Callable[..., Awaitable[OpenAIMessage]]
+        aget_messages: Callable[..., Awaitable[AsyncCursorPage[OpenAIMessage]]]
+        arun_thread: Callable[..., Awaitable[object]]
+        adecisions: Callable[..., Awaitable[OpenAIDecisionResponse | DecisionsResponse]]
+        acreate_fine_tuning_job: Callable[..., Awaitable[LiteLLMFineTuningJob]]
+        aretrieve_fine_tuning_job: Callable[..., Awaitable[LiteLLMFineTuningJob]]
+        acancel_fine_tuning_job: Callable[..., Awaitable[LiteLLMFineTuningJob]]
+        alist_fine_tuning_jobs: Callable[..., Awaitable[object]]
+        alist_batches: Callable[..., Awaitable[Mapping[str, object]]]
+        acancel_batch: Callable[..., Awaitable[LiteLLMBatch]]
+        aget_responses: Callable[..., Awaitable[ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]]
+        afile_content: Callable[..., Awaitable[HttpxBinaryResponseContent | FileContentStreamingResult]]
+        afile_delete: Callable[..., Awaitable[FileDeleted]]
+        avector_store_create: Callable[..., Awaitable[VectorStoreCreateResponse]]
+        allm_passthrough_route: Callable[..., Awaitable[httpx.Response | AsyncGenerator[bytes, bytes]]]
+
         def __getattr__(self, name: str) -> Any: ...  # the endpoints served by name
 
 else:
