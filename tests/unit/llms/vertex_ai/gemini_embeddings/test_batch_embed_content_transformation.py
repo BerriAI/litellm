@@ -792,3 +792,99 @@ def test_gemini_embedding_sends_extra_body_fields_on_each_request(respx_mock: re
             "documentOcr": True,
         }
     ]
+
+
+def _text_block(text: object, **extra: object) -> dict[str, object]:
+    return {"type": "text", "text": text, **extra}
+
+
+LITERAL_TEXTS: Final = (
+    "data:application/octet-stream;base64,AACAvw==",
+    'data:image/png;base64,iVBORw0KGgo="}',
+    "gs://bucket/build/output.txt",
+    "gs://bucket/assets/logo.png",
+    "files/README.md is the entry point",
+    FILES_URI,
+)
+
+
+class TestTextContentBlocks:
+    MODEL: Final = "gemini-embedding-2"
+
+    @pytest.mark.parametrize("text", LITERAL_TEXTS)
+    def test_batch_path_sends_a_text_block_as_text_whatever_it_starts_with(self, text: str) -> None:
+        body: Final = transform_openai_input_gemini_content(
+            input=[_text_block(text)], model=self.MODEL, optional_params={}
+        )
+        assert body["requests"][0]["content"]["parts"] == [{"text": text}]
+
+    @pytest.mark.parametrize("text", LITERAL_TEXTS)
+    def test_embed_content_path_sends_a_text_block_as_text_whatever_it_starts_with(self, text: str) -> None:
+        body: Final = transform_openai_input_gemini_embed_content(
+            input=[_text_block(text)], model=self.MODEL, optional_params={}
+        )
+        assert body["content"]["parts"] == [{"text": text}]
+
+    def test_text_block_and_bare_media_string_share_one_grouped_request(self) -> None:
+        body: Final = transform_openai_input_gemini_content(
+            input=[[_text_block(GCS_URL), GCS_URL]], model=self.MODEL, optional_params={}
+        )
+        assert body["requests"][0]["content"]["parts"] == [
+            {"text": GCS_URL},
+            {"file_data": {"mime_type": "image/png", "file_uri": GCS_URL}},
+        ]
+
+    @pytest.mark.parametrize(
+        "block, named_in_error",
+        [
+            ({"type": "text"}, "text: Field required"),
+            (_text_block(5), "text: Input should be a valid string"),
+            (_text_block("hello", cache_control={"type": "ephemeral"}), "cache_control"),
+        ],
+    )
+    def test_malformed_text_block_answers_400_naming_the_field(
+        self, block: dict[str, object], named_in_error: str
+    ) -> None:
+        with pytest.raises(BadRequestError, match=named_in_error):
+            _build_part_for_input(block)
+
+    def test_drop_params_drops_the_text_block_keys_embeddings_do_not_take(self) -> None:
+        block: Final = _text_block(IMAGE_DATA_URI, cache_control={"type": "ephemeral"})
+        assert _build_part_for_input(block, drop_params=True) == {"text": IMAGE_DATA_URI}
+
+    def test_text_block_is_not_multimodal(self) -> None:
+        assert _is_multimodal_input([_text_block(IMAGE_DATA_URI)]) is False
+        assert _is_multimodal_input([_text_block("hello"), IMAGE_DATA_URI]) is True
+
+    def test_process_response_counts_a_text_block_like_plain_text(self) -> None:
+        text: Final = 'data:image/png;base64,iVBORw0KGgo="}'
+        result: Final = process_response(
+            input=[_text_block(text), IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]},
+        )
+        assert result.usage.prompt_tokens == litellm.token_counter(model=self.MODEL, text=text) > 0
+
+    def test_embed_content_usage_fallback_counts_a_text_block(self) -> None:
+        text: Final = "gs://bucket/assets/logo.png"
+        result: Final = process_embed_content_response(
+            input=[_text_block(text)],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json={"embedding": {"values": [0.1, 0.2]}},
+        )
+        assert result.usage.prompt_tokens == litellm.token_counter(model=self.MODEL, text=text) > 0
+
+    def test_text_block_next_to_an_image_is_not_image_only_input(self) -> None:
+        result: Final = process_embed_content_response(
+            input=[_text_block(IMAGE_DATA_URI), IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json={
+                "embedding": {"values": [0.1, 0.2]},
+                "usageMetadata": {"promptTokenCount": 270, "totalTokenCount": 270},
+            },
+        )
+        assert result.usage.prompt_tokens == 270
+        assert result.usage.prompt_tokens_details.image_tokens == 0
