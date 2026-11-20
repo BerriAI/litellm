@@ -4294,6 +4294,32 @@ def test_a_deferred_mcp_result_is_sent_back_only_with_the_mcp_call_it_answers(
     assert _sent_assistant_turns(route, 2) == expected_turn_three
 
 
+def test_a_paused_mcp_call_and_the_result_its_resumed_turn_returns_are_both_sent_back() -> None:
+    call: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcptoolu_01Wiki",
+        "name": "read_wiki_structure",
+        "server_name": "wiki",
+        "input": {"repo": "example/project"},
+    }
+    result: Final = {
+        "type": "mcp_tool_result",
+        "tool_use_id": call["id"],
+        "is_error": False,
+        "content": [{"type": "text", "text": "Repository overview"}],
+    }
+    answer: Final = {"type": "text", "text": "The repository is documented."}
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read the repository"},
+        _parsed_assistant_message([call], "pause_turn").model_dump(),
+        _parsed_assistant_message([result, answer], "end_turn").model_dump(),
+        {"role": "user", "content": "What did you find?"},
+    )
+
+    assert replayed[1]["content"] == [call, result, answer]
+
+
 def test_a_streamed_deferred_mcp_result_reaches_the_client_in_a_chunk(respx_mock: respx.MockRouter) -> None:
     respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=_anthropic_reply(TURN_TWO_MESSAGE, TURN_TWO_STREAM_EVENTS)
@@ -11408,6 +11434,52 @@ def test_claude_routes_without_the_mcp_connector_send_no_tools_when_drop_params_
     assert "tools" not in mapped
     assert "mcp_servers" not in mapped
     assert "tool_choice" not in mapped
+
+
+_HISTORY_MCP_CALL: Final = {
+    "type": "mcp_tool_use",
+    "id": "mcptoolu_01Wiki",
+    "name": "read_wiki_structure",
+    "server_name": "deepwiki",
+    "input": {"repoName": "facebook/react"},
+}
+_HISTORY_MCP_RESULT: Final = {
+    "type": "mcp_tool_result",
+    "tool_use_id": "mcptoolu_01Wiki",
+    "is_error": False,
+    "content": [{"type": "text", "text": "1 React Repository Overview"}],
+}
+_HISTORY_MCP_ANSWER: Final = {"type": "text", "text": "The wiki has one page."}
+
+
+def _sent_mcp_history_turn(config_class: type[AnthropicConfig]) -> object:
+    sent: Final = config_class().transform_request(
+        model="claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "List the wiki pages of facebook/react."},
+            _parsed_assistant_message(
+                [_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER], "end_turn"
+            ).model_dump(),
+            {"role": "user", "content": "Which page covers the reconciler?"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    return sent["messages"][1]["content"]
+
+
+@pytest.mark.parametrize("config_class", [AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig])
+def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config_class):
+    sent: Final = _sent_mcp_history_turn(config_class)
+
+    assert isinstance(sent, list) and len(sent) == 3
+    assert all(block in sent for block in (_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER))
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_claude_routes_without_the_mcp_connector_send_only_the_text_of_an_mcp_turn_from_history(config_class, route):
+    assert _sent_mcp_history_turn(config_class) == [_HISTORY_MCP_ANSWER]
 
 
 _KEPT_SEARCH_CALL: Final = {

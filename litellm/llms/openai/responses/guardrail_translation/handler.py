@@ -160,8 +160,8 @@ class _CompactionSummaryPosition:
     output_index: int
 
 
-_McpCallTextField: TypeAlias = Literal["output", "error"]
-_MCP_CALL_TEXT_FIELDS: Final[tuple[_McpCallTextField, ...]] = ("output", "error")
+_McpCallTextField: TypeAlias = Literal["arguments", "output", "error"]
+_MCP_CALL_TEXT_FIELDS: Final[tuple[_McpCallTextField, ...]] = ("arguments", "output", "error")
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +218,14 @@ def _mcp_call_texts(item: object, output_index: int) -> tuple[tuple[_McpCallText
         (_McpCallTextPosition(output_index, item_id, text_field), text)
         for text_field in _MCP_CALL_TEXT_FIELDS
         if isinstance(text := stream_item_field(item, text_field), str) and text
+    )
+
+
+def _mcp_call_input_texts(item: Mapping[str, object]) -> tuple[tuple[int, str], ...]:
+    return tuple(
+        (field_index, text)
+        for field_index, text_field in enumerate(_MCP_CALL_TEXT_FIELDS)
+        if isinstance(text := item.get(text_field), str) and text
     )
 
 
@@ -463,6 +471,7 @@ _STREAM_TEXT_EVENT_TYPES: Final = (
     _OUTPUT_TEXT_EVENT_TYPES | _REASONING_SUMMARY_TEXT_EVENT_TYPES | _REASONING_TEXT_EVENT_TYPES
 )
 _TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "text"})
+_TOOL_RESULT_INPUT_ITEM_TYPES: Final = TOOL_CALL_OUTPUT_ITEM_TYPES | frozenset({"mcp_call"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
@@ -1041,7 +1050,7 @@ def scannable_instructions(data: Mapping[str, object], *, skip_system: bool = Fa
 
 
 def _input_item_role(item: object) -> str:
-    if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES:
+    if stream_item_field(item, "type") in _TOOL_RESULT_INPUT_ITEM_TYPES:
         return "tool"
     role: Final = item.get("role") if isinstance(item, Mapping) else None
     return role.lower() if isinstance(role, str) else ""
@@ -1568,6 +1577,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             texts_to_check.append(summary)
             task_mappings.append((msg_idx, None))
             return
+        if message.get("type") == "mcp_call":
+            mcp_call_texts: Final = _mcp_call_input_texts(message)
+            texts_to_check.extend(text for _, text in mcp_call_texts)
+            task_mappings.extend((msg_idx, field_index) for field_index, _ in mcp_call_texts)
+            return
         if message.get("type") in TOOL_CALL_OUTPUT_ITEM_TYPES:
             for content_idx, text in tool_output_texts(message):
                 texts_to_check.append(text)
@@ -1622,6 +1636,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             encrypted_content = _summarized_encrypted_content(item)
             if encrypted_content is not None:
                 _assignable(item)["encrypted_content"] = with_compaction_summary(encrypted_content, guardrail_response)
+                continue
+
+            if item.get("type") == "mcp_call" and content_idx_optional is not None:
+                _assignable(item)[_MCP_CALL_TEXT_FIELDS[content_idx_optional]] = guardrail_response
                 continue
 
             field = _scanned_text_field(item)
@@ -2510,10 +2528,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         reasoning_texts: Final = chain.from_iterable(
             _reasoning_output_texts(item, output_index) for output_index, item in enumerate(output_items)
         )
+        mcp_call_texts: Final = chain.from_iterable(
+            _mcp_call_texts(item, output_index) for output_index, item in enumerate(output_items)
+        )
         return StreamingScanKey(
             texts=(
                 *part_texts,
                 *summaries,
+                *(text for _, text in mcp_call_texts),
                 *(text for _, text in reasoning_texts),
                 *(text for _, text in _provider_thinking_texts(response)),
             ),

@@ -2202,19 +2202,17 @@ def _paused_turn_replay(
     *,
     is_final_message: bool,
     answered_later_ids: frozenset[str] = frozenset(),
-    dropped_mcp_ids: frozenset[str] = frozenset(),
 ) -> tuple[
     tuple[_AnthropicToolInvokeItem, ...],
     tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...],
 ]:
-    kept: Final = tuple(block for block in tool_invokes if not _is_or_answers(block, dropped_mcp_ids))
     unrun_ids: Final = _paused_server_tool_use_ids(tool_invokes, answered_later_ids)
     if not unrun_ids:
-        return kept, tuple(thinking_blocks)
+        return tuple(tool_invokes), tuple(thinking_blocks)
     dropped_ids: Final = (
         unrun_ids - frozenset((_last_block_id_among(tool_invokes, unrun_ids),)) if is_final_message else unrun_ids
     )
-    return tuple(block for block in kept if _block_id(block) not in dropped_ids), ()
+    return tuple(block for block in tool_invokes if _block_id(block) not in dropped_ids), ()
 
 
 _BACK_TO_BACK_JSON_OBJECTS: Final = re.compile(r"\}\s*\{")
@@ -3359,6 +3357,8 @@ def anthropic_messages_pt(
     model: str,
     llm_provider: str,
     drop_params: bool = False,
+    *,
+    replays_mcp_calls: bool = True,
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -3385,7 +3385,7 @@ def anthropic_messages_pt(
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
-    mcp_replay: Final = mcp_replay_plan(messages)
+    mcp_replay: Final = mcp_replay_plan(messages, replays_mcp_calls=replays_mcp_calls)
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
     split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
@@ -3582,17 +3582,21 @@ def anthropic_messages_pt(
                 if isinstance(_provider_specific_fields_raw, dict)
                 else {}
             )
-            tool_invoke_results = (
-                convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,
-                    web_search_results=_provider_specific_fields.get("web_search_results"),
-                    tool_results=_provider_specific_fields.get("tool_results"),
-                    answered_tool_ids=client_answered_tool_ids,
-                    server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
-                    split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
+            tool_invoke_results = tuple(
+                block
+                for block in (
+                    convert_to_anthropic_tool_invoke(
+                        assistant_tool_calls,
+                        web_search_results=_provider_specific_fields.get("web_search_results"),
+                        tool_results=_provider_specific_fields.get("tool_results"),
+                        answered_tool_ids=client_answered_tool_ids,
+                        server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
+                        split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
+                    )
+                    if assistant_tool_calls is not None
+                    else ()
                 )
-                if assistant_tool_calls is not None
-                else ()
+                if not _is_or_answers(block, mcp_replay.dropped_ids_at(msg_i))
             )
             turn_paused = bool(_paused_server_tool_use_ids(tool_invoke_results, mcp_replay.answered_later_ids))
             replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
@@ -3600,7 +3604,6 @@ def anthropic_messages_pt(
                 thinking_blocks or (),
                 is_final_message=msg_i == len(messages) - 1,
                 answered_later_ids=mcp_replay.answered_later_ids,
-                dropped_mcp_ids=mcp_replay.dropped_ids_at(msg_i),
             )
             _has_server_tool_calls = any(
                 message_field(item, "type") in ("server_tool_use", "mcp_tool_use") for item in replayed_tool_invokes

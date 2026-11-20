@@ -22,6 +22,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import anth
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
 from tests.unit.llms.anthropic.anthropic_deferred_mcp_result import (
@@ -2705,8 +2706,8 @@ def test_responses_over_anthropic_return_an_mcp_connector_call_as_an_mcp_call_it
         model=_MODEL, input="List the wiki pages of facebook/react.", tools=[_DEEPWIKI_SERVER], api_key="sk-ant-fake"
     )
 
-    assert [item.type for item in response.output] == ["message", "mcp_call"]
-    assert response.output[1].model_dump(exclude_none=True) == {
+    assert [item.type for item in response.output] == ["mcp_call", "message"]
+    assert response.output[0].model_dump(exclude_none=True) == {
         "id": f"mcp_{_MCP_CALL_ID}",
         "type": "mcp_call",
         "name": "read_wiki_structure",
@@ -2765,6 +2766,27 @@ def test_responses_over_anthropic_send_a_replayed_mcp_call_back_as_the_mcp_block
     )
 
     assert _sent_assistant_content(route) == [_MCP_TOOL_USE, expected_result_block]
+
+
+def test_responses_over_anthropic_send_a_replayed_mcp_call_with_the_mcp_beta_when_the_turn_has_no_mcp_tool(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "Page 2."})
+    )
+
+    litellm.responses(
+        model=_MODEL,
+        input=_replayed_mcp_input(
+            _mcp_call_item(f"mcp_{_MCP_CALL_ID}", status="completed", output="1 React Repository Overview")
+        ),
+        api_key="sk-ant-fake",
+    )
+
+    assert _sent_assistant_content(route) == [_MCP_TOOL_USE, _mcp_tool_result(False, "1 React Repository Overview")]
+    assert ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value in route.calls.last.request.headers[
+        "anthropic-beta"
+    ].split(",")
 
 
 def test_responses_over_anthropic_drop_a_replayed_mcp_call_that_holds_no_claude_call_id(

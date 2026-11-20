@@ -4922,7 +4922,6 @@ def _mcp_tool_call(query: str) -> ChatCompletionAssistantToolCall:
 
 
 def test_split_out_moves_a_rewritten_mcp_tool_call_back_to_server_tool_calls() -> None:
-    """A guardrail that masks a flattened mcp_tool_use call must not leave it in client tool_calls."""
     masked: Final = _mcp_tool_call("<EMAIL>")
     message: Final = {
         "role": "assistant",

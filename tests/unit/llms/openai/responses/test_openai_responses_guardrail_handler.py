@@ -1498,13 +1498,13 @@ def _persimmon_masking_filter() -> ContentFilterGuardrail:
     )
 
 
-def _mcp_call(item_id: str, **fields: str) -> McpCall:
+def _mcp_call(item_id: str, arguments: str = "{}", **fields: str) -> McpCall:
     return McpCall(
         id=item_id,
         type="mcp_call",
         server_label="orchard",
         name="lookup",
-        arguments="{}",
+        arguments=arguments,
         status="failed" if "error" in fields else "completed",
         **fields,
     )
@@ -1512,11 +1512,11 @@ def _mcp_call(item_id: str, **fields: str) -> McpCall:
 
 class TestMcpCallResultsReachOutputGuardrails:
     @pytest.mark.asyncio
-    async def test_mcp_call_output_and_error_are_masked_and_the_message_keeps_its_text(self) -> None:
+    async def test_mcp_call_arguments_output_and_error_are_masked_and_the_message_keeps_its_text(self) -> None:
         response: Final = {
             "output": [
                 _message_item("a fig"),
-                _mcp_call("mcp_toolu_1", output="two persimmon trees"),
+                _mcp_call("mcp_toolu_1", arguments='{"fruit": "persimmon"}', output="two persimmon trees"),
                 _mcp_call("mcp_toolu_2", error="persimmon orchard unreachable"),
             ]
         }
@@ -1526,6 +1526,7 @@ class TestMcpCallResultsReachOutputGuardrails:
         )
 
         answered, failed = response["output"][1], response["output"][2]
+        assert "persimmon" not in answered.arguments and "fruit" in answered.arguments
         assert "persimmon" not in answered.output and "trees" in answered.output
         assert "persimmon" not in failed.error and "unreachable" in failed.error
         assert response["output"][0]["content"][0]["text"] == "a fig"
@@ -1562,6 +1563,35 @@ class TestMcpCallResultsReachOutputGuardrails:
         assert "persimmon" not in streamed.output and "trees" in streamed.output
         assert "persimmon" not in streamed_failure.error and "unreachable" in streamed_failure.error
         assert (in_envelope, failure_in_envelope) == (streamed, streamed_failure)
+
+
+class TestReplayedMcpCallsReachInputGuardrails:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scan_only_tool_results", [False, True])
+    async def test_replayed_mcp_call_output_and_error_are_masked_before_the_request_goes_upstream(
+        self, scan_only_tool_results: bool
+    ) -> None:
+        guardrail: Final = _persimmon_masking_filter()
+        guardrail.scan_only_tool_results = scan_only_tool_results
+        data: Final = {
+            "model": "claude",
+            "input": [
+                {"role": "user", "content": "Look up the orchard"},
+                _mcp_call(
+                    "mcp_mcptoolu_1", arguments='{"fruit": "persimmon"}', output="two persimmon trees"
+                ).model_dump(exclude_none=True),
+                _mcp_call("mcp_mcptoolu_2", error="persimmon orchard unreachable").model_dump(exclude_none=True),
+                {"role": "user", "content": "How many trees?"},
+            ],
+        }
+
+        await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        answered, failed = data["input"][1], data["input"][2]
+        assert "persimmon" not in answered["arguments"] and "fruit" in answered["arguments"]
+        assert "persimmon" not in answered["output"] and "trees" in answered["output"]
+        assert "persimmon" not in failed["error"] and "unreachable" in failed["error"]
+        assert data["input"][3] == {"role": "user", "content": "How many trees?"}
 
 
 class TestOpenAIResponsesHandlerHelperMethods:

@@ -954,7 +954,14 @@ def _resolved_chat_config(model: str, custom_llm_provider: str | None) -> "BaseC
 
 
 def _route_replays_mcp_calls(model: str, custom_llm_provider: str | None) -> bool:
-    return chat_config_builds_anthropic_request(_resolved_chat_config(model, custom_llm_provider))
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    chat_config: Final = _resolved_chat_config(model, custom_llm_provider)
+    return (
+        chat_config_builds_anthropic_request(chat_config)
+        and isinstance(chat_config, AnthropicConfig)
+        and chat_config.runs_hosted_mcp()
+    )
 
 
 def _routed_base_model(request_kwargs: Mapping[str, object]) -> object:
@@ -3891,15 +3898,15 @@ class LiteLLMCompletionResponsesConfig:
         responses_output.extend(
             deferred_mcp_calls(tuple(message_field(choice, "message") for choice in choices), requested_mcp_calls)
         )
+        tool_output_items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=chat_completion_response,
+            responses_api_request=responses_api_request,
+        )
+        responses_output.extend(item for item in tool_output_items if isinstance(item, McpCall))
         responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
         )
-        responses_output.extend(
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
-                chat_completion_response=chat_completion_response,
-                responses_api_request=responses_api_request,
-            )
-        )
+        responses_output.extend(item for item in tool_output_items if not isinstance(item, McpCall))
 
         # Convert server-side tool results (e.g. Anthropic code execution)
         # into code_interpreter_call output items, replacing the corresponding

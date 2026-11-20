@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate, chain, groupby
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import Final
 
@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 
 _NO_IDS: Final = frozenset[str]()
 _NO_RESULTS: Final[tuple[Mapping[str, object], ...]] = ()
+_MCP_BLOCK_TYPES: Final = frozenset({"mcp_tool_use", "mcp_tool_result"})
 
 
 def mcp_server_name(tool_call: object) -> str | None:
@@ -78,15 +79,6 @@ def _assistant_runs(roles: Sequence[object]) -> tuple[int, ...]:
     )
 
 
-def _ids_by_run(turns: Sequence[_AssistantTurn]) -> Mapping[int, frozenset[str]]:
-    return MappingProxyType(
-        {
-            run: frozenset(chain.from_iterable(turn.results for turn in run_turns))
-            for run, run_turns in groupby(turns, key=lambda turn: turn.run)
-        }
-    )
-
-
 def _first_uses(turns: Sequence[_AssistantTurn]) -> Mapping[str, _AssistantTurn]:
     return MappingProxyType(
         dict(chain.from_iterable(((use_id, turn) for use_id in turn.use_ids) for turn in reversed(turns)))
@@ -94,7 +86,7 @@ def _first_uses(turns: Sequence[_AssistantTurn]) -> Mapping[str, _AssistantTurn]
 
 
 def _later_result_turn(turns: Sequence[_AssistantTurn], use: _AssistantTurn, use_id: str) -> _AssistantTurn | None:
-    return next((turn for turn in turns if turn.run > use.run and use_id in turn.results), None)
+    return next((turn for turn in turns if turn.message_index > use.message_index and use_id in turn.results), None)
 
 
 def _grouped_by_message(pairs: Iterable[tuple[int, str]]) -> Mapping[int, frozenset[str]]:
@@ -109,14 +101,13 @@ def _grouped_by_message(pairs: Iterable[tuple[int, str]]) -> Mapping[int, frozen
 
 def _plan(turns: Sequence[_AssistantTurn]) -> McpReplayPlan:
     first_uses: Final = _first_uses(turns)
-    answered_in_run: Final = _ids_by_run(turns)
-    unanswered_in_their_run: Final = MappingProxyType(
-        {use_id: use for use_id, use in first_uses.items() if use_id not in answered_in_run[use.run]}
+    unanswered_in_their_message: Final = MappingProxyType(
+        {use_id: use for use_id, use in first_uses.items() if use_id not in use.results}
     )
     lone_result_messages: Final = MappingProxyType(
         {
             use_id: later.message_index
-            for use_id, use in unanswered_in_their_run.items()
+            for use_id, use in unanswered_in_their_message.items()
             if (later := _later_result_turn(turns, use, use_id)) is not None
         }
     )
@@ -126,7 +117,7 @@ def _plan(turns: Sequence[_AssistantTurn]) -> McpReplayPlan:
     )
     never_answered_uses: Final = (
         (use.message_index, use_id)
-        for use_id, use in unanswered_in_their_run.items()
+        for use_id, use in unanswered_in_their_message.items()
         if use_id not in lone_result_messages and use.run != last_run
     )
     return McpReplayPlan(
@@ -145,7 +136,17 @@ def _plan(turns: Sequence[_AssistantTurn]) -> McpReplayPlan:
     )
 
 
-def mcp_replay_plan(messages: Sequence[object]) -> McpReplayPlan:
+def _plan_dropping_every_mcp_block(turns: Sequence[_AssistantTurn]) -> McpReplayPlan:
+    return McpReplayPlan(
+        dropped_ids_by_message=MappingProxyType(
+            {turn.message_index: frozenset(chain(turn.use_ids, turn.results)) for turn in turns}
+        ),
+        lone_results_by_message=MappingProxyType({}),
+        answered_later_ids=_NO_IDS,
+    )
+
+
+def mcp_replay_plan(messages: Sequence[object], *, replays_mcp_calls: bool) -> McpReplayPlan:
     roles: Final = tuple(message_field(message, "role") for message in messages)
     runs: Final = _assistant_runs(roles)
     turns: Final = tuple(
@@ -155,4 +156,11 @@ def mcp_replay_plan(messages: Sequence[object]) -> McpReplayPlan:
     )
     if not any(turn.use_ids or turn.results for turn in turns):
         return _NOTHING_TO_CHANGE
-    return _plan(turns)
+    return _plan(turns) if replays_mcp_calls else _plan_dropping_every_mcp_block(turns)
+
+
+def holds_mcp_blocks(anthropic_messages: Sequence[object]) -> bool:
+    return any(
+        message_field(block, "type") in _MCP_BLOCK_TYPES
+        for block in chain.from_iterable(parts_of(message_field(message, "content")) for message in anthropic_messages)
+    )
