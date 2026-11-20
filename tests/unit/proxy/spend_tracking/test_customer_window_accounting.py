@@ -19,10 +19,11 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     get_customer_scopes_for_accounting,
     resolve_customer_hierarchy,
 )
-from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings, get_budget_window_reset_fields
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
-from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed, recorded_window_spend
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     ProxyDBLogger,
     _update_database_and_spend_counters,
@@ -112,6 +113,7 @@ async def test_accounting_snapshot_keeps_the_admitted_window_key(duration: str) 
     assert await ps.customer_accounting_counters(
         CustomerHierarchyIds(app_id="app"), (restored,), started_at=datetime.fromtimestamp(now.timestamp())
     ) == customer_window_counters("app", "app", scope.budget_limits, now=now)
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ("customer_org", "customer_team", "customer_member"))
@@ -474,7 +476,10 @@ def test_saved_window_start_names_the_counter_until_its_reset_passes():
     settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
     created: Final = datetime(2026, 11, 13, 3, tzinfo=timezone.utc)
     limit: Final = BudgetLimit(
-        budget_duration="2d", max_budget=10, reset_at=datetime(2026, 11, 15, 6, tzinfo=timezone.utc), window_start=created
+        budget_duration="2d",
+        max_budget=10,
+        reset_at=datetime(2026, 11, 15, 6, tzinfo=timezone.utc),
+        window_start=created,
     )
     (current,) = customer_window_counters("customer_org", "org", (limit,), now=created, reset_settings=settings)
     assert current.window_start == created
@@ -485,3 +490,40 @@ def test_saved_window_start_names_the_counter_until_its_reset_passes():
     assert customer_window_counters(
         "customer_org", "org", (limit,), now=after_reset, reset_settings=settings
     ) == customer_window_counters("customer_org", "org", (unsaved,), now=after_reset, reset_settings=settings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin_reset_hour", (6, 10), ids=["calendar-reset", "admin-set-off-calendar-reset"])
+async def test_reset_job_rollover_keeps_the_customer_counter_already_in_use(admin_reset_hour: int):
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    window: Final = BudgetLimit(
+        budget_duration="1d", max_budget=10, reset_at=datetime(2026, 11, 13, admin_reset_hour, tzinfo=timezone.utc)
+    )
+    now: Final = datetime(2026, 11, 13, 11, tzinfo=timezone.utc)
+    (before_job,) = customer_window_counters("customer_org", "org", (window,), now=now, reset_settings=settings)
+    rolled: Final = await ResetBudgetJob._prepare_window_reset(
+        window.model_dump(mode="json"), None, MagicMock(), now, settings
+    )
+    assert rolled is not None
+    after_window: Final = window.model_copy(
+        update={"reset_at": rolled.next_reset_at, "window_start": rolled.window_start}
+    )
+    (after_job,) = customer_window_counters("customer_org", "org", (after_window,), now=now, reset_settings=settings)
+    assert after_job.counter_key == before_job.counter_key
+
+
+def test_saved_customer_start_still_matches_its_spend_row_after_a_cache_rebuild():
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    created: Final = datetime(2026, 11, 13, 3, 0, 0, 123456, tzinfo=timezone.utc)
+    window: Final = BudgetLimit.model_validate(
+        {
+            "budget_duration": "2d",
+            "max_budget": 10,
+            **get_budget_window_reset_fields("2d", settings=settings, now=created),
+        }
+    )
+    (counter,) = customer_window_counters("customer_org", "org", (window,), now=created, reset_settings=settings)
+    # Prisma maps DateTime to Postgres timestamp(3), so the spend row keeps the start to the millisecond.
+    stored_start: Final = counter.window_start.replace(microsecond=counter.window_start.microsecond // 1000 * 1000)
+    row: Final = SimpleNamespace(window_start=stored_start, spend=4.0)
+    assert recorded_window_spend(row, "customer_org", counter.window_start) == 4.0
