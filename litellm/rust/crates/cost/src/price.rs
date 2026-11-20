@@ -10,6 +10,11 @@ use crate::money::{Multiplier, UnitPrice};
 use crate::schedule::Schedule;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Deserialize),
+    serde(rename_all = "lowercase")
+)]
 pub enum ServiceTier {
     #[default]
     Standard,

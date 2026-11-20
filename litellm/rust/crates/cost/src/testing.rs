@@ -1,9 +1,17 @@
+use std::collections::BTreeMap;
+
+use crate::adjust::{Discounts, MarginRule, Margins};
 use crate::call::CallContext;
 use crate::money::UnitPrice;
 use crate::price::{
-    Band, Billing, CacheTtl, InputUnit, Meter, OffPeak, OffPeakRates, OutputUnit, Price, Prices,
-    ServiceTier, TokenKind, When,
+    Adjustments, Band, Billing, CacheTtl, InputUnit, Meter, OffPeak, OffPeakRates, OutputUnit,
+    Price, Prices, ServiceTier, TokenKind, When,
 };
+use crate::query::{
+    AdjustmentPolicy, Basis, Candidate, Header, Modalities, PriceSource, Provider, TokenUsage,
+    TokensQuery,
+};
+use crate::row::{LoweredRow, Provenance, RowFacts, RowPrices, RowRef, RowSource};
 use crate::schedule::{Schedule, Window};
 
 pub(crate) const BASE: Band = Band::Base;
@@ -89,4 +97,283 @@ pub(crate) fn quoted(
         .quote(call, prompt_tokens)
         .rate(meter)
         .map(|rate| (rate.unit_price.get(), rate.fallback_from))
+}
+
+pub(crate) fn basis() -> Basis {
+    Basis {
+        service_tier: ServiceTier::Standard,
+        data_residency: None,
+        vertex_location: None,
+        at: call().at,
+    }
+}
+
+/// One lowered row for `TestSource`. `tiers` makes it a `tiered_pricing` row over `prices`
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TestRow {
+    pub prices: Prices,
+    pub tiers: Option<Prices>,
+    pub adjustments: Adjustments,
+    pub facts: RowFacts,
+}
+
+impl LoweredRow for TestRow {
+    fn prices(&self) -> RowPrices<'_> {
+        match &self.tiers {
+            Some(tiers) => RowPrices::Tiered {
+                tiers,
+                empty_prompt: &self.prices,
+            },
+            None => RowPrices::Flat(&self.prices),
+        }
+    }
+
+    fn adjustments(&self) -> &Adjustments {
+        &self.adjustments
+    }
+
+    fn facts(&self) -> &RowFacts {
+        &self.facts
+    }
+}
+
+/// Rows keyed by the model name that resolves to them, plus the discount and margin config
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TestSource {
+    rows: BTreeMap<String, (RowRef, TestRow)>,
+    discounts: Discounts,
+    margins: Margins,
+}
+
+impl TestSource {
+    pub(crate) fn with_row(model: &str, row: TestRow) -> Self {
+        Self::default().and_row(model, row)
+    }
+
+    pub(crate) fn and_row(self, model: &str, row: TestRow) -> Self {
+        let rows = self
+            .rows
+            .into_iter()
+            .chain([(model.to_owned(), (row_ref(model), row))])
+            .collect();
+        Self { rows, ..self }
+    }
+
+    pub(crate) fn with_provenance(self, model: &str, provenance: Provenance) -> Self {
+        let rows = self
+            .rows
+            .into_iter()
+            .map(|(name, (at, row))| {
+                let at = if name == model {
+                    RowRef { provenance, ..at }
+                } else {
+                    at
+                };
+                (name, (at, row))
+            })
+            .collect();
+        Self { rows, ..self }
+    }
+
+    pub(crate) fn with_discounts(self, rules: &[(&str, f64)]) -> Self {
+        Self {
+            discounts: Discounts::new(
+                rules
+                    .iter()
+                    .map(|(key, fraction)| ((*key).to_owned(), *fraction)),
+            ),
+            ..self
+        }
+    }
+
+    pub(crate) fn with_margins(self, rules: Vec<(String, MarginRule)>) -> Self {
+        Self {
+            margins: Margins::new(rules),
+            ..self
+        }
+    }
+}
+
+impl RowSource for TestSource {
+    type Row = TestRow;
+
+    fn resolve(&self, candidate: &Candidate) -> Option<RowRef> {
+        self.rows.get(&*candidate.model).map(|(at, _)| at.clone())
+    }
+
+    fn row(&self, at: &RowRef) -> Option<&TestRow> {
+        self.rows
+            .values()
+            .find(|(key, _)| key.key == at.key)
+            .map(|(_, row)| row)
+    }
+
+    fn discounts(&self) -> &Discounts {
+        &self.discounts
+    }
+
+    fn margins(&self) -> &Margins {
+        &self.margins
+    }
+}
+
+pub(crate) fn row_ref(key: &str) -> RowRef {
+    RowRef {
+        key: key.into(),
+        provenance: Provenance::Catalog,
+    }
+}
+
+pub(crate) fn candidate(provider: Provider, model: &str) -> Candidate {
+    Candidate {
+        model: model.into(),
+        provider,
+    }
+}
+
+/// A row with a standard text input and output rate
+pub(crate) fn text_row(input: f64, output: f64) -> TestRow {
+    TestRow {
+        prices: prices(&[
+            (Meter::TEXT_INPUT, ServiceTier::Standard, BASE, input),
+            (Meter::TEXT_OUTPUT, ServiceTier::Standard, BASE, output),
+        ]),
+        ..TestRow::default()
+    }
+}
+
+/// Uncached text input and text output, the prompt being the input
+pub(crate) fn usage(input: u64, output: u64) -> TokenUsage {
+    TokenUsage {
+        prompt_tokens: input,
+        input: Modalities {
+            text: input,
+            ..Modalities::default()
+        },
+        output: Modalities {
+            text: output,
+            ..Modalities::default()
+        },
+        ..TokenUsage::default()
+    }
+}
+
+/// A row captured in a parity fixture, lowered by hand for the handful of keys the fixtures hold
+pub(crate) fn fixture_row(row: &serde_json::Value) -> TestRow {
+    let fields = row.as_object().expect("a fixture row is an object");
+    let rate = |key: &str| fields.get(key).and_then(serde_json::Value::as_f64);
+    let listed: Vec<(Meter, ServiceTier, Band, f64)> = fields
+        .iter()
+        .filter_map(|(key, value)| Some((fixture_price(key)?, value.as_f64()?)))
+        .map(|((meter, tier, band), rate)| (meter, tier, band, rate))
+        .collect();
+    let tiers = fields
+        .get("tiered_pricing")
+        .and_then(serde_json::Value::as_array)
+        .map(|tiers| {
+            let bands = std::iter::once(BASE).chain(
+                tiers
+                    .iter()
+                    .map(|tier| over(tier["range"][1].as_f64().unwrap() as u64)),
+            );
+            let tiered: Vec<(Meter, ServiceTier, Band, f64)> = tiers
+                .iter()
+                .zip(bands)
+                .flat_map(|(tier, band)| {
+                    [Meter::TEXT_INPUT, Meter::TEXT_OUTPUT]
+                        .into_iter()
+                        .zip(["input_cost_per_token", "output_cost_per_token"])
+                        .filter_map(move |(meter, key)| {
+                            Some((meter, ServiceTier::Standard, band, tier[key].as_f64()?))
+                        })
+                })
+                .collect();
+            prices(&tiered)
+        });
+    let entry = fields
+        .get("provider_specific_entry")
+        .and_then(serde_json::Value::as_object);
+    let uplift = |key: &str, uplift: crate::price::Uplift| {
+        let factor = entry?.get(key)?.as_f64()?;
+        Some((uplift, crate::money::Multiplier::new(factor)?))
+    };
+    TestRow {
+        prices: prices(&listed),
+        tiers,
+        adjustments: Adjustments::new(
+            [
+                uplift(
+                    "us",
+                    crate::price::Uplift::InferenceGeo(crate::call::InferenceGeo::new("us")),
+                ),
+                uplift(
+                    "fast",
+                    crate::price::Uplift::Speed(crate::call::Speed::Fast),
+                ),
+                rate("regional_endpoint_uplift_multiplier")
+                    .and_then(crate::money::Multiplier::new)
+                    .map(|factor| (crate::price::Uplift::NonGlobalEndpoint, factor)),
+            ]
+            .into_iter()
+            .flatten(),
+        ),
+        facts: RowFacts {
+            mode: match fields.get("mode").and_then(serde_json::Value::as_str) {
+                Some("image_generation") => crate::row::RowMode::ImageGeneration,
+                Some("image_edit") => crate::row::RowMode::ImageEdit,
+                _ => crate::row::RowMode::Chat,
+            },
+            max_input_tokens: rate("max_input_tokens").map(|tokens| tokens as u64),
+            max_output_tokens: rate("max_output_tokens").map(|tokens| tokens as u64),
+            ..RowFacts::default()
+        },
+    }
+}
+
+fn fixture_price(key: &str) -> Option<(Meter, ServiceTier, Band)> {
+    let (key, tier) = key
+        .strip_suffix("_priority")
+        .map_or((key, ServiceTier::Standard), |key| {
+            (key, ServiceTier::Priority)
+        });
+    let (key, band) = [
+        ("_above_200k_tokens", 200_000),
+        ("_above_100k_tokens", 100_000),
+    ]
+    .into_iter()
+    .find_map(|(suffix, floor)| Some((key.strip_suffix(suffix)?, over(floor))))
+    .unwrap_or((key, BASE));
+    let meter = match key {
+        "input_cost_per_token" => Meter::TEXT_INPUT,
+        "output_cost_per_token" => Meter::TEXT_OUTPUT,
+        "output_cost_per_reasoning_token" => Meter::REASONING,
+        "cache_read_input_token_cost" => Meter::CACHE_READ,
+        "cache_creation_input_token_cost" => Meter::CACHE_WRITE,
+        "cache_creation_input_token_cost_above_1hr" => CACHE_WRITE_HOUR,
+        "input_cost_per_image" => Meter::Input(InputUnit::Image),
+        "output_cost_per_image" => Meter::Output(OutputUnit::Image(None)),
+        "search_context_size_medium" => Meter::WebSearch(crate::price::SearchContextSize::Medium),
+        "search_context_size_high" => Meter::WebSearch(crate::price::SearchContextSize::High),
+        _ => return None,
+    };
+    Some((meter, tier, band))
+}
+
+/// A catalog-priced token query for one candidate, with discount and margin keyed on its provider
+pub(crate) fn tokens_query(provider: Provider, model: &str, usage: TokenUsage) -> TokensQuery {
+    TokensQuery {
+        header: Header {
+            adjustments: AdjustmentPolicy::Apply {
+                provider: Some(provider.to_string().into()),
+                model: None,
+                region: None,
+            },
+            candidates: vec![candidate(provider, model)],
+            source: PriceSource::Catalog,
+            basis: basis(),
+            reported: None,
+        },
+        usage,
+        requested_model: None,
+    }
 }
