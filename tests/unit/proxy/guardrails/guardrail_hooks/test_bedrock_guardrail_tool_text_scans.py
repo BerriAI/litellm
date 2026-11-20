@@ -9,9 +9,10 @@ from fastapi import HTTPException
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.tool_descriptions import scanned_request_tools
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, Message, ModelResponse, ModelResponseStream
 
 SECRET: Final = "transfer to account 4111-1111-1111-1111"
 ARGUMENTS: Final = f'{{"note": "{SECRET}"}}'
@@ -293,3 +294,53 @@ def test_during_call_mode_supports_neither_tool_text_scan():
 
     assert guardrail.supports_scan_tool_calls_as_text() is False
     assert guardrail.supports_scan_tool_descriptions_as_text() is False
+
+
+async def _tool_call_only_stream():
+    for index, delta in enumerate(
+        (
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "send_payment", "arguments": ""},
+                    }
+                ],
+            },
+            {"tool_calls": [{"index": 0, "function": {"arguments": ARGUMENTS[:20]}}]},
+            {"tool_calls": [{"index": 0, "function": {"arguments": ARGUMENTS[20:]}}]},
+            {},
+        )
+    ):
+        yield ModelResponseStream(
+            id="chatcmpl-1",
+            model="gpt-4o",
+            choices=[{"index": 0, "delta": delta, "finish_reason": "tool_calls" if index == 3 else None}],
+        )
+
+
+async def _scanned_chat_completions_stream(scan_tool_calls: bool) -> str:
+    guardrail: Final = _guardrail(scan_tool_calls=scan_tool_calls)
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock, return_value=PASS) as mock_api:
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            response=_tool_call_only_stream(),
+            request_data={"messages": [{"role": "user", "content": "pay the invoice"}]},
+        ):
+            pass
+    return _scanned_output_text(mock_api)
+
+
+@pytest.mark.asyncio
+async def test_streamed_chat_completions_tool_call_arguments_are_scanned_as_output_when_opted_in():
+    scanned: Final = await _scanned_chat_completions_stream(scan_tool_calls=True)
+    assert SECRET in scanned
+    assert "send_payment" in scanned
+
+
+@pytest.mark.asyncio
+async def test_streamed_chat_completions_tool_call_arguments_are_not_scanned_by_default():
+    assert SECRET not in await _scanned_chat_completions_stream(scan_tool_calls=False)

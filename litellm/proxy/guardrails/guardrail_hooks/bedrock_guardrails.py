@@ -3099,6 +3099,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # yield it as a normal stream, matching the shape a non-streaming block
             # produces.
             try:
+                await self._scan_tool_calls_as_text(
+                    inputs={
+                        "tool_calls": list(
+                            chain.from_iterable(
+                                choice.message.tool_calls or []
+                                for choice in assembled_model_response.choices
+                                if isinstance(choice, Choices)
+                            )
+                        )
+                    },
+                    request_data=request_data,
+                    input_type="response",
+                )
                 output_guardrail_response = await self.make_bedrock_api_request(
                     source="OUTPUT",
                     response=assembled_model_response,
