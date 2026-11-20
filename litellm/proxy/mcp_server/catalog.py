@@ -1695,18 +1695,13 @@ async def _fetch_cached_tool_page(
         if context.mcp_proxy_mode and meta is not None:
             meta = {key: value for key, value in meta.items() if key != "litellm.ai/proxy_tool_identity"}
         name: Final = (
-            tool.name if context.mcp_proxy_mode else resolve_native_tool_name_for_server(tool.name, server, (server,))
+            strip_known_server_prefix(tool.name, server)
+            if context.mcp_proxy_mode
+            else resolve_native_tool_name_for_server(tool.name, server, (server,))
         )
         return tool.model_copy(update={"name": name, "meta": meta})
 
     underlying_tools: Final = tuple(cached_tool_definition(tool) for tool in page.tools)
-    route_tools: Final = (
-        tuple(
-            tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)}) for tool in underlying_tools
-        )
-        if context.mcp_proxy_mode
-        else underlying_tools
-    )
     server_headers: Final = prepared_headers.get(server_id)
     catalog_auth_header: Final = server_headers[2] if server_headers is not None else None
     listed_caller: Final = ListedToolsCaller(
@@ -1731,7 +1726,7 @@ async def _fetch_cached_tool_page(
     )
     listing_updates.callback(
         manager.register_prefixed_tool_routes,
-        route_tools,
+        underlying_tools,
         server,
         register_bare_names=False,
     )

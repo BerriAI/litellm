@@ -1841,7 +1841,7 @@ async def test_cached_continuation_records_tools_on_the_receiving_worker(
         use_tool_list_cache=False,
     )
 
-    listed_tool_name: Final = "bound-bound-tool-1" if mcp_proxy_mode else "bound-tool-1"
+    listed_tool_name: Final = "bound-tool-1"
     listed_tool: Final = receiving_manager.get_listed_tool(server, listed_tool_name, listed_caller)
     assert listed_tool is not None
     assert listed_tool.name == listed_tool_name
