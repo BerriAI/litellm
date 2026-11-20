@@ -572,8 +572,10 @@ class _EvictedMidWrite(FakeAuthCache):
 
     cache: UserApiKeyCache | None = None
 
-    async def set_leased(self, key: str, lease: str | None, value: object, ttl_seconds: float | None = None) -> bool:
-        written: Final = await super().set_leased(key, lease, value, ttl_seconds)
+    async def set_leased(
+        self, key: str, lease: str | None, value: object, ttl_seconds: float | None, request: object
+    ) -> bool:
+        written: Final = await super().set_leased(key, lease, value, ttl_seconds, request)
         assert self.cache is not None
         await self.cache.async_delete_cache(key)
         return written
