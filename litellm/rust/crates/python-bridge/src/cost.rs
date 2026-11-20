@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use crate::model_cost::row_fields;
 use jiff::Timestamp;
 use litellm_cost::call::CallContext;
 use litellm_cost::money::UnitPrice;
@@ -13,12 +14,11 @@ use litellm_cost::price::{
 use litellm_cost::priced::Outcome;
 use litellm_cost::quote::Quote;
 use litellm_cost::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage};
-use litellm_host_python::json_from_py;
 use litellm_model_catalog::wire::{EntryWire, Fields};
 use litellm_model_catalog::{BilledPrices, billed_prices};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyMapping, PyString};
+use pyo3::types::PyMapping;
 use serde_json::Value;
 
 /// One row's prices and uplifts. A key whose value JSON cannot hold or the catalog cannot read is left out, as a
@@ -299,13 +299,8 @@ fn service_tier_named(name: Option<&str>) -> ServiceTier {
 }
 
 fn fields(row: &Bound<'_, PyMapping>, provider: Option<&str>) -> PyResult<Fields> {
-    let written = row.items()?.iter().filter_map(|item| {
-        let (key, value) = item
-            .extract::<(Bound<'_, PyString>, Bound<'_, PyAny>)>()
-            .ok()?;
-        Some((key.to_str().ok()?.to_owned(), json_from_py(&value).ok()?))
-    });
-    Ok(written
+    Ok(row_fields(row)?
+        .into_iter()
         .chain(provider.map(|provider| ("litellm_provider".to_owned(), Value::from(provider))))
         .collect())
 }

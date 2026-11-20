@@ -8,7 +8,7 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use litellm_host_python::to_py;
 use litellm_model_catalog::{
     CostMap, IntegrityLimits, Landed, Pass, Placed, Provenance, RegistrationTable, Registrations,
-    Store, write_pass,
+    Snapshot, SnapshotInputs, Snapshots, Store, write_pass,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -16,6 +16,7 @@ use pyo3::types::PyDict;
 
 pub(crate) use fetch::{NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched};
 use live::LiveDict;
+pub(crate) use live::row_fields;
 
 /// The installed document and the `register_model` calls kept above it, each as the dict Python merged
 struct Inputs {
@@ -32,7 +33,10 @@ impl Inputs {
     }
 }
 
-/// The cost map's inputs and the name index over `litellm.model_cost`
+/// A pricing snapshot of `litellm.model_cost`
+pub(crate) type CostSnapshot = Snapshot<Arc<Store<LiveDict>>>;
+
+/// The cost map's inputs, the name index over `litellm.model_cost` and its pricing snapshots
 #[pyclass(
     frozen,
     name = "NativeModelCostMap",
@@ -42,6 +46,7 @@ pub(crate) struct NativeModelCostMap {
     inputs: RwLock<Inputs>,
     limits: IntegrityLimits,
     index: RwLock<Option<Arc<Store<LiveDict>>>>,
+    snapshots: Snapshots<Arc<Store<LiveDict>>>,
 }
 
 #[pyclass(
@@ -136,6 +141,7 @@ impl NativeModelCostMap {
             }),
             limits,
             index: RwLock::new(None),
+            snapshots: Snapshots::default(),
         })
     }
 
@@ -246,8 +252,10 @@ impl NativeModelCostMap {
         self.index_over(rows).keys_in(provider)
     }
 
-    /// Drops the name index, for a caller that changed keys in a way the dict's length does not show
+    /// Drops the name index and the rows pricing read, for a caller that changed keys in a way the dict's length does
+    /// not show or edited a row in place
     fn invalidate(&self) {
+        self.snapshots.forget_rows();
         if let Some(index) = self
             .index
             .read()
@@ -276,6 +284,33 @@ impl NativeModelCostMap {
 }
 
 impl NativeModelCostMap {
+    /// The pricing snapshot of the published table at its current generation, built only when the generation moved
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the cost bridge stacked on this change prices through it"
+        )
+    )]
+    pub(crate) fn cost_snapshot(&self, py: Python<'_>) -> PyResult<Arc<CostSnapshot>> {
+        let (rows, generation) = host::generation(py)?;
+        self.snapshots.at(generation, || {
+            let rules = Arc::new(
+                self.read_inputs()
+                    .cost_map
+                    .catalog()
+                    .capability_rules()
+                    .clone(),
+            );
+            let names = Arc::new(host::known_names(py)?);
+            Ok(SnapshotInputs {
+                table: self.index_over(&rows),
+                rules,
+                names,
+            })
+        })
+    }
+
     fn read_inputs(&self) -> RwLockReadGuard<'_, Inputs> {
         self.inputs.read().unwrap_or_else(PoisonError::into_inner)
     }
@@ -424,6 +459,9 @@ mod tests {
 
     use super::*;
 
+    /// Held by every test that installs a fake host module, since Python can switch threads while one runs
+    static HOST_MODULE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     const HOST: &std::ffi::CStr = c_str!(
         r#"
 from types import SimpleNamespace
@@ -447,6 +485,7 @@ def write(rows, written):
 
     #[rstest]
     fn a_host_lookup_that_reaches_find_key_on_the_same_map_finishes() {
+        let _host = HOST_MODULE.lock().unwrap_or_else(PoisonError::into_inner);
         Python::initialize();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
@@ -493,5 +532,80 @@ def write(rows, written):
             .unwrap();
         assert_eq!(found, [Some("Lit-Reentry".to_owned())]);
         assert!((price - 1.5).abs() < f64::EPSILON);
+    }
+
+    const PRICING_HOST: &std::ffi::CStr = c_str!(
+        r#"
+class Row(dict):
+    registered_fields = frozenset()
+
+rows = {"claude-opus-5-5": Row(litellm_provider="anthropic", input_cost_per_token=1e-6)}
+writes = [0]
+
+def generation():
+    return rows, id(rows), len(rows), writes[0], 0, 0
+
+def known_names():
+    return frozenset({"anthropic"}), frozenset()
+
+def write(key, row):
+    rows[key] = row
+    writes[0] += 1
+"#
+    );
+
+    /// The input rate of the first row the snapshot tries for an Anthropic call to `claude-opus-5-5`
+    fn priced_input_rate(snapshot: &CostSnapshot) -> Option<f64> {
+        let call = litellm_model_catalog::CallIdentity {
+            provider: "anthropic".to_owned(),
+            request_model: Some("claude-opus-5-5".to_owned()),
+            response_model: Some("claude-opus-5-5".to_owned()),
+            ..Default::default()
+        };
+        let candidates = snapshot.candidates(&call);
+        snapshot.row(candidates.rows.first()?)?.lowered.fields["input_cost_per_token"].as_f64()
+    }
+
+    #[rstest]
+    fn a_cost_snapshot_prices_the_row_python_holds_at_each_generation() {
+        let _host = HOST_MODULE.lock().unwrap_or_else(PoisonError::into_inner);
+        Python::initialize();
+        let outcome = Python::attach(|py| -> PyResult<(Option<f64>, Option<f64>, bool)> {
+            let cost_map = NativeModelCostMap::bundled(0, 0.0)?;
+            let module_name = std::ffi::CString::new(host::MODULE).unwrap();
+            let host =
+                PyModule::from_code(py, PRICING_HOST, c_str!("host_model_cost.py"), &module_name)?;
+            let modules = py.import("sys")?.getattr("modules")?;
+            let packages = ["litellm", "litellm.rust_bridge", "litellm.rust_bridge.host"];
+            for package in packages {
+                modules.set_item(package, PyModule::new(py, package)?)?;
+            }
+            modules.set_item(host::MODULE, &host)?;
+            let priced = (|| -> PyResult<(Option<f64>, Option<f64>, bool)> {
+                let before = cost_map.cost_snapshot(py)?;
+                let rate_before = priced_input_rate(&before);
+                let row = host.getattr("Row")?.call(
+                    (),
+                    Some(&pyo3::types::IntoPyDict::into_py_dict(
+                        [("litellm_provider", "anthropic")],
+                        py,
+                    )?),
+                )?;
+                row.set_item("input_cost_per_token", 2e-6)?;
+                let unchanged = Arc::ptr_eq(&before, &cost_map.cost_snapshot(py)?);
+                host.getattr("write")?.call1(("claude-opus-5-5", row))?;
+                let after = cost_map.cost_snapshot(py)?;
+                Ok((rate_before, priced_input_rate(&after), unchanged))
+            })();
+            for name in [host::MODULE].into_iter().chain(packages) {
+                modules.del_item(name)?;
+            }
+            priced
+        });
+
+        let (before, after, unchanged) = outcome.unwrap();
+        assert!(unchanged);
+        assert_eq!(before, Some(1e-6));
+        assert_eq!(after, Some(2e-6));
     }
 }
