@@ -7,6 +7,7 @@ import openai
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ImageResponse
 
@@ -20,6 +21,18 @@ _ROUTES: Final = (
     pytest.param("generation", "vertex_ai/gemini-3.1-flash-image", "vertex_ai", id="vertex-generation"),
     pytest.param("edit", "vertex_ai/gemini-3.1-flash-image", "vertex_ai", id="vertex-edit"),
 )
+
+
+class _FailureCost(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cost: float | None = None
+
+    def log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        response_cost: Final = kwargs.get("response_cost")
+        self.cost = float(response_cost) if isinstance(response_cost, (int, float)) else None
 
 
 def _request_image(route: str, model: str, reply: Mapping[str, object]) -> ImageResponse:
@@ -85,7 +98,7 @@ def test_blocked_prompt_is_a_400_carrying_the_block_reason(route: str, model: st
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
 @pytest.mark.parametrize("finish_reason", ("NO_IMAGE", "IMAGE_OTHER", "STOP"))
-def test_answer_without_an_image_is_a_422_carrying_the_model_text_but_not_its_thoughts(
+def test_answer_without_an_image_is_a_422_that_does_not_echo_the_model_output(
     route: str, model: str, provider: str, finish_reason: str
 ):
     with pytest.raises(litellm.UnprocessableEntityError) as unanswered:
@@ -108,8 +121,44 @@ def test_answer_without_an_image_is_a_422_carrying_the_model_text_but_not_its_th
         )
 
     assert (unanswered.value.status_code, unanswered.value.llm_provider) == (422, provider)
-    assert f"finishReason={finish_reason}: I can only describe a red dot." in str(unanswered.value)
+    assert f"finishReason={finish_reason}" in str(unanswered.value)
+    assert "red dot" not in str(unanswered.value)
     assert "planning the dot" not in str(unanswered.value)
+
+
+def _failure_cost(
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    model: str,
+    reply: Mapping[str, object],
+    error: type[litellm.ContentPolicyViolationError | litellm.UnprocessableEntityError],
+) -> float | None:
+    failure_log: Final = _FailureCost()
+    monkeypatch.setattr(litellm, "failure_callback", [failure_log])
+    with pytest.raises(error):
+        _request_image(route, model, reply)
+    return failure_log.cost
+
+
+@pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
+def test_answer_without_an_image_bills_its_tokens_while_a_refusal_bills_nothing(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, provider: str
+):
+    usage: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
+    unanswered: Final = {
+        "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "a red dot"}]}}],
+        "usageMetadata": usage,
+    }
+    refused: Final = {
+        "candidates": [{"finishReason": "IMAGE_RECITATION", "content": {"role": "model"}}],
+        "usageMetadata": usage,
+    }
+
+    unanswered_cost: Final = _failure_cost(monkeypatch, route, model, unanswered, litellm.UnprocessableEntityError)
+    refused_cost: Final = _failure_cost(monkeypatch, route, model, refused, litellm.ContentPolicyViolationError)
+
+    assert unanswered_cost is not None and unanswered_cost > 0
+    assert refused_cost == 0
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)

@@ -430,7 +430,7 @@ def _transform_response(model: str, payload: object) -> ImageResponse:
         model=model,
         raw_response=httpx.Response(200, json=payload),
         model_response=ImageResponse(data=[]),
-        logging_obj=Mock(),
+        logging_obj=Mock(response_cost_calculator=Mock(return_value=None)),
         request_data={},
         optional_params={},
         litellm_params={},

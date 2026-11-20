@@ -250,17 +250,20 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             if (inline_data := part.get("inlineData")) and (b64_json := inline_data.get("data"))
         ]
 
-        if not data_list:
-            raise empty_image_response_error(response_json, model, "vertex_ai", raw_response)
         usage_metadata: Final = _JSON_DICT.validate_python(response_json.get("usageMetadata") or {})
         traffic_type: Final = usage_metadata.get("trafficType") if usage_metadata else None
-        return ImageResponse(
+        model_response: Final = ImageResponse(
             data=data_list,
             usage=transform_gemini_image_usage(usage_metadata) if usage_metadata else None,
             hidden_params={"provider_specific_fields": {"traffic_type": traffic_type}}
             if isinstance(traffic_type, str) and traffic_type
             else {},
         )
+        if not data_list:
+            raise empty_image_response_error(
+                response_json, model, "vertex_ai", raw_response, model_response, logging_obj
+            )
+        return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[HttpxPartType]:
         images: Final[list[FileTypes]] = image if isinstance(image, list) else [image]

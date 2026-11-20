@@ -343,6 +343,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             setattr(model_response.usage, "web_search_requests", web_search_requests)
 
         if not model_response.data:
-            raise empty_image_response_error(response_object, model, "vertex_ai", raw_response)
+            raise empty_image_response_error(
+                response_object, model, "vertex_ai", raw_response, model_response, logging_obj
+            )
 
         return model_response
