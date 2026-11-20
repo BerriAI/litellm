@@ -2476,9 +2476,9 @@ class TestMigrateDeployRunsUnderTheCoordinatorLock:
         harness = _MigrateDeployHarness(monkeypatch, tmp_path, ["ok"])
         original_run = harness._fake_run
 
-        def run_and_record(cmd, **kwargs):
+        def run_and_record(cmd: Sequence[str], *, env: Mapping[str, str], **kwargs: object):
             events.append("deploy")
-            return original_run(cmd, **kwargs)
+            return original_run(cmd, env=env, **kwargs)
 
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", run_and_record)
 
@@ -2494,9 +2494,9 @@ class TestMigrateDeployRunsUnderTheCoordinatorLock:
         )
         original_run = harness._fake_run
 
-        def run_and_record(cmd, **kwargs):
+        def run_and_record(cmd: Sequence[str], *, env: Mapping[str, str], **kwargs: object):
             events.append("deploy")
-            return original_run(cmd, **kwargs)
+            return original_run(cmd, env=env, **kwargs)
 
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", run_and_record)
 
