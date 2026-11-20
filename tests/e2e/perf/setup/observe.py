@@ -30,6 +30,7 @@ from setup.datastore import (
 )
 from setup.mocks.reply_common import Provider
 from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase, Ramp
+from setup.podcpu import CpuSeries
 from setup.ramp import StepReading, render_steps, sustained_rps
 from setup.series import Series
 from setup.telemetry import GatewayTelemetry
@@ -123,11 +124,12 @@ class Observation:
     redis_after: RedisCounters | None = None
     redis_commands: tuple[RedisCommand, ...] | None = None
     gateway_cpu_seconds: float | None = None
+    gateway_cpu_coverage: float | None = None
     telemetry_before: GatewayTelemetry | None = None
     telemetry_after: GatewayTelemetry | None = None
     peak_connections: int | None = None
     ramp: Ramp | None = None
-    cpu_series: Series[float] | None = None
+    cpu_series: Series[float] | CpuSeries | None = None
     connection_series: Series[int] | None = None
     telemetry_series: Series[GatewayTelemetry] | None = None
 
@@ -207,6 +209,9 @@ class Observation:
                 if record.first_token_s is not None
             ]
             return non_stream + stream
+        if metric == "client_total_seconds":
+            retried: Final = self.retried_markers
+            return [(r, r.total_s) for r in self.served if r.marker not in retried]
         if metric == "time_to_first_token_seconds":
             return [(r, r.first_token_s) for r, _ in self._clean(stream=True) if r.first_token_s is not None]
         if metric == "litellm_overhead_seconds":
@@ -217,6 +222,9 @@ class Observation:
 
     def _first_attempts(self) -> list[WireRecord]:
         return [record for record, _ in self._clean(stream=False)] + [record for record, _ in self._clean(stream=True)]
+
+    def client_total_seconds(self) -> list[float]:
+        return [value for _, value in self.latency_pairs("client_total_seconds")]
 
     def gateway_added_seconds(self) -> list[float]:
         return [value for _, value in self.latency_pairs("gateway_added_seconds")]
@@ -280,12 +288,16 @@ class Observation:
 
     def _window_readings(self, start: float, seconds: float, completed: int) -> WindowReadings:
         end: Final = start + seconds
-        cpu: Final = None if self.cpu_series is None else sum(self.cpu_series.between(start, end))
+        cpu_samples: Final = None if self.cpu_series is None else self.cpu_series.between(start, end)
+        cpu: Final = None if cpu_samples is None else sum(cpu_samples)
         conns: Final = None if self.connection_series is None else self.connection_series.between(start, end)
         before: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(start)
         after: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(end)
         return WindowReadings(
             cpu_seconds_per_request=None if cpu is None or completed == 0 else cpu / completed,
+            cpu_seconds_per_request_coverage=self.cpu_series.coverage_between(start, end)
+            if isinstance(self.cpu_series, CpuSeries)
+            else None,
             redis_latency_mean_seconds=None
             if before is None or after is None
             else after.minus(before).redis_latency.mean,
@@ -295,6 +307,7 @@ class Observation:
 
 class WindowReadings(TypedDict):
     cpu_seconds_per_request: ReadOnly[float | None]
+    cpu_seconds_per_request_coverage: ReadOnly[float | None]
     redis_latency_mean_seconds: ReadOnly[float | None]
     postgres_peak_connections: ReadOnly[int | None]
 
@@ -315,7 +328,11 @@ def _text_sha1(text: str, *, intervened: bool) -> str:
 
 
 LatencyMetric = Literal[
-    "gateway_added_seconds", "time_to_first_token_seconds", "litellm_overhead_seconds", "litellm_response_seconds"
+    "gateway_added_seconds",
+    "client_total_seconds",
+    "time_to_first_token_seconds",
+    "litellm_overhead_seconds",
+    "litellm_response_seconds",
 ]
 TOP_CONTRIBUTORS: Final = 5
 
@@ -423,6 +440,7 @@ def breakdown(
     `postgres_peak_connections`) have none."""
     if metric in (
         "gateway_added_seconds",
+        "client_total_seconds",
         "time_to_first_token_seconds",
         "litellm_overhead_seconds",
         "litellm_response_seconds",
@@ -445,6 +463,7 @@ def observe(
     """The observed value of one metric, at a percentile when the metric is per request."""
     per_request: dict[str, list[float]] = {
         "gateway_added_seconds": observation.gateway_added_seconds(),
+        "client_total_seconds": observation.client_total_seconds(),
         "time_to_first_token_seconds": observation.time_to_first_token_seconds(),
         "litellm_overhead_seconds": observation.litellm_overhead_seconds(),
         "litellm_response_seconds": observation.litellm_response_seconds(),
@@ -498,6 +517,7 @@ class Row:
     floor: float | None = None
     detail: str = ""
     breakdown: tuple[Contributor, ...] = ()
+    coverage: float | None = None
 
     @property
     def label(self) -> str:
@@ -574,6 +594,7 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
                 floor=limit.min if limit else None,
                 detail=_detail(metric, observation, case.background_cap_exempt_tables),
                 breakdown=breakdown(metric, rank, observation, case.background_cap_exempt_tables),
+                coverage=observation.gateway_cpu_coverage if metric == "cpu_seconds_per_request" else None,
             )
         )
     exceeded: Final = [_breach(row) for row in rows if row.over or row.missing]
@@ -603,6 +624,7 @@ def _detail(metric: Metric, observation: Observation, exempt_tables: frozenset[s
 
 def _row_properties(row: Row) -> tuple[tuple[str, float | str], ...]:
     observed: Final = ((row.property_name, row.observed),) if row.observed is not None else ()
+    coverage: Final = ((f"{row.property_name}_coverage", row.coverage),) if row.coverage is not None else ()
     limit: Final = ((f"{row.property_name}_limit", row.limit),) if row.limit is not None else ()
     floor: Final = ((f"{row.property_name}_floor", row.floor),) if row.floor is not None else ()
     contributors: Final = (
@@ -610,7 +632,7 @@ def _row_properties(row: Row) -> tuple[tuple[str, float | str], ...]:
         if row.breakdown
         else ()
     )
-    return observed + limit + floor + contributors
+    return observed + coverage + limit + floor + contributors
 
 
 def junit_properties(rows: Iterable[Row]) -> tuple[tuple[str, float | str], ...]:
@@ -644,7 +666,8 @@ def render(case: PerformanceTestCase, observation: Observation, rows: list[Row])
             if row.missing
             else ""
         )
-        lines.append(f"  {row.label:32} {observed:>12} {row.bound:>12}{flag}")
+        coverage = "" if row.coverage is None else f"  coverage {row.coverage:.4f}"
+        lines.append(f"  {row.label:32} {observed:>12} {row.bound:>12}{flag}{coverage}")
     lines.extend(render_steps(observation.steps()))
     lines.extend(_diagnostics(observation))
     lines.extend(_datastore_lines(observation))

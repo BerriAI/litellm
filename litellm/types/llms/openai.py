@@ -95,6 +95,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 
 from .base import CachedTokensDetails
@@ -102,7 +103,7 @@ from .base import CachedTokensDetails
 if TYPE_CHECKING:
     from litellm.types.utils import Usage
 
-FileContent = IO[bytes] | bytes | PathLike
+FileContent = IO[bytes] | bytes | PathLike[str]
 
 FileTypes = (
     # file (or bytes)
@@ -144,10 +145,10 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, response: _ResponseT) -> None:
+    def __init__(self, response: _ResponseT, usage: "Usage | None" = None) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
-        self.usage = None
+        self.usage = usage
 
     @property
     def content_type(self) -> str | None:
@@ -168,6 +169,9 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
         except RuntimeError:
             return self.response.num_bytes_downloaded
         return len(content)
+
+    def unread_response(self) -> httpx.Response | None:
+        return None if self.response.is_stream_consumed else self.response
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
@@ -817,6 +821,12 @@ class ChatCompletionTextObject(
     cache_control: ChatCompletionCachedContent
 
 
+class ChatCompletionGuardedTextObject(TypedDict):
+    type: ReadOnly[Literal["guarded_text"]]
+    text: ReadOnly[str]
+    cache_control: NotRequired[ReadOnly[ChatCompletionCachedContent]]
+
+
 class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
@@ -957,6 +967,7 @@ class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
     content: str | Iterable[ToolMessageContentPart]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tool_call_id: str
+    is_error: NotRequired[bool]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 class ChatCompletionFunctionMessage(TypedDict):
@@ -1594,6 +1605,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
             | ResponseCompactionItem
         ]
     )
