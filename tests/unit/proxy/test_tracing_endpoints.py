@@ -3,12 +3,14 @@ Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 """
 
 import asyncio
+import gzip
 import json
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from types import ModuleType
-from typing import Final, Literal, TypedDict
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
+from typing import ClassVar, Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, call
 
 import httpx
@@ -16,8 +18,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import Response
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from pydantic import JsonValue, TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, override
 
 from litellm.constants import (
     AGENT_TRACING_AGENT_LIST_LIMIT,
@@ -29,14 +32,14 @@ from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKe
 from litellm.proxy.auth.authorization import OwnedRows, ReadScope
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
+from litellm.proxy.tracing_runtime import manage_tracing
+from litellm.tracing import TraceReceiver
 from litellm.tracing.errors import TraceChanged
 from litellm.tracing.generated.models import TraceQueryHelp
 from litellm.tracing.generated.responses import TraceSQLResponse
-from litellm.tracing.generated.types import AllQueryScope, TraceScope
-from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing import TraceReceiver
+from litellm.tracing.generated.types import TraceScope
 from litellm.tracing.remote import RemoteTraceStore
+from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing.types import TraceAgent, TraceAgentList
 
 SQL_ROWS: Final[tuple[Mapping[str, JsonValue], ...]] = (
@@ -1009,8 +1012,12 @@ async def test_storage_preserves_page_cursor_and_normalizes_remote_trace_data(
 
     def accept(request: httpx.Request) -> httpx.Response:
         assert json.loads(request.content) == {
-            "operation": "trace", "scope": {**scope, "team_ids": []}, "trace_id": "t1", "trace_ref": "run",
-            "cursor": cursor, "page_size": page_size,
+            "operation": "trace",
+            "scope": {**scope, "team_ids": []},
+            "trace_id": "t1",
+            "trace_ref": "run",
+            "cursor": cursor,
+            "page_size": page_size,
         }
         return httpx.Response(200, json={**TRACE_RESPONSE, "next_cursor": "more"})
 
@@ -1026,7 +1033,9 @@ async def test_storage_validates_the_remote_query_help_value() -> None:
     async with httpx.AsyncClient(
         base_url="http://lens", transport=httpx.MockTransport(lambda request: httpx.Response(200, json=QUERY_HELP))
     ) as client:
-        assert await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret") == TraceQueryHelp.model_validate(QUERY_HELP)
+        assert await LensTraceStorage(RemoteTraceStore(client)).query_help(
+            {"kind": "all"}, "secret"
+        ) == TraceQueryHelp.model_validate(QUERY_HELP)
 
 
 @pytest.mark.parametrize(
@@ -1050,44 +1059,82 @@ async def test_storage_validates_the_remote_query_help_value() -> None:
 )
 async def test_storage_rejects_remote_query_help_that_drifts_from_the_contract(drift: Mapping[str, object]) -> None:
     async with httpx.AsyncClient(
-        base_url="http://lens", transport=httpx.MockTransport(lambda request: httpx.Response(200, json={**QUERY_HELP, **drift}))
+        base_url="http://lens",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={**QUERY_HELP, **drift})),
     ) as client:
         with pytest.raises(RuntimeError, match="invalid response"):
             await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret")
 
 
+class _FakeLens(BaseHTTPRequestHandler):
+    uploads: ClassVar[
+        list[tuple[str, str, bytes]]
+    ] = []  # mutable-ok: the handler class is the only place the stdlib server lets a test collect requests
+
+    def do_POST(self) -> None:
+        body: Final = self.rfile.read(int(self.headers.get("content-length", "0")))
+        inflated: Final = gzip.decompress(body) if self.headers.get("content-encoding") == "gzip" else body
+        self.uploads.append((self.path, self.headers.get("authorization", ""), inflated))
+        self.send_response(200)
+        self.end_headers()
+
+    @override
+    def log_message(self, format: str, *args: object) -> None:
+        return None
+
+
 @pytest.mark.asyncio
-async def test_connected_gateway_sends_model_calls_to_lens_without_claiming_the_proxy_otel_logger(
+async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_without_the_caller_ip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import litellm
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.proxy import proxy_server
 
-    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
+    _FakeLens.uploads.clear()
+    server: Final = HTTPServer(("127.0.0.1", 0), _FakeLens)
+    Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("LITELLM_LENS_URL", f"http://127.0.0.1:{server.server_port}")
     monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+    monkeypatch.setenv("OTEL_EXPORTER", "otlp_http")
+    monkeypatch.setenv("OTEL_ENDPOINT", f"http://127.0.0.1:{server.server_port}/operator")
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "operator-service")
 
-    def lens_exporters() -> tuple[tuple[str, str | None, str | None, str], ...]:
-        return tuple(
-            (spec.kind, spec.traces_endpoint, spec.headers, callback.config.capture_message_content)
-            for callback in litellm.callbacks
-            if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "lens"
-            for spec in callback.config.exporters
-        )
+    try:
+        async with manage_tracing(True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage))):
+            await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "what is the capital of France"}],
+                mock_response="Paris",
+                metadata={"user_api_key_user_id": "user-1", "requester_ip_address": "203.0.113.7"},
+            )
+            await asyncio.sleep(0.2)
+            assert proxy_server.open_telemetry_logger is None
+    finally:
+        server.shutdown()
 
-    async with manage_tracing(True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage))):
-        assert lens_exporters() == (
-            (
-                "otlp_http",
-                "http://lens.test/internal/traces",
-                "Authorization=Bearer test-service-token-with-32-characters",
-                "span_only",
-            ),
-        )
-        assert proxy_server.open_telemetry_logger is None
-        assert not any(isinstance(callback, OpenTelemetryV2) for callback in litellm.service_callback)
-    assert lens_exporters() == ()
+    traces: Final = tuple(
+        ExportTraceServiceRequest.FromString(body)
+        for path, auth, body in _FakeLens.uploads
+        if path == "/internal/traces" and auth == "Bearer test-service-token-with-32-characters" and body
+    )
+    spans: Final = tuple(
+        span
+        for trace in traces
+        for resource in trace.resource_spans
+        for scope in resource.scope_spans
+        for span in scope.spans
+    )
+    assert tuple(span.name for span in spans) == ("chat gpt-4o-mini",)
+    assert tuple(path for path, _, _ in _FakeLens.uploads if path.startswith("/operator")) == ()
+    assert "operator-service" not in str(traces[0].resource_spans[0].resource)
+    attributes: Final = {attribute.key: attribute.value.string_value for attribute in spans[0].attributes}
+    assert attributes["litellm.metadata.user_api_key_user_id"] == "user-1"
+    assert "what is the capital of France" in attributes["gen_ai.input.messages"]
+    assert "Paris" in attributes["gen_ai.output.messages"]
+    assert "litellm.metadata.requester_ip_address" not in attributes
+    assert not any(isinstance(callback, OpenTelemetryV2) for callback in litellm.callbacks)
 
 
 @pytest.mark.asyncio

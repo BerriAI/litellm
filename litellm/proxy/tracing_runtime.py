@@ -1,16 +1,19 @@
-from collections.abc import AsyncGenerator, Callable, Generator, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+import asyncio
+from collections.abc import AsyncGenerator, Callable, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager
 from http import HTTPStatus
 from typing import Final
 
 import httpx
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from typing_extensions import override
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.model.baggage import DEFAULT_BAGGAGE_METADATA_KEYS
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.tracing import TraceReceiver
 from litellm.tracing.exporter import LensExporter
@@ -63,16 +66,16 @@ async def manage_tracing(
         )
         async with AsyncExitStack() as exports:
             await exports.enter_async_context(_export_requests(LensExporter(client)))
-            if await _accepts_gateway_traces(client):
-                exports.enter_context(_export_traces(connection))
+            if await _accepts_gateway_traces(client, connection):
+                await exports.enter_async_context(_export_traces(connection))
             yield tracing
 
 
-async def _accepts_gateway_traces(client: httpx.AsyncClient) -> bool:
+async def _accepts_gateway_traces(client: httpx.AsyncClient, connection: LensConnection) -> bool:
     """A Lens released before gateway traces has no route for them, and would fail every export."""
     try:
         response: Final = await client.post(
-            LENS_TRACE_PATH, content=b"", headers={"Content-Type": "application/x-protobuf"}
+            connection.endpoint(LENS_TRACE_PATH), content=b"", headers={"Content-Type": "application/x-protobuf"}
         )
     except httpx.HTTPError:
         return True
@@ -90,6 +93,25 @@ LENS_TRACE_PATH: Final = "/internal/traces"
 LENS_TRACE_CALLBACK: Final = "lens"
 
 
+_CALLER_IP_KEY: Final = "requester_ip_address"
+
+
+class _LensTraceConfig(OpenTelemetryV2Config):
+    """Built from its arguments alone, so the OTEL_* variables a gateway sets for its own tracing never reach Lens."""
+
+    @classmethod
+    @override
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (init_settings,)
+
+
 class _LensTraceLogger(OpenTelemetryV2):
     """Model-call spans only, on a private provider, so a gateway's own OTel callbacks are left as they are."""
 
@@ -98,10 +120,10 @@ class _LensTraceLogger(OpenTelemetryV2):
         return None
 
 
-@contextmanager
-def _export_traces(connection: LensConnection) -> Generator[None, None, None]:
+@asynccontextmanager
+async def _export_traces(connection: LensConnection) -> AsyncGenerator[None, None]:
     trace_logger: Final = _LensTraceLogger(
-        config=OpenTelemetryV2Config(
+        config=_LensTraceConfig(
             exporters=[
                 ExporterSpec(
                     kind="otlp_http",
@@ -110,6 +132,7 @@ def _export_traces(connection: LensConnection) -> Generator[None, None, None]:
                 )
             ],
             capture_message_content=CaptureMessageContent.SPAN_ONLY,
+            baggage_metadata_keys=[key for key in DEFAULT_BAGGAGE_METADATA_KEYS if key != _CALLER_IP_KEY],
         ),
         callback_name=LENS_TRACE_CALLBACK,
     )
@@ -119,6 +142,7 @@ def _export_traces(connection: LensConnection) -> Generator[None, None, None]:
         yield None
     finally:
         manager.remove_callback_from_all_lists(trace_logger)
+        await asyncio.to_thread(trace_logger.tracer_provider.shutdown)
 
 
 @asynccontextmanager
