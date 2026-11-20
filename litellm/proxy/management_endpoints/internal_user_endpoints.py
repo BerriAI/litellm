@@ -1823,7 +1823,6 @@ async def _update_single_user_helper(
             await evict_budget_windows_absent_marker(
                 entity_type=Litellm_EntityType.USER,
                 entity_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
-                user_api_key_cache=user_api_key_cache,
             )
 
         await evict_and_broadcast(
@@ -2200,7 +2199,6 @@ async def bulk_user_update(
                         evict_budget_windows_absent_marker(
                             entity_type=Litellm_EntityType.USER,
                             entity_id=user.user_id,
-                            user_api_key_cache=user_api_key_cache,
                         )
                         for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
                         if user.user_id in windows_by_user
