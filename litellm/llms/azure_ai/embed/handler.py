@@ -29,7 +29,7 @@ def _embedding_api_base(api_base: str | None) -> str | None:
         return None
     base_url: Final = httpx.URL(api_base)
     if is_openai_v1_resource_base(base_url):
-        return str(base_url.copy_with(path="/" + "/".join(OPENAI_V1_PATH)))
+        return str(base_url.copy_with(path="/" + "/".join(OPENAI_V1_PATH), params={}))
     if not is_foundry_model_inference_base(api_base):
         return api_base
     parts: Final = urlsplit(api_base)

@@ -47,6 +47,10 @@ EMBEDDING_PAYLOAD = {
             "https://my-resource.cognitiveservices.azure.com/openai/v1",
         ),
         (
+            "https://my-resource.openai.azure.com/openai/?api-version=2024-10-21",
+            "https://my-resource.openai.azure.com/openai/v1",
+        ),
+        (
             "https://my-foundry.services.ai.azure.com/openai",
             "https://my-foundry.services.ai.azure.com/openai/v1",
         ),
@@ -85,6 +89,7 @@ def test_azure_ai_embedding_calls_foundry_models_route():
         "https://my-resource.openai.azure.com/openai/",
         "https://my-resource.openai.azure.com",
         "https://my-resource.cognitiveservices.azure.com",
+        "https://my-resource.openai.azure.com/openai/?api-version=2024-10-21",
     ],
 )
 @respx.mock

@@ -249,6 +249,40 @@ def test_azure_model_router_stream_chunks_report_selected_model(respx_mock: resp
 
 
 @pytest.mark.respx(assert_all_called=True)
+def test_azure_model_router_dated_version_on_resource_base_calls_router_deployment(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://example-resource.openai.azure.com/openai/deployments/test-router/chat/completions",
+        params={"api-version": "2024-10-21"},
+    ).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-router",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4.1-nano-2025-04-14",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/model_router/test-router",
+        messages=[{"role": "user", "content": "hello"}],
+        api_base="https://example-resource.openai.azure.com/openai/",
+        api_key="azure-ai-test-key",
+        api_version="2024-10-21",
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["model"] == "test-router"
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.respx(assert_all_called=True)
 def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRouter) -> None:
     api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
     response_body: Final = {
