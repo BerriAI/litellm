@@ -6,11 +6,10 @@ const positiveInteger = z.number().int().positive();
 const modelName = z
   .string()
   .trim()
-  .min(1, () => i18n.t("addModel.switchyardConfigFields.selectModel"))
-  .refine(
-    (name) => !name.startsWith("auto_router/"),
-    () => i18n.t("addModel.switchyardConfigFields.selectConcreteModel"),
-  );
+  .min(1, { error: () => i18n.t("addModel.switchyardConfigFields.selectModel") })
+  .refine((name) => !name.startsWith("auto_router/"), {
+    error: () => i18n.t("addModel.switchyardConfigFields.selectConcreteModel"),
+  });
 const optionsFields = {
   picker: z.enum(["efficient_first", "capable_first"]).default("efficient_first"),
   confidence_threshold: threshold.nullish(),
