@@ -544,7 +544,7 @@ async def route_create_file(
             )
 
             # Create the file with model credentials
-            response = await litellm.acreate_file(
+            response: OpenAIFileObject = await litellm.acreate_file(
                 **upload_request,
                 custom_llm_provider=credentials["custom_llm_provider"],
             )
@@ -610,7 +610,9 @@ async def route_create_file(
         _create_file_request.update(llm_provider_config)
     _create_file_request.pop("custom_llm_provider", None)
     # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-    provider_file: Final = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
+    provider_file: Final[OpenAIFileObject] = await litellm.acreate_file(
+        **_create_file_request, custom_llm_provider=custom_llm_provider
+    )
     return await _with_recorded_owner(
         provider_file,
         provider_file.id,
