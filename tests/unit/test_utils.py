@@ -10315,9 +10315,7 @@ def test_validate_environment_takes_any_together_ai_key_name_for_bare_and_prefix
 def test_validate_environment_keeps_the_wandb_key_check_for_bare_ids_wandb_shares_with_together_ai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shared_bare_ids: Final = tuple(
-        sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model))
-    )
+    shared_bare_ids: Final = tuple(sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model)))
     monkeypatch.setattr(
         litellm,
         "together_ai_models",
@@ -11578,8 +11576,7 @@ def test_check_valid_key_never_counts_a_global_fallback_answer_as_a_valid_key(
 
     with respx.mock(assert_all_called=False) as upstream:
         _ = upstream.post("https://api.openai.com/v1/chat/completions").respond(
-            401,
-            json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}},
+            401, json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}
         )
         fallback_route: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(
             200,
