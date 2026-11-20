@@ -84,6 +84,8 @@ Managing LLM calls across providers gets complicated fast — different SDKs, au
 
 [**All Supported Endpoints**](https://docs.litellm.ai/docs/supported_endpoints) - `/chat/completions`, `/responses`, `/embeddings`, `/images`, `/audio`, `/batches`, `/rerank`, `/a2a`, `/messages` and more.
 
+Native Anthropic batch passthrough keeps list, retrieve, cancellation and JSONL results responses intact. Only a POST to the batch collection is logged as batch creation.
+
 ### Python SDK
 
 ```shell
