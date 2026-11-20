@@ -2037,8 +2037,11 @@ def test_openapi_config_yaml_schema_keeps_router_model_info_component_name(
         components["Deployment"]["properties"]["model_info"],
         *components["Deployment"]["properties"]["model_info"].get("anyOf", ()),
     )
-    config_model_info_ref: Final = components["ModelParams"]["properties"]["model_info"]["$ref"]
-    config_model_info: Final = components[config_model_info_ref.removeprefix("#/components/schemas/")]
+    config_model_info_refs: Final = re.findall(
+        r'"#/components/schemas/([^"]+)"', json.dumps(components["ModelParams"]["properties"]["model_info"])
+    )
+    assert len(config_model_info_refs) == 1
+    config_model_info: Final = components[config_model_info_refs[0]]
     assert set(config_model_info["properties"]) == set(ProxyModelInfo.model_fields)
     assert not {name for name in model_info_components if "__" in name}
 
@@ -2076,6 +2079,12 @@ def config_yaml_validator(app: FastAPI, client: TestClient) -> jsonschema.Draft2
     [
         pytest.param({"model_name": "m", "litellm_params": _LITELLM_PARAMS}, True, id="model_info_omitted"),
         pytest.param({"model_name": "m", "litellm_params": _LITELLM_PARAMS, "model_info": {}}, True, id="empty"),
+        pytest.param({"model_name": "m", "litellm_params": _LITELLM_PARAMS, "model_info": None}, True, id="null"),
+        pytest.param(
+            {"model_name": "m", "litellm_params": _LITELLM_PARAMS, "model_info": {"id": None, "mode": None}},
+            True,
+            id="filled_fields_null",
+        ),
         pytest.param(
             {"model_name": "m", "litellm_params": _LITELLM_PARAMS, "model_info": {"id": "a"}}, True, id="partial"
         ),
