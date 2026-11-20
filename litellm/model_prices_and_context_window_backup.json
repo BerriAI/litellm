@@ -23312,7 +23312,10 @@
         "input_cost_per_token_priority": 2.49998e-06,
         "output_cost_per_token_priority": 1.999998e-05,
         "cache_read_input_token_cost_priority": 2.4997e-07,
-        "cache_creation_input_token_cost_priority": 2.49998e-06
+        "cache_creation_input_token_cost_priority": 2.49998e-06,
+        "deprecation_date": "2026-12-11",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
+        "successor_model": "databricks/databricks-gpt-6-1-sol"
     },
     "databricks/databricks-gpt-5-1": {
         "cache_creation_input_token_cost": 1.24999e-06,
@@ -23693,7 +23696,10 @@
         "input_cost_per_token_priority": 4.5003e-07,
         "output_cost_per_token_priority": 3.60003e-06,
         "cache_read_input_token_cost_priority": 4.501e-08,
-        "cache_creation_input_token_cost_priority": 4.5003e-07
+        "cache_creation_input_token_cost_priority": 4.5003e-07,
+        "deprecation_date": "2026-12-11",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
+        "successor_model": "databricks/databricks-gpt-6-1-terra"
     },
     "databricks/databricks-gpt-5-nano": {
         "cache_creation_input_token_cost": 4.998e-08,
