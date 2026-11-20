@@ -22,6 +22,7 @@ use support::*;
 mod gateway;
 mod host;
 mod pre_request;
+mod pricing;
 mod request;
 mod response;
 mod retry;
