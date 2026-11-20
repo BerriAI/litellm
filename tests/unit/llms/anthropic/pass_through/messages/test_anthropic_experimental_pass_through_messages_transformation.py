@@ -8,6 +8,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
+from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
 from tests.unit.llms.anthropic.test_anthropic_wif import (
@@ -116,3 +117,33 @@ def test_wif_token_exchange_reaches_only_anthropic_not_minimax_or_tencent(
         assert config._allows_workload_identity is False
 
     assert len(poster.requests) == 1
+
+
+_LIST_ID_ADVISOR_TURN: Final = (
+    {"type": "server_tool_use", "id": "srvtoolu_01", "name": "advisor", "input": {}},
+    {"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_01"], "content": "ok"},
+    {"type": "text", "text": "done"},
+)
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected"),
+    [
+        pytest.param(None, list(_LIST_ID_ADVISOR_TURN[1:]), id="kept-for-the-provider"),
+        pytest.param(True, [{"type": "text", "text": "done"}], id="dropped-under-drop-params"),
+    ],
+)
+def test_an_advisor_block_with_a_list_id_is_dropped_only_under_drop_params(
+    drop_params: bool | None, expected: list[dict[str, object]]
+) -> None:
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        model="claude-opus-4-8",
+        messages=[
+            {"role": "assistant", "content": list(_LIST_ID_ADVISOR_TURN)},
+            {"role": "user", "content": "and now?"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+    assert request["messages"][0]["content"] == expected

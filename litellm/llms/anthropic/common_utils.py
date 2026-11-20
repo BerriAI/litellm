@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
-from itertools import chain
+from itertools import chain, filterfalse
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote, urlparse
@@ -24,7 +24,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -1554,7 +1554,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
-def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_text: bool = False) -> list[_MessageT]:
+def strip_advisor_blocks_from_messages(
+    messages: list[_MessageT], replace_with_text: bool = False, drop_params: object = None
+) -> list[_MessageT]:
     """
     Remove (or replace) server_tool_use (name='advisor') and advisor_tool_result blocks
     from assistant message content.
@@ -1569,17 +1571,30 @@ def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_t
         replace_with_text: When True, replace the advisor exchange with an
             <advisor_feedback> text block so the executor retains the semantic
             context of what the advisor said.  When False (default), strip silently.
+        drop_params: The request's drop_params. When it is on, advisor blocks left without
+            their pair (a non-string or unmatched id) are dropped too, otherwise they reach
+            the provider as sent.
     """
+    drops_unpaired: Final = drops_unsupported_params(drop_params)
     for message in messages:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         content = message.get("content")
         if not isinstance(content, list):
             continue
-        new_content = _without_advisor_exchanges(content, replace_with_text)
+        new_content = _without_advisor_blocks(content, replace_with_text, drops_unpaired)
         if new_content is not None:
             message["content"] = new_content
     return messages
+
+
+def _without_advisor_blocks(
+    blocks: Sequence[object], replace_with_text: bool, drops_unpaired: bool
+) -> Sequence[object] | None:
+    paired: Final = _without_advisor_exchanges(blocks, replace_with_text)
+    if not drops_unpaired:
+        return paired
+    return list(filterfalse(_is_advisor_block, blocks if paired is None else paired))
 
 
 def _without_advisor_exchanges(blocks: Sequence[object], replace_with_text: bool) -> list[object] | None:
@@ -1598,6 +1613,16 @@ def _without_advisor_exchanges(blocks: Sequence[object], replace_with_text: bool
         else MappingProxyType({})
     )
     return list(chain.from_iterable(_without_advisor_exchange(block, advisor_ids, advice_by_id) for block in blocks))
+
+
+def _is_advisor_block(block: object) -> bool:
+    match message_field(block, "type"):
+        case "server_tool_use":
+            return message_field(block, "name") == "advisor"
+        case "advisor_tool_result":
+            return True
+        case _:
+            return False
 
 
 def _advisor_use_id(block: object) -> str | None:
