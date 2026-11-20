@@ -497,25 +497,30 @@ _METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-meth
 _MAX_PATH_DECODE_ROUNDS: Final = 8
 
 
-def _fully_decoded_path(path: str) -> str:
+def _fully_decoded_path(path: str) -> str | None:
     decoded: Final = reduce(lambda current, _: unquote(current), range(_MAX_PATH_DECODE_ROUNDS), path)
-    if unquote(decoded) != decoded:
-        raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
-    return decoded
+    return decoded if unquote(decoded) == decoded else None
 
 
-def _gemini_passthrough_file_id(method: str, headers: Mapping[str, str], path: str) -> str | None:
+def _is_gemini_get_or_delete(method: str, headers: Mapping[str, str]) -> bool:
     methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
-    if methods.isdisjoint(("GET", "DELETE")):
-        return None
-    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(posixpath.normpath(f"/{_fully_decoded_path(path)}"))
+    return not methods.isdisjoint(("GET", "DELETE"))
+
+
+def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
+    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(posixpath.normpath(f"/{decoded_path}"))
     return single_file.group(1) if single_file is not None else None
 
 
 async def _enforce_gemini_passthrough_file_ownership(
     request: Request, path: str, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
-    file_id: Final = _gemini_passthrough_file_id(request.method, request.headers, path)
+    if not _is_gemini_get_or_delete(request.method, request.headers):
+        return
+    decoded_path: Final = _fully_decoded_path(path)
+    if decoded_path is None:
+        raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
+    file_id: Final = _gemini_passthrough_file_id(decoded_path)
     if file_id is None:
         return
     from litellm.proxy.proxy_server import proxy_logging_obj
