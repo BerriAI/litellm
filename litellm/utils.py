@@ -6505,9 +6505,14 @@ def get_optional_params(
             model=model,
             drop_params=bool(drop_params),
         )
+    explicitly_dropped: Final = frozenset(additional_drop_params or ())
+    output_format_sources: Final = (
+        (passed_params, {"output_format"}),
+        (as_str_mapping(passed_params.get("extra_body")) or {}, {"extra_body", "extra_body.output_format"}),
+    )
     if isinstance(provider_config, litellm.AnthropicConfig) and any(
-        params.get("output_format") is not None
-        for params in (passed_params, as_str_mapping(passed_params.get("extra_body")) or {})
+        params.get("output_format") is not None and explicitly_dropped.isdisjoint(drop_names)
+        for params, drop_names in output_format_sources
     ):
         raise UnsupportedParamsError(
             status_code=400,

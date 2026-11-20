@@ -12920,6 +12920,29 @@ def test_anthropic_output_format_is_rejected_on_chat_completions(
     assert "`response_format`" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    ("sent", "dropped"),
+    [
+        pytest.param({"output_format": {"type": "json_schema"}}, "output_format", id="top_level"),
+        pytest.param({"extra_body": {"output_format": {"type": "json_schema"}}}, "extra_body", id="extra_body"),
+        pytest.param(
+            {"extra_body": {"output_format": {"type": "json_schema"}}}, "extra_body.output_format", id="nested_path"
+        ),
+    ],
+)
+def test_anthropic_output_format_named_in_additional_drop_params_is_dropped_not_rejected(
+    sent: dict[str, object], dropped: str
+):
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="claude-sonnet-4-5", custom_llm_provider="anthropic", additional_drop_params=[dropped], **sent
+    )
+
+    assert "output_format" not in optional_params
+    assert "output_format" not in (optional_params.get("extra_body") or {})
+
+
 def test_response_format_still_maps_to_anthropic_native_structured_output():
     from litellm.utils import get_optional_params
 
