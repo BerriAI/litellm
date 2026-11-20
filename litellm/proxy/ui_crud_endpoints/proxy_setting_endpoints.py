@@ -47,12 +47,12 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
+from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
-    AccessGroupRepository,
     SSOConfigRepository,
     UISettingsRepository,
 )
@@ -382,6 +382,11 @@ class UISettings(LiteLLMBaseModel):
         description="Hides Aria for everyone on this deployment.",
     )
 
+    aria_internal_user_access: Literal["none", "own_usage", "own_and_team_usage"] = Field(
+        default="own_usage",
+        description="Aria access for internal users. Proxy admins and proxy-wide spend viewers are unaffected.",
+    )
+
     moyai_url: str | None = Field(
         default=None,
         description="URL of a connected Moyai deployment. When set, the Moyai entry in the UI navigation opens this deployment instead of the Moyai landing page.",
@@ -438,6 +443,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
     "disable_aria",
+    "aria_internal_user_access",
     "moyai_url",
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }
@@ -503,12 +509,6 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
 # instances of ``type`` — so tightening this to ``type`` would reject
 # valid inputs.
 _EXTRA_UI_SETTINGS_FIELDS: Final[dict[str, tuple[object, FieldInfo]]] = {}
-
-# Settings OSS knows about as enterprise-gated. If a caller sends one of
-# these keys and no extension package has registered it, the PATCH
-# endpoint returns 403 instead of silently dropping the value, so the
-# client gets a clear signal that the feature requires LiteLLM Enterprise.
-_ENTERPRISE_ONLY_UI_SETTINGS: Final[set[str]] = {"enable_projects_ui"}
 
 # Memoized effective class; invalidated on registration.
 _EFFECTIVE_UI_SETTINGS_CLASS: type[UISettings] | None = None
@@ -2165,20 +2165,6 @@ async def update_ui_settings(
 
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict: Final = _json_settings(settings.model_dump(exclude_unset=True))
-
-    # Reject enterprise-only settings up front so the caller gets a clear
-    # signal instead of a silent drop.
-    blocked_enterprise_keys = sorted((settings_dict.keys() & _ENTERPRISE_ONLY_UI_SETTINGS) - ALLOWED_UI_SETTINGS_FIELDS)
-    if blocked_enterprise_keys:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": (
-                    f"Setting(s) {blocked_enterprise_keys} are a LiteLLM "
-                    "Enterprise feature and are not available on this build."
-                )
-            },
-        )
 
     # Enforce allowlist and drop anything unexpected
     incoming: Final = {k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS}

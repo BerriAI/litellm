@@ -1,4 +1,5 @@
 import ClassifierMaxOutputTokensInput from "./ClassifierMaxOutputTokensInput";
+import HeuristicFirstContextLimitField from "./HeuristicFirstContextLimitField";
 import ClassifierPrimarySettings from "./ClassifierPrimarySettings";
 import { AutoRouterAllowanceNote } from "./AutoRouterAvailability";
 import { transitionClassifierType } from "./classifier_type_transition";
@@ -518,6 +519,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               : t("addModel.classificationMethodConfig.decideLocally.helpV1")}
           </p>
         </div>
+      )}
+
+      {showSelection && classifierType === "heuristic_first" && (
+        <HeuristicFirstContextLimitField
+          value={value.heuristic_first_max_context_tokens}
+          onChange={(limit) => onChange({ ...value, heuristic_first_max_context_tokens: limit })}
+        />
       )}
 
       {showSelection && classifierType === "hybrid" && (

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Final, NoReturn, Optional
 
 import pytest
+from psycopg.conninfo import conninfo_to_dict
 
 sys.path.insert(
     0,
@@ -411,6 +412,8 @@ class TestMigrationSQLIdempotency:
         "20250918083359_drop_spec_version_column_from_mcp_table",
         "20260213170952_access_group_change_to_model_name",
         "20260224203854_add_agent_object_permissions_table",
+        "20261113120000_drop_customer_budget_reset_at",
+        "20261113130000_customer_hierarchy_schema_cleanup",
     }
 
     def test_no_drop_column_statements(self, all_migrations):
@@ -1730,6 +1733,14 @@ class TestStripPrismaQueryParams:
             "sslcert": "/client.crt",
             "sslkey": "/client.key",
         }
+
+    def test_a_unix_socket_host_query_param_reaches_libpq(self) -> None:
+        url: Final = "postgresql://u:p@localhost/litellm?host=/cloudsql/project:region:instance&connection_limit=10"
+
+        conninfo: Final = conninfo_to_dict(ProxyExtrasDBManager._strip_prisma_query_params(url))
+
+        assert conninfo["host"] == "/cloudsql/project:region:instance"
+        assert "connection_limit" not in conninfo
 
     def test_an_explicit_sslrootcert_wins_over_the_prisma_sslcert(self):
         url = "postgresql://writer/db?sslmode=require&sslrootcert=/ca.pem&sslcert=/pinned.pem&sslaccept=strict"

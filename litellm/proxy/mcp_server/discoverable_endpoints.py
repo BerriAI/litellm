@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Final,
     Literal,
     Optional,
@@ -110,17 +111,16 @@ from litellm.proxy.mcp_server.oauth_identity_binding import (
 from litellm.proxy.mcp_server.oauth_utils import (
     CIMD_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
+    asks_for_wildcard,
     build_upstream_authorize_url,
     build_upstream_oauth2_token_request,
     configured_proxy_base_url,
     get_cimd_client_id,
     get_cimd_document_url,
     get_request_base_url,
-    grant_covers_scopes,
     needs_cimd_discovery,
     oauth_client_registration_matches,
     resolve_upstream_resource,
-    server_scope_names,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
 )
@@ -1066,7 +1066,11 @@ async def _managed_authorization_scope(
         if scope_user_id and prisma_client is not None
         else None
     )
-    merged_scope: Final = union_scopes(" ".join(prior_grant.get("scopes") or ()) if prior_grant else None, scope)
+    kept_scope: Final = (
+        None if prior_grant is None or asks_for_wildcard(scope) else " ".join(prior_grant.get("scopes") or ())
+    )
+    refused_scope: Final = " ".join(prior_grant.get("needs_scopes") or ()) if prior_grant is not None else None
+    merged_scope: Final = union_scopes(union_scopes(kept_scope, refused_scope), scope)
     selected_scope: Final = (
         get_client_metadata_scopes(
             merged_scope,
@@ -2556,9 +2560,7 @@ async def token_endpoint(
     )
 
 
-async def _vendor_credential_state(
-    user_id: str, server_id: str, requested_scopes: tuple[str, ...] = ()
-) -> VendorCredentialState:
+async def _vendor_credential_state(user_id: str, server_id: str) -> VendorCredentialState:
     """Whether the gateway itself can see a live vendor credential for this user and server.
 
     The one reading of "authorized" the connect page displays and the finish step enforces, so
@@ -2568,9 +2570,6 @@ async def _vendor_credential_state(
         get_user_oauth_credential,
         oauth_grant_state,
     )
-    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import at module load
-        global_mcp_server_manager,
-    )
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import at module load
 
     if prisma_client is None:
@@ -2579,15 +2578,9 @@ async def _vendor_credential_state(
         credential: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
     except Exception:  # noqa: BLE001  # a credential-read fault must fail the scoped grant closed
         return "unavailable"
-    if oauth_grant_state(credential) == "absent":
+    if oauth_grant_state(credential) == "absent" or credential is None or credential.get("needs_scopes"):
         return "absent"
-    granted_scopes: Final = credential.get("scopes") if credential else None
-    covered: Final = grant_covers_scopes(
-        tuple(granted_scopes or ()),
-        requested_scopes,
-        lambda: server_scope_names(global_mcp_server_manager.get_mcp_server_by_id(server_id)),
-    )
-    return "present" if covered else "absent"
+    return "present"
 
 
 @router.get("/authorize/flow")
@@ -2610,14 +2603,19 @@ async def authorize_complete(
     delivery: str | None = Form(None),
     team_id: str | None = Form(None),
     decision: str | None = Form(None),
+    server: Annotated[tuple[str, ...], Form()] = (),
 ) -> Response:
     """Finish an aggregate connect flow: mint the gateway authorization code for the
     signed-in user and hand it back to the DCR client, by 303 redirect (default) or, for
     a loopback client on a different machine, as a copyable callback URL
     (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
     anonymous or bad-flow request just 400s. The native-client consent page adds
-    ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to."""
-    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # circular import at module load
+    ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.
+    Each ``server`` field is the id of a server the connect page shows as on."""
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
+        master_key,
+        user_api_key_cache,
+    )
 
     return await complete_connect_flow(
         request=request,
@@ -2629,6 +2627,8 @@ async def authorize_complete(
         decision=decision,
         lookup_vendor_credential=_vendor_credential_state,
         lookup_server_reachability=_user_can_reach_mcp_server,
+        selected_server_ids=server,
+        master_key=master_key,
     )
 
 

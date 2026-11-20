@@ -1,17 +1,27 @@
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
+from types import ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from redis.exceptions import RedisError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import DailyTagSpendTransaction
+from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    WindowSpendUpdateQueue,
+    build_window_spend_transaction,
+)
 from litellm.proxy.proxy_server import ProxyStartupEvent
 
 
@@ -77,6 +87,59 @@ async def test_daily_tag_spend_restored_after_rpush_failure_is_pushed_once_on_ne
     assert redis_key == REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
     assert json.loads(values[0]) == json.loads(safe_dumps(original_transactions))
     assert await queue.flush_and_get_aggregated_daily_spend_update_transactions() == {}
+
+
+async def _spend_queue_with_one_update() -> SpendUpdateQueue:
+    queue: Final = SpendUpdateQueue()
+    await queue.add_update(
+        SpendUpdateQueueItem(entity_type=Litellm_EntityType.KEY, entity_id="hashed-key", response_cost=0.25)
+    )
+    return queue
+
+
+async def _daily_queue_with_one_update() -> DailySpendUpdateQueue:
+    queue: Final = DailySpendUpdateQueue()
+    await queue.add_update(_daily_tag_spend_update_transactions())
+    return queue
+
+
+async def _window_queue_with_one_update() -> WindowSpendUpdateQueue:
+    queue: Final = WindowSpendUpdateQueue()
+    await queue.add_update(
+        build_window_spend_transaction(
+            entity_type="key",
+            entity_id="hashed-key",
+            window_duration="30d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=0.25,
+        )
+    )
+    return queue
+
+
+@pytest.mark.asyncio
+async def test_draining_the_buffer_leaves_no_redis_key_behind_for_any_queue_a_flush_wrote(
+    router_redis: tuple[RedisCache, object],
+):
+    redis, _ = router_redis
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis)
+    await buffer.store_in_memory_spend_updates_in_redis(
+        spend_update_queue=await _spend_queue_with_one_update(),
+        daily_spend_update_queue=await _daily_queue_with_one_update(),
+        daily_team_spend_update_queue=await _daily_queue_with_one_update(),
+        daily_org_spend_update_queue=await _daily_queue_with_one_update(),
+        daily_end_user_spend_update_queue=await _daily_queue_with_one_update(),
+        daily_agent_spend_update_queue=await _daily_queue_with_one_update(),
+        daily_customer_member_spend_update_queue=await _daily_queue_with_one_update(),
+        window_spend_update_queue=await _window_queue_with_one_update(),
+    )
+    buffered: Final = await redis.async_scan_iter(pattern="*")
+    assert len(buffered) == 8, buffered
+
+    await buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+    left_behind: Final = await redis.async_scan_iter(pattern="*")
+    assert left_behind == [], f"buffer keys never drained, Redis grows by one list per flush: {left_behind}"
 
 
 @pytest.fixture
@@ -572,8 +635,6 @@ async def test_restore_transactions_to_redis_noop_when_empty(redis_update_buffer
 @pytest.mark.asyncio
 async def test_restore_transactions_to_redis_swallows_redis_error(redis_update_buffer, mock_redis_cache):
     """A Redis failure during restore must not propagate to the caller's finally block."""
-    from redis.exceptions import RedisError
-
     mock_redis_cache.async_rpush_pipeline = AsyncMock(side_effect=RedisError("redis down"))
 
     await redis_update_buffer.restore_transactions_to_redis(
@@ -909,11 +970,10 @@ async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_
 
 
 @pytest.mark.asyncio
-async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails():
-    from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
-
+@pytest.mark.parametrize("failure", [ConnectionError("redis down"), RedisError("redis down")])
+async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails(failure: Exception):
     redis_cache = MagicMock()
-    redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))
+    redis_cache.async_rpush_pipeline = AsyncMock(side_effect=failure)
     queue = ToolDiscoveryQueue()
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
@@ -921,3 +981,18 @@ async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails()
     await RedisUpdateBuffer(redis_cache=redis_cache).store_tool_discoveries_in_redis(queue)
 
     assert queue.flush() == [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 2}]
+
+
+@pytest.mark.asyncio
+async def test_buffer_without_redis_installed_skips_redis_work_when_no_cache_is_configured(
+    import_without_redis_installed: Callable[[str], ModuleType],
+):
+    module: Final = import_without_redis_installed("litellm.proxy.db.db_transaction_queue.redis_update_buffer")
+    buffer: Final[RedisUpdateBuffer] = module.RedisUpdateBuffer(redis_cache=None)
+    queue: Final = ToolDiscoveryQueue()
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+
+    await buffer.restore_transactions_to_redis(db_spend_update_transactions={"key_list_transactions": {"key1": 1.0}})
+    await buffer.store_tool_discoveries_in_redis(queue)
+
+    assert queue.flush() == [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 1}]

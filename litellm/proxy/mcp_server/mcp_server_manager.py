@@ -29,7 +29,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache, partial
 from itertools import chain, groupby
 from types import EllipsisType, MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import ParseResult, urlparse
 
 import anyio
@@ -159,6 +159,7 @@ from litellm.proxy.mcp_server.outbound_credentials.token_exchange_provider impor
 )
 from litellm.proxy.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
+    ApiKeyConfig,
     AuthResolution,
     IdJagConfig,
     PassthroughConfig,
@@ -168,6 +169,7 @@ from litellm.proxy.mcp_server.result_conversion import (
     WireCompat,
     complete_call_tool_result,
     handler_outcome,
+    is_url_elicitation_required,
     to_gateway_tool,
 )
 from litellm.proxy.mcp_server.sampling_handler import (
@@ -371,6 +373,12 @@ _UpstreamSessionKey: TypeAlias = tuple[
     str,
     tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool, bool],
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceListingFailed:
+    server_name: str
+    error: Exception
 
 
 @dataclass(frozen=True, slots=True)
@@ -1340,6 +1348,47 @@ def _server_auth_header_for(
     return mcp_auth_header if server_specific is None else server_specific
 
 
+def _v1_default_key_header(auth_type: MCPAuthType) -> str | None:
+    match auth_type:
+        case (
+            MCPAuth.bearer_token
+            | MCPAuth.basic
+            | MCPAuth.authorization
+            | MCPAuth.oauth2
+            | MCPAuth.token
+            | MCPAuth.oauth2_token_exchange
+        ):
+            return "Authorization"
+        case MCPAuth.api_key:
+            return "X-API-Key"
+        case (
+            None
+            | MCPAuth.none
+            | MCPAuth.aws_sigv4
+            | MCPAuth.oauth2_id_jag
+            | MCPAuth.true_passthrough
+            | MCPAuth.oauth_delegate
+        ):
+            return None
+    assert_never(auth_type)  # pragma: no cover
+
+
+def _v1_key_occupies_authorization(server: MCPServer) -> bool:
+    if server.is_byok or not server.authentication_token:
+        return False
+    default_header: Final = _v1_default_key_header(server.auth_type)
+    if default_header is None:
+        return False
+    return (server.upstream_token_header or default_header).lower() == "authorization"
+
+
+def _server_key_occupies_authorization(server: MCPServer) -> bool:
+    spec: Final = to_server_spec(server)
+    if spec is None:
+        return _v1_key_occupies_authorization(server)
+    return isinstance(spec.config, ApiKeyConfig) and spec.config.header_name.lower() == "authorization"
+
+
 def listed_tools_caller_for(
     server: MCPServer,
     user_api_key_auth: UserAPIKeyAuth | None,
@@ -1621,13 +1670,14 @@ def _redacted_registry_dump(servers: dict[str, MCPServer]) -> dict[str, dict[str
 
 def caller_authorization_fans_out(
     server: MCPServer,
-    scope_servers: list[MCPServer] | None,
+    scope_servers: Sequence[MCPServer] | None,
 ) -> bool:
     """True when forwarding the caller's request-wide ``Authorization`` to ``server`` inside a
     listing fan-out would replay one credential against multiple upstreams: another server in the
     scope also consumes it (RFC 9700 cross-resource replay). ``scope_servers`` is None for
-    explicitly-addressed operations (tool call, get_prompt, read_resource, single-server routes),
-    where the client named the one target and the gateway is not choosing recipients."""
+    explicitly-addressed operations (tool call, get_prompt, single-server routes), where the client
+    named the one target and the gateway is not choosing recipients. An aggregate read_resource passes
+    its scope because the gateway picks the owner from listings."""
     if scope_servers is None:
         return False
     return any(
@@ -1655,6 +1705,24 @@ def _extract_upstream_auth_failure(
 def _upstream_failure_suffix(exc: BaseException) -> str:
     detail: Final = describe_upstream_http_failure(exc)
     return f"\n  upstream exchange: {detail}" if detail else ""
+
+
+async def _note_scope_refusal(
+    server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None, error: BaseException
+) -> None:
+    """Note a provider's scope refusal on the caller's grant, so her next connect goes back to the provider."""
+    from litellm.proxy.mcp_server.db import record_oauth_scope_refusal  # noqa: PLC0415  # circular import
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import
+
+    managed_per_user: Final = server.is_gateway_managed_oauth2 and server.needs_user_oauth_token
+    refused_scope: Final = upstream_insufficient_scope(error) if managed_per_user else None
+    user_id: Final = user_api_key_auth.user_id if user_api_key_auth is not None else None
+    if refused_scope is None or not user_id or prisma_client is None:
+        return
+    try:
+        await record_oauth_scope_refusal(prisma_client, user_id, server.server_id, refused_scope)
+    except Exception as exc:  # noqa: BLE001  # the challenge still goes out when the note cannot be written
+        verbose_logger.warning("Failed to note an MCP scope refusal (%s)", type(exc).__name__)
 
 
 def _obo_retry_applies(server: MCPServer, subject_token: str | None) -> bool:
@@ -1949,6 +2017,24 @@ def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
 
 class _InternalNetworkSettings(Protocol):
     def get(self, key: Literal["mcp_internal_ip_ranges"], /) -> list[str] | None: ...
+
+
+_Gathered: Final = TypeVar("_Gathered")
+
+
+async def _gather_before_relaying_url_elicitation(tasks: Sequence[asyncio.Task[_Gathered]]) -> Sequence[_Gathered]:
+    try:
+        return await asyncio.gather(*tasks)
+    except Exception as error:
+        if not is_url_elicitation_required(error):
+            raise
+        settled: Final = await asyncio.gather(*tasks, return_exceptions=True)
+        rejection: Final = next(
+            (outcome for outcome in settled if isinstance(outcome, BaseException) and outcome is not error), None
+        )
+        if rejection is None:
+            raise
+        raise rejection from None
 
 
 class MCPServerManager:
@@ -4597,6 +4683,7 @@ class MCPServerManager:
                     and not has_static_authorization
                     and not mcp_auth_header
                     and not has_extra_authorization
+                    and not _server_key_occupies_authorization(server)
                 ):
                     extra_headers = await inject_mcp_jwt_headers_for_upstream(
                         user_api_key_dict=user_api_key_auth,
@@ -4696,6 +4783,7 @@ class MCPServerManager:
             # Pass-through 401 must surface to single-server routes so the
             # client triggers the upstream OAuth flow. The multi-server
             # aggregator catches this explicitly to keep absorbing.
+            await _note_scope_refusal(server, user_api_key_auth, upstream_auth_error)
             if server.is_dcr_bridge and upstream_auth_error.www_authenticate is not None:
                 raise MCPUpstreamAuthError(
                     status_code=upstream_auth_error.status_code,
@@ -4726,6 +4814,7 @@ class MCPServerManager:
             verbose_logger.warning(
                 "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, _upstream_failure_suffix(e)
             )
+            await _note_scope_refusal(server, user_api_key_auth, e)
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
     def _admin_tools_list_ttl(self, server: MCPServer) -> int | None:
@@ -5099,8 +5188,33 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[Resource]:
-        if self._skip_blocked_stdio_listing(server, "resource"):
+        listing: Final = await self.list_resources_from_server(
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=add_prefix,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+        if isinstance(listing, ResourceListingFailed):
+            verbose_logger.warning("Failed to get resources from server %s: %s", server.name, listing.error)
             return []
+        return list(listing)
+
+    async def list_resources_from_server(
+        self,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | Mapping[str, str] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        add_prefix: bool = True,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
+    ) -> tuple[Resource, ...] | ResourceListingFailed:
+        if self._skip_blocked_stdio_listing(server, "resource"):
+            return ()
+        auth_header: Final = dict(mcp_auth_header) if isinstance(mcp_auth_header, Mapping) else mcp_auth_header
         try:
             headers: Final = (
                 dict(
@@ -5115,7 +5229,7 @@ class MCPServerManager:
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
             client: Final = await self.create_mcp_client(
                 server=server,
-                mcp_auth_header=mcp_auth_header,
+                mcp_auth_header=auth_header,
                 extra_headers=headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
@@ -5127,7 +5241,7 @@ class MCPServerManager:
             key: Final = self._discovery_key(
                 server,
                 user_api_key_auth,
-                mcp_auth_header,
+                auth_header,
                 headers,
                 stdio_env,
                 subject_token,
@@ -5139,10 +5253,9 @@ class MCPServerManager:
                 return await client.list_resources_result(raise_on_error=True)
 
             items: Final = await self._resource_discovery_cache.get(key, fetch)
-            return self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix)
+            return tuple(self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix))
         except Exception as error:
-            verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
-            return []
+            return ResourceListingFailed(server_name=server.name, error=error)
 
     async def get_resource_templates_from_server(
         self,
@@ -6717,6 +6830,8 @@ class MCPServerManager:
                     persistent_session=persistent_session,
                 )
         except Exception as exc:
+            if is_url_elicitation_required(exc):
+                raise
             auth_failure: Final = _extract_upstream_auth_failure(exc)
             if auth_failure is None and not isinstance(exc, UpstreamSessionClosedError):
                 return MCPClient.error_tool_result(exc)
@@ -6857,9 +6972,11 @@ class MCPServerManager:
             hook_has_authorization: Final = any(k.lower() == "authorization" for k in hook_extra_headers)
             existing_has_authorization: Final = any(k.lower() == "authorization" for k in extra_headers)
             server_auth_occupies_authorization: Final = (
-                any(k.lower() == "authorization" for k in server_auth_header)
+                _server_key_occupies_authorization(mcp_server)
+                if not server_auth_header
+                else any(k.lower() == "authorization" for k in server_auth_header)
                 if isinstance(server_auth_header, dict)
-                else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+                else mcp_server.auth_type != MCPAuth.api_key
             )
             if hook_has_authorization and (existing_has_authorization or server_auth_occupies_authorization):
                 # Mirror the tools/list signer guard: an upstream credential (user OAuth,
@@ -6954,8 +7071,11 @@ class MCPServerManager:
                             persistent_session=persistent_session,
                         )
                     except Exception as e:
+                        if is_url_elicitation_required(e):
+                            raise
                         required_scope: Final = upstream_insufficient_scope(e) if managed_per_user else None
                         if required_scope is not None:
+                            await _note_scope_refusal(mcp_server, user_api_key_auth, e)
                             raise MCPUpstreamAuthError(
                                 status_code=403,
                                 www_authenticate=None,
@@ -6990,7 +7110,9 @@ class MCPServerManager:
 
         _timeout: Final = mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
         try:
-            mcp_responses: Final = await asyncio.wait_for(asyncio.gather(*tasks), timeout=_timeout)
+            mcp_responses: Final = await asyncio.wait_for(
+                _gather_before_relaying_url_elicitation(tasks), timeout=_timeout
+            )
         except asyncio.TimeoutError:
             raise HTTPException(
                 status_code=504,

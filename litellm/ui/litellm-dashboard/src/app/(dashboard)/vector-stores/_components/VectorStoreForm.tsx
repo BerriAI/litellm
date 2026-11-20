@@ -33,6 +33,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -65,7 +66,7 @@ interface VectorStoreFormProps {
   credentials: CredentialItem[];
 }
 
-const PROVIDER_FIELD_NAMES = [
+const TEXT_PROVIDER_FIELD_NAMES = [
   "api_base",
   "api_key",
   "vertex_project",
@@ -90,12 +91,25 @@ const PROVIDER_FIELD_NAMES = [
   "opensearch_embedding_field",
   "opensearch_text_field",
   "opensearch_index_name",
+  "opensearch_search_pipeline",
 ] as const;
 
-type ProviderFieldName = (typeof PROVIDER_FIELD_NAMES)[number];
+const BOOLEAN_PROVIDER_FIELD_NAMES = ["opensearch_hybrid_search"] as const;
+
+type TextProviderFieldName = (typeof TEXT_PROVIDER_FIELD_NAMES)[number];
+
+type BooleanProviderFieldName = (typeof BOOLEAN_PROVIDER_FIELD_NAMES)[number];
+
+type ProviderFieldName = TextProviderFieldName | BooleanProviderFieldName;
+
+const isTextProviderFieldName = (name: string): name is TextProviderFieldName =>
+  (TEXT_PROVIDER_FIELD_NAMES as readonly string[]).includes(name);
+
+const isBooleanProviderFieldName = (name: string): name is BooleanProviderFieldName =>
+  (BOOLEAN_PROVIDER_FIELD_NAMES as readonly string[]).includes(name);
 
 const isProviderFieldName = (name: string): name is ProviderFieldName =>
-  (PROVIDER_FIELD_NAMES as readonly string[]).includes(name);
+  isTextProviderFieldName(name) || isBooleanProviderFieldName(name);
 
 const optionalText = z.string().optional();
 
@@ -129,6 +143,8 @@ const vectorStoreShape = {
   opensearch_embedding_field: optionalText,
   opensearch_text_field: optionalText,
   opensearch_index_name: optionalText,
+  opensearch_search_pipeline: optionalText,
+  opensearch_hybrid_search: z.boolean().optional(),
 };
 
 const vectorStoreSchema = z.object(vectorStoreShape).superRefine((values, ctx) => {
@@ -144,6 +160,17 @@ const vectorStoreSchema = z.object(vectorStoreShape).superRefine((values, ctx) =
             : i18n.t("vectorStores.form.errors.inputField", { field: i18n.t(field.label).toLowerCase() }),
       }),
     );
+  if (
+    values.custom_llm_provider === "opensearch" &&
+    values.opensearch_hybrid_search === true &&
+    !values.opensearch_search_pipeline
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["opensearch_search_pipeline"],
+      message: i18n.t("vectorStores.form.errors.hybridSearchNeedsPipeline"),
+    });
+  }
 });
 
 type VectorStoreFormValues = z.output<typeof vectorStoreSchema>;
@@ -540,10 +567,12 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
   );
 };
 
-type SupportedProviderField = VectorStoreFieldConfig & { name: ProviderFieldName };
+type SupportedProviderField =
+  | (VectorStoreFieldConfig & { type: "boolean"; name: BooleanProviderFieldName })
+  | (VectorStoreFieldConfig & { type?: "text" | "password" | "select"; name: TextProviderFieldName });
 
 const isSupportedProviderField = (field: VectorStoreFieldConfig): field is SupportedProviderField =>
-  isProviderFieldName(field.name);
+  field.type === "boolean" ? isBooleanProviderFieldName(field.name) : isTextProviderFieldName(field.name);
 
 interface ProviderFieldProps {
   field: SupportedProviderField;
@@ -555,6 +584,14 @@ const ProviderField: React.FC<ProviderFieldProps> = ({ field, control, modelInfo
   const { t } = useTranslation();
   const label = labelWithHint(t(field.label), t(field.tooltip));
   const placeholder = field.placeholderKey ? t(field.placeholderKey) : field.placeholder;
+
+  if (field.type === "boolean") {
+    return (
+      <FormField control={control} name={field.name} label={label}>
+        {({ id, value, onChange }) => <Switch id={id} checked={value === true} onCheckedChange={onChange} />}
+      </FormField>
+    );
+  }
 
   if (field.type === "select") {
     const selectOptions =

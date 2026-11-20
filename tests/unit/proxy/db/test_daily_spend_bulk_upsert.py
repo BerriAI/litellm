@@ -1,8 +1,11 @@
 """Tests for the single-statement daily spend upsert (LIT-5291)."""
 
+import hashlib
+import json
 import re
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Final
 
 import pytest
 
@@ -88,9 +91,9 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
-    # 26 bound columns per row plus the inlined updated_at, so the row count is what
+    # 27 bound columns per row plus the inlined updated_at, so the row count is what
     # separates one multi-row statement from a hundred single-row ones.
-    assert len(params) == 100 * 26
+    assert len(params) == 100 * 27
     assert "$2600::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
 
@@ -112,6 +115,7 @@ def test_conflict_target_is_the_full_unique_constraint():
         "completion_tokens",
         "spend",
         "guardrail_spend",
+        "customer_margin_spend",
         "api_requests",
         "successful_requests",
         "failed_requests",
@@ -250,3 +254,40 @@ def test_customer_daily_aliases_of_one_model_keep_separate_rows_under_a_stable_i
     first_id, second_id = params[0], params[len(params) // 2]
     assert first_id != second_id
     assert build_bulk_upsert(table, merged[:1])[1][0] == first_id
+
+
+def test_app_daily_rows_split_but_empty_app_preserves_the_pre_app_hash() -> None:
+    table: Final = DAILY_SPEND_TABLES["customer_member"]
+    base: Final = {
+        **tag_txn(),
+        "customer_member_id": "member",
+        "customer_team_id": "team",
+        "customer_org_id": "org",
+    }
+    legacy_columns: Final = (
+        "customer_member_id",
+        "customer_team_id",
+        "customer_org_id",
+        "date",
+        "api_key",
+        "model",
+        "custom_llm_provider",
+        "mcp_namespaced_tool_name",
+        "endpoint",
+        "model_group",
+    )
+    legacy_pairs: Final = sorted((column, str(base.get(column) or "")) for column in legacy_columns)
+    legacy_id: Final = hashlib.sha256(json.dumps(legacy_pairs, separators=(",", ":")).encode()).hexdigest()
+    merged: Final = merge_by_conflict_key(
+        table,
+        (
+            base,
+            {**base, "app_id": ""},
+            {**base, "app_id": "app-a"},
+            {**base, "app_id": "app-b"},
+        ),
+    )
+    assert len(merged) == 3
+    ids: Final = tuple(build_bulk_upsert(table, (row,))[1][0] for row in merged)
+    assert len(set(ids)) == 3 and legacy_id in ids
+    assert sorted(row["spend"] for _, row in merged) == [0.25, 0.25, 0.5]
