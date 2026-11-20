@@ -3347,7 +3347,9 @@ def test_a_stream_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_p
     assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))
 
 
-def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_it_again(monkeypatch, all_chunks):
+def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_it_again(
+    monkeypatch: pytest.MonkeyPatch, all_chunks: list[str]
+) -> None:
     logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=True)
     logging_obj.optional_params = {}
     logging_obj.record_route_cost(0.0421)
@@ -3357,7 +3359,7 @@ def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_
 
     monkeypatch.setattr(litellm, "completion_cost", repriced)
     monkeypatch.setattr(litellm, "response_cost_calculator", repriced)
-    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
         litellm_logging_obj=logging_obj,
         passthrough_success_handler_obj=MagicMock(),
         url_route="/v1/messages",
@@ -3369,4 +3371,4 @@ def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_
     )
 
     assert result["kwargs"]["response_cost"] == 0.0421, result["kwargs"]
-    assert result["result"]._hidden_params["response_cost"] == 0.0421
+    assert logging_obj.model_call_details["response_cost"] == 0.0421

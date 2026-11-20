@@ -4067,9 +4067,8 @@ def _priced_logger(litellm_params: Mapping[str, object]) -> Logging:
         litellm_call_id="priced",
         function_id="priced",
     )
-    logger.update_environment_variables(
-        model="claude-opus-5-5", user=None, optional_params={}, litellm_params=dict(litellm_params)
-    )
+    logger.litellm_params = dict(litellm_params)
+    logger.model_call_details["litellm_params"] = logger.litellm_params
     return logger
 
 
