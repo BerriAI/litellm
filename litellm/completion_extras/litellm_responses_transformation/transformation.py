@@ -259,7 +259,9 @@ _RESPONSES_ONLY_FIELD_EQUIVALENTS: Final[Mapping[str, str]] = MappingProxyType(
 
 def _responses_only_field_error(sent_params: Sequence[Mapping[str, object]]) -> str | None:
     sent: Final = tuple(
-        field for field in _RESPONSES_ONLY_FIELD_EQUIVALENTS if any(params.get(field) is not None for params in sent_params)
+        field
+        for field in _RESPONSES_ONLY_FIELD_EQUIVALENTS
+        if any(params.get(field) is not None for params in sent_params)
     )
     if not sent:
         return None

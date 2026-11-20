@@ -408,7 +408,6 @@ def _build_responses_kwargs(
         preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
     )
 
-
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
     reasoning: Final = responses_kwargs.get("reasoning")
