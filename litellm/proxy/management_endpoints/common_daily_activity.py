@@ -12,7 +12,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PTU_SENTINEL_API_KEY, SUBSCRIPTION_BACKED_PROVIDERS
+from litellm.constants import PTU_SENTINEL_API_KEY, SUBSCRIPTION_BUCKET_SUFFIX, SUBSCRIPTION_COVERED_PROVIDERS
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
@@ -316,7 +316,13 @@ def _entity_metadata(
 
 
 def provider_bucket_metadata(provider: str, base: Mapping[str, object]) -> Mapping[str, object]:
-    if provider in SUBSCRIPTION_BACKED_PROVIDERS:
+    if provider.endswith(SUBSCRIPTION_BUCKET_SUFFIX):
+        return {
+            **base,
+            "subscription_covered": True,
+            "custom_llm_provider": provider.removesuffix(SUBSCRIPTION_BUCKET_SUFFIX),
+        }
+    if provider in SUBSCRIPTION_COVERED_PROVIDERS:
         return {**base, "subscription_covered": True}
     return dict(base)
 

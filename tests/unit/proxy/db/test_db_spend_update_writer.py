@@ -2052,6 +2052,85 @@ async def test_endpoint_field_maps_retrieve_batch_spend_row_to_batches_endpoint(
         assert transaction["endpoint"] == "/batches"
 
 
+def _anthropic_daily_payload(request_id: str, claude_subscription_usage: dict | None) -> dict:
+    return {
+        "request_id": request_id,
+        "user": "test-user",
+        "team_id": "test-team",
+        "request_tags": ["tag-a"],
+        "call_type": "acompletion",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-4-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-4-5",
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "spend": 0.0,
+        "metadata": json.dumps(
+            {
+                "usage_object": {},
+                "used_client_oauth_token": claude_subscription_usage is not None,
+                "claude_subscription_usage": claude_subscription_usage,
+            }
+        ),
+    }
+
+
+_ALLOWANCE_USAGE: Final = {"is_overage": False, "status": "allowed", "overage_status": None}
+_OVERAGE_USAGE: Final = {"is_overage": True, "status": "rejected", "overage_status": "allowed"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("claude_subscription_usage", "expected_provider"),
+    [(_ALLOWANCE_USAGE, "anthropic:subscription"), (_OVERAGE_USAGE, "anthropic"), (None, "anthropic")],
+    ids=["allowance", "overage", "api_key"],
+)
+async def test_every_daily_entity_buckets_a_claude_allowance_request_apart_from_metered_anthropic_usage(
+    claude_subscription_usage: dict | None, expected_provider: str
+):
+    writer = DBSpendUpdateWriter()
+    prisma: Final = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+    payload: Final = _anthropic_daily_payload("req-claude", claude_subscription_usage)
+    queues: Final = {
+        "user": (writer.daily_spend_update_queue, writer.add_spend_log_transaction_to_daily_user_transaction),
+        "team": (writer.daily_team_spend_update_queue, writer.add_spend_log_transaction_to_daily_team_transaction),
+        "tag": (writer.daily_tag_spend_update_queue, writer.add_spend_log_transaction_to_daily_tag_transaction),
+    }
+    for queue, _ in queues.values():
+        queue.add_update = AsyncMock()
+
+    for _, enqueue in queues.values():
+        await enqueue(payload=payload, prisma_client=prisma)
+
+    for queue, _ in queues.values():
+        (update,) = queue.add_update.call_args[1]["update"].items()
+        key, transaction = update
+        assert transaction["custom_llm_provider"] == expected_provider
+        assert key.endswith(f"_claude-sonnet-4-5_{expected_provider}_/chat/completions")
+
+
+@pytest.mark.asyncio
+async def test_a_claude_allowance_request_and_a_metered_request_never_share_a_daily_transaction():
+    writer = DBSpendUpdateWriter()
+    prisma: Final = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+
+    for request_id, usage in (("covered", _ALLOWANCE_USAGE), ("metered", None)):
+        await writer.add_spend_log_transaction_to_daily_user_transaction(
+            payload=_anthropic_daily_payload(request_id, usage), prisma_client=prisma
+        )
+
+    queued: Final = await writer.daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    assert {transaction["custom_llm_provider"] for transaction in queued.values()} == {
+        "anthropic",
+        "anthropic:subscription",
+    }
+    assert all(transaction["api_requests"] == 1 for transaction in queued.values())
+
+
 @pytest.mark.asyncio
 async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
     """

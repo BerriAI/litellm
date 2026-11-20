@@ -34,6 +34,7 @@ _METADATA_FIELDS: Final = frozenset(
         "internal_call_origin",
         "billed_retry_attempt",
         "user_api_key_customer_usage",
+        "claude_subscription_usage",
         ROUTE_CALL_TYPE_METADATA_KEY,
     }
 )

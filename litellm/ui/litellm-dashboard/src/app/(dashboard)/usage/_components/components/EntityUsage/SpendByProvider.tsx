@@ -22,7 +22,10 @@ export type ProviderSpendData = {
   failed_requests: number;
   tokens: number;
   subscription_covered?: boolean;
+  provider_name?: string;
 };
+
+const displayName = (row: ProviderSpendData): string => row.provider_name ?? row.provider;
 
 interface SpendByProviderProps {
   loading: boolean;
@@ -41,10 +44,10 @@ const columns: ColumnDef<ProviderSpendData>[] = [
       <div className="flex min-w-0 items-center gap-2">
         {row.original.provider && (
           <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md border bg-background">
-            <ProviderLogo provider={row.original.provider} className="size-3.5 rounded-[3px]" />
+            <ProviderLogo provider={displayName(row.original)} className="size-3.5 rounded-[3px]" />
           </span>
         )}
-        <span className="truncate font-medium text-foreground">{row.original.provider}</span>
+        <span className="truncate font-medium text-foreground">{displayName(row.original)}</span>
       </div>
     ),
   },
@@ -109,7 +112,7 @@ export function ProviderSpendBreakdown({ rows }: { rows: readonly ProviderSpendD
               <div
                 key={row.provider}
                 data-testid="provider-share-segment"
-                title={`${row.provider || t("usage.providerSpend.unknownProvider")} · ${shareOf(row.spend).toFixed(1)}%`}
+                title={`${displayName(row) || t("usage.providerSpend.unknownProvider")} · ${shareOf(row.spend).toFixed(1)}%`}
                 className="h-full first:rounded-l-full last:rounded-r-full"
                 style={{ width: `${shareOf(row.spend)}%`, backgroundColor: colorOf(index) }}
               />
@@ -119,7 +122,7 @@ export function ProviderSpendBreakdown({ rows }: { rows: readonly ProviderSpendD
             {visible.slice(0, 6).map((row, index) => (
               <span key={row.provider} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="size-2 rounded-[2px]" style={{ backgroundColor: colorOf(index) }} />
-                <span className="text-foreground">{row.provider || t("usage.providerSpend.unknownProvider")}</span>
+                <span className="text-foreground">{displayName(row) || t("usage.providerSpend.unknownProvider")}</span>
                 <span className="tabular-nums">{shareOf(row.spend).toFixed(1)}%</span>
               </span>
             ))}

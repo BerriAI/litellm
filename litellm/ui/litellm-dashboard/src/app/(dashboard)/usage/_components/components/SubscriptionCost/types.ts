@@ -64,11 +64,16 @@ export interface SubscriptionFeeFormValues {
 export const isSubscriptionCovered = (metadata: object | undefined): boolean =>
   metadata !== undefined && "subscription_covered" in metadata && metadata.subscription_covered === true;
 
-export const subscriptionCoveredProviders = (results: readonly DailyData[]): ReadonlySet<string> =>
-  new Set(
+const coveredProviderName = (bucket: string, metadata: object | undefined): string =>
+  metadata !== undefined && "custom_llm_provider" in metadata && typeof metadata.custom_llm_provider === "string"
+    ? metadata.custom_llm_provider
+    : bucket;
+
+export const subscriptionCoveredProviders = (results: readonly DailyData[]): ReadonlyMap<string, string> =>
+  new Map(
     results.flatMap((day) =>
       Object.entries(day.breakdown.providers ?? {})
         .filter(([, entry]) => isSubscriptionCovered(entry.metadata))
-        .map(([provider]) => provider),
+        .map(([bucket, entry]): [string, string] => [bucket, coveredProviderName(bucket, entry.metadata)]),
     ),
   );

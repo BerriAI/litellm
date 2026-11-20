@@ -115,6 +115,19 @@ describe("providerSpendRows", () => {
     });
     expect(rows.find((row) => row.provider === "chatgpt")).toEqual(expect.objectContaining({ requests: 2 }));
   });
+
+  it("keeps a client subscription bucket apart from metered usage of the same provider and names the real provider", () => {
+    const rows = providerSpendRows([
+      providerDay("2026-10-01", {
+        anthropic: {},
+        "anthropic:subscription": { subscription_covered: true, custom_llm_provider: "anthropic" },
+      }),
+    ]);
+    expect(rows.map((row) => [row.provider, row.provider_name, row.subscription_covered])).toEqual([
+      ["anthropic", "anthropic", false],
+      ["anthropic:subscription", "anthropic", true],
+    ]);
+  });
 });
 
 describe("rollUpBreakdown", () => {

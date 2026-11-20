@@ -17,6 +17,7 @@ export interface ProviderSpendRow extends Record<string, unknown> {
   failed_requests: number;
   tokens: number;
   subscription_covered: boolean;
+  provider_name: string;
 }
 
 export const getTopModels = (
@@ -220,6 +221,7 @@ export const getProviderSpend = (results: ExtendedDailyData[]): ProviderSpendRow
           failed_requests: 0,
           tokens: 0,
           subscription_covered: covered.has(provider),
+          provider_name: covered.get(provider) ?? provider,
         };
       }
       try {
