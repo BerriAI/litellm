@@ -1,3 +1,4 @@
+pub mod active_teams;
 pub mod auth_cache;
 mod codec;
 pub mod deployment_health;
