@@ -6683,16 +6683,20 @@ async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrot
     ],
 )
 async def test_nonstreaming_response_model_echoes_the_path_model_when_the_body_has_none(
-    monkeypatch, body, route_type, metadata, expected
-):
+    monkeypatch: pytest.MonkeyPatch,
+    body: dict[str, object],
+    route_type: Literal["acompletion", "atext_completion"],
+    metadata: dict[str, object],
+    expected: str,
+) -> None:
     import litellm.proxy.common_request_processing as cpr
 
-    async def llm():
+    async def llm() -> litellm.ModelResponse:
         return litellm.ModelResponse(
             model="gpt-4o-2024-08-06", choices=[{"message": {"role": "assistant", "content": "pong"}}]
         )
 
-    async def fake_route_request(**_kwargs):
+    async def fake_route_request(**_kwargs: object) -> Coroutine[object, object, litellm.ModelResponse]:
         return llm()
 
     logging_obj = MagicMock(litellm_call_id="call-id", defer_async_logging=False)
