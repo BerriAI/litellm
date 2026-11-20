@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from importlib import import_module
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -298,6 +299,28 @@ def test_redis_semantic_cache_matches_bytes_cache_key():
         cache_hit={RedisSemanticCache.CACHE_KEY_FIELD_NAME: b"test_key"},
         key="test_key",
     )
+
+
+_STORED_RESPONSE: Final = {"content": "Paris", "finish_reason": None, "cached": True}
+
+
+@pytest.mark.parametrize(
+    ("cached_response", "expected"),
+    [
+        (str(_STORED_RESPONSE), _STORED_RESPONSE),
+        (str(_STORED_RESPONSE).encode("utf-8"), _STORED_RESPONSE),
+        ("{'content': 'Paris'", None),
+    ],
+    ids=["python_repr", "python_repr_bytes", "unparseable"],
+)
+def test_redis_semantic_cache_reads_back_a_value_stored_as_its_python_repr(
+    cached_response: str | bytes, expected: dict[str, object] | None
+):
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+
+    assert redis_semantic_cache._get_cache_logic(cached_response) == expected
 
 
 def test_redis_semantic_cache_rejects_pre_isolation_unscoped_hit():
@@ -1407,10 +1430,10 @@ def test_redis_semantic_cache_defaults_embedding_timeout():
 
 @pytest.mark.asyncio
 async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -1427,7 +1450,7 @@ async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")
 
-    embedding, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(text * 100))
+    embedding, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(uncounted_text()))
 
     assert embedding == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5

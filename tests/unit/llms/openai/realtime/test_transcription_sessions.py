@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-
+import litellm
 from litellm.llms.azure.realtime.http_transformation import AzureRealtimeHTTPConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -21,9 +21,7 @@ from litellm.types.realtime import RealtimeTranscriptionSessionRequest
 def test_openai_transcription_session_url():
     cfg = OpenAIRealtimeHTTPConfig()
     assert (
-        cfg.get_transcription_session_url(
-            api_base="https://api.openai.com", model="gpt-realtime-whisper"
-        )
+        cfg.get_transcription_session_url(api_base="https://api.openai.com", model="gpt-realtime-whisper")
         == "https://api.openai.com/v1/realtime/transcription_sessions"
     )
 
@@ -32,24 +30,36 @@ def test_openai_transcription_session_url_strips_trailing_v1():
     """A /v1 suffix must not be duplicated in the path."""
     cfg = OpenAIRealtimeHTTPConfig()
     assert (
-        cfg.get_transcription_session_url(
-            api_base="https://api.openai.com/v1", model="gpt-realtime-whisper"
-        )
+        cfg.get_transcription_session_url(api_base="https://api.openai.com/v1", model="gpt-realtime-whisper")
         == "https://api.openai.com/v1/realtime/transcription_sessions"
     )
 
 
-def test_azure_transcription_session_url_uses_deployment_and_api_version():
+@pytest.mark.parametrize(
+    "api_base",
+    ["https://my.openai.azure.com", "https://my.openai.azure.com/openai", "https://my.openai.azure.com/openai/v1/"],
+)
+def test_azure_transcription_session_url_uses_deployment_and_api_version(api_base: str):
     cfg = AzureRealtimeHTTPConfig()
     url = cfg.get_transcription_session_url(
-        api_base="https://my.openai.azure.com",
+        api_base=api_base,
         model="whisper-deploy",
         api_version="2025-04-01-preview",
     )
-    assert (
-        url
-        == "https://my.openai.azure.com/openai/realtime/transcription_sessions?api-version=2025-04-01-preview"
-    )
+    assert url == "https://my.openai.azure.com/openai/realtime/transcription_sessions?api-version=2025-04-01-preview"
+
+
+@pytest.mark.parametrize("api_version", [None, "v1", "latest", "preview"])
+@pytest.mark.parametrize("model", ["gpt-realtime-2.1", "gpt-realtime-2", "gpt-realtime-2-2026-05-06"])
+def test_azure_ga_realtime_http_urls(api_version, model: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    cfg = AzureRealtimeHTTPConfig()
+    base = "https://my.openai.azure.com"
+
+    assert cfg.get_complete_url(base, model, api_version) == (f"{base}/openai/v1/realtime/client_secrets")
+    assert cfg.get_realtime_calls_url(base, model, api_version) == (f"{base}/openai/v1/realtime/calls")
+    litellm.get_model_info.cache_clear()
 
 
 def test_request_resolves_model_returns_none_when_both_absent():
@@ -142,6 +152,27 @@ async def test_client_secret_handler_still_targets_client_secrets_url():
 
 
 @pytest.mark.asyncio
+async def test_azure_client_secret_routes_on_a_provider_qualified_session_model():
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_client = MagicMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    result = await litellm.acreate_realtime_client_secret(
+        session={"type": "realtime", "model": "azure/gpt-realtime-2.1"},
+        api_base="https://my.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="v1",
+        client=mock_client,
+    )
+
+    assert result is mock_response
+    request = mock_client.post.call_args.kwargs
+    assert request["url"] == "https://my.openai.azure.com/openai/v1/realtime/client_secrets"
+    assert request["headers"]["api-key"] == "azure-test-key"
+    assert request["json"]["session"]["model"] == "gpt-realtime-2.1"
+
+
+@pytest.mark.asyncio
 async def test_sdk_fn_routes_openai_transcription_session(monkeypatch):
     """
     litellm.acreate_realtime_transcription_session resolves the OpenAI provider
@@ -169,18 +200,14 @@ async def test_sdk_fn_routes_openai_transcription_session(monkeypatch):
     assert kwargs["url"].endswith("/v1/realtime/transcription_sessions")
     # The litellm-only routing hint must not be forwarded upstream.
     assert "model" not in kwargs["json"]
-    assert kwargs["json"]["input_audio_transcription"] == {
-        "model": "gpt-realtime-whisper"
-    }
+    assert kwargs["json"]["input_audio_transcription"] == {"model": "gpt-realtime-whisper"}
 
 
 def test_append_query_params_skips_existing_keys():
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
     url = "wss://example.com/v1/realtime?model=gpt-4o"
-    result = BaseLLMHTTPHandler._append_query_params(
-        url, {"model": "ignored", "intent": "transcription"}
-    )
+    result = BaseLLMHTTPHandler._append_query_params(url, {"model": "ignored", "intent": "transcription"})
     assert "model=ignored" not in result
     assert "intent=transcription" in result
 

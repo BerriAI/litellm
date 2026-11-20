@@ -38,6 +38,7 @@ from litellm.types.extraction import ExtractionRequestBody
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 if sys.version_info >= (3, 14):
     from compression import zstd
@@ -1050,6 +1051,359 @@ def test_images_to_a_text_only_deployment_are_dropped_when_it_drops_params(
     }
 
 
+_CACHE_POLICY: Final = "A defect is damage that makes the item unusable."
+_CACHED_POLICY_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "role": "developer",
+    "content": [
+        {"type": "input_text", "text": _CACHE_POLICY, "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}
+    ],
+}
+_CACHED_POLICY_USER_MESSAGE: Final[Mapping[str, object]] = {**_CACHED_POLICY_MESSAGE, "role": "user"}
+_IMAGE_TEXT_MESSAGE: Final[Mapping[str, object]] = {"type": "message", "role": "user", "content": _IMAGE_TEXT}
+_PREDICATE: Final[Mapping[str, object]] = {
+    "type": "predicate",
+    "name": "is_defect",
+    "instructions": "Is this a defect?",
+}
+
+
+def test_prompt_cache_controls_reach_an_openai_deployment_unchanged(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    _route_decider_to(monkeypatch, {"model": "openai/gpt-6-luna", "api_key": "k"})
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={
+            "model": "gpt-6-luna",
+            "answers": [{**_OPENAI_FORMAT_ANSWERS[0], "name": _PREDICATE["name"]}],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            },
+        }
+    )
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "decider",
+            "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "questions": [_PREDICATE],
+            "prompt_cache_key": "defect-review",
+            "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE],
+        "questions": [_PREDICATE],
+        "prompt_cache_key": "defect-review",
+        "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
+    }
+
+
+def test_prompt_cache_fields_are_refused_by_a_deployment_without_prompt_cache(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key"})
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "decider",
+            "input": [_CACHED_POLICY_USER_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "questions": [_PREDICATE],
+            "prompt_cache_key": "defect-review",
+            "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "['prompt_cache_key', 'prompt_cache_options']" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
+@pytest.mark.parametrize("ttl", ("30m", "1h"), ids=("known_ttl", "unknown_ttl"))
+def test_prompt_cache_controls_are_dropped_by_a_deployment_without_prompt_cache_that_drops_params(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, ttl: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(
+        monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key", "drop_params": True}
+    )
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "decider",
+            "input": [_CACHED_POLICY_USER_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "questions": [_PREDICATE],
+            "prompt_cache_key": "defect-review",
+            "prompt_cache_options": {"mode": "explicit", "ttl": ttl},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": f"{_CACHE_POLICY}\n\n{_IMAGE_TEXT}",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+def test_developer_messages_are_refused_by_a_deployment_without_them(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key"})
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={"model": "decider", "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE], "questions": [_PREDICATE]},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "developer and system messages" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
+_MALFORMED_BREAKPOINT_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "role": "user",
+    "content": [
+        {
+            "type": "input_text",
+            "text": _CACHE_POLICY,
+            "prompt_cache_breakpoint": {"mode": "always"},
+        }
+    ],
+}
+
+
+def test_malformed_prompt_cache_breakpoints_are_ignored_by_a_deployment_without_prompt_cache(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key"})
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "decider",
+            "input": [_MALFORMED_BREAKPOINT_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "questions": [_PREDICATE],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": f"{_CACHE_POLICY}\n\n{_IMAGE_TEXT}",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+def _policy_message_marked(prompt_cache_breakpoint: object) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": _CACHE_POLICY, "prompt_cache_breakpoint": prompt_cache_breakpoint}],
+    }
+
+
+_UNMARKED_POLICY_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "role": "user",
+    "content": [{"type": "input_text", "text": _CACHE_POLICY}],
+}
+_PROMPT_CACHE_FIELDS: Final[Mapping[str, object]] = {
+    "prompt_cache_key": "defect-review",
+    "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
+}
+_MALFORMED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[Mapping[str, object], str, Mapping[str, object]], ...]] = (
+    (
+        {"input": [_MALFORMED_BREAKPOINT_MESSAGE, _IMAGE_TEXT_MESSAGE], **_PROMPT_CACHE_FIELDS},
+        "prompt_cache_breakpoint",
+        {"input": [_UNMARKED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE], **_PROMPT_CACHE_FIELDS},
+    ),
+    (
+        {"input": [_policy_message_marked({"mode": "explicit", "ttl": 30}), _IMAGE_TEXT_MESSAGE]},
+        "prompt_cache_breakpoint",
+        {"input": [_policy_message_marked({"mode": "explicit"}), _IMAGE_TEXT_MESSAGE]},
+    ),
+    (
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": 7},
+        "prompt_cache_key",
+        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": _PROMPT_CACHE_FIELDS["prompt_cache_options"]},
+    ),
+    (
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": "explicit"},
+        "prompt_cache_options",
+        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": _PROMPT_CACHE_FIELDS["prompt_cache_key"]},
+    ),
+    (
+        {
+            **_PROMPT_CACHE_FIELDS,
+            "input": [_IMAGE_TEXT_MESSAGE],
+            "prompt_cache_options": {"mode": "explicit", "ttl": 30},
+        },
+        "prompt_cache_options",
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"mode": "explicit"}},
+    ),
+)
+_MALFORMED_PROMPT_CACHE_IDS: Final = (
+    "breakpoint_mode",
+    "breakpoint_ttl",
+    "non_string_key",
+    "string_options",
+    "options_ttl",
+)
+_UNACCEPTED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[Mapping[str, object], Mapping[str, object]], ...]] = (
+    (
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": "k" * 65},
+        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": _PROMPT_CACHE_FIELDS["prompt_cache_options"]},
+    ),
+    (
+        {
+            **_PROMPT_CACHE_FIELDS,
+            "input": [_IMAGE_TEXT_MESSAGE],
+            "prompt_cache_options": {"mode": "explicit", "ttl": "7d"},
+        },
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"mode": "explicit"}},
+    ),
+    (
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"mode": "always"}},
+        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": _PROMPT_CACHE_FIELDS["prompt_cache_key"]},
+    ),
+    (
+        {
+            **_PROMPT_CACHE_FIELDS,
+            "input": [_IMAGE_TEXT_MESSAGE],
+            "prompt_cache_options": {"mode": "always", "ttl": "12h"},
+        },
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"ttl": "12h"}},
+    ),
+    (
+        {
+            **_PROMPT_CACHE_FIELDS,
+            "input": [_IMAGE_TEXT_MESSAGE],
+            "prompt_cache_options": {"mode": "explicit", "ttl": "12h", "retention": "long"},
+        },
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE]},
+    ),
+    (
+        {"input": [_policy_message_marked({"mode": "explicit", "ttl": "7d"}), _IMAGE_TEXT_MESSAGE]},
+        {"input": [_policy_message_marked({"mode": "explicit"}), _IMAGE_TEXT_MESSAGE]},
+    ),
+    (
+        {"input": [_policy_message_marked({"mode": "explicit", "ttl": "12h", "scope": "org"}), _IMAGE_TEXT_MESSAGE]},
+        {"input": [_policy_message_marked({"mode": "explicit", "ttl": "12h"}), _IMAGE_TEXT_MESSAGE]},
+    ),
+)
+_UNACCEPTED_PROMPT_CACHE_IDS: Final = (
+    "key_over_64_characters",
+    "options_ttl_7d",
+    "options_mode",
+    "options_mode_with_ttl",
+    "options_unknown_key",
+    "breakpoint_ttl_7d",
+    "breakpoint_unknown_key",
+)
+_OPENAI_DECISION_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "gpt-6-luna",
+    "answers": [{**_OPENAI_FORMAT_ANSWERS[0], "name": _PREDICATE["name"]}],
+    "usage": {
+        "input_tokens": _INPUT_TOKENS,
+        "output_tokens": _OUTPUT_TOKENS,
+        "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+    },
+}
+
+
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+@pytest.mark.parametrize(
+    ("request_fields", "field_name", "wire_fields"), _MALFORMED_PROMPT_CACHE_REQUESTS, ids=_MALFORMED_PROMPT_CACHE_IDS
+)
+def test_malformed_prompt_cache_values_are_refused_unless_the_openai_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_drops_params: bool,
+    request_fields: Mapping[str, object],
+    field_name: str,
+    wire_fields: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    _route_decider_to(
+        monkeypatch, {"model": "openai/gpt-6-luna", "api_key": "k", "drop_params": deployment_drops_params}
+    )
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_DECISION_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions", json={"model": "decider", "questions": [_PREDICATE], **request_fields}
+    )
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert field_name in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "questions": [_PREDICATE],
+        **wire_fields,
+    }
+
+
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+@pytest.mark.parametrize(
+    ("request_fields", "drop_params_wire_fields"), _UNACCEPTED_PROMPT_CACHE_REQUESTS, ids=_UNACCEPTED_PROMPT_CACHE_IDS
+)
+def test_prompt_cache_values_openai_rejects_reach_it_as_written_unless_the_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_drops_params: bool,
+    request_fields: Mapping[str, object],
+    drop_params_wire_fields: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    _route_decider_to(
+        monkeypatch, {"model": "openai/gpt-6-luna", "api_key": "k", "drop_params": deployment_drops_params}
+    )
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_DECISION_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions", json={"model": "decider", "questions": [_PREDICATE], **request_fields}
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "questions": [_PREDICATE],
+        **(drop_params_wire_fields if deployment_drops_params else request_fields),
+    }
+
+
 @pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
 def test_malformed_images_are_refused_unless_the_deployment_drops_params(
     client: TestClient,
@@ -1703,7 +2057,7 @@ def test_a_compressed_body_naming_a_model_outside_the_key_is_refused_by_auth(
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", "no-db-needed-for-a-cached-key")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
     upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
 
     response: Final = client.post(
@@ -1887,3 +2241,102 @@ def test_proxy_routes_ollama_decisions_with_optional_authentication(
         else [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
     )
     assert response.json()["answers"] == expected
+
+
+def test_proxy_decisions_dispatches_vercel_ai_gateway_deployment(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    deployment_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gateway-decider",
+                "litellm_params": {"model": "vercel_ai_gateway/openai/gpt-6-luna-decisions"},
+                "model_info": {"mode": "evaluation"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", deployment_router)
+    upstream: Final = respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": "openai/gpt-6-luna-decisions",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            },
+        }
+    )
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "gateway-decider",
+            "input": "The package arrived broken.",
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
+    assert upstream.called
+    assert str(upstream.calls.last.request.url) == "https://ai-gateway.vercel.sh/v1/decisions"
+    assert upstream.calls.last.request.headers["authorization"] == "Bearer gateway-key"
+    assert json.loads(upstream.calls.last.request.content) == {
+        "model": "openai/gpt-6-luna-decisions",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+    gateway_cost: Final = litellm.model_cost["vercel_ai_gateway/openai/gpt-6-luna-decisions"]
+    expected_cost: Final = _INPUT_TOKENS * float(gateway_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        gateway_cost["output_cost_per_token"]
+    )
+    assert expected_cost > 0
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("gateway_cost", ("0.00005722", "0"), ids=("paid_call", "free_call"))
+def test_proxy_decisions_report_the_billed_gateway_charge_in_the_header_and_body(
+    gateway_cost: str,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    monkeypatch.setattr(litellm, "cost_margin_config", {"vercel_ai_gateway": 0.5})
+    deployment_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gateway-decider",
+                "litellm_params": {"model": "vercel_ai_gateway/example/unpriced-decider"},
+                "model_info": {"mode": "evaluation"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", deployment_router)
+    respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": "example/unpriced-decider",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+            "provider_metadata": {"gateway": {"cost": gateway_cost}},
+        }
+    )
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={
+            "model": "gateway-decider",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(response.json()["usage"]["cost"])
+    assert response.json()["usage"]["cost"] == pytest.approx(float(gateway_cost))

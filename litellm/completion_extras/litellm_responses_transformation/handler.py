@@ -11,8 +11,11 @@ from typing import (
     cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
 )
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
+from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
+from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
+from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
@@ -20,15 +23,15 @@ if TYPE_CHECKING:
 
 
 class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
-    model: str
-    messages: list
-    optional_params: dict
-    litellm_params: dict
-    headers: dict
-    model_response: "ModelResponse"
-    logging_obj: "LiteLLMLoggingObj"
-    custom_llm_provider: str
-    encoding: object
+    model: ReadOnly[str]
+    messages: ReadOnly[list]
+    optional_params: ReadOnly[dict[str, object]]
+    litellm_params: ReadOnly[dict[str, object]]
+    headers: ReadOnly[dict]
+    model_response: ReadOnly["ModelResponse"]
+    logging_obj: ReadOnly["LiteLLMLoggingObj"]
+    custom_llm_provider: ReadOnly[str]
+    encoding: ReadOnly[object]
 
 
 def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:
@@ -182,10 +185,14 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
+        logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
-        request_data: Final = self.transformation_handler.transform_request(
+        transformed_request: Final = self.transformation_handler.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -194,17 +201,17 @@ class ResponsesToCompletionBridgeHandler:
             litellm_logging_obj=logging_obj,
             client=kwargs.get("client"),
         )
+        request_data: Final = dict(
+            without_stored_instructions({**transformed_request, "custom_llm_provider": custom_llm_provider})
+        )
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
         # `sanitized_litellm_params` already carries both, so passing them again
         # would raise a duplicate-keyword TypeError.
-        request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
-        result: Final = responses(
-            **request_data,
-        )
+        result: Final = responses(**request_data, **PROMPT_MANAGEMENT_APPLIED)
 
         from litellm.types.utils import ModelResponse
 
@@ -251,7 +258,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, replays_responses_history
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -260,7 +267,8 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
-                replays_openai_history=custom_llm_provider == "openai",
+                replays_openai_history=replays_responses_history(custom_llm_provider),
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -283,11 +291,15 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
+        logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
         try:
-            request_data: Final = self.transformation_handler.transform_request(
+            transformed_request: Final = self.transformation_handler.transform_request(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
@@ -297,17 +309,21 @@ class ResponsesToCompletionBridgeHandler:
             )
         except Exception as e:
             raise e
+        request_data: Final = dict(
+            await awithout_stored_instructions({**transformed_request, "custom_llm_provider": custom_llm_provider})
+        )
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
         # `sanitized_litellm_params` already carries both, so passing them again
         # would raise a duplicate-keyword TypeError.
-        request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
         result: Final = await aresponses(
             **request_data,
+            **PROMPT_MANAGEMENT_APPLIED,
             aresponses=True,
+            _agentic_loop_api_surface=CHAT_COMPLETION_AGENTIC_SURFACE,
         )
 
         from litellm.types.utils import ModelResponse
@@ -355,7 +371,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, replays_responses_history
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -364,7 +380,8 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
-                replays_openai_history=custom_llm_provider == "openai",
+                replays_openai_history=replays_responses_history(custom_llm_provider),
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
