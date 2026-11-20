@@ -4724,6 +4724,14 @@
         "alias_of": "azure_ai/gpt-6.1-terra"
     },
     "azure_ai/gpt-5.6-sol": {
+        "input_cost_per_token_above_272k_tokens": 8e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 3e-05,
+        "input_cost_per_token_above_272k_tokens_flex": 4e-06,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 4e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 5e-06,
+        "output_cost_per_token_above_272k_tokens_flex": 1.5e-05,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_flex": 2.5e-06,
         "cache_creation_input_token_cost_priority": 1e-05,
@@ -4762,6 +4770,14 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure_ai/gpt-5.6-sol-2026-07-09": {
+        "input_cost_per_token_above_272k_tokens": 8e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 3e-05,
+        "input_cost_per_token_above_272k_tokens_flex": 4e-06,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 4e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 5e-06,
+        "output_cost_per_token_above_272k_tokens_flex": 1.5e-05,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_flex": 2.5e-06,
         "cache_creation_input_token_cost_priority": 1e-05,
@@ -4800,6 +4816,14 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure_ai/gpt-5.6-terra": {
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 1.8e-05,
+        "input_cost_per_token_above_272k_tokens_flex": 2e-06,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 2e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-06,
+        "output_cost_per_token_above_272k_tokens_flex": 9e-06,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_flex": 1.25e-06,
         "cache_creation_input_token_cost_priority": 5e-06,
@@ -4838,6 +4862,14 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure_ai/gpt-5.6-terra-2026-07-09": {
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 1.8e-05,
+        "input_cost_per_token_above_272k_tokens_flex": 2e-06,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 2e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-06,
+        "output_cost_per_token_above_272k_tokens_flex": 9e-06,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_flex": 1.25e-06,
         "cache_creation_input_token_cost_priority": 5e-06,
@@ -4876,6 +4908,14 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure_ai/gpt-5.6-luna": {
+        "input_cost_per_token_above_272k_tokens": 4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-08,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-07,
+        "output_cost_per_token_above_272k_tokens": 1.8e-06,
+        "input_cost_per_token_above_272k_tokens_flex": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 2e-08,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-07,
+        "output_cost_per_token_above_272k_tokens_flex": 9e-07,
         "cache_creation_input_token_cost": 2.5e-07,
         "cache_creation_input_token_cost_flex": 1.25e-07,
         "cache_read_input_token_cost": 2e-08,
@@ -4910,6 +4950,14 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure_ai/gpt-5.6-luna-2026-07-09": {
+        "input_cost_per_token_above_272k_tokens": 4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-08,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-07,
+        "output_cost_per_token_above_272k_tokens": 1.8e-06,
+        "input_cost_per_token_above_272k_tokens_flex": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 2e-08,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-07,
+        "output_cost_per_token_above_272k_tokens_flex": 9e-07,
         "cache_creation_input_token_cost": 2.5e-07,
         "cache_creation_input_token_cost_flex": 1.25e-07,
         "cache_read_input_token_cost": 2e-08,
