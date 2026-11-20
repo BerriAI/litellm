@@ -5,7 +5,7 @@ from typing import Final
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.cost_calculator import cost_per_token
@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, insta
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.openai_like.common_utils import resolve_nousresearch_api_key
 
 BASE: Final = "https://inference-api.nousresearch.com/v1"
 MODEL: Final = "google/gemini-4-hydrogen"
@@ -25,6 +26,69 @@ CHAT: Final = {
     "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
 }
 MODELS: Final = tuple(name for name in litellm.model_cost if name.startswith("nousresearch/"))
+
+
+@pytest.mark.parametrize(
+    ("explicit", "environment", "expected"),
+    [("dummy-explicit", "dummy-env", "dummy-explicit"), (None, "dummy-env", "dummy-env")],
+)
+def test_nous_credential_resolution(
+    explicit: str | None, environment: str, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NOUSRESEARCH_API_KEY", environment)
+    assert resolve_nousresearch_api_key(explicit, MODEL) == expected
+
+
+@pytest.mark.parametrize("client", [None, object()])
+def test_nous_credential_resolution_requires_authentication(client: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NOUSRESEARCH_API_KEY", raising=False)
+    with pytest.raises(litellm.AuthenticationError, match="NOUSRESEARCH_API_KEY"):
+        resolve_nousresearch_api_key(None, MODEL, client=client)
+
+
+@pytest.mark.parametrize("key", ["dummy-client", ""])
+def test_nous_credential_resolution_checks_sync_client_authentication(
+    key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NOUSRESEARCH_API_KEY", raising=False)
+    with OpenAI(api_key=key, base_url="https://nous.invalid/v1") as client:
+        if key:
+            assert resolve_nousresearch_api_key(None, MODEL, client=client) is None
+        else:
+            with pytest.raises(litellm.AuthenticationError, match="NOUSRESEARCH_API_KEY"):
+                resolve_nousresearch_api_key(None, MODEL, client=client)
+        with pytest.raises(litellm.AuthenticationError, match="NOUSRESEARCH_API_KEY"):
+            resolve_nousresearch_api_key(None, MODEL, client=client, is_async=True)
+
+
+@pytest.mark.asyncio
+async def test_nous_credential_resolution_accepts_async_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NOUSRESEARCH_API_KEY", raising=False)
+    async with AsyncOpenAI(api_key="dummy-client", base_url="https://nous.invalid/v1") as client:
+        assert resolve_nousresearch_api_key(None, MODEL, client=client, is_async=True) is None
+        with pytest.raises(litellm.AuthenticationError, match="NOUSRESEARCH_API_KEY"):
+            resolve_nousresearch_api_key(None, MODEL, client=client)
+
+
+def test_nous_credential_resolution_accepts_client_token_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NOUSRESEARCH_API_KEY", raising=False)
+    with OpenAI(api_key=lambda: "dummy-token", base_url="https://nous.invalid/v1") as client:
+        assert resolve_nousresearch_api_key(None, MODEL, client=client) is None
+
+
+@pytest.mark.parametrize("name", ["Authorization", "X-Api-Key"])
+def test_nous_credential_resolution_accepts_explicit_native_headers(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NOUSRESEARCH_API_KEY", raising=False)
+    assert resolve_nousresearch_api_key(None, MODEL, headers={name: "dummy-auth"}) is None
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": ""}, {"Content-Type": "application/json"}])
+def test_nous_credential_resolution_rejects_missing_native_authentication(
+    headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NOUSRESEARCH_API_KEY", raising=False)
+    with pytest.raises(litellm.AuthenticationError, match="NOUSRESEARCH_API_KEY"):
+        resolve_nousresearch_api_key(None, MODEL, headers=headers)
 
 
 def test_unlisted_model_forwards_tools() -> None:
