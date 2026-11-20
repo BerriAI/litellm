@@ -1647,15 +1647,18 @@ def _pricing_identity(request: Mapping[str, object], logger: object) -> PricingI
     provider: Final = _resolved_provider(request)
     litellm_params: Final = as_str_mapping(logger.model_call_details.get("litellm_params")) or {}
     data_residency: Final = litellm_params.get("data_residency")
+    model: Final = _requested_model(request)
     return PricingIdentity(
         deployment_id=logger.get_router_model_id(),
         base_model=get_base_model_from_metadata(model_call_details=logger.model_call_details),
-        region=_resolve_mantle_region_for_cost(custom_llm_provider=provider, litellm_params=litellm_params),
+        region=_resolve_mantle_region_for_cost(
+            custom_llm_provider=provider, litellm_params=litellm_params, model=model
+        ),
         vertex_location=resolve_vertex_location_for_cost(
             custom_llm_provider=provider,
             litellm_params=litellm_params,
             optional_params=None,
-            model=_requested_model(request),
+            model=model,
         ),
         data_residency=data_residency if isinstance(data_residency, str) else None,
     )

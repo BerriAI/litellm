@@ -4100,6 +4100,17 @@ _ROUTED: Final = MappingProxyType({"metadata": {"model_info": {"id": "deployment
                 "data_residency": "EU",
             },
         ),
+        (
+            _MANTLE_ROUTE,
+            {"aws_region_name": "us-gov-west-1"},
+            {
+                "deployment_id": None,
+                "base_model": None,
+                "region": "us-gov-west-1",
+                "vertex_location": None,
+                "data_residency": None,
+            },
+        ),
         ("anthropic/claude-opus-5-5", {**_ROUTED, "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, None),
         (
             "anthropic/claude-opus-5-5",
