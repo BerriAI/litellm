@@ -3571,6 +3571,13 @@ class ProxyLogging:
         if data is None:
             return None
 
+        from litellm.proxy.proxy_server import current_general_settings
+
+        if not skip_guardrails and current_general_settings().get("reject_unregistered_guardrails") is True:
+            from litellm.proxy.guardrails.guardrail_helpers import reject_unregistered_request_guardrails
+
+            reject_unregistered_request_guardrails(data)
+
         if not guardrails_only:
             seed_request_identity(
                 user_api_key_dict,

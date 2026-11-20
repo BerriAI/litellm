@@ -116,6 +116,7 @@ async def should_proceed_based_on_api_key(user_api_key_dict: UserAPIKeyAuth, gua
 
 _GUARDRAIL_ENTRIES: Final = TypeAdapter(list[str | dict[str, object]])
 _MODIFY_GUARDRAILS_PERMISSION: Final = TypeAdapter(dict[Literal["modify_guardrails"], StrictBool])
+_REQUEST_BUCKET: Final = TypeAdapter(Mapping[str, object])
 
 
 def _guardrail_entry_names(entries: object) -> frozenset[str] | None:
@@ -142,13 +143,44 @@ def _malformed_guardrails_message(entries: object) -> str:
     )
 
 
-async def registered_guardrail_names(names: frozenset[str], prisma_client: "PrismaClient | None") -> frozenset[str]:
-    loaded_names: Final = frozenset(
+def loaded_guardrail_names() -> frozenset[str]:
+    return frozenset(
         callback.guardrail_name
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
-        if isinstance(callback, CustomGuardrail)
+        if isinstance(callback, CustomGuardrail) and callback.guardrail_name
     )
-    loaded: Final = names & loaded_names
+
+
+def _listed_guardrail_names(bucket: object) -> frozenset[str]:
+    try:
+        fields: Final = _REQUEST_BUCKET.validate_python(bucket)
+    except ValidationError:
+        return frozenset()
+    return _guardrail_entry_names(fields.get("guardrails")) or frozenset()
+
+
+def reject_unregistered_request_guardrails(data: Mapping[str, object]) -> None:
+    requested: Final = frozenset(
+        chain.from_iterable(
+            _listed_guardrail_names(bucket) for bucket in (data, data.get("metadata"), data.get("litellm_metadata"))
+        )
+    )
+    unregistered: Final = requested - loaded_guardrail_names()
+    if not unregistered:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"Unknown guardrail(s): {', '.join(sorted(unregistered))}. "
+            + "The request names guardrails that are not registered on this proxy, and "
+            + "general_settings.reject_unregistered_guardrails is on. "
+            + "Check the names against /v2/guardrails/list."
+        },
+    )
+
+
+async def registered_guardrail_names(names: frozenset[str], prisma_client: "PrismaClient | None") -> frozenset[str]:
+    loaded: Final = names & loaded_guardrail_names()
     missing: Final = names - loaded
     if not missing or prisma_client is None:
         return loaded

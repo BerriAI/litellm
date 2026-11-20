@@ -2612,6 +2612,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
 
+    reject_unregistered_guardrails: bool = Field(
+        False,
+        description="Return 400 for a request whose merged guardrails (request, key, team, project, policy and model level) name a guardrail that is not registered on the proxy, instead of serving it without that guardrail.",
+    )
+
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",

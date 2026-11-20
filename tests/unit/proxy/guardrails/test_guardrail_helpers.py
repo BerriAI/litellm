@@ -1,13 +1,14 @@
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 
 DB_ROWS: Final = MappingProxyType({"valid": "active", "also-valid": "active", "submitted": "pending_review"})
@@ -226,3 +227,67 @@ async def test_other_stored_dicts_fail_loudly_since_they_never_run(entries: dict
 
     assert exc.value.status_code == 400
     assert exc.value.detail["error"].startswith("Invalid guardrail detected - {")
+
+
+async def _pre_call(
+    data: dict[str, object], reject_unregistered: bool, skip_guardrails: bool = False
+) -> dict[str, object] | None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import CallTypes
+    from litellm.proxy.utils import ProxyLogging
+
+    ProxyLogging._callback_capabilities_cache.clear()
+    with patch(
+        "litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": reject_unregistered}
+    ):
+        return await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            data=data,
+            call_type=CallTypes.acompletion.value,
+            skip_guardrails=skip_guardrails,
+        )
+
+
+def _request(metadata: dict[str, object]) -> dict[str, object]:
+    return {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "metadata": metadata}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_rejects_a_named_guardrail_when_none_are_registered() -> None:
+    with patch("litellm.callbacks", []), pytest.raises(HTTPException) as exc:
+        await _pre_call(_request({"guardrails": ["deleted-guardrail"]}), reject_unregistered=True)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"].startswith("Unknown guardrail(s): deleted-guardrail.")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_names_only_the_unregistered_guardrails(guardrail_loaded_here: str) -> None:
+    data: Final = _request({"guardrails": [guardrail_loaded_here, {"typo": {}}]})
+    data["litellm_metadata"] = {"guardrails": ["other-typo"]}
+
+    with pytest.raises(HTTPException) as exc:
+        await _pre_call(data, reject_unregistered=True)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"].startswith("Unknown guardrail(s): other-typo, typo.")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_serves_a_request_whose_guardrails_are_all_registered(guardrail_loaded_here: str) -> None:
+    data: Final = _request({"guardrails": [guardrail_loaded_here]})
+
+    assert await _pre_call(data, reject_unregistered=True) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reject_unregistered", "skip_guardrails"), ((False, False), (True, True)), ids=("flag_off", "skip_guardrails")
+)
+async def test_pre_call_serves_unregistered_guardrails_without_the_flag_or_when_skipping(
+    reject_unregistered: bool, skip_guardrails: bool
+) -> None:
+    data: Final = _request({"guardrails": ["deleted-guardrail"]})
+
+    with patch("litellm.callbacks", []):
+        assert await _pre_call(data, reject_unregistered, skip_guardrails) is not None
