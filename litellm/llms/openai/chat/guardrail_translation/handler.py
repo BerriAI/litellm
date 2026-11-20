@@ -293,12 +293,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["model"] = model
 
             original_structured_messages: Final = inputs.get("structured_messages")
-            guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
-                request_data=data,
-                input_type="request",
-                logging_obj=litellm_logging_obj,
-            )
+            try:
+                guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
+                    inputs=inputs,
+                    request_data=data,
+                    input_type="request",
+                    logging_obj=litellm_logging_obj,
+                )
+            except BaseException:
+                for row in commentary_rows:
+                    messages[row.index]["content"] = row.original
+                raise
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
@@ -336,6 +341,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:
                     if len(guardrailed_texts) != len(text_task_mappings):
+                        for row in commentary_rows:
+                            messages[row.index]["content"] = row.original
                         raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
                     await self._apply_guardrail_responses_to_input_texts(
                         messages=messages,

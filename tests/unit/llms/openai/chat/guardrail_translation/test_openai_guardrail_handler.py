@@ -5,6 +5,7 @@ Tests the handler's ability to process input/output for Chat Completions API
 with guardrail transformations, including tool calls.
 """
 
+import asyncio
 import copy
 import json
 from collections.abc import Iterable, Mapping
@@ -2936,3 +2937,54 @@ async def test_bridged_commentary_follows_the_guardrail_role_scope() -> None:
     assert guardrail.last_inputs is not None
     assert guardrail.last_inputs["texts"] == ["result"]
     assert messages[1] == original
+
+
+class _Blocked(Exception):
+    pass
+
+
+class _FailingReadingGuardrail(_ReadingGuardrail):
+    """Reads like a detector, then raises: a block or a cancelled guardrail call."""
+
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self.error: Final = error
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error", [_Blocked("blocked"), asyncio.CancelledError()], ids=["guardrail-raises", "guardrail-cancelled"]
+)
+@pytest.mark.asyncio
+async def test_a_failed_guardrail_leaves_a_reusable_request_with_its_commentary_once(error: BaseException) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    guardrail: Final = _FailingReadingGuardrail(error)
+    data: Final = dict(_bridged_turn_request())
+    original: Final = copy.deepcopy(data)
+
+    for _attempt in range(2):
+        with pytest.raises(type(error)) as raised:
+            await OpenAIChatCompletionsHandler().process_input_messages(data, guardrail)
+        assert raised.value is error
+        assert guardrail.texts == ("weather?", "checking parisit rains")
+        assert tuple(chain.from_iterable(map(_row_texts, guardrail.rows))) == guardrail.texts
+        assert data == original
+
+    messages: Final = data["messages"]
+    assert isinstance(messages, list)
+    sent, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        messages, replay_openai_history=True
+    )
+    assert json.dumps(sent).count("checking") == 1
