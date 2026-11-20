@@ -14,6 +14,7 @@ from typing import Any, Final, cast
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -816,7 +817,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         anthropic_usage: Final = self.translate_responses_api_usage_to_anthropic_usage(response.usage)
 
-        return AnthropicMessagesResponse(
+        translated_response: Final = AnthropicMessagesResponse(
             id=response.id,
             type="message",
             role="assistant",
@@ -827,3 +828,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             stop_reason=stop_reason,
             stop_details=(refusal_stop_details(refusal_text) if stop_reason == "refusal" else None),
         )
+        hidden_params: Final = get_hidden_params(response)
+        if hidden_params:
+            set_hidden_params(translated_response, dict(hidden_params))
+        return translated_response
