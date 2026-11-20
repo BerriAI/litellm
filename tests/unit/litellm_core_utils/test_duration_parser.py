@@ -101,7 +101,6 @@ class TestStandardizedResetTime(unittest.TestCase):
         self.assertEqual(ist_result, ist_expected)
 
         # Test hourly reset in different timezones
-        # US/Pacific (UTC-7): 3:30 PM, so next 2h reset is 4:00 PM
         pacific = ZoneInfo("US/Pacific")
         pacific_expected = datetime(2023, 5, 15, 16, 0, 0, tzinfo=pacific)
         pacific_result = get_next_standardized_reset_time("2h", base_time, "US/Pacific")
@@ -551,6 +550,76 @@ def test_a_month_starting_now_matches_duration_in_seconds():
         assert duration_in_seconds("1mo") == duration_in_seconds_from(now, "1mo")
 
 
+@pytest.mark.parametrize(
+    "duration,next_date",
+    (("1d", (2026, 11, 2)), ("30d", (2026, 12, 1)), ("1mo", (2026, 12, 1))),
+)
+@pytest.mark.parametrize("fold", (0, 1))
+def test_calendar_reset_uses_only_the_first_occurrence(duration: str, next_date: tuple[int, int, int], fold: int) -> None:
+    zone: Final = ZoneInfo("America/New_York")
+    now: Final = datetime(2026, 11, 1, 1, 15, tzinfo=zone, fold=fold)
+    expected: Final = datetime(*(next_date if fold else (2026, 11, 1)), 1, 30, tzinfo=zone)
+
+    result: Final = get_next_standardized_reset_time(duration, now, zone.key, time(1, 30))
+
+    assert result.astimezone(timezone.utc) == expected.astimezone(timezone.utc)
+
+
+@pytest.mark.parametrize("hour,minute,next_day", ((1, 45, False), (3, 15, False), (3, 30, True), (3, 45, True)))
+def test_daily_reset_resolves_the_spring_gap_before_comparing(hour: int, minute: int, next_day: bool) -> None:
+    zone: Final = ZoneInfo("America/New_York")
+    now: Final = datetime(2026, 3, 8, hour, minute, tzinfo=zone)
+    expected: Final = datetime(2026, 3, 9, 2, 30, tzinfo=zone) if next_day else datetime(2026, 3, 8, 3, 30, tzinfo=zone)
+
+    result: Final = get_next_standardized_reset_time("1d", now, zone.key, time(2, 30))
+
+    assert result.astimezone(timezone.utc) == expected.astimezone(timezone.utc)
+    assert result == result.astimezone(timezone.utc).astimezone(zone)
+
+
+@pytest.mark.parametrize(
+    "duration,reset_at,wall_time,expected",
+    (
+        ("1d", "2026-11-02T01:30:00-05:00", time(1, 30), "2026-11-01T01:30:00-04:00"),
+        ("1mo", "2026-12-01T01:30:00-05:00", time(1, 30), "2026-11-01T01:30:00-04:00"),
+        ("30d", "2026-03-01T02:30:00-05:00", time(2, 30), "2026-02-01T02:30:00-05:00"),
+        ("1d", "2026-03-09T02:30:00-04:00", time(2, 30), "2026-03-08T03:30:00-04:00"),
+        ("1d", "2026-03-08T03:30:00-04:00", time(2, 30), "2026-03-07T02:30:00-05:00"),
+        ("1mo", "2026-03-15T09:15:00-04:00", time(2, 30), "2026-02-15T09:15:00-05:00"),
+        ("1h", "2026-11-01T01:30:00-05:00", time(1, 30), "2026-11-01T01:30:00-04:00"),
+    ),
+)
+def test_window_start_keeps_calendar_rules_and_elapsed_units(
+    duration: str, reset_at: str, wall_time: time, expected: str
+) -> None:
+    result: Final = get_budget_window_start(
+        duration, datetime.fromisoformat(reset_at), "America/New_York", wall_time
+    )
+
+    assert result.astimezone(timezone.utc) == datetime.fromisoformat(expected)
+
+
+def test_window_end_after_a_spring_gap_returns_to_the_configured_wall_time() -> None:
+    result: Final = get_budget_window_end(
+        "1d",
+        datetime.fromisoformat("2026-03-08T07:30:00+00:00"),
+        "America/New_York",
+        reset_time_of_day=time(2, 30),
+    )
+
+    assert result == datetime.fromisoformat("2026-03-09T06:30:00+00:00")
+
+
+def test_daily_reset_resolves_a_half_hour_gap() -> None:
+    zone: Final = ZoneInfo("Australia/Lord_Howe")
+    now: Final = datetime(2026, 10, 4, 2, 35, tzinfo=zone)
+    expected: Final = datetime(2026, 10, 4, 2, 45, tzinfo=zone)
+
+    result: Final = get_next_standardized_reset_time("1d", now, zone.key, time(2, 15))
+
+    assert result.astimezone(timezone.utc) == expected.astimezone(timezone.utc)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -660,6 +729,8 @@ def test_saved_elapsed_schedules_do_not_shorten_at_local_unit_rollover(
         ("America/New_York", "2026-11-01T05:30:00Z", "2026-11-02T00:00:00-05:00"),
         ("America/New_York", "2026-11-01T06:30:00Z", "2026-11-02T00:00:00-05:00"),
         ("America/New_York", "2026-03-08T06:30:00Z", "2026-03-09T00:00:00-04:00"),
+        ("America/Santiago", "2026-09-05T12:00:00Z", "2026-09-06T01:00:00-03:00"),
+        ("America/Havana", "2026-03-08T03:00:00Z", "2026-03-08T01:00:00-04:00"),
     ),
 )
 def test_whole_day_hour_durations_reset_at_local_midnight(duration: str, zone: str, now: str, expected: str) -> None:
@@ -667,7 +738,7 @@ def test_whole_day_hour_durations_reset_at_local_midnight(duration: str, zone: s
     reset: Final = get_next_standardized_reset_time(
         duration, current, zone, time(1, 30), elapsed_anchor=datetime(2020, 1, 1, 7, 13, tzinfo=timezone.utc)
     )
-    start: Final = get_budget_window_start(duration, reset)
+    start: Final = get_budget_window_start(duration, reset, zone)
     previous_midnight: Final = datetime(
         current.astimezone(ZoneInfo(zone)).year, current.astimezone(ZoneInfo(zone)).month,
         current.astimezone(ZoneInfo(zone)).day, tzinfo=ZoneInfo(zone),

@@ -73,11 +73,17 @@ def _rebase_window(
         after: Final = BudgetLimitEntry.model_validate(current_window)
     except ValidationError:
         return window
-    if after.reset_at is None or before.reset_at == after.reset_at:
+    if after.reset_at is None or (before.reset_at == after.reset_at and before.window_start == after.window_start):
         return window
-    if before.model_dump(exclude={"reset_at"}) != after.model_dump(exclude={"reset_at"}):
+    if before.model_dump(exclude={"reset_at", "window_start"}) != after.model_dump(
+        exclude={"reset_at", "window_start"}
+    ):
         return window
-    return {**window, "reset_at": after.reset_at.isoformat()}
+    return {
+        **{key: value for key, value in window.items() if key not in ("reset_at", "window_start")},
+        "reset_at": after.reset_at.isoformat(),
+        **({"window_start": after.window_start.isoformat()} if after.window_start is not None else {}),
+    }
 
 
 async def rebase_budget_limits_update(
