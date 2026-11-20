@@ -15,7 +15,12 @@ import {
   isClientForwardedTokenMode,
   preservedAdminCredentials,
 } from "@/components/mcp_tools/types";
-import { type AdditionalAuthDraft, additionalAuthEntry, firstInvalidProfileId } from "./additionalAuthProfiles";
+import {
+  type AdditionalAuthDraft,
+  additionalAuthEntry,
+  firstInvalidProfileId,
+  invalidProfileMessage,
+} from "./additionalAuthProfiles";
 import { AUTH_TYPES_REQUIRING_CREDENTIALS, reduceStaticHeaders } from "./createServerPayload";
 import { TOOL_DISPLAY_NAME_PATTERN, normalizeEnvVars } from "./utils";
 
@@ -138,7 +143,7 @@ export const editPayloadErrorMessage = (
     case "invalid_token_validation_json":
       return t("mcpServers.editServerPayload.errors.invalidTokenValidationJson");
     case "invalid_additional_auth":
-      return t("mcpServers.additionalAuth.errors.invalidProfile", { id: result.profileId });
+      return invalidProfileMessage(result.profileId, t);
     default:
       return assertNever(result);
   }

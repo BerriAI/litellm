@@ -16,6 +16,7 @@ const fullSnapshot: CreateUiSnapshot = {
   aliasManuallyEdited: true,
   logoUrl: "https://cdn/logo.png",
   authorizedIdentity: "identity-abc",
+  additionalAuth: [],
 };
 
 const seedRaw = (value: unknown) => setSecureItem(STORAGE_KEY, JSON.stringify(value));

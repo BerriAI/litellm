@@ -1,4 +1,4 @@
-import type { ParseKeys } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import { v4 as uuidv4 } from "uuid";
 import { AUTH_TYPE, MCP_OAUTH2_FLOW_M2M, type AdditionalAuthProfile } from "@/components/mcp_tools/types";
 import { ApiError } from "@/lib/http/client";
@@ -73,6 +73,9 @@ export const draftFromProfile = (profile: AdditionalAuthProfile): AdditionalAuth
 export const draftsFromProfiles = (profiles: readonly AdditionalAuthProfile[] | null | undefined) =>
   (profiles ?? []).map(draftFromProfile);
 
+export const draftsWithoutSecrets = (drafts: readonly AdditionalAuthDraft[]): readonly AdditionalAuthDraft[] =>
+  drafts.map((draft) => ({ ...draft, client_secret: "", authentication_token: "" }));
+
 const ifSet = (key: string, value: string): Record<string, string> =>
   value.trim() === "" ? {} : { [key]: value.trim() };
 
@@ -103,13 +106,16 @@ const draftToProfile = (draft: AdditionalAuthDraft): AdditionalAuthProfile => {
     ...ifSet("client_id", draft.client_id),
     ...secretIfSet("client_secret", draft.client_secret),
     ...ifSet("token_url", draft.token_url),
-    ...(scopes.length > 0 || !draft.isNew ? { scopes: [...scopes] } : {}), // an omitted key keeps the stored value
+    ...(scopes.length > 0 || !draft.isNew ? { scopes: [...scopes] } : {}),
     ...(tokenEndpointAuthMethod || !draft.isNew ? { token_endpoint_auth_method: tokenEndpointAuthMethod ?? null } : {}),
   };
 };
 
 export const draftsToProfiles = (drafts: readonly AdditionalAuthDraft[]): readonly AdditionalAuthProfile[] =>
   drafts.map(draftToProfile);
+
+export const sameProfileDrafts = (a: readonly AdditionalAuthDraft[], b: readonly AdditionalAuthDraft[]): boolean =>
+  JSON.stringify(draftsToProfiles(a)) === JSON.stringify(draftsToProfiles(b));
 
 const REQUIRED_WHEN_NEW: Readonly<Record<ProfileKind, readonly (keyof AdditionalAuthDraft)[]>> = {
   client_credentials: ["client_id", "client_secret", "token_url"],
@@ -133,6 +139,11 @@ export const profileProblem = (
 
 export const firstInvalidProfileId = (drafts: readonly AdditionalAuthDraft[]): string | undefined =>
   drafts.find((draft) => profileProblem(draft, drafts) !== null)?.id;
+
+export const invalidProfileMessage = (profileId: string, t: TFunction): string =>
+  profileId === ""
+    ? t("mcpServers.additionalAuth.errors.missingProfileId")
+    : t("mcpServers.additionalAuth.errors.invalidProfile", { id: profileId });
 
 export const additionalAuthEntry = (
   drafts: readonly AdditionalAuthDraft[] | null | undefined,
