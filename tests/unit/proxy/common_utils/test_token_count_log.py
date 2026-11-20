@@ -1,12 +1,18 @@
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Final
 
 import pytest
 from fastapi import HTTPException, Request, Response
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
-from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, logged_token_count
+from litellm.proxy.common_utils.token_count_log import (
+    answered_with_litellm_call_id,
+    logged_token_count,
+    rejected_token_count,
+)
 from litellm.types.utils import TokenCountResponse
 
 
@@ -50,6 +56,22 @@ async def test_a_cancelled_count_writes_no_line(
         await logged_token_count(_count_ending_in(asyncio.CancelledError()), "count-log-cancelled", "count-log-gpt", None)
 
     assert token_count_log_lines() == ()
+
+
+@pytest.mark.asyncio
+async def test_server_errors_remain_visible_at_warning(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        with pytest.raises(_TokenizerPanic):
+            await logged_token_count(_count_ending_in(_TokenizerPanic()), "count-panic", "count-model", "deployment")
+        rejected_token_count(Response(status_code=503), "count-unavailable", "count-model")
+        rejected_token_count(Response(status_code=429), "count-rate-limited", "count-model")
+
+    assert [(line["litellm_call_id"], line["status_code"]) for line in token_count_log_lines()] == [
+        ("count-panic", 500),
+        ("count-unavailable", 503),
+    ]
 
 
 @pytest.mark.asyncio
