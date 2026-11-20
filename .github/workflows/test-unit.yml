@@ -282,6 +282,7 @@ jobs:
               tests/unit/llms/databricks
               tests/unit/llms/dataforseo
               tests/unit/llms/datarobot
+              tests/unit/llms/deapi
               tests/unit/llms/deepagents
               tests/unit/llms/deepgram
               tests/unit/llms/deepinfra
