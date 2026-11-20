@@ -94,6 +94,7 @@ from litellm.proxy.common_utils.openai_error_payload import openai_error_param, 
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
+from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
@@ -6026,7 +6027,7 @@ async def delete_key_aliases(
     )
 
 
-async def rotate_master_key(
+async def reencrypt_credentials_for_aes_migration(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -6195,6 +6196,17 @@ async def rotate_master_key(
                 # Continue with next credential instead of failing entire rotation
                 continue
         verbose_proxy_logger.debug("Successfully re-encrypted %s credentials with new master key", len(credentials))
+
+
+async def rotate_master_key(prisma_client: PrismaClient, current_master_key: str, new_master_key: str) -> None:
+    if SALT_KEY_ENV_VAR in os.environ or current_master_key == new_master_key:
+        return
+    async with prisma_client.writer_db.tx(timeout=timedelta(minutes=2)) as tx:
+        result: Final = await reencrypt_stored_values(
+            tx, from_key=current_master_key, to_key=new_master_key, require_unchanged=True, upgrade_legacy_mcp=True
+        )
+        if result is None:
+            raise RuntimeError("Stored secrets changed during master key rotation. Retry with writes paused.")
 
 
 _rotate_master_key: Final = rotate_master_key
@@ -6736,14 +6748,13 @@ async def regenerate_key_fn(
         _is_master_key_valid: Final = is_master_key(api_key=key, _master_key=master_key)
 
         if master_key is not None and data and _is_master_key_valid:
-            if data.new_master_key is None:
+            if not data.new_master_key or not data.new_master_key.strip():
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={"error": "New master key is required."},
                 )
             await rotate_master_key(
                 prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
                 current_master_key=master_key,
                 new_master_key=data.new_master_key,
             )

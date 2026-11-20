@@ -9953,7 +9953,7 @@ async def test_key_does_not_override_explicit_budget_duration():
 
 @pytest.mark.asyncio
 @patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
-async def test_rotate_master_key_reencrypts_model_params_in_place(
+async def test_reencrypt_credentials_for_aes_migration_reencrypts_model_params_in_place(
     mock_rotate_mcp,
 ):
     """
@@ -9969,7 +9969,7 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        rotate_master_key,
+        reencrypt_credentials_for_aes_migration,
     )
 
     # Setup mock prisma client
@@ -10037,7 +10037,7 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
         "litellm.proxy.proxy_server.proxy_config",
         mock_proxy_config,
     ):
-        await rotate_master_key(
+        await reencrypt_credentials_for_aes_migration(
             prisma_client=mock_prisma_client,
             user_api_key_dict=user_api_key_dict,
             current_master_key="sk-old-master-key",
@@ -10074,13 +10074,13 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(monkeypatch):
+async def test_reencrypt_credentials_for_aes_migration_keeps_environment_variables_it_cannot_decrypt(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
-    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.management_endpoints.key_management_endpoints import reencrypt_credentials_for_aes_migration
     from litellm.proxy.proxy_server import ProxyConfig
 
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
@@ -10108,7 +10108,7 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(m
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=prisma_client,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
         current_master_key="sk-old-master-key",
@@ -10125,13 +10125,13 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(m
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(monkeypatch):
+async def test_reencrypt_credentials_for_aes_migration_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
-    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.management_endpoints.key_management_endpoints import reencrypt_credentials_for_aes_migration
     from litellm.proxy.proxy_server import ProxyConfig
 
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
@@ -10153,7 +10153,7 @@ async def test_rotate_master_key_keeps_an_environment_variable_the_read_replica_
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=prisma_client,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
         current_master_key="sk-old-master-key",
@@ -10175,12 +10175,12 @@ def _rotated_value(table: MagicMock, field: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_salt_key(
+async def test_reencrypt_credentials_for_aes_migration_with_a_salt_key_keeps_stored_values_under_the_salt_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
-    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.management_endpoints.key_management_endpoints import reencrypt_credentials_for_aes_migration
     from litellm.proxy.proxy_server import ProxyConfig
     from litellm.types.utils import CredentialItem
 
@@ -10247,7 +10247,7 @@ async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_s
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=prisma_client,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
         current_master_key="sk-old-master-key",
@@ -19403,7 +19403,7 @@ async def test_list_keys_without_expires_param_forwards_none():
 @patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_env_vars_master_key")
 @patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_credentials_master_key")
 @patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
-async def test_rotate_master_key_rotates_sso_identity_assertions(
+async def test_reencrypt_credentials_for_aes_migration_rotates_sso_identity_assertions(
     mock_rotate_mcp_server,
     mock_rotate_mcp_user,
     mock_rotate_env_vars,
@@ -19417,7 +19417,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        rotate_master_key,
+        reencrypt_credentials_for_aes_migration,
     )
 
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
@@ -19452,7 +19452,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         "litellm.proxy.proxy_server.proxy_config",
         mock_proxy_config,
     ):
-        await rotate_master_key(
+        await reencrypt_credentials_for_aes_migration(
             prisma_client=mock_prisma_client,
             user_api_key_dict=user_api_key_dict,
             current_master_key="sk-old-master-key",
@@ -19466,7 +19466,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_rotates_search_tools(monkeypatch):
+async def test_reencrypt_credentials_for_aes_migration_rotates_search_tools(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
@@ -19476,7 +19476,7 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
         encrypt_value_helper,
     )
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        rotate_master_key,
+        reencrypt_credentials_for_aes_migration,
     )
 
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
@@ -19511,7 +19511,7 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
         user_id="test-user",
     )
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=mock_prisma_client,
         user_api_key_dict=user_api_key_dict,
         current_master_key="sk-old-master-key",
@@ -24315,7 +24315,7 @@ async def test_member_key_request_with_the_setting_off_is_refused_without_readin
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
+async def test_reencrypt_credentials_for_aes_migration_reencrypts_guardrail_params(monkeypatch):
     import json
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
@@ -24327,7 +24327,7 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
     )
     from litellm.proxy.management_endpoints import key_management_endpoints
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        rotate_master_key,
+        reencrypt_credentials_for_aes_migration,
     )
 
     for rotator in (
@@ -24352,7 +24352,7 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[guardrail_row])
     mock_prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(return_value=1)
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=mock_prisma_client,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
         current_master_key="sk-old-master-key",
