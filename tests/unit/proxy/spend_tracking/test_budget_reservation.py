@@ -1081,12 +1081,19 @@ def test_configured_caps_never_shrink_an_uncapped_hold(route: str, config_source
     assert configured == pytest.approx(uncapped)
 
 
-def _priced_router(backend_models: tuple[str, ...]) -> Router:
+def _priced_router(
+    backend_models: tuple[str, ...],
+    additional_drop_params: list[str] | None = None,
+    default_litellm_params: dict | None = None,
+) -> Router:
     return Router(
+        default_litellm_params=default_litellm_params,
         model_list=[
             Deployment(
                 model_name="priced-model",
-                litellm_params=LiteLLM_Params(model=backend_model, api_key="sk-fake"),
+                litellm_params=LiteLLM_Params(
+                    model=backend_model, api_key="sk-fake", additional_drop_params=additional_drop_params
+                ),
                 model_info=ModelInfo(
                     id=f"deployment-{index}",
                     input_cost_per_token=0.0001,
@@ -1188,6 +1195,41 @@ def test_chat_provider_native_cap_lowers_the_hold_only_when_every_deployment_rea
 
     assert uncapped is not None and capped is not None
     assert (capped < uncapped) is lowers_hold
+
+
+@pytest.mark.parametrize(
+    ("backend_model", "cap"),
+    [
+        ("gemini/gemini-2.5-pro", "max_output_tokens"),
+        ("openai/gpt-5.6", "max_tokens"),
+        ("openai/gpt-5.6", "max_completion_tokens"),
+    ],
+)
+@pytest.mark.parametrize("dropped_by", ["request", "deployment", "router_default"])
+def test_a_cap_named_in_additional_drop_params_cannot_lower_the_hold(
+    backend_model: str, cap: str, dropped_by: str
+) -> None:
+    body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], cap: 1}
+    kept_router: Final = _priced_router((backend_model,))
+    dropping_router: Final = _priced_router(
+        (backend_model,),
+        additional_drop_params=[cap] if dropped_by == "deployment" else None,
+        default_litellm_params={"additional_drop_params": [cap]} if dropped_by == "router_default" else None,
+    )
+    dropping_body: Final = {**body, "additional_drop_params": [cap]} if dropped_by == "request" else body
+    uncapped: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": body["messages"]},
+        route="/v1/chat/completions",
+        llm_router=kept_router,
+    )
+    kept: Final = estimate_request_max_cost(request_body=body, route="/v1/chat/completions", llm_router=kept_router)
+    dropped: Final = estimate_request_max_cost(
+        request_body=dropping_body, route="/v1/chat/completions", llm_router=dropping_router
+    )
+
+    assert uncapped is not None and kept is not None
+    assert kept < uncapped
+    assert dropped == pytest.approx(uncapped)
 
 
 def test_custom_handler_deployment_trusts_only_the_chat_cap_it_receives(monkeypatch: pytest.MonkeyPatch) -> None:

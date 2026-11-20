@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.duration_parser import (
     get_budget_window_start as calendar_budget_window_start,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.litellm_core_utils.tool_fields import drop_policy
 from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import (
@@ -91,6 +92,7 @@ from litellm.redis.stores.spend_counters import (
 from litellm.redis.stores.spend_counters.types import customer_window_counter
 from litellm.responses.main import will_bridge_to_chat_completions
 from litellm.router import Router
+from litellm.router_api import RoutingContext
 from litellm.types.proxy.auth.customer_hierarchy import (
     AppDurationLimit,
     CustomerScopeKey,
@@ -1306,7 +1308,7 @@ def _estimate_request_max_cost_for_model(
     input_tokens: int | None = None,
 ) -> float | None:
     pricing: Final = _get_model_pricing(model=model, llm_router=llm_router)
-    caps: Final = _valid_output_token_caps(request_body)
+    caps: Final = _valid_output_token_caps(request_body, router_dropped=_router_dropped_fields(llm_router))
     surface: Final = _output_cap_surface(route, request_body)
     honored_fields: Final = _honored_output_token_fields(
         caps,
@@ -1683,14 +1685,21 @@ def _request_output_token_caps(request_body: Mapping[str, object]) -> Mapping[st
     return MappingProxyType(dict((*top_level_caps, *nested_cap)))
 
 
-def _valid_output_token_caps(request_body: Mapping[str, object]) -> Mapping[str, int]:
+def _valid_output_token_caps(request_body: Mapping[str, object], router_dropped: frozenset[str]) -> Mapping[str, int]:
+    dropped: Final = drop_policy(request_body).additional_drop_params | router_dropped
     return MappingProxyType(
         {
             field: tokens
             for field, value in _request_output_token_caps(request_body).items()
-            if (tokens := _non_negative_int(value)) is not None
+            if field not in dropped and (tokens := _non_negative_int(value)) is not None
         }
     )
+
+
+def _router_dropped_fields(llm_router: Router | None) -> frozenset[str]:
+    if llm_router is None:
+        return frozenset()
+    return drop_policy(RoutingContext(llm_router).default_litellm_params()).additional_drop_params
 
 
 def _honored_output_token_fields(
@@ -1699,8 +1708,21 @@ def _honored_output_token_fields(
     serving: Sequence[_ServingDeployment],
 ) -> frozenset[str]:
     return frozenset(
-        field for field in caps if all(_deployment_honors(field, surface, deployment) for deployment in serving)
+        field for field in caps if all(_deployment_receives(field, surface, deployment) for deployment in serving)
     )
+
+
+def _deployment_receives(field: str, surface: _OutputCapSurface, deployment: _ServingDeployment) -> bool:
+    return field not in _deployment_dropped_fields(deployment) and _deployment_honors(field, surface, deployment)
+
+
+def _deployment_dropped_fields(deployment: _ServingDeployment) -> frozenset[str]:
+    if deployment.deployment is None:
+        return frozenset()
+    litellm_params: Final = deployment.deployment["litellm_params"]
+    if _get_value(litellm_params, "additional_drop_params") is None:
+        return frozenset()
+    return drop_policy(litellm_params).additional_drop_params
 
 
 def _deployment_honors(field: str, surface: _OutputCapSurface, deployment: _ServingDeployment) -> bool:
