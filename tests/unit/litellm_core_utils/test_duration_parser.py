@@ -13,9 +13,29 @@ from litellm.litellm_core_utils.duration_parser import (
     get_annual_budget_window_start,
     get_budget_window_end,
     get_budget_window_start,
+    get_customer_budget_reset_time,
     get_next_standardized_reset_time,
     is_annual_budget_duration,
 )
+
+
+@pytest.mark.parametrize("hour,minute,expected_day", ((5, 15, 1), (5, 31, 2), (6, 15, 2), (6, 31, 2)))
+def test_customer_daily_reset_uses_only_the_first_fall_back_occurrence(
+    hour: int, minute: int, expected_day: int
+) -> None:
+    now: Final = datetime(2026, 11, 1, hour, minute, tzinfo=timezone.utc)
+    reset: Final = get_customer_budget_reset_time("1d", now, "America/New_York", time(1, 30))
+    assert reset.astimezone(timezone.utc) == datetime(
+        2026, 11, expected_day, 5 if expected_day == 1 else 6, 30, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.parametrize("duration", ("1mo", "12mo", "1h", "daily", "15m", "30s"))
+def test_customer_clock_preserves_existing_calendar_and_subday_resets(duration: str) -> None:
+    now: Final = datetime(2026, 11, 1, 6, 15, tzinfo=timezone.utc)
+    assert get_customer_budget_reset_time(
+        duration, now, "America/New_York", time(1, 30)
+    ) == get_next_standardized_reset_time(duration, now, "America/New_York", time(1, 30))
 
 
 class TestStandardizedResetTime(unittest.TestCase):

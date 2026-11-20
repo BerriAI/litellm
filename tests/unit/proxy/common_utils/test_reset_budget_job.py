@@ -1708,6 +1708,24 @@ def _window_spend_rolls(prisma_client):
     ]
 
 
+@pytest.mark.asyncio
+async def test_daily_customer_window_reset_skips_the_repeated_fall_back_hour(monkeypatch):
+    now: Final = datetime(2026, 11, 1, 6, 15, tzinfo=timezone.utc)
+    row: Final = {
+        "budget_id": "daily",
+        "budget_limits": [{"budget_duration": "1d", "max_budget": 10, "reset_at": "2026-11-01T05:30:00+00:00"}],
+    }
+    job, prisma_client, counters = _make_reset_budget_windows_job(monkeypatch, key_rows=[], team_rows=[])
+    job.reset_settings = BudgetResetSettings(timezone="America/New_York", reset_time_of_day=dt_time(1, 30))
+    source: Final = next(
+        source for source in reset_budget_job_module._WINDOW_SOURCES if source.table == "LiteLLM_BudgetTable"
+    )
+    await job._reset_window_row(source, row, now, counters.store())
+    written: Final = json.loads(prisma_client.db.litellm_budgettable.update.await_args.kwargs["data"]["budget_limits"])
+    assert datetime.fromisoformat(written[0]["reset_at"]) == datetime(2026, 11, 2, 6, 30, tzinfo=timezone.utc)
+    assert counters.memory == {}
+
+
 def test_reset_budget_windows_rolls_the_key_window_spend_row(monkeypatch):
     """The maintained per-window total has to start the new window at zero
     alongside the counter, or enforcement keeps reading the old window's spend."""

@@ -10,7 +10,7 @@ from fastapi import Request
 import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.accounting.projection import project
-from litellm.models.budget import BudgetLimit
+from litellm.models.budget import BudgetLimit, initialize_budget_limits
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import (
     check_customer_hierarchy_windows,
@@ -52,6 +52,30 @@ LIMITS: Final = (
     BudgetLimit(budget_duration="1mo", max_budget=10),
     BudgetLimit(budget_duration="12mo", max_budget=100),
 )
+
+
+def test_daily_customer_caps_never_revisit_old_spend_during_fall_back() -> None:
+    settings: Final = BudgetResetSettings(timezone="America/New_York", reset_time_of_day=time(1, 30))
+    limits: Final = (
+        BudgetLimit(budget_duration="1d", max_budget=10, reset_at=datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc)),
+    )
+    counters: Final = tuple(
+        customer_window_counters(
+            "customer_member",
+            "member",
+            limits,
+            now=datetime(2026, 11, 1, hour, minute, tzinfo=timezone.utc),
+            reset_settings=settings,
+        )[0]
+        for hour, minute in ((5, 31), (6, 15), (6, 31), (7, 0))
+    )
+    assert {counter.window_start for counter in counters} == {datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc)}
+    assert {counter.reset_at for counter in counters} == {datetime(2026, 11, 2, 6, 30, tzinfo=timezone.utc)}
+    assert len({counter.counter_key for counter in counters}) == 1
+    initialized: Final = initialize_budget_limits(
+        (BudgetLimit(budget_duration="1d", max_budget=10),), settings, datetime(2026, 11, 1, 6, 15, tzinfo=timezone.utc)
+    )
+    assert initialized[0].reset_at == counters[0].reset_at
 
 
 @pytest.fixture

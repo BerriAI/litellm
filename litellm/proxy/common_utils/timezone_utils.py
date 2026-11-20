@@ -4,7 +4,10 @@ from typing import Final
 from pydantic import ConfigDict
 
 import litellm
-from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.litellm_core_utils.duration_parser import (
+    get_customer_budget_reset_time,
+    get_next_standardized_reset_time,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -82,6 +85,10 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     `BudgetResetSettings` by injection (creation/update endpoints, startup backfill).
     """
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
+
+
+def compute_customer_budget_reset_at(budget_duration: str, settings: BudgetResetSettings, now: datetime) -> datetime:
+    return get_customer_budget_reset_time(budget_duration, now, settings.timezone, settings.reset_time_of_day)
 
 
 def keeps_due_budget_reset(

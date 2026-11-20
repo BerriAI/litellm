@@ -42,6 +42,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,
+    compute_customer_budget_reset_at,
     get_budget_reset_settings,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -139,7 +140,11 @@ def _customer_window_counter(
         if limit.reset_at is not None and limit.reset_at.tzinfo is None
         else limit.reset_at
     )
-    standard_reset: Final = compute_budget_reset_at(limit.budget_duration, settings, now)
+    standard_reset: Final = (
+        compute_customer_budget_reset_at(limit.budget_duration, settings, now)
+        if isinstance(limit, BudgetLimit)
+        else compute_budget_reset_at(limit.budget_duration, settings, now)
+    )
     reset_at: Final = configured_reset if configured_reset is not None and configured_reset > now else standard_reset
     start: Final = calendar_budget_window_start(
         limit.budget_duration, reset_at.astimezone(standard_reset.tzinfo)
