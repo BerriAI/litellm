@@ -4,19 +4,23 @@
 import json
 import os
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
 
 
 def get_utc_datetime():
@@ -60,10 +64,11 @@ class OpenMeterLogger(CustomLogger):
         if (
             isinstance(response_obj, litellm.ModelResponse) or isinstance(response_obj, litellm.EmbeddingResponse)
         ) and hasattr(response_obj, "usage"):
+            response_usage: Final = require_attributes(response_obj["usage"], _SupportsGet, "get")
             usage = {
-                "prompt_tokens": response_obj["usage"].get("prompt_tokens", 0),
-                "completion_tokens": response_obj["usage"].get("completion_tokens", 0),
-                "total_tokens": response_obj["usage"].get("total_tokens"),
+                "prompt_tokens": response_usage.get("prompt_tokens", 0),
+                "completion_tokens": response_usage.get("completion_tokens", 0),
+                "total_tokens": response_usage.get("total_tokens"),
             }
 
         # OPENMETER_TRUST_REQUEST_USER (default "true"): when set to "false",

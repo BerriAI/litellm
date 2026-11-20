@@ -1,0 +1,409 @@
+{
+ "_source": "What Python's Mantle Messages configs sent and answered, captured once at 8c12b992 before they were removed",
+ "proxy_betas": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "region_prefix": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-haiku-4-5"
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/accepted-betas": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": "claude-code-20250219,context-management-2025-06-27,interleaved-thinking-2025-05-14",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/advanced-tool-use-renamed": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": "tool-search-tool-2025-10-19",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/clear-thinking-with-thinking": {
+  "body": {
+   "context_management": {
+    "edits": [
+     {
+      "keep": "all",
+      "type": "clear_thinking_20251015"
+     },
+     {
+      "type": "clear_tool_uses_20250919"
+     }
+    ]
+   },
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5",
+   "thinking": {
+    "type": "adaptive"
+   }
+  },
+  "headers": {
+   "anthropic-beta": "context-management-2025-06-27",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/client-dangerous-tool-use": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": "dangerous-tool-use-2026-09-03",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/every-beta-rejected": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/feature-beta-joins": {
+  "body": {
+   "context_management": {
+    "edits": [
+     {
+      "type": "clear_tool_uses_20250919"
+     }
+    ]
+   },
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": "context-1m-2025-08-07,context-management-2025-06-27",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/plain": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/rejected-betas-dropped": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": "context-1m-2025-08-07",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/safeguards-beta": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5",
+   "safeguards": [
+    {
+     "classifier_context": {
+      "permission_mode": "auto",
+      "v": 1
+     },
+     "type": "dangerous_tool_use"
+    }
+   ]
+  },
+  "headers": {
+   "anthropic-beta": "dangerous-tool-use-2026-09-03",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/tools": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5",
+   "tool_choice": {
+    "type": "auto"
+   },
+   "tools": [
+    {
+     "description": "Look up the weather",
+     "input_schema": {
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ],
+      "type": "object"
+     },
+     "name": "get_weather"
+    }
+   ]
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/version-stays-out-of-the-body": {
+  "body": {
+   "context_management": {
+    "edits": [
+     {
+      "type": "clear_tool_uses_20250919"
+     }
+    ]
+   },
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": "context-1m-2025-08-07,context-management-2025-06-27",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": null,
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "request/workspace": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "proj_abc123def456",
+   "authorization": "Bearer test-bearer",
+   "x-api-key": null
+  },
+  "path": "/anthropic/v1/messages"
+ },
+ "signing/bedrock/mantle/anthropic.claude-mythos-preview": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-mythos-preview"
+  },
+  "signing": [
+   "/anthropic/v1/messages",
+   "us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date",
+   null,
+   true,
+   false
+  ]
+ },
+ "signing/bedrock_mantle/anthropic.claude-sonnet-5": {
+  "body": {
+   "max_tokens": 8,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "anthropic.claude-sonnet-5"
+  },
+  "signing": [
+   "/anthropic/v1/messages",
+   "us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date",
+   null,
+   true,
+   false
+  ]
+ },
+ "stream/bedrock/mantle/anthropic.claude-mythos-preview": {
+  "max_tokens": 8,
+  "messages": [
+   {
+    "content": "Hello",
+    "role": "user"
+   }
+  ],
+  "model": "anthropic.claude-mythos-preview",
+  "stream": true
+ },
+ "stream/bedrock_mantle/anthropic.claude-sonnet-5": {
+  "max_tokens": 8,
+  "messages": [
+   {
+    "content": "Hello",
+    "role": "user"
+   }
+  ],
+  "model": "anthropic.claude-sonnet-5",
+  "stream": true
+ },
+ "usage/backfilled": {
+  "input_tokens": 0,
+  "output_tokens": 0
+ },
+ "usage/kept": {
+  "cache_read_input_tokens": 5,
+  "input_tokens": 42,
+  "output_tokens": 7
+ }
+}

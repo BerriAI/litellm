@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,6 +8,9 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.huggingface.embedding.handler import HuggingFaceEmbedding
+from litellm.types.utils import EmbeddingResponse
+from tests.unit.conftest import in_operator_error
 
 MOCK_EMBEDDING_RESPONSE = [[0.1, 0.2, 0.3, 0.4, 0.5]]
 
@@ -227,3 +231,46 @@ async def test_huggingface_embedding_sends_the_caller_timeout(
     assert lookup.called
     assert route.calls.last.request.extensions["timeout"]["read"] == 45
     assert response.data[0]["embedding"] == MOCK_EMBEDDING_RESPONSE[0]
+
+
+async def _embedding(sync_mode: bool, **kwargs: object) -> object:
+    return litellm.embedding(**kwargs) if sync_mode else await litellm.aembedding(**kwargs)
+
+
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_huggingface_embedding_raises_the_error_the_endpoint_returns(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(json={"max_position_embeddings": 512})
+    respx_mock.get(HF_MODEL_LOOKUP_URL).respond(json={"pipeline_tag": "feature-extraction"})
+    route: Final = respx_mock.post(HF_EMBED_URL).respond(json={"error": "Model BAAI/bge-m3 is currently loading"})
+    request: Final = {"model": "huggingface/BAAI/bge-m3", "input": ["hello"], "api_key": "hf_test"}
+
+    with pytest.raises(
+        litellm.APIError, match="HuggingfaceException - Model BAAI/bge-m3 is currently loading"
+    ) as exc_info:
+        await _embedding(sync_mode, **request)
+
+    assert route.called
+    assert exc_info.value.status_code == 500
+
+
+@pytest.mark.parametrize(
+    ("embeddings", "message"),
+    [
+        (5, in_operator_error(5)),
+        ([None], "'NoneType' object is not subscriptable"),
+        ({"similarities": [1]}, "cannot unpack non-iterable int object"),
+    ],
+)
+def test_process_embedding_response_rejects_a_malformed_body(embeddings: object, message: str) -> None:
+    with pytest.raises(TypeError, match=f"^{re.escape(message)}$"):
+        HuggingFaceEmbedding()._process_embedding_response(
+            embeddings=embeddings,
+            model_response=EmbeddingResponse(),
+            model="BAAI/bge-m3",
+            input=["hello"],
+            encoding=MagicMock(),
+        )
