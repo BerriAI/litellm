@@ -254,7 +254,9 @@ def initialize_standard_callback_dynamic_params(
         disabled_callbacks: Final = kwargs.get("litellm_disabled_callbacks")
         if isinstance(disabled_callbacks, list):
             standard_callback_dynamic_params["litellm_disabled_callbacks"] = [
-                name.lower() for name in _CALLBACK_NAMES.validate_python(disabled_callbacks) if isinstance(name, str)
+                name.strip().lower()
+                for name in _CALLBACK_NAMES.validate_python(disabled_callbacks)
+                if isinstance(name, str)
             ]
 
         for param, trusted_value in get_trusted_callback_params(kwargs):
