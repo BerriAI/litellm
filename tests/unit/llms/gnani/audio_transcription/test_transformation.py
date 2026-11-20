@@ -61,7 +61,26 @@ def test_sdk_sends_gnani_multipart_and_normalizes_text(respx_mock: MockRouter, m
         "substitution_map": b'[{"patterns": ["one"], "replacement": "1"}]',
     }
     assert isinstance(result, TranscriptionResponse)
-    assert result.model_dump(exclude_none=True) == {"text": "नमस्ते"}
+    assert result.model_dump(exclude_none=True) == {"text": "नमस्ते", "request_id": "req"}
+
+
+def test_response_returns_gnani_language_request_id_and_truncation(respx_mock: MockRouter) -> None:
+    respx_mock.post(f"{_BASE}/stt/v3").respond(
+        json={
+            "success": True,
+            "transcript": "नमस्ते",
+            "request_id": "req-1",
+            "detected_language_code": "hi-IN",
+            "truncated": True,
+        }
+    )
+    result: Final = litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE)
+    assert result.model_dump(exclude_none=True) == {
+        "text": "नमस्ते",
+        "language": "hi-IN",
+        "request_id": "req-1",
+        "truncated": True,
+    }
 
 
 def test_prisma_v25_returns_the_formatted_transcript(respx_mock: MockRouter) -> None:
@@ -99,7 +118,7 @@ def test_prisma_v25_requires_one_explicit_language(language: str | None, respx_m
 
 
 def test_prisma_v25_reports_unsupported_context(respx_mock: MockRouter) -> None:
-    with pytest.raises(litellm.BadRequestError, match="topic"):
+    with pytest.raises(litellm.UnsupportedParamsError, match="topic") as failure:
         litellm.transcription(
             model="gnani/prisma-v2.5",
             file=_AUDIO,
@@ -108,7 +127,25 @@ def test_prisma_v25_reports_unsupported_context(respx_mock: MockRouter) -> None:
             language="hi",
             extra_body={"topic": "math"},
         )
+    assert "GnaniException" not in str(failure.value)
     assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    ("model", "options", "kept"),
+    [
+        ("gnani/prisma-v2.5", {"language": "hi", "topic": "math", "bias_list": ["x"]}, {"bias_list": b'["x"]'}),
+        ("gnani/prisma-v3.0", {"bias_score": 1.5, "keyterms": ["x"]}, {"keyterms": b'["x"]'}),
+    ],
+)
+def test_drop_params_drops_fields_the_model_does_not_support(
+    model: str, options: dict[str, object], kept: dict[str, bytes], respx_mock: MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=model, file=_AUDIO, api_key="test", api_base=_BASE, drop_params=True, **options)
+    sent: Final = _form(route.calls.last.request)
+    assert {key: sent[key] for key in kept} == kept
+    assert not {"topic", "bias_score"} & sent.keys()
 
 
 @pytest.mark.asyncio
@@ -177,7 +214,6 @@ def test_provider_failure_keeps_its_reason(respx_mock: MockRouter, status: int, 
         {"temperature": 0},
         {"chunking_strategy": "auto"},
         {"include": ["logprobs"]},
-        {"prompt": "instruction"},
         {"timestamp_granularities": ["word"]},
         {"known_speaker_names": ["Ada"]},
         {"known_speaker_references": ["data:audio/wav;base64,AA=="]},
@@ -187,6 +223,32 @@ def test_unsupported_openai_options_are_rejected(options: dict[str, object], res
     with pytest.raises(litellm.UnsupportedParamsError):
         litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, **options)
     assert not respx_mock.calls
+
+
+def test_prisma_v25_rejects_prompt(respx_mock: MockRouter) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.transcription(
+            model="gnani/prisma-v2.5", file=_AUDIO, api_key="test", api_base=_BASE, language="hi", prompt="context"
+        )
+    assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({"prompt": "earlier clip"}, b"earlier clip"),
+        ({"prompt": "earlier clip", "previous_text": "explicit"}, b"explicit"),
+        ({"prompt": "earlier clip", "extra_body": {"previous_text": "explicit"}}, b"explicit"),
+    ],
+)
+def test_prompt_becomes_previous_text_unless_set(
+    options: dict[str, object], expected: bytes, respx_mock: MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, **options)
+    sent: Final = _form(route.calls.last.request)
+    assert sent["previous_text"] == expected
+    assert "prompt" not in sent
 
 
 @pytest.mark.parametrize("stream", [None, ""])
@@ -211,22 +273,25 @@ def test_global_drop_params_drops_unsupported_options(respx_mock: MockRouter, mo
 
 def test_missing_key_fails_before_upload(respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GNANI_API_KEY", raising=False)
-    with pytest.raises(litellm.AuthenticationError, match="GNANI_API_KEY"):
+    with pytest.raises(litellm.AuthenticationError, match="GNANI_API_KEY") as failure:
         litellm.transcription(model=_MODEL, file=_AUDIO, api_base=_BASE)
+    assert "GnaniException" not in str(failure.value)
     assert not respx_mock.calls
 
 
-@pytest.mark.parametrize("model", [_MODEL, "gnani/prisma-v2.5"])
-def test_discovery_lists_transcription_for_gnani(model: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("model", "params"),
+    [(_MODEL, ["language", "response_format", "prompt"]), ("gnani/prisma-v2.5", ["language", "response_format"])],
+)
+def test_discovery_lists_transcription_for_gnani(
+    model: str, params: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("GNANI_API_KEY", raising=False)
     assert litellm.validate_environment(model=model)["missing_keys"] == ["GNANI_API_KEY"]
     monkeypatch.setenv("GNANI_API_KEY", "env-key")
     assert litellm.validate_environment(model=model) == {"keys_in_environment": True, "missing_keys": []}
     assert model in litellm.get_valid_models(custom_llm_provider="gnani", check_provider_endpoint=False)
-    assert litellm.get_supported_openai_params(model=model, request_type="transcription") == [
-        "language",
-        "response_format",
-    ]
+    assert litellm.get_supported_openai_params(model=model, request_type="transcription") == params
 
 
 def test_dropping_unsupported_options_preserves_native_hints(respx_mock: MockRouter) -> None:
@@ -256,6 +321,8 @@ def test_dropping_unsupported_options_preserves_native_hints(respx_mock: MockRou
         ("hi,", b"hi-IN"),
         ("INDIC-AUTO", b"indic-auto"),
         ("Indic-Auto", b"indic-auto"),
+        ("hi-in", b"hi-IN"),
+        ("EN-in,ta", b"en-IN,ta-IN"),
     ],
 )
 def test_prisma_v3_normalizes_language_hints(language: str, expected: bytes, respx_mock: MockRouter) -> None:
@@ -264,11 +331,25 @@ def test_prisma_v3_normalizes_language_hints(language: str, expected: bytes, res
     assert _form(route.calls.last.request)["language_code"] == expected
 
 
-@pytest.mark.parametrize(("model", "content"), [("gnani/unknown", b"data"), (_MODEL, b"")])
-def test_invalid_requests_stop_before_upload(model: str, content: bytes, respx_mock: MockRouter) -> None:
-    with pytest.raises(litellm.BadRequestError):
-        litellm.transcription(model=model, file=("clip.wav", content), api_key="test", api_base=_BASE)
+def test_empty_audio_stops_before_upload(respx_mock: MockRouter) -> None:
+    with pytest.raises(litellm.BadRequestError) as failure:
+        litellm.transcription(model=_MODEL, file=("clip.wav", b""), api_key="test", api_base=_BASE)
+    assert "GnaniException" not in str(failure.value)
     assert not respx_mock.calls
+
+
+def test_unlisted_prisma_model_gets_current_model_behavior(respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(
+        model="gnani/prisma-v3.5", file=_AUDIO, api_key="test", api_base=_BASE, prompt="earlier", keyterms=["x"]
+    )
+    assert _form(route.calls.last.request) == {
+        "model": b"prisma-v3.5",
+        "language_code": b"indic-auto",
+        "previous_text": b"earlier",
+        "keyterms": b'["x"]',
+        "audio_file": _AUDIO[1],
+    }
 
 
 @pytest.mark.asyncio

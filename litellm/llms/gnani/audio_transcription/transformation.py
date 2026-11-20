@@ -1,12 +1,15 @@
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
-from litellm.exceptions import UnsupportedParamsError
+import litellm
+from litellm.exceptions import AuthenticationError, BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -22,6 +25,8 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 _SHARED_FIELDS: Final = frozenset(("format", "enable_substitution", "substitution_map", "bias_list"))
 _V25_FIELDS: Final = _SHARED_FIELDS | {"bias_score", "itn_native_numerals"}
 _V3_FIELDS: Final = _SHARED_FIELDS | {"keyterms", "topic", "previous_text", "speaker_names"}
+_V25_MODEL: Final = "prisma-v2.5"
+_REGION_CODE: Final = re.compile(r"([A-Za-z]{2})-([A-Za-z]{2})")
 
 
 class _PrismaTranscript(BaseModel):
@@ -34,19 +39,26 @@ class _PrismaTranscript(BaseModel):
     truncated: bool | None = None
 
 
+def _is_v25(model: str) -> bool:
+    return model.removeprefix("gnani/") == _V25_MODEL
+
+
 def _normalized_hint(hint: str) -> str:
     if hint.lower() == "indic-auto":
         return "indic-auto"
-    return f"{hint.lower()}-IN" if len(hint) == 2 else hint
+    if len(hint) == 2:
+        return f"{hint.lower()}-IN"
+    region: Final = _REGION_CODE.fullmatch(hint)
+    return f"{region[1].lower()}-{region[2].upper()}" if region else hint
 
 
 def _language_code(model: str, language: object) -> str:
     if language is not None and not isinstance(language, str):
         raise UnsupportedParamsError(message="language must be a string", model=model, llm_provider="gnani")
     hints: Final = tuple(filter(None, (hint.strip() for hint in (language or "").split(","))))
-    if not hints and model == "prisma-v3.0":
+    if not hints and not _is_v25(model):
         return "indic-auto"
-    if model == "prisma-v2.5" and (len(hints) != 1 or hints[0].lower() == "indic-auto"):
+    if _is_v25(model) and (len(hints) != 1 or hints[0].lower() == "indic-auto"):
         raise UnsupportedParamsError(
             message="Prisma v2.5 requires one explicit language, for example language='hi'.",
             model=model,
@@ -55,11 +67,35 @@ def _language_code(model: str, language: object) -> str:
     return ",".join(_normalized_hint(hint) for hint in hints)
 
 
+def _with_prompt_as_previous_text(fields: Mapping[str, object]) -> Mapping[str, object]:
+    prompt: Final = fields.get("prompt")
+    if prompt is None or fields.get("previous_text") is not None:
+        return fields
+    return {**fields, "previous_text": prompt}
+
+
+class _CallerFields(TypedDict, total=False):
+    language: ReadOnly[str]
+    request_id: ReadOnly[str]
+    truncated: ReadOnly[bool]
+
+
+def _caller_fields(payload: _PrismaTranscript) -> _CallerFields:
+    language: Final[_CallerFields] = (
+        {} if payload.detected_language_code is None else {"language": payload.detected_language_code}
+    )
+    request_id: Final[_CallerFields] = {} if payload.request_id is None else {"request_id": payload.request_id}
+    truncated: Final[_CallerFields] = {} if payload.truncated is None else {"truncated": payload.truncated}
+    return {**language, **request_id, **truncated}
+
+
 class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: the public capability API returns a list
-        return ["language", "response_format"]
+        if _is_v25(model):
+            return ["language", "response_format"]
+        return ["language", "response_format", "prompt"]
 
     def map_openai_params(
         self,
@@ -72,7 +108,12 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             raise UnsupportedParamsError(
                 message="Gnani transcription supports response_format=json", model=model, llm_provider="gnani"
             )
-        return {**optional_params, "language_code": _language_code(model, non_default_params.get("language"))}
+        prompt: Final = non_default_params.get("prompt")
+        return {
+            **optional_params,
+            "language_code": _language_code(model, non_default_params.get("language")),
+            **({} if prompt is None else {"prompt": prompt}),
+        }
 
     def validate_environment(
         self,
@@ -86,7 +127,9 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> dict[str, object]:  # mutable-ok: the HTTP handler accepts and updates a header dict
         key: Final = api_key or get_secret_str("GNANI_API_KEY")
         if not key:
-            raise BaseLLMException(401, "Set GNANI_API_KEY or pass api_key for Gnani transcription")
+            raise AuthenticationError(
+                message="Set GNANI_API_KEY or pass api_key for Gnani transcription", llm_provider="gnani", model=model
+            )
         return {**headers, "X-API-Key-ID": key}
 
     def get_complete_url(
@@ -107,20 +150,27 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
-        if model not in ("prisma-v2.5", "prisma-v3.0"):
-            raise BaseLLMException(400, "Gnani REST transcription supports prisma-v2.5 and prisma-v3.0")
         try:
             audio: Final = process_audio_file(audio_file)
         except (ValueError, OSError) as exc:
-            raise BaseLLMException(400, "Invalid audio upload") from exc
+            raise BadRequestError(message="Invalid audio upload", model=model, llm_provider="gnani") from exc
         if not audio.file_content:
-            raise BaseLLMException(400, "Gnani transcription requires a non-empty audio file")
-        fields: Final = {**(as_str_mapping(optional_params.get("extra_body")) or {}), **optional_params}
-        supported: Final = _V25_FIELDS if model == "prisma-v2.5" else _V3_FIELDS
+            raise BadRequestError(
+                message="Gnani transcription requires a non-empty audio file", model=model, llm_provider="gnani"
+            )
+        fields: Final = _with_prompt_as_previous_text(
+            {**(as_str_mapping(optional_params.get("extra_body")) or {}), **optional_params}
+        )
+        supported: Final = _V25_FIELDS if _is_v25(model) else _V3_FIELDS
         incompatible: Final = (_V25_FIELDS | _V3_FIELDS) - supported
         unsupported: Final = sorted(key for key in incompatible if fields.get(key) is not None)
-        if unsupported:
-            raise BaseLLMException(400, f"{model} does not support {', '.join(unsupported)}")
+        drops_unsupported: Final = litellm_params.get("drop_params") is True or litellm.drop_params is True
+        if unsupported and not drops_unsupported:
+            raise UnsupportedParamsError(
+                message=f"{model} does not support {', '.join(unsupported)}. To drop it, set drop_params=True.",
+                model=model,
+                llm_provider="gnani",
+            )
         form: Final = {
             key: value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
             for key, value in fields.items()
@@ -136,8 +186,11 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             payload: Final = _PrismaTranscript.model_validate_json(raw_response.content)
         except ValidationError:
             raise BaseLLMException(502, "Invalid Gnani transcription response", headers=raw_response.headers) from None
+        metadata: Final = payload.model_dump(exclude={"success", "transcript"}, exclude_none=True)
         response: Final = TranscriptionResponse(text=payload.transcript)
-        response.hidden_params = payload.model_dump(exclude={"success", "transcript"}, exclude_none=True)
+        for field, value in _caller_fields(payload).items():
+            setattr(response, field, value)
+        response.hidden_params = metadata
         return response
 
     def get_error_class(
