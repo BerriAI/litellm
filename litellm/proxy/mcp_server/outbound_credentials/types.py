@@ -58,6 +58,7 @@ class AuthResolution(str, Enum):
     token_exchange = "token-exchange"
     id_jag = "id-jag"
     aws_sigv4 = "aws-sigv4"
+    signed_identity = "signed-identity"
     extra_headers = "extra-headers"
     not_applicable = "not-applicable"
     unresolved = "unresolved"

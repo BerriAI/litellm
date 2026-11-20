@@ -42,6 +42,7 @@ import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import TruePassthroughWarning from "./TruePassthroughWarning";
+import SignedIdentityHint from "./SignedIdentityHint";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
@@ -1033,6 +1034,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       )}
                     </MountedFormField>
                     <TruePassthroughWarning authType={authType} />
+                    <SignedIdentityHint authType={authType} serverUrl={mountedValues.url as string | undefined} />
                     <PassthroughAuthorizeSection
                       authType={authType}
                       oauthFlow={{

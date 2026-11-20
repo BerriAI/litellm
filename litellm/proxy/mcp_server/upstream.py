@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from typing import Final
 
 import httpx2
@@ -194,6 +195,28 @@ def _stdio_config(server: MCPServer, stdio_env: dict[str, str] | None) -> MCPStd
     )
 
 
+def signed_identity_authorization(server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None) -> str:
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import get_identity_signer
+
+    signer: Final = get_identity_signer()
+    if signer is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"MCP server '{server.name}' uses signed_identity, which needs MCP_JWT_SIGNING_KEY set on the proxy.",
+        )
+    token: Final = signer.sign_identity(user_api_key_auth or UserAPIKeyAuth(), audience=server.url or server.server_id)
+    return f"Bearer {token}"
+
+
+def _signed_identity_headers(
+    server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None, extra_headers: Mapping[str, str] | None
+) -> dict[str, str]:  # mutable-ok: MCPClient takes its extra headers as a dict
+    return {
+        **(without_header(extra_headers, "Authorization") or {}),
+        "Authorization": signed_identity_authorization(server, user_api_key_auth),
+    }
+
+
 async def prepare_upstream_client(
     server: MCPServer,
     *,
@@ -272,6 +295,24 @@ async def prepare_upstream_client(
                 timeout=timeout,
                 extra_headers=resolved_headers,
                 resolved_auth=resolved_auth,
+                sampling_callback=sampling_callback,
+                elicitation_callback=elicitation_callback,
+            ),
+            for_tool_listing=for_tool_listing,
+        )
+    if server.auth_type == MCPAuth.signed_identity:
+        record_auth_resolution(server.server_id, AuthResolution.signed_identity)
+        return await prepare_mcp_client(
+            server,
+            MCPClient(
+                server_url=server.url or "",
+                transport_type=transport,
+                protocol_version=protocol_version,
+                skip_tool_output_validation=server.skip_tool_output_validation,
+                upstream_transport=upstream_transport,
+                auth_type=server.auth_type,
+                timeout=timeout,
+                extra_headers=_signed_identity_headers(server, user_api_key_auth, extra_headers),
                 sampling_callback=sampling_callback,
                 elicitation_callback=elicitation_callback,
             ),

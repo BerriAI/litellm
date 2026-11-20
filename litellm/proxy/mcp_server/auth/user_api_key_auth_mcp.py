@@ -1485,6 +1485,7 @@ class MCPRequestHandler:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
         admitted: Final = UserAPIKeyAuth(
             user_id=user_object.user_id,
+            user_email=user_object.user_email,
             user_role=user_object.user_role,
             org_id=user_object.organization_id,
             object_permission=object_permission,

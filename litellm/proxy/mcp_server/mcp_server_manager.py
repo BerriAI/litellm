@@ -93,6 +93,7 @@ from litellm.proxy._types import (
     SpecialMCPServerNames,
     UserAPIKeyAuth,
     is_per_server_oauth_discovery_eligible,
+    reject_signed_identity_without_key,
 )
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -194,6 +195,7 @@ from litellm.proxy.mcp_server.upstream import (
     passthrough_token_from_mcp_auth_header,
     prepare_upstream_client,
     resolve_upstream_auth,
+    signed_identity_authorization,
     take_forwarded_authorization,
     to_server_spec_fail_closed,
 )
@@ -1368,6 +1370,7 @@ def _v1_default_key_header(auth_type: MCPAuthType) -> str | None:
             | MCPAuth.oauth2_id_jag
             | MCPAuth.true_passthrough
             | MCPAuth.oauth_delegate
+            | MCPAuth.signed_identity
         ):
             return None
     assert_never(auth_type)  # pragma: no cover
@@ -2871,6 +2874,8 @@ class MCPServerManager:
                     "or oauth2_flow: authorization_code for interactive servers (per-user tokens via "
                     "browser sign-in, including delegate_auth_to_upstream)."
                 )
+
+            reject_signed_identity_without_key({"auth_type": auth_type}, server=server_name or server_id)
 
             config_dcr_bridge = server_config.get("dcr_bridge", None)
             config_per_server_oauth_discovery = _config_per_server_oauth_discovery(
@@ -7289,6 +7294,11 @@ class MCPServerManager:
         caller's gateway credential can never displace a per-server BYOK header or leak upstream
         as the resolved credential.
         """
+        if mcp_server.auth_type == MCPAuth.signed_identity:
+            return (
+                {"Authorization": signed_identity_authorization(mcp_server, user_api_key_auth)},
+                without_header(forwarded_headers, "Authorization"),
+            )
         spec: Final = to_server_spec(mcp_server)
         if spec is None:
             if oauth2_headers:
