@@ -1,19 +1,23 @@
 import asyncio
 import json
 import logging
+from functools import partial
 from itertools import chain
 from typing import Final
 
 import httpx
+import prometheus_client
 import pytest
-from prometheus_client import REGISTRY
+from prometheus_client import CollectorRegistry, Counter
 
+from litellm.integrations.lens import exporter as exporter_module
 from litellm.integrations.lens.exporter import (
     MAX_BUFFER_EVENTS,
     MAX_EVENT_BYTES,
     ExportFailure,
     LensExporter,
     encode_record,
+    lens_export_counters,
 )
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -367,24 +371,24 @@ def test_serialization_returns_a_failure_for_invalid_payloads(value: object) -> 
     assert encode_record({"value": value}) is ExportFailure.INVALID
 
 
-def _counter_value(name: str) -> float:
-    return REGISTRY.get_sample_value(name) or 0.0
-
-
 async def _drained(exporter: LensExporter) -> None:
     while exporter.buffered_events:
         await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
-async def test_written_and_dropped_rows_are_exported_as_prometheus_counters() -> None:
+async def test_written_and_dropped_rows_are_exported_as_prometheus_counters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry: Final = CollectorRegistry()
+    # Exercise the real factory without sharing its cached collectors with other tests.
+    monkeypatch.setattr(prometheus_client, "Counter", partial(Counter, registry=registry))
+    monkeypatch.setattr(exporter_module, "lens_export_counters", lens_export_counters.__wrapped__)
     statuses: Final = iter((204, 500))
 
     def answer(request: httpx.Request) -> httpx.Response:
         return httpx.Response(next(statuses))
 
-    written_before: Final = _counter_value("litellm_lens_export_rows_written_total")
-    dropped_before: Final = _counter_value("litellm_lens_export_rows_dropped_total")
     async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(answer)) as client:
         exporter: Final = LensExporter(client)
         exporter.start()
@@ -395,8 +399,8 @@ async def test_written_and_dropped_rows_are_exported_as_prometheus_counters() ->
             await _drained(exporter)
         await exporter.aclose()
     assert (exporter.rows_written, exporter.rows_dropped) == (1, 1)
-    assert _counter_value("litellm_lens_export_rows_written_total") - written_before == exporter.rows_written
-    assert _counter_value("litellm_lens_export_rows_dropped_total") - dropped_before == exporter.rows_dropped
+    assert registry.get_sample_value("litellm_lens_export_rows_written_total") == exporter.rows_written
+    assert registry.get_sample_value("litellm_lens_export_rows_dropped_total") == exporter.rows_dropped
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,6 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from typing_extensions import override
 
 import litellm
-from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.lens.policy import lens_logging_enabled_for_call
 from litellm.integrations.lens.remote import LensConnection
 from litellm.integrations.otel.logger import OpenTelemetryV2
@@ -267,7 +266,7 @@ class _LensTraceLogger(OpenTelemetryV2):
         end_time: datetime | float | None,
     ) -> Span | None:
         call: Final = LLMCallEvent.from_dict(kwargs)
-        if is_lens_analysis() or not lens_logging_enabled_for_call(kwargs):
+        if not lens_logging_enabled_for_call(kwargs):
             self._release_carrier(self._open_llm_calls.pop(call.call_id, None) if call.call_id else None)
             return None
         made_by: Final = agent_call(call.payload)
