@@ -6670,6 +6670,71 @@ async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrot
     assert response.model == expected
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, route_type, metadata, expected",
+    [
+        ({}, "acompletion", {}, "team-model"),
+        ({"model": "body-model"}, "acompletion", {}, "body-model"),
+        ({"model": None}, "acompletion", {}, "gpt-4o-2024-08-06"),
+        ({"model": ""}, "acompletion", {}, "gpt-4o-2024-08-06"),
+        ({}, "acompletion", {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}, "gpt-4o-2024-08-06"),
+        ({}, "atext_completion", {}, "gpt-4o-2024-08-06"),
+    ],
+)
+async def test_nonstreaming_response_model_echoes_the_path_model_when_the_body_has_none(
+    monkeypatch, body, route_type, metadata, expected
+):
+    import litellm.proxy.common_request_processing as cpr
+
+    async def llm():
+        return litellm.ModelResponse(
+            model="gpt-4o-2024-08-06", choices=[{"message": {"role": "assistant", "content": "pong"}}]
+        )
+
+    async def fake_route_request(**_kwargs):
+        return llm()
+
+    logging_obj = MagicMock(litellm_call_id="call-id", defer_async_logging=False)
+    proxy_logging = MagicMock(spec=ProxyLogging)
+    proxy_logging.during_call_hook = AsyncMock(return_value=None)
+    proxy_logging.post_call_success_hook = AsyncMock(side_effect=lambda data, user_api_key_dict, response: response)
+    proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    proxy_logging._callback_capabilities_cache = {}
+    monkeypatch.setattr(cpr, "route_request", fake_route_request)
+
+    processor = ProxyBaseLLMRequestProcessing(data={**body, "messages": []})
+    monkeypatch.setattr(
+        processor,
+        "common_processing_pre_call_logic",
+        AsyncMock(return_value=({"model": "team-model", "metadata": metadata}, logging_obj)),
+    )
+    monkeypatch.setattr(processor, "_has_post_call_guardrails", MagicMock(return_value=False))
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/openai/deployments/team-model/chat/completions",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+
+    response = await processor.base_process_llm_request(
+        request=request,
+        fastapi_response=Response(),
+        user_api_key_dict=ProxyUserAPIKeyAuth(),
+        proxy_logging_obj=proxy_logging,
+        general_settings={},
+        proxy_config=MagicMock(spec=ProxyConfig),
+        route_type=route_type,
+        model="team-model",
+        version=None,
+    )
+
+    assert response.model == expected
+
+
 class TestStreamingClientDisconnectLogging:
     @pytest.mark.asyncio
     async def test_record_streaming_client_disconnect_sets_error_information(self):
