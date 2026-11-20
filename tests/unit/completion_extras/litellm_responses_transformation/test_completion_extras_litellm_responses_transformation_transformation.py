@@ -6897,6 +6897,19 @@ def test_responses_only_field_set_on_the_deployment_is_not_rejected(in_extra_bod
         routed(("max_output_tokens",))
 
 
+@pytest.mark.parametrize("continuation", [{}, {"truncation": "auto"}])
+def test_deployment_instructions_are_kept_alongside_the_system_message(continuation: dict[str, str]) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": "openai", "metadata": {"_caller_sent_responses_fields": ()}},
+        {"instructions": "Deployment instructions", **continuation},
+    )
+    assert request["instructions"] == (
+        "Be brief.\nDeployment instructions" if continuation else "Deployment instructions"
+    )
+
+
 @pytest.mark.parametrize(
     ("deployment_params", "request_params", "rejected_field"),
     [

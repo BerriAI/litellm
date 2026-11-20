@@ -419,6 +419,17 @@ def _build_responses_kwargs(
         preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
     )
 
+    deployment_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
+    deployment_instructions: Final = deployment_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
+    system_instructions: Final = responses_kwargs.get("instructions")
+    if isinstance(system_instructions, str) and isinstance(deployment_instructions, str):
+        combined_instructions: Final = (
+            f"{system_instructions}\n{deployment_instructions}" if deployment_instructions else system_instructions
+        )
+        responses_kwargs["instructions"] = combined_instructions
+        if "instructions" in deployment_extra_body:
+            responses_kwargs["extra_body"] = {**deployment_extra_body, "instructions": combined_instructions}
+
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
     reasoning: Final = responses_kwargs.get("reasoning")

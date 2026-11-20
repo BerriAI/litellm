@@ -1504,8 +1504,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             custom_llm_provider=_served_provider(litellm_params),
         )
 
+        deployment_instructions: Final = responses_api_request.get("instructions")
         if instructions:
-            responses_api_request["instructions"] = instructions
+            responses_api_request["instructions"] = (
+                f"{instructions}\n{deployment_instructions}" if deployment_instructions else instructions
+            )
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug("Chat provider: Stream parameter: %s", stream)

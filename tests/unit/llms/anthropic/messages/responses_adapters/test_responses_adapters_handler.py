@@ -109,8 +109,11 @@ def test_caller_instructions_are_rejected_with_the_messages_equivalent(
     assert "`system`" in str(rejected.value)
 
 
+@pytest.mark.parametrize("request_params", [{}, {"truncation": "auto"}])
 @pytest.mark.parametrize("nested", [False, True])
-def test_instructions_set_on_the_deployment_are_not_rejected(nested: bool) -> None:
+def test_instructions_set_on_the_deployment_are_kept_and_not_rejected(
+    request_params: dict[str, str], nested: bool
+) -> None:
     deployment_set: Final = {"instructions": "Deployment instructions"}
 
     def routed(caller_sent: tuple[str, ...]) -> dict[str, object]:
@@ -118,16 +121,20 @@ def test_instructions_set_on_the_deployment_are_not_rejected(nested: bool) -> No
             max_tokens=1024,
             messages=MESSAGES,
             model="openai/gpt-6.2-sol",
+            system="Be brief.",
             extra_kwargs={
                 "custom_llm_provider": "openai",
                 "store": False,
                 "litellm_metadata": {"_caller_sent_responses_fields": caller_sent},
                 **({"extra_body": deployment_set} if nested else deployment_set),
+                **request_params,
             },
         )
 
     forwarded: Final = routed(())
-    assert (forwarded["extra_body"] if nested else forwarded)["instructions"] == "Deployment instructions"
+    assert (forwarded["extra_body"] if nested else forwarded)["instructions"] == (
+        "Be brief.\nDeployment instructions" if request_params else "Deployment instructions"
+    )
     with pytest.raises(litellm.UnsupportedParamsError, match="`instructions` is not supported on the Messages API"):
         routed(("instructions",))
 
