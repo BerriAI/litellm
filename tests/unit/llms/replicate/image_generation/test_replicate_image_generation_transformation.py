@@ -1,4 +1,5 @@
 import base64
+import ssl
 import time
 from typing import Final
 from unittest.mock import Mock
@@ -7,7 +8,8 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, HTTPResponseLimitError
 from litellm.constants import REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES
 from litellm.litellm_core_utils.url_utils import SSRFError
 from litellm.llms.replicate import common_utils
@@ -20,6 +22,39 @@ API_BASE: Final = "https://api.replicate.com/v1"
 MODEL: Final = "black-forest-labs/flux-schnell"
 PREDICTIONS_URL: Final = f"{API_BASE}/models/{MODEL}/predictions"
 IMAGE_URLS: Final = ("https://replicate.delivery/out/0.webp", "https://replicate.delivery/out/1.webp")
+
+
+@pytest.mark.parametrize("ssl_verify", [None, False, True])
+def test_replicate_httpx_client_configures_certificate_verification(
+    ssl_verify: bool | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("SSL_VERIFY", "True")
+    result: Final = common_utils.replicate_httpx_client(ssl_verify)
+    try:
+        assert isinstance(result, HTTPHandler)
+        context: Final = result.client._transport._pool._ssl_context
+        assert context.verify_mode == (ssl.CERT_NONE if ssl_verify is False else ssl.CERT_REQUIRED)
+        assert context.check_hostname is (ssl_verify is not False)
+    finally:
+        result.close()
+
+
+@pytest.mark.parametrize("ssl_verify", [None, False, True])
+async def test_replicate_async_httpx_client_configures_certificate_verification(
+    ssl_verify: bool | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("SSL_VERIFY", "True")
+    result: Final = common_utils.replicate_async_httpx_client(ssl_verify)
+    try:
+        assert isinstance(result, AsyncHTTPHandler)
+        context: Final = result.client._transport._pool._ssl_context
+        assert context.verify_mode == (ssl.CERT_NONE if ssl_verify is False else ssl.CERT_REQUIRED)
+        assert context.check_hostname is (ssl_verify is not False)
+    finally:
+        await result.close()
 
 
 @pytest.fixture(autouse=True)

@@ -53,6 +53,14 @@ pub fn strip_bedrock_routing_prefix(model: &str) -> &str {
     })
 }
 
+pub fn split_bedrock_region_path(model: &str) -> (Option<&str>, &str) {
+    let stripped = strip_bedrock_routing_prefix(model);
+    match stripped.split_once('/') {
+        Some((region, model_id)) if is_bedrock_region(region) => (Some(region), model_id),
+        _ => (None, stripped),
+    }
+}
+
 fn model_name_from_arn(model: &str) -> &str {
     if !model.to_lowercase().contains("arn") {
         return model;
@@ -262,12 +270,15 @@ pub(crate) fn tools_without_eager_input_streaming(request_body: &mut Map<String,
         });
 }
 
-pub(crate) fn validated_region(region: String) -> Result<String, Error> {
-    if !region.is_empty()
+pub(crate) fn is_valid_region(region: &str) -> bool {
+    !region.is_empty()
         && region
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    {
+}
+
+pub(crate) fn validated_region(region: String) -> Result<String, Error> {
+    if is_valid_region(&region) {
         return Ok(region);
     }
     Err(Error::InvalidRequest(ErrorDetail::InvalidValue {

@@ -1,4 +1,3 @@
-import copy
 import json
 import re
 import time
@@ -39,12 +38,11 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    DEFS_MAX_INLINED_BYTES,
+    defs_unpacked,
     invalid_type_message,
     is_present_non_string,
     is_unhashable_value_behind,
     sanitize_input_schema_for_anthropic,
-    unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
@@ -132,6 +130,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     ModelResponse,
     Usage,
     add_dummy_tool,
@@ -141,6 +140,7 @@ from litellm.utils import (
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_mid_conversation_system,
     supports_reasoning,
+    thinking_param_needs_replayed_thinking_blocks,
     token_counter,
 )
 
@@ -197,8 +197,8 @@ _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools", "stream"})
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -266,6 +266,56 @@ def _fields_behind(messages: Sequence[object], error: Exception) -> Iterable[tup
             return _assistant_tool_call_ids_failing(messages, partial(_is_non_string_value_behind, error))
         case _:
             return ()
+
+
+def admitted_extra_body(
+    extra_body: Mapping[str, object], request: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object] | AnthropicError:
+    guarded: Final = sorted(EXTRA_BODY_GUARDED_KEYS.intersection(extra_body))
+    if guarded and not drop_params:
+        return AnthropicError(
+            status_code=400,
+            message=f"extra_body can't set {', '.join(guarded)}, since litellm builds them from the request. "
+            "Send them as request fields, or set drop_params to drop them",
+        )
+    if guarded:
+        litellm.verbose_logger.warning("drop_params dropped extra_body keys %s, since litellm builds them", guarded)
+    unguarded: Final = {key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS}
+    match unguarded.get("max_tokens"), request.get("max_tokens"):
+        case (int() as requested_cap, int() as admitted_cap) if requested_cap > admitted_cap and not drop_params:
+            return AnthropicError(
+                status_code=400,
+                message=f"extra_body can't raise max_tokens above the request's max_tokens ({admitted_cap}). "
+                "Send max_tokens as a request field, or set drop_params to cap it",
+            )
+        case (int() as requested_cap, int() as admitted_cap) if requested_cap > admitted_cap:
+            return MappingProxyType({**unguarded, "max_tokens": admitted_cap})
+        case _:
+            return MappingProxyType(unguarded)
+
+
+def with_extra_body_fields(params: Mapping[str, object]) -> Mapping[str, object]:
+    extra_body: Final = request_extra_body(params.get("extra_body"))
+    fields: Final[Mapping[str, object]] = MappingProxyType({}) if isinstance(extra_body, AnthropicError) else extra_body
+    return MappingProxyType(
+        {
+            **{key: value for key, value in params.items() if key != "extra_body"},
+            **{key: value for key, value in fields.items() if key not in EXTRA_BODY_GUARDED_KEYS},
+        }
+    )
+
+
+def request_extra_body(extra_body: object) -> Mapping[str, object] | AnthropicError:
+    match extra_body:
+        case None:
+            return MappingProxyType({})
+        case Mapping():
+            return _REQUEST_PARAMS_ADAPTER.validate_python(extra_body)
+        case _:
+            return AnthropicError(
+                status_code=400,
+                message=f"Invalid type for 'extra_body': expected an object, got {type(extra_body).__name__}",
+            )
 
 
 def non_string_message_field_error(messages: Sequence[object], error: Exception) -> AnthropicError | None:
@@ -961,7 +1011,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return cls._raise_invalid_reasoning_effort(model, value, llm_provider)
 
     def get_supported_openai_params(self, model: str):
-        sampling_params: Final = ("temperature", "top_p") if self._supports_sampling_params(model) else ()
+        sampling_params: Final = ("temperature", "top_p") if self._supports_sampling_params(model) else ("temperature",)
         params: Final = [
             "stream",
             "stop",
@@ -1895,14 +1945,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return json_schema
 
     @staticmethod
-    def _defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
-        unpacked: Final = copy.deepcopy(dict(json_schema))
-        defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
-        if isinstance(defs, dict) and defs:
-            unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
-        return unpacked
-
-    @staticmethod
     def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
         if (
             schema_has_unresolvable_ref(json_schema)
@@ -1933,7 +1975,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return self.uses_native_structured_output(model) and not open_object_takes_json_tool
 
     def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
-        return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
+        return self.filter_anthropic_output_schema(dict(defs_unpacked(json_schema)))
 
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
         json_schema: Final = self._extract_json_schema_from_response_format(value)
@@ -2581,7 +2623,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
         if (
-            optional_params.get("thinking") is not None
+            thinking_param_needs_replayed_thinking_blocks(
+                optional_params.get("thinking")  # pyright: ignore[reportUnknownArgumentType]  # optional_params is a bare dict
+            )
             and last_assistant_with_tool_calls_has_no_thinking_blocks(capped_messages)
             and not any_assistant_message_has_thinking_blocks(capped_messages)
         ):
@@ -2671,8 +2715,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 message=f"{e}\nReceived Messages={request_messages}",
             )  # don't use verbose_logger.exception, if exception is raised
 
+        request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
+            dict[str, object], optional_params
+        )
+        extra_body: Final = request_extra_body(request_params.get("extra_body"))
+        if isinstance(extra_body, AnthropicError):
+            raise extra_body
         self.update_headers_with_optional_anthropic_beta(
-            headers=headers, optional_params=optional_params, messages=anthropic_messages
+            headers=headers,
+            optional_params=dict(with_extra_body_fields(request_params)),
+            messages=anthropic_messages,
         )
 
         ## Auto-strip advisor blocks from history if advisor tool is absent.
@@ -2744,9 +2796,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
         optional_params.pop("client_metadata", None)
-        request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
-            dict[str, object], optional_params
-        )
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
@@ -2772,23 +2821,37 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 output_key="top_k",
             )
         output_format: Final = request_params.get("output_format")
-        if (
-            output_format is not None
-            and not isinstance(output_format, Mapping)
-            and drops_unsupported_params(_LITELLM_PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params"))
-        ):
+        if output_format is not None and not isinstance(output_format, Mapping) and drop_params:
             request_params.pop("output_format")
 
-        data: Final = {
+        request_body: Final = {
             "model": model,
             "messages": anthropic_messages,
-            **optional_params,
+            **{key: value for key, value in request_params.items() if key != "extra_body"},
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
+        self._apply_output_config(data=request_body, model=model, optional_params=optional_params)
+        admitted: Final = admitted_extra_body(extra_body, request_body, drop_params)
+        if isinstance(admitted, AnthropicError):
+            raise admitted
+        return {**request_body, **admitted}
 
-        self._apply_output_config(data=data, model=model, optional_params=optional_params)
-
-        return data
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        fields: Final = request_extra_body(extra_body)
+        if isinstance(fields, AnthropicError):
+            raise fields
+        admitted: Final = admitted_extra_body(
+            fields, request, drops_unsupported_params(litellm_params.get("drop_params"))
+        )
+        if isinstance(admitted, AnthropicError):
+            raise admitted
+        return admitted
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data.

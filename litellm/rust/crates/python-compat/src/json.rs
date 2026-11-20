@@ -49,6 +49,61 @@ pub fn from_json(value: serde_json::Value) -> Value {
     }
 }
 
+/// `str(value)` of what `json.loads` returns: a string's own contents, `None` for null, and
+/// `repr` for every other value.
+pub fn loaded_str(value: &serde_json::Value) -> String {
+    crate::repr::to_str(&from_json(value.clone()))
+}
+
+/// `left == right` between what `json.loads` returns for two scalars: `bool`, `int` and
+/// `float` compare by numeric value (`True == 1 == 1.0`), and other values compare as JSON.
+/// Containers compare as JSON, so a nested `[1]` is not equal to `[1.0]` here though Python
+/// says it is.
+pub fn loaded_equals(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    match (numeric(left), numeric(right)) {
+        (Some(Ok(a)), Some(Ok(b))) => a == b,
+        (Some(Err(a)), Some(Err(b))) => a == b,
+        (Some(Ok(int)), Some(Err(float))) | (Some(Err(float)), Some(Ok(int))) => {
+            int_equals_float(int, float)
+        }
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => left == right,
+    }
+}
+
+fn numeric(value: &serde_json::Value) -> Option<Result<i128, f64>> {
+    match value {
+        serde_json::Value::Bool(flag) => Some(Ok(i128::from(*flag))),
+        serde_json::Value::Number(number) => Some(
+            number
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| number.as_u64().map(i128::from))
+                .map_or_else(|| Err(number.as_f64().unwrap_or(f64::NAN)), Ok),
+        ),
+        _ => None,
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+fn int_equals_float(int: i128, float: f64) -> bool {
+    float.is_finite() && float.fract() == 0.0 && float.abs() < 1.7e38 && float as i128 == int
+}
+
+/// `type(json.loads(text)).__name__`: the type [`crate::json::from_json`] gives the value,
+/// so an integer `serde_json` holds as `f64` (beyond `u64`) reads as `float`.
+pub fn type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "NoneType",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(number) if number.is_i64() || number.is_u64() => "int",
+        serde_json::Value::Number(_) => "float",
+        serde_json::Value::String(_) => "str",
+        serde_json::Value::Array(_) => "list",
+        serde_json::Value::Object(_) => "dict",
+    }
+}
+
 /// `json.loads(text)`. Integers keep full precision, and a repeated key keeps its first position
 /// with its last value, as `dict(pairs)` does. An escape that leaves a lone surrogate fails, since
 /// a Rust `String` cannot hold one.
@@ -460,8 +515,23 @@ pub fn write_string(out: &mut impl Sink, text: &str) {
 mod tests {
     use rstest::rstest;
 
-    use super::{dumps, loads};
+    use super::{dumps, loads, type_name};
     use crate::{Error, Value, repr::repr};
+
+    #[rstest]
+    #[case::null(serde_json::json!(null), "NoneType")]
+    #[case::boolean(serde_json::json!(true), "bool")]
+    #[case::int(serde_json::json!(1), "int")]
+    #[case::float(serde_json::json!(1.5), "float")]
+    #[case::text(serde_json::json!("a"), "str")]
+    #[case::list(serde_json::json!([1]), "list")]
+    #[case::object(serde_json::json!({"a": 1}), "dict")]
+    fn a_json_value_is_named_by_its_python_type(
+        #[case] value: serde_json::Value,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(type_name(&value), expected);
+    }
 
     // Expected values are the repr of CPython 3.14 json.loads(text)
     #[rstest]

@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
@@ -1907,6 +1908,192 @@ async def test_streaming_step_delivers_a_legacy_mask_of_a_streamed_claude_refusa
 
 class _NoHooksGuardrail(CustomGuardrail):
     pass
+
+
+class _PersimmonMaskingLegacyHook(_LegacyHookGuardrail):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> object:
+        self.calls.append(response)
+        return json.loads(json.dumps(response).replace("persimmon", "[MASKED]"))
+
+
+class _TextRecorder(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+        self.texts_per_call: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.texts_per_call.append(list(inputs.get("texts", [])))
+        return inputs
+
+
+class _AllTextsInOneCallRecorder(_TextRecorder):
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return True
+
+
+def _reasoning_stream_event(thought: str) -> dict[str, object]:
+    return {
+        "type": "response.reasoning_summary_text.delta",
+        "item_id": "rs_1",
+        "output_index": 0,
+        "summary_index": 0,
+        "delta": thought,
+    }
+
+
+def _reasoning_output_item(*thoughts: str) -> dict[str, object]:
+    return {
+        "id": "rs_1",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": thought} for thought in thoughts],
+    }
+
+
+def _answer_stream_event(answer: str) -> dict[str, object]:
+    return {
+        "type": "response.output_text.delta",
+        "item_id": "msg_1",
+        "output_index": 1,
+        "content_index": 0,
+        "delta": answer,
+    }
+
+
+def _answer_output_item(answer: str) -> dict[str, object]:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": answer}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_runs_a_legacy_hook_once_over_a_response_with_reasoning(monkeypatch):
+    guardrail = _PersimmonMaskingLegacyHook()
+    chunks = [
+        _reasoning_stream_event("I think of a persimmon"),
+        _answer_stream_event("the fruit is a persimmon"),
+        {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    _reasoning_output_item("I think of a persimmon", "a persimmon is orange"),
+                    _answer_output_item("the fruit is a persimmon"),
+                ]
+            },
+        },
+    ]
+
+    result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks, translation=OpenAIResponsesHandler())
+
+    output = chunks[-1]["response"]["output"]
+    assert result.terminal_action == "allow"
+    assert len(guardrail.calls) == 1
+    assert chunks[0]["delta"] == "I think of a [MASKED]"
+    assert chunks[1]["delta"] == "the fruit is a [MASKED]"
+    assert [part["text"] for part in output[0]["summary"]] == ["I think of a [MASKED]", "a [MASKED] is orange"]
+    assert output[1]["content"][0]["text"] == "the fruit is a [MASKED]"
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_keeps_a_legacy_hook_reasoning_out_of_an_answer_the_envelope_lacks(monkeypatch):
+    guardrail = _PersimmonMaskingLegacyHook()
+    chunks = [
+        _answer_stream_event("the fruit is a persimmon"),
+        {"type": "response.completed", "response": {"output": [_reasoning_output_item("I think of a persimmon")]}},
+    ]
+
+    result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks, translation=OpenAIResponsesHandler())
+
+    assert result.terminal_action == "allow"
+    assert chunks[0]["delta"] == "the fruit is a persimmon"
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_keeps_a_legacy_hook_mask_when_reasoning_streamed_past_a_cut_short_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _PersimmonMaskingLegacyHook()
+    chunks: Final = [
+        _reasoning_stream_event("I think of a persimmon"),
+        _answer_stream_event("the fruit is a persimmon"),
+        {**_reasoning_stream_event("later a persimmon"), "item_id": "rs_2", "output_index": 2},
+        {
+            "type": "response.incomplete",
+            "response": {
+                "status": "incomplete",
+                "output": [
+                    _reasoning_output_item("I think of a persimmon"),
+                    _answer_output_item("the fruit is a persimmon"),
+                ],
+            },
+        },
+    ]
+
+    result: Final = await _run_legacy_streaming_step(
+        monkeypatch, guardrail, chunks, translation=OpenAIResponsesHandler()
+    )
+
+    assert result.terminal_action == "allow"
+    assert len(guardrail.calls) == 1
+    assert chunks[0]["delta"] == "I think of a [MASKED]"
+    assert chunks[1]["delta"] == "the fruit is a [MASKED]"
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_sends_all_reasoning_in_one_call_after_the_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _TextRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    chunks: Final = [
+        {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    _reasoning_output_item("I think of a fig", "a fig is purple"),
+                    _answer_output_item("the fruit is a fig"),
+                ]
+            },
+        },
+    ]
+
+    await _run_streaming_step(OpenAIResponsesHandler(), chunks)
+
+    assert guardrail.texts_per_call == [["the fruit is a fig"], ["I think of a fig", "a fig is purple"]]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_puts_reasoning_in_the_answer_call_of_a_guardrail_that_takes_all_texts_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _AllTextsInOneCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    chunks: Final = [
+        _reasoning_stream_event("I think of a fig"),
+        {**_reasoning_stream_event("later a fig"), "item_id": "rs_2", "output_index": 2},
+        {
+            "type": "response.incomplete",
+            "response": {
+                "status": "incomplete",
+                "output": [_reasoning_output_item("I think of a fig"), _answer_output_item("the fruit is a fig")],
+            },
+        },
+    ]
+
+    await _run_streaming_step(OpenAIResponsesHandler(), chunks)
+
+    assert guardrail.texts_per_call == [["the fruit is a fig", "I think of a fig"]]
 
 
 class _IteratorAndLegacyHookGuardrail(_LegacyHookGuardrail):

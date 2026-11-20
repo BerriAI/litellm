@@ -1,5 +1,6 @@
 use std::error::Error as StdError;
 
+use litellm_auth::gcp::google::GoogleLoginFailure;
 use litellm_error::{Report, Source};
 use litellm_inference::Error;
 use pyo3::{
@@ -26,6 +27,9 @@ const MESSAGES_REQUEST_ERROR: &str = "messages_request_error";
 /// The rejection is a parameter the model does not support, which Python raises as
 /// `UnsupportedParamsError`.
 const MESSAGES_UNSUPPORTED_PARAM: &str = "messages_unsupported_param";
+/// The model a provider config names on its `UnsupportedParamsError`, which Python then also
+/// attributes to the request's provider.
+const MESSAGES_UNSUPPORTED_PARAM_MODEL: &str = "messages_unsupported_param_model";
 /// The phase label (`Connection` or `Read`) of a timed-out call, for Python's timeout text, or
 /// `Body` for a streamed body read that timed out after the head arrived.
 const MESSAGES_TIMEOUT: &str = "messages_timeout";
@@ -33,9 +37,11 @@ const MESSAGES_TIMEOUT: &str = "messages_timeout";
 const MESSAGES_BODY_CUT: &str = "messages_body_cut";
 /// No credential reached the provider, which Python raises as `AuthenticationError`.
 const MESSAGES_MISSING_CREDENTIAL: &str = "messages_missing_credential";
+/// What the provider config needed and did not get, when that was a named param rather than the key.
+const MESSAGES_MISSING_PARAM: &str = "messages_missing_param";
 /// Python refuses the request only once its logger knows the resolved model and provider (the
 /// provider config's request transform), so the failure logs them.
-const MESSAGES_LATE_REJECTION: &str = "messages_late_rejection";
+pub(crate) const MESSAGES_LATE_REJECTION: &str = "messages_late_rejection";
 /// Python's request transform raises a builtin exception (`TypeError`) that its handler does not
 /// map, so the caller gets the native exception as it is.
 const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
@@ -44,9 +50,22 @@ const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
 const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
 /// Python's provider config raises the refusal as litellm's `BadRequestError`.
 const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
+/// Why the STS call made for the credentials failed, as `(kind, operation, code, message)`.
+const MESSAGES_STS_FAILURE: &str = "messages_sts_failure";
+/// The `scheme://host:port` of a provider the call could not connect to.
+const MESSAGES_CONNECT_ORIGIN: &str = "messages_connect_origin";
+/// The provider replied with a body litellm refuses to read, which Python raises as `APIError` 500.
+const MESSAGES_REFUSED_REPLY: &str = "messages_refused_reply";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
-/// when only running Python's signing again gives its exception.
+/// when the Bedrock invoke host runs Python's signing again for its exception. The Mantle routes
+/// turn `replay` into `unavailable`, which maps from a fixed class list.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
+/// `(class, text)` of the exception Python's Vertex AI login raises for a login Rust could not
+/// complete, which the route raises in its place.
+const MESSAGES_GOOGLE_LOGIN_FAILURE: &str = "messages_google_login_failure";
+/// The AWS profile no config or credentials file defines, for the `profile_not_found` credential
+/// failure that botocore raises as `ProfileNotFound`.
+const MESSAGES_MISSING_PROFILE: &str = "messages_missing_profile";
 
 struct ProviderRejection {
     text: String,
@@ -70,17 +89,63 @@ fn credential_failure(error: &Error) -> Option<&'static str> {
     }
 }
 
-fn aws_credential_failure(error: &(dyn StdError + 'static)) -> &'static str {
-    let innermost = std::iter::successors(Some(error), |&cause| cause.source())
+fn google_login_failure(failure: &GoogleLoginFailure) -> (&'static str, &str) {
+    (failure.exception.into(), failure.message.as_str())
+}
+
+fn innermost_aws_error<'a>(
+    error: &'a (dyn StdError + 'static),
+) -> Option<&'a litellm_auth_aws::Error> {
+    std::iter::successors(Some(error), |&cause| cause.source())
         .filter_map(|cause| {
             cause
                 .downcast_ref::<litellm_auth_aws::Error>()
                 .or_else(|| cause.downcast_ref::<Source>()?.downcast_ref())
         })
-        .last();
-    match innermost {
+        .last()
+}
+
+fn missing_param(error: &Error) -> Option<&litellm_auth::Error> {
+    let (Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth))) = error else {
+        return None;
+    };
+    matches!(auth, litellm_auth::Error::MissingParam { .. }).then_some(auth)
+}
+
+fn missing_profile(error: &Error) -> Option<&str> {
+    let (Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth))) = error else {
+        return None;
+    };
+    match innermost_aws_error(auth)? {
+        litellm_auth_aws::Error::ProfileNotFound { profile } => Some(profile),
+        _ => None,
+    }
+}
+
+fn sts_failure(error: &Error) -> Option<(&'static str, &'static str, String, String)> {
+    let (Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth))) = error else {
+        return None;
+    };
+    Some(match innermost_aws_error(auth)?.sts_failure()? {
+        litellm_auth_aws::StsFailure::InvalidWebIdentityToken { message } => {
+            ("invalid_web_identity_token", "", String::new(), message)
+        }
+        litellm_auth_aws::StsFailure::Rejected {
+            operation,
+            code,
+            message,
+        } => ("rejected", operation, code, message),
+        litellm_auth_aws::StsFailure::Unreachable => {
+            ("unreachable", "", String::new(), String::new())
+        }
+    })
+}
+
+fn aws_credential_failure(error: &(dyn StdError + 'static)) -> &'static str {
+    match innermost_aws_error(error) {
         Some(litellm_auth_aws::Error::WebIdentityTokenReference) => "web_identity_reference",
         Some(litellm_auth_aws::Error::MissingWebIdentityToken) => "missing_web_identity_token",
+        Some(litellm_auth_aws::Error::ProfileNotFound { .. }) => "profile_not_found",
         Some(failure) if failure.is_empty_default_chain() => "no_credentials",
         _ => "replay",
     }
@@ -119,6 +184,15 @@ fn provider_rejection(rejection: &(dyn StdError + 'static)) -> Option<ProviderRe
         }),
         _ => None,
     }
+}
+
+/// Whether Python's provider config raises this refusal as litellm's own `BadRequestError`, as the
+/// Bedrock invoke transform does, naming the provider it raises for.
+pub(crate) fn raises_bad_request(error: &Error) -> bool {
+    error
+        .rejected_request()
+        .and_then(provider_rejection)
+        .is_some_and(|rejection| rejection.bad_request)
 }
 
 pub(crate) fn upstream_error(
@@ -206,10 +280,17 @@ pub(crate) fn route_failure(
         (RequestMarker::Messages, Some(rejection))
             if matches!(
                 rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
-                Some(litellm_llms::ErrorDetail::MissingAzureApiBase)
+                Some(
+                    litellm_llms::ErrorDetail::MissingAzureApiBase
+                        | litellm_llms::ErrorDetail::InvalidAwsRegion { .. }
+                        | litellm_llms::ErrorDetail::InvalidMantleRegion {
+                            check: litellm_llms::MantleRegionCheck::Request,
+                            ..
+                        }
+                )
             ) =>
         {
-            // Python raises it from `get_complete_url`, after the provider resolved.
+            // Python raises these from building or signing the call, after the provider resolved.
             let native = PyValueError::new_err(rejection.to_string());
             let value = native.value(py);
             value.setattr(MESSAGES_LATE_REJECTION, true)?;
@@ -220,20 +301,34 @@ pub(crate) fn route_failure(
             let native = PyValueError::new_err(Report::new(rejection).to_string());
             let value = native.value(py);
             value.setattr(MESSAGES_REQUEST_ERROR, true)?;
+            let detail = rejection.downcast_ref::<litellm_llms::ErrorDetail>();
             if matches!(
-                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                detail,
                 Some(
                     litellm_llms::ErrorDetail::UnsupportedParameter { .. }
                         | litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                        | litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
+                        | litellm_llms::ErrorDetail::NonObjectVertexOutputFormat { .. }
                 )
             ) {
                 value.setattr(MESSAGES_UNSUPPORTED_PARAM, true)?;
             }
             if matches!(
-                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
-                Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
+                detail,
+                Some(
+                    litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                        | litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
+                        | litellm_llms::ErrorDetail::NonObjectVertexOutputFormat { .. }
+                )
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
+            if let Some(litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion {
+                model,
+                ..
+            }) = detail
+            {
+                value.setattr(MESSAGES_UNSUPPORTED_PARAM_MODEL, model.as_str())?;
             }
             if let Some(provider) = provider_rejection(rejection) {
                 value.setattr(MESSAGES_PROVIDER_REJECTION, provider.text)?;
@@ -257,11 +352,32 @@ pub(crate) fn route_failure(
             if let Some(cut) = error.body_cut() {
                 value.setattr(MESSAGES_BODY_CUT, (cut.received, cut.expected, cut.reset))?;
             }
+            if let Some(origin) = error.connect_origin() {
+                value.setattr(MESSAGES_CONNECT_ORIGIN, origin)?;
+            }
             if error.is_missing_credential() {
                 value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
             }
+            if let Some(missing) = missing_param(&error) {
+                value.setattr(MESSAGES_MISSING_PARAM, missing.to_string())?;
+            }
+            if matches!(
+                error.refused_response(),
+                Some(litellm_llms::ErrorDetail::UnbillableUsage { .. })
+            ) {
+                value.setattr(MESSAGES_REFUSED_REPLY, true)?;
+            }
             if let Some(failure) = credential_failure(&error) {
                 value.setattr(MESSAGES_CREDENTIAL_FAILURE, failure)?;
+            }
+            if let Some(failure) = litellm_error::find::<GoogleLoginFailure>(&error) {
+                value.setattr(MESSAGES_GOOGLE_LOGIN_FAILURE, google_login_failure(failure))?;
+            }
+            if let Some(failure) = sts_failure(&error) {
+                value.setattr(MESSAGES_STS_FAILURE, failure)?;
+            }
+            if let Some(profile) = missing_profile(&error) {
+                value.setattr(MESSAGES_MISSING_PROFILE, profile)?;
             }
             native
         }
@@ -278,6 +394,7 @@ pub(crate) fn route_error_to_pyerr(error: Error) -> PyErr {
 
 #[cfg(test)]
 mod tests {
+    use litellm_auth::gcp::google::PythonException;
     use litellm_core_utils::decline::Decline;
     use reqwest::header::{HeaderValue, RETRY_AFTER};
 
@@ -482,6 +599,10 @@ mod tests {
         #[case] error: Error,
         #[case] expected: Option<(&str, bool)>,
     ) {
+        assert_eq!(
+            raises_bad_request(&error),
+            expected.is_some_and(|(_, bad_request)| bad_request)
+        );
         Python::initialize();
         Python::attach(|py| {
             let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
@@ -554,6 +675,10 @@ mod tests {
         },
         "replay"
     )]
+    #[case::missing_profile(
+        litellm_auth_aws::Error::ProfileNotFound { profile: "absent".into() },
+        "profile_not_found"
+    )]
     #[case::expired(litellm_auth_aws::Error::ExpiredCredentials, "replay")]
     fn an_aws_credential_failure_names_what_python_signing_raises(
         #[case] failure: litellm_auth_aws::Error,
@@ -576,6 +701,15 @@ mod tests {
                 .extract::<String>()
                 .unwrap();
             assert_eq!(marked, expected);
+            let profile = native
+                .value(py)
+                .getattr_opt(MESSAGES_MISSING_PROFILE)
+                .unwrap()
+                .map(|value| value.extract::<String>().unwrap());
+            assert_eq!(
+                profile.as_deref(),
+                (expected == "profile_not_found").then_some("absent")
+            );
         });
     }
 
@@ -628,6 +762,39 @@ mod tests {
         });
     }
 
+    type Marker = (String, String);
+
+    #[rstest::rstest]
+    #[case::plain(
+        GoogleLoginFailure::new(PythonException::Refresh, "invalid_grant"),
+        ("google.auth.exceptions.RefreshError".into(), "invalid_grant".into())
+    )]
+    #[case::file_failure(
+        GoogleLoginFailure::new(PythonException::Value, "file failure"),
+        ("ValueError".into(), "file failure".into())
+    )]
+    fn a_google_login_failure_names_python_s_exception(
+        #[case] failure: GoogleLoginFailure,
+        #[case] expected: Marker,
+        #[values(false, true)] through_llm: bool,
+    ) {
+        let error = match through_llm {
+            true => Error::Llm(litellm_llms::Error::Auth(failure.into())),
+            false => Error::Auth(failure.into()),
+        };
+        Python::initialize();
+        Python::attach(|py| {
+            let raised = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            let named: Marker = raised
+                .value(py)
+                .getattr(MESSAGES_GOOGLE_LOGIN_FAILURE)
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(named, expected);
+        });
+    }
+
     #[test]
     fn a_wrapped_credential_failure_keeps_the_native_mapping() {
         let error = Error::post_call(Error::Auth(litellm_auth::Error::from(
@@ -670,6 +837,36 @@ mod tests {
                     .is_some()
             );
             assert!(value.getattr_opt(MESSAGES_REQUEST_ERROR).unwrap().is_none());
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::unbillable_usage(
+        Error::invalid_response(litellm_llms::ErrorDetail::UnbillableUsage {
+            reason: "got an array".into(),
+        }),
+        true
+    )]
+    #[case::other_invalid_response(
+        Error::invalid_response(litellm_llms::ErrorDetail::MissingAzureApiBase),
+        false
+    )]
+    #[case::rejected_request(
+        Error::invalid_request(litellm_llms::ErrorDetail::UnbillableUsage {
+            reason: "got an array".into(),
+        }),
+        false
+    )]
+    fn only_an_unbillable_reply_is_marked_refused(#[case] error: Error, #[case] refused: bool) {
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            let marked = native
+                .value(py)
+                .getattr_opt(MESSAGES_REFUSED_REPLY)
+                .unwrap()
+                .is_some_and(|value| value.extract::<bool>().unwrap());
+            assert_eq!(marked, refused);
         });
     }
 
@@ -720,6 +917,94 @@ mod tests {
                 assert!(native.is_instance_of::<PyValueError>(py));
                 assert_eq!(native.value(py).to_string(), rejection);
             }
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::vertex_version(
+        litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion {
+            model: "claude-sonnet-4-5".into(),
+            value: "latest".into(),
+        },
+        Some("claude-sonnet-4-5")
+    )]
+    #[case::vertex_output_format(
+        litellm_llms::ErrorDetail::NonObjectVertexOutputFormat {
+            model: "claude-sonnet-4-5".into(),
+            actual: "str",
+        },
+        None
+    )]
+    #[case::shared_gate(
+        litellm_llms::ErrorDetail::UnsupportedParameter {
+            model: "claude-sonnet-4-5".into(),
+            param: "top_k".into(),
+            value: "5".into(),
+            hint: String::new(),
+        },
+        None
+    )]
+    fn vertex_transform_refusals_are_late_unsupported_params(
+        #[case] detail: litellm_llms::ErrorDetail,
+        #[case] attributed_model: Option<&str>,
+    ) {
+        let late = !matches!(
+            detail,
+            litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+        );
+        Python::initialize();
+        Python::attach(|py| {
+            let raised = route_failure(
+                py,
+                Error::invalid_request(detail),
+                RequestMarker::Messages,
+                Ok,
+            )
+            .unwrap();
+            let value = raised.value(py);
+            let flag = |name: &str| {
+                value
+                    .getattr_opt(name)
+                    .unwrap()
+                    .is_some_and(|flag| flag.extract::<bool>().unwrap())
+            };
+            assert!(flag(MESSAGES_UNSUPPORTED_PARAM));
+            assert_eq!(flag(MESSAGES_LATE_REJECTION), late);
+            assert_eq!(
+                value
+                    .getattr_opt(MESSAGES_UNSUPPORTED_PARAM_MODEL)
+                    .unwrap()
+                    .map(|model| model.extract::<String>().unwrap())
+                    .as_deref(),
+                attributed_model
+            );
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::provider_resolution(litellm_llms::MantleRegionCheck::ProviderResolution, true)]
+    #[case::request(litellm_llms::MantleRegionCheck::Request, false)]
+    fn an_invalid_mantle_region_is_flagged_where_python_raises_it(
+        #[case] check: litellm_llms::MantleRegionCheck,
+        #[case] resolving_provider: bool,
+    ) {
+        let error = Error::invalid_request(litellm_llms::ErrorDetail::InvalidMantleRegion {
+            region: "US-EAST-1".into(),
+            check,
+        });
+        Python::initialize();
+        Python::attach(|py| {
+            let raised = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            assert!(raised.is_instance_of::<PyValueError>(py));
+            let value = raised.value(py);
+            assert_eq!(
+                value.str().unwrap().to_string(),
+                "Invalid AWS region format: 'US-EAST-1'. Region names must contain only lowercase letters, digits, and hyphens."
+            );
+            let flagged = |name: &str| value.getattr_opt(name).unwrap().is_some();
+            assert_eq!(flagged(MESSAGES_REQUEST_ERROR), resolving_provider);
+            assert_eq!(flagged(MESSAGES_PYTHON_RAISED), !resolving_provider);
+            assert_eq!(flagged(MESSAGES_LATE_REJECTION), !resolving_provider);
         });
     }
 

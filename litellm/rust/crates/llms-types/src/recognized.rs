@@ -1,3 +1,4 @@
+use litellm_python_compat::truthy::json_truthy;
 use serde_json::Value;
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -80,19 +81,8 @@ impl Recognized<bool> {
     pub fn is_truthy(&self) -> bool {
         match self {
             Self::Known(flag) => *flag,
-            Self::Unrecognized(other) => python_truthy(other),
+            Self::Unrecognized(other) => json_truthy(other),
         }
-    }
-}
-
-pub fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_none_or(|number| number != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(fields) => !fields.is_empty(),
     }
 }
 

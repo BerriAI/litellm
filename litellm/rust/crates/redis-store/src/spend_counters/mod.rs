@@ -4,7 +4,7 @@ mod types;
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -13,7 +13,7 @@ use litellm_python_compat::repr::to_str;
 use litellm_redis_client::{Declared, Expiry, RedisBatch, commands};
 
 pub use self::keys::{NotASpendCounter, SpendCounter};
-pub use self::types::{LostSeed, PostCallSettlement, Reading};
+pub use self::types::{LostSeed, Reading};
 use crate::{
     Error, Number, Pending, RequestRedis, Send,
     dual_cache::{DualCache, MemorySettings},
@@ -68,7 +68,10 @@ impl SpendCounters {
             SpendCounter::Committed(_)
             | SpendCounter::CustomerOrg(_)
             | SpendCounter::CustomerTeam(_)
-            | SpendCounter::CustomerMember(_) => default_ttl.max(Duration::from_millis(
+            | SpendCounter::CustomerMember(_)
+            | SpendCounter::App(_)
+            | SpendCounter::AppCustomerOrg(_)
+            | SpendCounter::AppCustomerMember(_) => default_ttl.max(Duration::from_millis(
                 self.committed_ttl_millis.load(Ordering::Relaxed),
             )),
             _ => default_ttl,
@@ -212,14 +215,17 @@ impl SpendCounters {
     }
 
     /// `increment_many` on the request's post-call batch. Each total reaches memory once the batch
-    /// goes out, and a counter whose increment failed is dropped everywhere. `None` without Redis,
-    /// else a settlement that reports when every reply is back, whoever flushed the batch.
+    /// goes out, and a counter whose increment failed is dropped everywhere. `false` without Redis.
+    /// The request tracks the increments when a committed counter is among them, so a reader later
+    /// in the request knows whether its own charge has its reply.
     pub fn increment_many_post_call(
         self: &Arc<Self>,
         request: &RequestRedis,
         increments: &[(SpendCounter, Number)],
-    ) -> Option<PostCallSettlement> {
-        let remote = self.cache.redis().get()?;
+    ) -> bool {
+        let Some(remote) = self.cache.redis().get() else {
+            return false;
+        };
         let batch = Send::PostCall(request).batch(&remote.client);
         let declared = increments
             .iter()
@@ -233,13 +239,19 @@ impl SpendCounters {
             })
             .collect::<Vec<_>>();
         let store = Arc::clone(self);
-        let settled = Arc::new(AtomicBool::new(false));
-        let settlement = PostCallSettlement(Arc::clone(&settled));
-        request.spawn(async move {
+        let charges_committed_spend = increments
+            .iter()
+            .any(|(counter, _)| matches!(counter, SpendCounter::Committed(_)));
+        let mirror = async move {
             for (counter, total) in declared {
                 match total.settled().await {
                     Ok(total) => {
-                        if let Err(error) = store.cache.memory().set(&counter.key(), Number::Float(total), None) {
+                        if let Err(error) =
+                            store
+                                .cache
+                                .memory()
+                                .set(&counter.key(), Number::Float(total), None)
+                        {
                             tracing::warn!(%error, "mirroring a spend counter total into memory failed");
                         }
                     }
@@ -247,15 +259,21 @@ impl SpendCounters {
                         let key = counter.key();
                         crate::failure_log::redis_failure!(
                             &error,
-                            &format!("spend counter {key} increment did not land in the post-call pipeline; invalidating it"),
+                            &format!(
+                                "spend counter {key} increment did not land in the post-call pipeline; invalidating it"
+                            ),
                         );
                         store.invalidate(std::slice::from_ref(&counter)).await;
                     }
                 }
             }
-            settled.store(true, Ordering::Release);
-        });
-        Some(settlement)
+        };
+        if charges_committed_spend {
+            request.spawn_tracked(mirror);
+        } else {
+            request.spawn(mirror);
+        }
+        true
     }
 
     /// `_repair_stale_spend_counter`: raise memory and Redis to `spend`, never lowering either.
@@ -424,6 +442,9 @@ mod tests {
     #[case::organization(SpendCounter::CustomerOrg("tenant:lifetime".into()))]
     #[case::team(SpendCounter::CustomerTeam("team:lifetime".into()))]
     #[case::member(SpendCounter::CustomerMember("member:lifetime".into()))]
+    #[case::app(SpendCounter::App("app:lifetime".into()))]
+    #[case::app_organization(SpendCounter::AppCustomerOrg("app:org:lifetime".into()))]
+    #[case::app_member(SpendCounter::AppCustomerMember("app:member:lifetime".into()))]
     fn customer_counters_outlive_the_pending_database_flush(#[case] counter: SpendCounter) {
         let store = SpendCounters::new(None);
         store.set_committed_ttl(Duration::from_secs(120));

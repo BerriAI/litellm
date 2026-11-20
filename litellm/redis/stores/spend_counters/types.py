@@ -15,7 +15,14 @@ SpendIncrement: TypeAlias = tuple[str, float]
 SpendReading: TypeAlias = tuple[float | None, bool]
 """(value, authoritative): authoritative when Redis answered, a clean miss included."""
 
-CustomerCounterScope: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
+CustomerCounterScope: TypeAlias = Literal[
+    "customer_org",
+    "customer_team",
+    "customer_member",
+    "app",
+    "app_customer_org",
+    "app_customer_member",
+]
 
 
 def customer_window_counter(
@@ -28,13 +35,22 @@ def customer_window_counter(
     )
 
 
-def parse_customer_window_counter(counter_key: str) -> tuple[CustomerCounterScope, str, str, datetime] | None:
+def parse_customer_window_counter(
+    counter_key: str,
+) -> tuple[CustomerCounterScope, str, str, datetime] | None:
     prefix, separator, window = counter_key.rpartition(":window:")
     parts: Final = prefix.split(":", 2)
     if not separator or len(parts) != 3 or parts[0] != "spend":
         return None
     scope: Final = parts[1]
-    if scope not in ("customer_org", "customer_team", "customer_member"):
+    if scope not in (
+        "customer_org",
+        "customer_team",
+        "customer_member",
+        "app",
+        "app_customer_org",
+        "app_customer_member",
+    ):
         return None
     duration, at, start = window.rpartition("@")
     if not at or not duration:

@@ -13,6 +13,11 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
+)
 from litellm.integrations.clickhouse.clickhouse_spend_logger import (
     ClickHouseSpendLogger,
     parse_traceparent,
@@ -20,15 +25,10 @@ from litellm.integrations.clickhouse.clickhouse_spend_logger import (
     strip_cache_hit_suffix,
 )
 from litellm.integrations.clickhouse.context import lens_analysis
-from litellm.constants import (
-    INTERNAL_CALL_ORIGIN_METADATA_KEY,
-    ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
-    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
-)
-from litellm.litellm_core_utils.internal_call_metadata import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
+from litellm.integrations.clickhouse.spend_log_types import SpendLogRecord
 from litellm.litellm_core_utils import litellm_logging
+from litellm.litellm_core_utils.internal_call_metadata import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
 from litellm.litellm_core_utils.secret_redaction import REDACTED
-from litellm.tracing.types import SpendLogRecord
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
