@@ -19,8 +19,8 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequen
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
-from urllib.parse import quote
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
+from urllib.parse import quote, unquote
 
 import httpx
 import openai
@@ -483,6 +483,32 @@ async def llm_passthrough_factory_proxy_route(
     return received_value
 
 
+_GEMINI_SINGLE_FILE_PATH: Final = re.compile(r"(?:^|/)files/([^/:]+)(?::download)?/?$")
+
+
+@runtime_checkable
+class _ProviderFileAccessGuard(Protocol):
+    async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: UserAPIKeyAuth) -> None: ...
+
+
+def _gemini_passthrough_file_id(method: str, path: str) -> str | None:
+    if method not in ("GET", "DELETE"):
+        return None
+    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(unquote(path))
+    return single_file.group(1) if single_file is not None else None
+
+
+async def _enforce_gemini_passthrough_file_ownership(method: str, path: str, user_api_key_dict: UserAPIKeyAuth) -> None:
+    file_id: Final = _gemini_passthrough_file_id(method, path)
+    if file_id is None:
+        return
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if isinstance(hook, _ProviderFileAccessGuard):
+        await hook.enforce_provider_file_access(file_id, user_api_key_dict)
+
+
 @router.api_route(
     "/gemini/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -507,6 +533,8 @@ async def gemini_proxy_route(
     # Ensure endpoint starts with '/' for proper URL construction
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
+
+    await _enforce_gemini_passthrough_file_ownership(request.method, encoded_endpoint, user_api_key_dict)
 
     # Construct the full target URL using httpx, preserving any base path
     # prefix that the operator configured on base_target_url.
