@@ -15,6 +15,7 @@ import httpx
 import pytest
 import respx
 from pydantic import BaseModel, TypeAdapter
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
@@ -2835,6 +2836,169 @@ def test_gemini_with_grounding(respx_mock: respx.MockRouter) -> None:
     assert json.loads(route.calls.last.request.content)["tools"] == [{"googleSearch": {}}]
     assert complete_response.choices[0].message.content == "The capital of France is Paris."
     assert complete_response.usage.prompt_tokens_details.web_search_requests == 1
+
+
+_GEMINI_3_STUDIO_URL: Final = "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3-flash-preview"
+_SEARCHED_RESPONSE_ID: Final = "searched-response-1"
+_SEARCHED_USAGE: Final = {"promptTokenCount": 30, "candidatesTokenCount": 9, "totalTokenCount": 39}
+_SHELL_CALL_PART: Final = {
+    "functionCall": {"name": "shell", "args": {"command": "echo 1.2.3"}},
+    "thoughtSignature": "c2ln",
+}
+_URL_CONTEXT_CALL_PART: Final = {
+    "toolCall": {"toolType": "URL_CONTEXT", "args": {"urls": ["https://docs.litellm.ai"]}, "id": "call_url"}
+}
+_SEARCH_WEB_ITEMS: Final = TypeAdapter(list[ResponseFunctionWebSearch])
+
+
+def _search_tool_call_parts(call_id: str, queries: Sequence[str]) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "toolCall": {"toolType": "GOOGLE_SEARCH_WEB", "args": {"queries": list(queries)}, "id": call_id},
+            "thoughtSignature": f"sig-{call_id}",
+        },
+        {"toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "response": {}, "id": call_id}},
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _SearchedTurn:
+    tool_call_parts: tuple[dict[str, object], ...]
+    grounding: Mapping[str, object] | None
+    searched_queries: tuple[str, ...]
+
+    def _closing_candidate(self, parts: Sequence[dict[str, object]]) -> dict[str, object]:
+        grounding: Final = {} if self.grounding is None else {"groundingMetadata": self.grounding}
+        return {"content": {"role": "model", "parts": list(parts)}, "finishReason": "STOP", "index": 0, **grounding}
+
+    def response(self) -> dict[str, object]:
+        return {
+            "candidates": [self._closing_candidate([*self.tool_call_parts, _SHELL_CALL_PART])],
+            "usageMetadata": _SEARCHED_USAGE,
+            "responseId": _SEARCHED_RESPONSE_ID,
+        }
+
+    def stream_events(self) -> tuple[dict[str, object], ...]:
+        return (
+            {
+                "candidates": [{"content": {"role": "model", "parts": list(self.tool_call_parts)}, "index": 0}],
+                "responseId": _SEARCHED_RESPONSE_ID,
+            },
+            {
+                "candidates": [self._closing_candidate([_SHELL_CALL_PART])],
+                "usageMetadata": _SEARCHED_USAGE,
+                "responseId": _SEARCHED_RESPONSE_ID,
+            },
+        )
+
+
+_SEARCHED_TURNS: Final = {
+    "tool_calls_only": _SearchedTurn(
+        tool_call_parts=(
+            *_search_tool_call_parts("call_1", ["litellm latest release", "litellm pypi version"]),
+            _URL_CONTEXT_CALL_PART,
+            *_search_tool_call_parts("call_2", ["litellm pypi version", "", "litellm github releases"]),
+        ),
+        grounding=None,
+        searched_queries=("litellm latest release", "litellm pypi version", "litellm github releases"),
+    ),
+    "tool_calls_and_grounding": _SearchedTurn(
+        tool_call_parts=(
+            *_search_tool_call_parts("call_1", ["litellm latest release", "litellm pypi version"]),
+            _URL_CONTEXT_CALL_PART,
+        ),
+        grounding={
+            "webSearchQueries": ["litellm pypi version", "litellm changelog"],
+            "groundingChunks": [{"web": {"uri": "https://pypi.org/project/litellm/", "title": "pypi.org"}}],
+        },
+        searched_queries=("litellm latest release", "litellm pypi version", "litellm changelog"),
+    ),
+}
+_SEARCHED_REQUEST: Final = {
+    "model": "gemini/gemini-3-flash-preview",
+    "messages": [{"role": "user", "content": "Find the newest LiteLLM release, then echo it"}],
+    "tools": [
+        {"type": "web_search"},
+        {
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+            },
+        },
+    ],
+    "api_key": "test-api-key",
+}
+
+
+def _mock_searched_turn(respx_mock: respx.MockRouter, turn: _SearchedTurn) -> None:
+    respx_mock.post(f"{_GEMINI_3_STUDIO_URL}:generateContent").mock(
+        return_value=httpx.Response(200, json=turn.response())
+    )
+    respx_mock.post(f"{_GEMINI_3_STUDIO_URL}:streamGenerateContent?alt=sse").mock(
+        return_value=_gemini_sse(*turn.stream_events())
+    )
+
+
+def _delta_search_calls(chunk: ModelResponseStream) -> Sequence[object]:
+    if not chunk.choices:
+        return ()
+    return (chunk.choices[0].delta.provider_specific_fields or {}).get("web_search_calls", ())
+
+
+def _streamed_search_calls_and_usage(
+    chunks: Sequence[ModelResponseStream],
+) -> tuple[Mapping[str, ResponseFunctionWebSearch], Usage]:
+    calls: Final = _SEARCH_WEB_ITEMS.validate_python(list(chain.from_iterable(map(_delta_search_calls, chunks))))
+    return {call.id: call for call in calls}, next(
+        chunk.usage for chunk in reversed(chunks) if getattr(chunk, "usage", None)
+    )
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.parametrize("turn", list(_SEARCHED_TURNS.values()), ids=list(_SEARCHED_TURNS))
+def test_gemini_reports_and_bills_each_distinct_search_query_once(
+    respx_mock: respx.MockRouter, turn: _SearchedTurn
+) -> None:
+    _mock_searched_turn(respx_mock, turn)
+
+    response: Final = litellm.completion(**_SEARCHED_REQUEST)
+    streamed_calls, streamed_usage = _streamed_search_calls_and_usage(
+        list(litellm.completion(**_SEARCHED_REQUEST, stream=True, stream_options={"include_usage": True}))
+    )
+
+    calls: Final = _SEARCH_WEB_ITEMS.validate_python(
+        response.choices[0].message.provider_specific_fields["web_search_calls"]
+    )
+    assert [call.action.query for call in calls] == list(turn.searched_queries)
+    assert {call.status for call in calls} == {"completed"}
+    assert {call.id: call.action.query for call in calls} == {
+        call_id: call.action.query for call_id, call in streamed_calls.items()
+    }
+    assert response.usage.prompt_tokens_details.web_search_requests == len(calls) == len(turn.searched_queries)
+    assert streamed_usage.prompt_tokens_details.web_search_requests == len(streamed_calls)
+    assert response.choices[0].message.tool_calls[0].function.name == "shell"
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+def test_gemini_bills_server_side_search_tool_calls_like_grounded_searches(respx_mock: respx.MockRouter) -> None:
+    searched_queries: Final = _SEARCHED_TURNS["tool_calls_only"].searched_queries
+    turns: Final = (
+        _SEARCHED_TURNS["tool_calls_only"],
+        _SearchedTurn(tool_call_parts=(), grounding={"webSearchQueries": list(searched_queries)}, searched_queries=()),
+        _SearchedTurn(tool_call_parts=(), grounding=None, searched_queries=()),
+    )
+    route: Final = respx_mock.post(f"{_GEMINI_3_STUDIO_URL}:generateContent").mock(
+        side_effect=[httpx.Response(200, json=turn.response()) for turn in turns]
+    )
+
+    tool_call_cost, grounded_cost, unsearched_cost = (
+        litellm.completion_cost(completion_response=litellm.completion(**_SEARCHED_REQUEST)) for _ in turns
+    )
+
+    assert route.call_count == len(turns)
+    assert tool_call_cost == pytest.approx(grounded_cost)
+    assert tool_call_cost > unsearched_cost
 
 
 @pytest.mark.parametrize(

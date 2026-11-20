@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import lru_cache, partial
 from itertools import chain, repeat
@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -130,7 +131,7 @@ from ..context_caching.rejected_cache_retry import (
 )
 from ..request_labels import vertex_request_label_fields, without_caller_labels_header
 from ..vertex_llm_base import VertexBase
-from .grounding_requests import calculate_grounding_requests
+from .grounding_requests import calculate_grounding_requests, search_tool_call_queries, web_search_queries
 from .long_decode import (
     HOP_FAILURES,
     AsyncStreamResume,
@@ -168,6 +169,7 @@ from .transformation import (
     gemini_convert_messages_with_history,
     sync_transform_request_body,
 )
+from .web_search_calls import gemini_web_search_calls
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -275,6 +277,24 @@ def _names_its_finish(candidate: Candidates) -> bool:
 def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
     reason: Final = candidate.get("finishReason")
     return MappingProxyType({"native_finish_reason": reason}) if reason is not None else None
+
+
+def _candidate_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
+    content: Final = candidate.get("content")
+    return (content.get("parts") or ()) if content else ()
+
+
+def _parts_of_candidates(candidates: Sequence[Candidates]) -> Iterator[HttpxPartType]:
+    for candidate in candidates:
+        yield from _candidate_parts(candidate)
+
+
+def _candidate_web_search_queries(candidate: Candidates) -> tuple[str, ...]:
+    grounding: Final = candidate.get("groundingMetadata")
+    grounding_items: Final = as_object_list(grounding) or (() if grounding is None else per_hop(grounding))
+    return web_search_queries(
+        tuple(filter(None, map(as_str_mapping, grounding_items))), search_tool_call_queries(_candidate_parts(candidate))
+    )
 
 
 def _served_model_name(model_version: object) -> str | None:
@@ -2907,8 +2927,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._calculate_web_search_requests(grounding_metadata)
 
     @staticmethod
-    def _set_grounding_usage_counters(usage: Usage, grounding_metadata: Sequence[Mapping[str, object]]) -> None:
-        grounding_requests: Final = calculate_grounding_requests(grounding_metadata)
+    def _set_grounding_usage_counters(
+        usage: Usage,
+        grounding_metadata: Sequence[Mapping[str, object]],
+        tool_call_queries: Sequence[str] = (),
+    ) -> None:
+        grounding_requests: Final = calculate_grounding_requests(grounding_metadata, tool_call_queries)
         details: Final = cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details)
         if grounding_requests.web_search_requests is not None:
             details.web_search_requests = grounding_requests.web_search_requests
@@ -2920,8 +2944,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         usage: Usage,
         grounding_metadata: Sequence[Mapping[str, object]],
+        tool_call_queries: Sequence[str] = (),
     ) -> None:
-        return cls._set_grounding_usage_counters(usage, grounding_metadata)
+        return cls._set_grounding_usage_counters(usage, grounding_metadata, tool_call_queries)
 
     @staticmethod
     def _create_streaming_choice(
@@ -3271,11 +3296,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         reasoning_content = "\n".join(reasoning_content_parts)
                         chat_completion_message["reasoning_content"] = reasoning_content
 
+            web_search_calls = gemini_web_search_calls(model_response.id, _candidate_web_search_queries(candidate))
             message_provider_fields = {
                 key: value
                 for key, value in (
                     ("thought_signatures", thought_signatures),
                     ("server_side_tool_invocations", server_side_tool_invocations),
+                    ("web_search_calls", list(web_search_calls) or None),
                     ("continuation_token", client_continuation_token(candidate)),
                 )
                 if value is not None
@@ -3440,7 +3467,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 cache_creation_tokens=_cache_creation_tokens(logging_obj),
             )
 
-            VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
+            VertexGeminiConfig._set_grounding_usage_counters(
+                usage, grounding_metadata, search_tool_call_queries(_parts_of_candidates(_candidates or ()))
+            )
 
             setattr(model_response, "usage", usage)
 
@@ -4317,6 +4346,8 @@ class ModelResponseIterator:
         self._initial_prompt_tokens: int | None = None
         self._grounding_offset: tuple[Mapping[str, object], ...] = ()
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
+        self._search_tool_call_queries: tuple[str, ...] = ()
+        self._web_search_calls_by_choice: Mapping[int, Mapping[str, ResponseFunctionWebSearch]] = MappingProxyType({})
         self._answer_offset: int = 0
         self._hop_answer_bytes: int = 0
 
@@ -4459,7 +4490,9 @@ class ModelResponseIterator:
             cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
         )
 
-        VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
+        VertexGeminiConfig.set_grounding_usage_counters(
+            usage, self._grounding_through_this_hop(grounding_metadata), self._search_tool_call_queries
+        )
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
@@ -4518,6 +4551,11 @@ class ModelResponseIterator:
                     safety_ratings,
                     citation_metadata,
                 ) = self._apply_stream_candidates(_candidates, model_response)
+                self._search_tool_call_queries = (
+                    *self._search_tool_call_queries,
+                    *search_tool_call_queries(_parts_of_candidates(_candidates)),
+                )
+                self._report_web_search_calls_so_far(model_response)
 
             usage: Final = self._marked_stream_usage(
                 self._apply_stream_usage_metadata(processed_chunk, model_response, grounding_metadata)
@@ -4540,6 +4578,23 @@ class ModelResponseIterator:
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
+
+    def _report_web_search_calls_so_far(self, model_response: "ModelResponseStream") -> None:
+        for choice in model_response.choices:
+            fields: Mapping[str, object] = choice.delta.provider_specific_fields or {}
+            arrived = as_object_list(fields.get("web_search_calls"))
+            if not arrived:
+                continue
+            reported = MappingProxyType(
+                {
+                    **self._web_search_calls_by_choice.get(choice.index, {}),
+                    **{call.id: call for call in arrived if isinstance(call, ResponseFunctionWebSearch)},
+                }
+            )
+            self._web_search_calls_by_choice = MappingProxyType(
+                {**self._web_search_calls_by_choice, choice.index: reported}
+            )
+            choice.delta.provider_specific_fields = {**fields, "web_search_calls": list(reported.values())}
 
     def _with_usage_offset(self, chunk: GenerateContentResponseBody) -> GenerateContentResponseBody:
         if "usageMetadata" not in chunk:

@@ -117,6 +117,12 @@ def _tool_call_objects(tool_calls: object) -> tuple[object, ...]:
     return tuple(tool_calls) if isinstance(tool_calls, list) else ()
 
 
+def _tool_call_id_of(tool_call: object) -> str:
+    mapping: Final = as_str_mapping(tool_call)
+    call_id: Final = mapping.get("id") if mapping is not None else getattr(tool_call, "id", None)
+    return str(call_id) if call_id else ""
+
+
 def _tool_call_provider_specific_fields(tool_call: object) -> Mapping[str, object]:
     mapping: Final = as_str_mapping(tool_call)
     fields: Final[object] = (
@@ -246,6 +252,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
+        self._arrived_web_search_call_ids: tuple[str, ...] = ()
         self._tool_search = tool_search_routing(request_tools)
         self._tool_search_executions: Mapping[str, ToolSearchExecution] = MappingProxyType({})
         self._tool_search_output_index_by_call_id: Mapping[str, int] = MappingProxyType({})
@@ -479,6 +486,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 status = item.get("status") if isinstance(item, dict) else None
             if call_id:
                 output_index = self._get_or_assign_tool_output_index(call_id)
+                if isinstance(call_id, str) and call_id not in self._web_search_calls and status != "in_progress":
+                    self._arrived_web_search_call_ids = (*self._arrived_web_search_call_ids, call_id)
                 self._web_search_calls[call_id] = item
                 if status == "in_progress":
                     self._pending_tool_events = [
@@ -671,6 +680,28 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._pending_tool_events.append(item_done_event)
 
     def _queue_web_search_events(self, call_id: str, web_search_call: object) -> None:
+        self._pending_tool_events.extend(self._web_search_events(call_id, web_search_call))
+
+    def _queue_arrived_web_search_calls(self, chunk: ModelResponseStream) -> None:
+        arrived: Final = self._arrived_web_search_call_ids
+        self._arrived_web_search_call_ids = ()
+        claimed: Final = self._claimed_tool_call_ids(chunk)
+        for call_id in arrived:
+            if call_id in claimed or call_id in self._queued_web_search_call_ids:
+                continue
+            self._pending_response_events.extend(self._web_search_events(call_id, self._web_search_calls[call_id]))
+            self._queued_web_search_call_ids.add(call_id)
+
+    def _claimed_tool_call_ids(self, chunk: ModelResponseStream) -> frozenset[str]:
+        delta: Final = chunk.choices[0].delta if chunk.choices else None
+        delta_tool_calls: Final = (
+            (*anthropic_server_tool_calls(delta), *_tool_call_objects(getattr(delta, "tool_calls", None)))
+            if delta is not None
+            else ()
+        )
+        return frozenset((*self._tool_call_id_by_index.values(), *map(_tool_call_id_of, delta_tool_calls)))
+
+    def _web_search_events(self, call_id: str, web_search_call: object) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
         from openai.types.responses import ResponseFunctionWebSearch
 
         item: Final = (
@@ -679,28 +710,30 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             else ResponseFunctionWebSearch.model_validate(web_search_call)
         )
         output_index: Final = self._get_or_assign_tool_output_index(call_id)
-        self._queue_output_item_added(
-            output_index,
-            BaseLiteLLMOpenAIResponseObject(
-                **{
-                    "id": item.id,
-                    "type": item.type,
-                    "status": "in_progress",
-                    "action": None,
-                }
-            ),
-        )
         progress_events: Final = (
             _WEB_SEARCH_PROGRESS_EVENTS[:1] if item.status == "in_progress" else _WEB_SEARCH_PROGRESS_EVENTS
         )
-        for event_type, event_class in progress_events:
-            self._pending_tool_events.append(event_class(type=event_type, output_index=output_index, item_id=item.id))
-        self._pending_tool_events.append(
+        return (
+            self._next_output_item_added(
+                output_index,
+                BaseLiteLLMOpenAIResponseObject(
+                    **{
+                        "id": item.id,
+                        "type": item.type,
+                        "status": "in_progress",
+                        "action": None,
+                    }
+                ),
+            ),
+            *(
+                event_class(type=event_type, output_index=output_index, item_id=item.id)
+                for event_type, event_class in progress_events
+            ),
             OutputItemDoneEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
                 item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
-            )
+            ),
         )
 
     def _adopt_response_id_from_chunk(self, chunk: ModelResponseStream) -> None:
@@ -1391,6 +1424,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             self._snapshot_chunk_for_stream_chunk_builder(chunk)
                         )
                         self._queue_reasoning_done_events_on_reasoning_end(chunk)
+                        self._queue_arrived_web_search_calls(chunk)
                         self._queue_chunk_events(chunk)
 
                     if self._pending_response_events:
@@ -1458,6 +1492,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._snapshot_chunk_for_stream_chunk_builder(cast(ModelResponseStream, chunk))
                     )
                     self._queue_reasoning_done_events_on_reasoning_end(chunk)
+                    self._queue_arrived_web_search_calls(chunk)
                     self._queue_chunk_events(chunk)
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)
