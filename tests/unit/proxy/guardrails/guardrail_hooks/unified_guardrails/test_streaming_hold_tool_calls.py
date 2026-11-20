@@ -92,9 +92,13 @@ def _text_completion_items(with_tool_call: bool) -> tuple[object, ...]:
     return (chunk("Let me "), chunk("clean that up."), chunk("", finish_reason="stop"))
 
 
-def _gemini_chunk(part: dict[str, object], finish_reason: str | None = None) -> dict[str, object]:
+def _gemini_candidate(part: dict[str, object], finish_reason: str | None = None) -> dict[str, object]:
     candidate: Final[dict[str, object]] = {"content": {"role": "model", "parts": [part]}, "index": 0}
-    return {"candidates": [candidate if finish_reason is None else {**candidate, "finishReason": finish_reason}]}
+    return candidate if finish_reason is None else {**candidate, "finishReason": finish_reason}
+
+
+def _gemini_chunk(part: dict[str, object], finish_reason: str | None = None) -> dict[str, object]:
+    return {"candidates": [_gemini_candidate(part, finish_reason)]}
 
 
 GEMINI_FUNCTION_CALL: Final[dict[str, object]] = {
@@ -914,14 +918,7 @@ def _gemini_event(chunk: object) -> bytes:
             id="sse function call after a text part",
         ),
         pytest.param(
-            _gemini_event(
-                {
-                    "candidates": [
-                        _gemini_chunk({"text": "a"})["candidates"][0],
-                        {"content": {"parts": [GEMINI_FUNCTION_CALL]}},
-                    ]
-                }
-            ),  # type: ignore[index]
+            _gemini_event({"candidates": [_gemini_candidate({"text": "a"}), _gemini_candidate(GEMINI_FUNCTION_CALL)]}),
             True,
             id="sse function call in a second candidate",
         ),

@@ -1,6 +1,7 @@
 import json
+from collections.abc import AsyncGenerator
 from types import MappingProxyType, SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -26,6 +27,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     Function,
+    GenericGuardrailAPIInputs,
     Message,
     ModelResponse,
     TextChoices,
@@ -155,7 +157,7 @@ def test_litellm_streaming_hook_reads_the_flags_stream_mode_sets(stream_mode, bu
     assert hook.resolve_streaming_flag(g, "streaming_hold_tool_calls", buffered) is not buffered
 
 
-def test_hold_tool_calls_false_lets_tool_calls_stream_as_they_arrive():
+def test_hold_tool_calls_false_lets_tool_calls_stream_as_they_arrive() -> None:
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         UnifiedLLMGuardrails,
     )
@@ -170,25 +172,25 @@ def test_hold_tool_calls_false_lets_tool_calls_stream_as_they_arrive():
     assert g.streaming_end_of_stream_only is True
 
 
-def test_hold_tool_calls_is_on_unless_turned_off():
+def test_hold_tool_calls_is_on_unless_turned_off() -> None:
     assert _make_guardrail(stream_mode="streaming").streaming_hold_tool_calls is True
     assert _make_guardrail(stream_mode="streaming", hold_tool_calls=True).streaming_hold_tool_calls is True
     assert StraikerGuardrailConfigModelOptionalParams.model_fields["hold_tool_calls"].default is True
 
 
 @pytest.mark.parametrize("hold_tool_calls", [True, False])
-def test_hold_tool_calls_changes_nothing_in_buffered_mode(hold_tool_calls):
+def test_hold_tool_calls_changes_nothing_in_buffered_mode(hold_tool_calls: bool) -> None:
     g = _make_guardrail(stream_mode="buffered", hold_tool_calls=hold_tool_calls)
     assert g.streaming_buffer_until_moderated is True
     assert g.streaming_hold_tool_calls is False
 
 
-def test_only_an_explicit_false_turns_the_hold_off():
+def test_only_an_explicit_false_turns_the_hold_off() -> None:
     assert _make_guardrail(stream_mode="streaming", hold_tool_calls=None).streaming_hold_tool_calls is True
 
 
 @pytest.mark.parametrize(("configured", "holds"), [("false", False), ("true", True), (False, False), (True, True)])
-def test_initializer_reads_hold_tool_calls_written_as_text(configured, holds):
+def test_initializer_reads_hold_tool_calls_written_as_text(configured: str | bool, holds: bool) -> None:
     from litellm.types.guardrails import LitellmParams
 
     callback = initialize_guardrail(
@@ -204,7 +206,9 @@ def test_initializer_reads_hold_tool_calls_written_as_text(configured, holds):
 
 
 @pytest.mark.parametrize("configured", ["sometimes", "os.environ/STRAIKER_HOLD_TOOL_CALLS", "", " false ", 2])
-def test_initializer_keeps_the_guardrail_and_the_hold_on_a_hold_tool_calls_it_cannot_read(configured):
+def test_initializer_keeps_the_guardrail_and_the_hold_on_a_hold_tool_calls_it_cannot_read(
+    configured: str | int,
+) -> None:
     """Raising would start the proxy without the guardrail, so an unreadable value holds instead."""
     from litellm.types.guardrails import LitellmParams
 
@@ -224,14 +228,24 @@ def test_initializer_keeps_the_guardrail_and_the_hold_on_a_hold_tool_calls_it_ca
 class _AllowingStraiker(StraikerGuardrail):
     """Straiker's stream flags with a verdict that always allows, recording what the client had by then."""
 
-    def __init__(self, released, **kwargs):
+    def __init__(self, released: list[object], hold_tool_calls: bool) -> None:
         super().__init__(
-            api_key="k", stream_mode="streaming", guardrail_name="straiker", event_hook="post_call", **kwargs
+            api_key="k",
+            stream_mode="streaming",
+            hold_tool_calls=hold_tool_calls,
+            guardrail_name="straiker",
+            event_hook="post_call",
         )
-        self.released = released
-        self.released_at_verdict = None
+        self.released: Final = released
+        self.released_at_verdict: list[object] | None = None
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
         self.released_at_verdict = list(self.released)
         return inputs
 
@@ -239,13 +253,13 @@ class _AllowingStraiker(StraikerGuardrail):
 @pytest.mark.parametrize(("hold_tool_calls", "tool_call_waits"), [(True, True), (False, False)])
 @pytest.mark.asyncio
 async def test_hold_tool_calls_decides_whether_a_streamed_tool_call_waits_for_the_verdict(
-    hold_tool_calls, tool_call_waits
-):
+    hold_tool_calls: bool, tool_call_waits: bool
+) -> None:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
     from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function, ModelResponseStream, StreamingChoices
 
-    def chunk(delta, finish_reason=None):
+    def chunk(delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
         choice = StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)
         return ModelResponseStream(id="chatcmpl-1", created=1724900000, model="m", choices=[choice])
 
@@ -255,12 +269,12 @@ async def test_hold_tool_calls_decides_whether_a_streamed_tool_call_waits_for_th
     text, tool_call = chunk(Delta(content="On it.")), chunk(Delta(tool_calls=[call]))
     stream = (text, tool_call, chunk(Delta(), finish_reason="tool_calls"))
 
-    async def upstream():
+    async def upstream() -> AsyncGenerator[object, None]:
         for item in stream:
             yield item
 
-    released = []
-    guardrail = _AllowingStraiker(released, hold_tool_calls=hold_tool_calls)
+    released: Final[list[object]] = []
+    guardrail: Final = _AllowingStraiker(released, hold_tool_calls=hold_tool_calls)
     async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
         response=upstream(),
@@ -278,7 +292,7 @@ async def test_hold_tool_calls_decides_whether_a_streamed_tool_call_waits_for_th
     assert text in guardrail.released_at_verdict
 
 
-def test_initializer_reads_hold_tool_calls():
+def test_initializer_reads_hold_tool_calls() -> None:
     from litellm.types.guardrails import LitellmParams
 
     flattened = initialize_guardrail(
