@@ -27,7 +27,7 @@ from litellm.constants import (
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
-from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
+from litellm.litellm_core_utils.health_check_helpers import HealthCheckLogDeployment, native_health_check_mode
 from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
@@ -602,12 +602,20 @@ async def _run_model_health_check(model: dict):
         {**litellm_params, "model_info": {"mode": model_info["mode"]}} if "mode" in model_info else litellm_params
     )
 
+    deployment_id: Final = model_info.get("id")
+    model_group: Final = model.get("model_name")
+    log_deployment: Final = (
+        HealthCheckLogDeployment(deployment_id, model_group)
+        if isinstance(deployment_id, str) and isinstance(model_group, str)
+        else None
+    )
     return await run_with_timeout(
         litellm.ahealth_check(
             probe_params,
             mode=mode,
             prompt=DEFAULT_HEALTH_CHECK_PROMPT,
             input=["test from litellm"],
+            log_deployment=log_deployment,
         ),
         timeout,
     )
