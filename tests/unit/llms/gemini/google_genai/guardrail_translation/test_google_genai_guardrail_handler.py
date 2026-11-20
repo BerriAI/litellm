@@ -2,17 +2,22 @@
 Tests for the Google GenAI generateContent guardrail translation handler.
 """
 
+import copy
 import json
+from collections.abc import Callable, Sequence
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.llms.gemini.google_genai.guardrail_translation.handler import (
     GoogleGenAIGenerateContentHandler,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 
 class GuardrailBlockedError(Exception):
@@ -248,3 +253,157 @@ def test_discovery_finds_generate_content_handler():
     mappings = load_guardrail_translation_mappings()
     assert mappings[CallTypes.agenerate_content] is GoogleGenAIGenerateContentHandler
     assert mappings[CallTypes.agenerate_content_stream] is GoogleGenAIGenerateContentHandler
+
+
+def _masking_card_numbers(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> list[object]:
+    return [
+        {
+            **tool_call,
+            "function": {
+                **tool_call["function"],
+                "arguments": tool_call["function"]["arguments"].replace("4111", "[CARD]"),
+            },
+        }
+        for tool_call in tool_calls
+    ]
+
+
+class _ToolCallGuardrail(CustomGuardrail):
+    def __init__(
+        self,
+        scan_tool_calls: bool = True,
+        rewrite: Callable[[Sequence[ChatCompletionToolCallChunk]], list[object]] = list,
+    ) -> None:
+        super().__init__(guardrail_name="tool-call-guardrail")
+        self.scan_tool_calls_as_text = scan_tool_calls
+        self.rewrite: Final = rewrite
+        self.seen: Final[list[GenericGuardrailAPIInputs]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen.append(inputs)
+        tool_calls: Final = inputs.get("tool_calls")
+        if tool_calls is None:
+            return inputs
+        return {**inputs, "tool_calls": self.rewrite(tool_calls)}
+
+
+FUNCTION_CALL_PART: Final = {"functionCall": {"name": "send_payment", "args": {"card": "4111 1111", "amount": 12.5}}}
+
+
+async def _scan_request(guardrail: _ToolCallGuardrail) -> None:
+    await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data={"model": "gemini-2.5-flash", "contents": [{"role": "model", "parts": [FUNCTION_CALL_PART]}]},
+        guardrail_to_apply=guardrail,
+    )
+
+
+async def _scan_response(guardrail: _ToolCallGuardrail) -> None:
+    await GoogleGenAIGenerateContentHandler().process_output_response(
+        response={"candidates": [{"content": {"role": "model", "parts": [FUNCTION_CALL_PART]}}]},
+        guardrail_to_apply=guardrail,
+    )
+
+
+async def _scan_sse_stream(guardrail: _ToolCallGuardrail) -> None:
+    frame: Final = "data: " + json.dumps({"candidates": [{"content": {"parts": [FUNCTION_CALL_PART]}}]}) + "\r\n\r\n"
+    await GoogleGenAIGenerateContentHandler().process_output_streaming_response(
+        responses_so_far=[frame[:20], frame[20:].encode("utf-8")], guardrail_to_apply=guardrail
+    )
+
+
+async def _scan_object_stream(guardrail: _ToolCallGuardrail) -> None:
+    part: Final = SimpleNamespace(
+        text=None, function_call=SimpleNamespace(name="send_payment", args={"card": "4111 1111", "amount": 12.5})
+    )
+    await GoogleGenAIGenerateContentHandler().process_output_streaming_response(
+        responses_so_far=[SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))])],
+        guardrail_to_apply=guardrail,
+    )
+
+
+SCANS: Final = (
+    pytest.param(_scan_request, id="request"),
+    pytest.param(_scan_response, id="response"),
+    pytest.param(_scan_sse_stream, id="sse-stream"),
+    pytest.param(_scan_object_stream, id="object-stream"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan", SCANS)
+async def test_function_call_parts_reach_the_guardrail_as_tool_calls_when_opted_in(
+    scan: Callable[[_ToolCallGuardrail], object],
+) -> None:
+    guardrail: Final = _ToolCallGuardrail()
+
+    await scan(guardrail)
+
+    (inputs,) = guardrail.seen
+    (tool_call,) = inputs["tool_calls"]
+    assert tool_call["function"]["name"] == "send_payment"
+    assert json.loads(tool_call["function"]["arguments"]) == {"card": "4111 1111", "amount": 12.5}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan", SCANS)
+async def test_function_call_parts_are_not_scanned_by_default(scan: Callable[[_ToolCallGuardrail], object]) -> None:
+    guardrail: Final = _ToolCallGuardrail(scan_tool_calls=False)
+
+    await scan(guardrail)
+
+    assert guardrail.seen == []
+
+
+@pytest.mark.asyncio
+async def test_masked_function_call_args_are_written_back_and_unmasked_ones_are_left_alone() -> None:
+    untouched_args: Final = {"query": "invoices"}
+    sdk_function_call: Final = SimpleNamespace(name="charge", args={"card": "4111 2222"})
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "contents": [
+            {"role": "model", "parts": [{"functionCall": {"name": "search", "args": untouched_args}}]},
+            {"role": "model", "parts": [{"function_call": {"name": "send_payment", "args": {"card": "4111 1111"}}}]},
+            {"role": "model", "parts": [SimpleNamespace(text=None, function_call=sdk_function_call)]},
+        ],
+    }
+
+    await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_masking_card_numbers)
+    )
+
+    assert data["contents"][0]["parts"][0]["functionCall"]["args"] is untouched_args
+    assert data["contents"][1]["parts"][0]["function_call"]["args"] == {"card": "[CARD] 1111"}
+    assert sdk_function_call.args == {"card": "[CARD] 2222"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        pytest.param(lambda tool_calls: [], id="dropped"),
+        pytest.param(
+            lambda tool_calls: [{**call, "function": {**call["function"], "arguments": "[1]"}} for call in tool_calls],
+            id="not-an-object",
+        ),
+    ],
+)
+async def test_function_call_rewrite_the_request_cannot_carry_is_rejected(
+    rewrite: Callable[[Sequence[ChatCompletionToolCallChunk]], list[object]],
+) -> None:
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "model", "parts": [copy.deepcopy(FUNCTION_CALL_PART)]}],
+    }
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await GoogleGenAIGenerateContentHandler().process_input_messages(
+            data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=rewrite)
+        )
+
+    assert data["contents"][0]["parts"][0] == FUNCTION_CALL_PART
