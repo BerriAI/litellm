@@ -40,6 +40,9 @@ LOG_FORMAT_TYPES = Literal["json_array", "ndjson", "single"]
 _SENSITIVE_REDIRECT_HEADERS: Final[frozenset[str]] = frozenset(
     {"authorization", "proxy-authorization", "cookie"}
 )
+_BODY_RELATED_HEADERS: Final[frozenset[str]] = frozenset(
+    {"content-length", "transfer-encoding", "content-type"}
+)
 
 
 def _is_same_origin(source_url: str, target_url: str) -> bool:
@@ -60,15 +63,30 @@ def _is_same_origin(source_url: str, target_url: str) -> bool:
     )
 
 
-def _strip_cross_origin_credentials(
+def _redirect_method_and_body(
+    status_code: int,
+    current_method: str,
+    current_data: str | None,
+) -> tuple[str, str | None]:
+    if status_code == 303 or (status_code in (301, 302) and current_method == "POST"):
+        return ("GET", None)
+    return (current_method, current_data)
+
+
+def _redirect_headers(
     headers: Mapping[str, str],
     source_url: str,
     target_url: str,
+    method: str,
 ) -> Mapping[str, str]:
-    if _is_same_origin(source_url, target_url):
-        return headers
+    same_origin: Final = _is_same_origin(source_url, target_url)
     return MappingProxyType(
-        {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE_REDIRECT_HEADERS}
+        {
+            k: v
+            for k, v in headers.items()
+            if (same_origin or k.lower() not in _SENSITIVE_REDIRECT_HEADERS)
+            and (method != "GET" or k.lower() not in _BODY_RELATED_HEADERS)
+        }
     )
 
 
@@ -345,23 +363,31 @@ class GenericAPILogger(CustomBatchLogger):
     async def _dispatch_hop(
         self,
         target_url: str,
-        data: str,
+        method: str,
+        data: str | None,
         hop_headers: Mapping[str, str],
     ) -> httpx.Response:
         validated_url, host_header = await asyncio.to_thread(validate_url, target_url)
-        headers_dict: dict[str, str] = {**hop_headers, "Host": host_header}  # mutable-ok: headers for httpx post
+        headers_dict: dict[str, str] = {**hop_headers, "Host": host_header}  # mutable-ok: headers for httpx request
         raw_client: Final = getattr(self.async_httpx_client, "client", None)
         if isinstance(raw_client, httpx.AsyncClient) and not isinstance(
             getattr(self.async_httpx_client, "post", None), AsyncMock
         ):
+            content: Final = data.encode("utf-8") if data is not None else None
             req: Final = raw_client.build_request(
-                "POST",
+                method,
                 validated_url,
                 headers=headers_dict,
-                content=data.encode("utf-8"),
+                content=content,
                 timeout=self.timeout,
             )
             return await raw_client.send(req, follow_redirects=False)
+        if method == "GET":
+            return await self.async_httpx_client.get(  # pyright: ignore[reportUnknownMemberType]  # handler.get return type
+                url=validated_url,
+                headers=headers_dict,
+                timeout=self.timeout,
+            )
         return await self.async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # handler.post return type
             url=validated_url,
             headers=headers_dict,
@@ -379,13 +405,20 @@ class GenericAPILogger(CustomBatchLogger):
             )
 
         destination_url = current_url  # rebind-ok: updated across redirect hops
-        hop_headers: Mapping[str, str] = MappingProxyType(dict(self.headers))  # rebind-ok: stripped on cross-origin redirects
+        hop_headers: Mapping[str, str] = MappingProxyType(dict(self.headers))  # rebind-ok: stripped on redirects
+        current_method = "POST"  # rebind-ok: updated on 301/302/303 redirects
+        current_data: str | None = data  # rebind-ok: cleared on 301/302/303 redirects
         for _ in range(5):
-            response = await self._dispatch_hop(destination_url, data, hop_headers)
+            response = await self._dispatch_hop(destination_url, current_method, current_data, hop_headers)
             if not response.is_redirect:
                 return response
             (next_url,) = (extract_redirect_url(response, destination_url),)
-            hop_headers = _strip_cross_origin_credentials(hop_headers, destination_url, next_url)
+            (next_method, next_data) = _redirect_method_and_body(
+                response.status_code, current_method, current_data
+            )
+            hop_headers = _redirect_headers(hop_headers, destination_url, next_url, next_method)
+            current_method = next_method
+            current_data = next_data
             destination_url = next_url
         raise SSRFError("Too many redirects")
 
