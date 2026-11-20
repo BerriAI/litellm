@@ -42,7 +42,7 @@ impl KeyExchangeGroup {
     }
 
     /// This group when `provider` offers it. The FIPS build's OpenSSL provider has no X25519, so there a curve the
-    /// provider lacks is unsupported and the default groups are used, as for a name rustls does not know.
+    /// provider lacks is unsupported and the default groups are used.
     pub(crate) fn offered_by(
         self,
         provider: &CryptoProvider,
