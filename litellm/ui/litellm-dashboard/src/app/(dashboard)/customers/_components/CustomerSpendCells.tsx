@@ -75,9 +75,13 @@ export function CustomerSpendIdentity({
 export function CustomerSpendHeaders({
   children,
   usageLayout = false,
+  showYearly = true,
+  shareLabel,
 }: {
   children: ReactNode;
   usageLayout?: boolean;
+  showYearly?: boolean;
+  shareLabel?: string;
 }) {
   const { t } = useTranslation();
   return (
@@ -86,10 +90,12 @@ export function CustomerSpendHeaders({
         {t(usageLayout ? "customerPortal.list.columns.monthlySpend" : "customerPortal.analytics.monthlySpend")}
       </TableHead>
       {children}
-      <TableHead className={cn("text-right", usageLayout && "px-4")}>
-        {t("customerPortal.analytics.yearlySpend")}
-      </TableHead>
-      <CustomerSpendMetricsHeaders usageLayout={usageLayout} />
+      {showYearly && (
+        <TableHead className={cn("text-right", usageLayout && "px-4")}>
+          {t("customerPortal.analytics.yearlySpend")}
+        </TableHead>
+      )}
+      <CustomerSpendMetricsHeaders usageLayout={usageLayout} shareLabel={shareLabel} />
       <TableHead className={cn("text-right", usageLayout && "px-4")}>{t("customerPortal.analytics.status")}</TableHead>
     </>
   );
@@ -106,6 +112,8 @@ export function CustomerSpendCells({
   shareContent,
   showYearly = true,
   shareLabel,
+  shareSpend = monthlySpend,
+  budgetUnavailable,
 }: {
   entity: CustomerUsageEntity;
   monthlySpend: number | null;
@@ -117,9 +125,11 @@ export function CustomerSpendCells({
   shareContent?: ReactNode;
   showYearly?: boolean;
   shareLabel?: string;
+  shareSpend?: number | null;
+  budgetUnavailable?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const budgets = customerBudgetUsage(member);
+  const budgets = budgetUnavailable ? [] : customerBudgetUsage(member);
   const monthlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "monthly");
   const yearlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "yearly");
   const otherBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "other");
@@ -139,6 +149,7 @@ export function CustomerSpendCells({
             <CustomerBudgetSpend
               spend={monthlySpend}
               limit={null}
+              limitKnown={!budgetUnavailable}
               label={t("customerPortal.analytics.monthlySpend")}
               showLimit={!customWindows}
             />
@@ -154,7 +165,11 @@ export function CustomerSpendCells({
           ))}
         </div>
       </TableCell>
-      <CustomerBudgetLimitCell limit={customerBudgetLimit(member)} rateLimits={member.rateLimits} />
+      {budgetUnavailable ? (
+        <TableCell className="px-4">{budgetUnavailable}</TableCell>
+      ) : (
+        <CustomerBudgetLimitCell limit={customerBudgetLimit(member)} rateLimits={member.rateLimits} />
+      )}
       {showYearly && (
         <TableCell className={cn("text-right tabular-nums", usageLayout && "px-4")}>
           <div className="space-y-2">
@@ -167,13 +182,13 @@ export function CustomerSpendCells({
               />
             ))}
             {yearlyBudgets.length === 0 && (
-              <CustomerBudgetSpend spend={yearlySpend} limit={null} label={t("customerPortal.analytics.yearlySpend")} showLimit={!customWindows} />
+              <CustomerBudgetSpend spend={yearlySpend} limit={null} limitKnown={!budgetUnavailable} label={t("customerPortal.analytics.yearlySpend")} showLimit={!customWindows} />
             )}
           </div>
         </TableCell>
       )}
       <CustomerSpendMetricsCells
-        monthlySpend={monthlySpend}
+        monthlySpend={shareSpend}
         organizationSpend={organizationSpend}
         usageLayout={usageLayout}
         shareContent={shareContent}
@@ -188,19 +203,25 @@ export function CustomerSpendCells({
             atLimit && "bg-destructive/10 text-destructive",
           )}
         >
-          {t(status)}
+          {t(budgetUnavailable ? "customerPortal.analytics.budgetUsageUnavailable" : status)}
         </span>
       </TableCell>
     </>
   );
 }
 
-export function CustomerSpendMetricsHeaders({ usageLayout = false }: { usageLayout?: boolean }) {
+export function CustomerSpendMetricsHeaders({
+  usageLayout = false,
+  shareLabel,
+}: {
+  usageLayout?: boolean;
+  shareLabel?: string;
+}) {
   const { t } = useTranslation();
   return (
     <>
       <TableHead className={cn("min-w-36 whitespace-normal text-right", usageLayout && "px-4 text-left")}>
-        {t("customerPortal.analytics.customerSpendShare")}
+        {shareLabel ?? t("customerPortal.analytics.customerSpendShare")}
       </TableHead>
       <TableHead className={cn("text-right", usageLayout && "px-4")}>{t("customerPortal.analytics.tokens")}</TableHead>
     </>

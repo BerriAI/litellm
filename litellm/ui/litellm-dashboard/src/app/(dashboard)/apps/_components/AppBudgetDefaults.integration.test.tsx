@@ -15,6 +15,7 @@ import {
   within,
 } from "../../../../../tests/test-utils";
 import AppBudgetDefaults from "./AppBudgetDefaults";
+import AppSettingsPage from "../settings/page";
 import type { App, Budget } from "./appForms";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
@@ -86,6 +87,7 @@ beforeEach(() => {
           })),
         );
       if (path.endsWith("/apps")) return json(listed);
+      if (path.endsWith("/apps/app-chat")) return json(listed.find((app) => app.app_id === "app-chat"));
       if (path.endsWith("/models")) return json(["model-a"]);
       if (path.endsWith("/app_customer_member_budget_groups"))
         return catalog({ "member-1": "Member 1", "member-2": "Member 2" });
@@ -98,6 +100,50 @@ beforeEach(() => {
   );
 });
 afterEach(() => vi.unstubAllGlobals());
+
+it("changes only the current app's member default from its Settings page without loading other apps", async () => {
+  rejectedIds.clear();
+  const user = userEvent.setup();
+  render(<AppSettingsPage />, { searchParams: "?app_id=app-chat&section=members" });
+  const chat = within(await screen.findByRole("group", { name: "Defaults for Chat" }));
+  const select = chat.getByRole("combobox", { name: "Budget group" });
+  await waitFor(() => expect(select).toBeEnabled());
+  await chooseSelectOption(user, select, /^Member 2/);
+  await user.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith("App settings saved."));
+  await expectWrites([["PATCH", "chat", "member-2"]], "default_customer_member_budget_id");
+  expect(screen.queryByRole("group", { name: "Defaults for Support" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Add app default" })).not.toBeInTheDocument();
+  expect(vi.mocked(fetch).mock.calls.map(([request]) => new URL((request as Request).url).pathname)).toEqual(
+    expect.arrayContaining(["/management/v1/apps/app-chat", "/management/v1/app_customer_member_budget_groups"]),
+  );
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.every(([request]) => !new URL((request as Request).url).pathname.endsWith("/apps/resources")),
+  ).toBe(true);
+});
+
+it("edits shared app-member templates from the app page without changing the app's assignment", async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (request.method !== "PATCH") return fallback(request);
+    writes.push(request.clone());
+    return catalog({ "member-1": "Member 1", "member-2": "Member 2" });
+  });
+  const user = userEvent.setup();
+  render(<AppSettingsPage />, { searchParams: "?app_id=app-chat&section=groups&group_scope=app-member" });
+  const row = within(await screen.findByRole("row", { name: "Member 1" }));
+  expect(screen.getByText(/These templates are shared across apps/)).toBeInTheDocument();
+  fireEvent.change(row.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "500" } });
+  await user.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  expect(new URL(writes[0].url).pathname).toBe("/management/v1/app_customer_member_budget_groups");
+  expect(await writes[0].json()).toMatchObject({
+    default_budgets: expect.arrayContaining([expect.objectContaining({ budget_id: "member-1", tpm_limit: 500 })]),
+  });
+});
 
 async function expectWrites(
   expected: ["POST" | "PATCH", string, string | null][],

@@ -28,6 +28,29 @@ const fields = compactBudgetEditorFields(preset);
 const [monthly, yearly] = fields.budgetWindows;
 
 describe("app budget forms", () => {
+  it.each(["1mo", "01mo", "30d", "monthly"])("rejects a second monthly limit expressed as %s", (period) => {
+    const budget = {
+      max_budget: 100,
+      budget_duration: "1mo",
+      budget_limits: [{ max_budget: 200, budget_duration: period }],
+    };
+    expect(
+      compactBudgetEditorValue(compactBudgetEditorFields(budget), { max_budget: 100, budget_duration: "1mo" }),
+    ).toEqual({
+      ok: false,
+      error: "customerPortal.budgetEditor.duplicatePeriod",
+    });
+  });
+
+  it("allows a monthly limit alongside a no-reset cap but rejects duplicate additional periods", () => {
+    const budget = { max_budget: 500, budget_limits: [{ max_budget: 100, budget_duration: "1mo" }] };
+    const fields = compactBudgetEditorFields(budget);
+    expect(compactBudgetEditorValue(fields)).toMatchObject({ ok: true });
+    expect(
+      compactBudgetEditorValue({ ...fields, budgetWindows: [...fields.budgetWindows, ...fields.budgetWindows] }),
+    ).toEqual({ ok: false, error: "customerPortal.budgetEditor.duplicatePeriod" });
+  });
+
   it("saves a rate-only budget and preserves zero limits", () => {
     expect(budgetEditorValue({ ...budgetEditorFields({}), tpm: "50000", rpm: "0" })).toEqual({
       ok: true,

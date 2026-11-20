@@ -18,9 +18,9 @@ const compactPeriodLabels: Record<string, ParseKeys> = {
 
 function periodError(value: string, edited: boolean, unavailablePeriods: readonly string[], t: TFunction): string {
   if (!edited) return "";
-  if (!isValidBudgetDuration(value)) return t("customerPortal.budgetEditor.invalidPeriod");
   if (unavailablePeriods.includes(normalizeBudgetDuration(value)))
     return t("customerPortal.budgetEditor.duplicatePeriod");
+  if (!isValidBudgetDuration(value)) return t("customerPortal.budgetEditor.invalidPeriod");
   return "";
 }
 
@@ -94,7 +94,7 @@ export default function CustomerBudgetPeriodSelect({
             ))}
         </SelectContent>
       </Select>
-      {customPeriod && error && (
+      {error && (
         <span
           id={errorId}
           role="alert"

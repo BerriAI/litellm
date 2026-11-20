@@ -22,7 +22,7 @@ import {
 import { useCustomerBudgetSave } from "../../customers/_components/useCustomerBudgetSave";
 import { useAppBudgetGroups, useAppMemberBudgetGroups } from "./useAppBudgetGroups";
 import { useManagedApps } from "./useManagedApps";
-import { applicationRows, type ApplicationRow } from "./applications";
+import { applicationRows, grantedApplicationRows, type ApplicationRow } from "./applications";
 import { invalidateAppBudgets } from "./appApi";
 import type { App } from "./appForms";
 
@@ -111,16 +111,43 @@ function MemberDefaultDialog({
   );
 }
 
-export default function AppBudgetDefaults({ scope = "organization" }: { scope?: DefaultScope }) {
+export default function AppBudgetDefaults({ scope = "organization", app }: { scope?: DefaultScope; app?: App }) {
+  const rows = useMemo(() => grantedApplicationRows(app ? [app] : []), [app]);
+  return app ? (
+    <AppBudgetDefaultRows key={app.app_id} scope={scope} rows={rows} singleApp />
+  ) : (
+    <ManagedAppBudgetDefaults scope={scope} />
+  );
+}
+
+function ManagedAppBudgetDefaults({ scope }: { scope: DefaultScope }) {
+  const { t } = useTranslation();
+  const { definition, resourceType, resources, apps } = useManagedApps();
+  const rows = useMemo(() => applicationRows(resources.data ?? [], apps.data ?? [], ""), [resources.data, apps.data]);
+  const failed = [definition, resources, apps].find((query) => query.isError);
+  if (failed)
+    return <ErrorState message={extractProxyErrorMessage(failed.error)} onRetry={() => void failed.refetch()} />;
+  if (definition.isPending || (resourceType && (resources.isPending || apps.isPending)))
+    return <p role="status">{t("apps.loading")}</p>;
+  return <AppBudgetDefaultRows scope={scope} rows={rows} />;
+}
+
+function AppBudgetDefaultRows({
+  scope,
+  rows,
+  singleApp = false,
+}: {
+  scope: DefaultScope;
+  rows: ApplicationRow[];
+  singleApp?: boolean;
+}) {
   const { t } = useTranslation();
   const [title, description] = defaultCopy[scope];
   const queryClient = useQueryClient();
-  const { definition, resourceType, resources, apps } = useManagedApps();
   const [drafts, setDrafts] = useState<Record<string, DefaultDraft>>({});
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<{ row: ApplicationRow; draft: DefaultDraft } | null>(null);
   const { pending, error, run } = useCustomerBudgetSave();
-  const rows = useMemo(() => applicationRows(resources.data ?? [], apps.data ?? [], ""), [resources.data, apps.data]);
   const organizationGroups = useAppBudgetGroups(
     rows.map(({ app }) => app?.default_tier_budget_id),
     scope === "organization",
@@ -208,13 +235,11 @@ export default function AppBudgetDefaults({ scope = "organization" }: { scope?: 
       if (results.every(([, result]) => !("error" in result))) toast.success(t("apps.saved"));
     });
   };
-  const failed = [definition, resources, apps].find((query) => query.isError);
-  const resourcesLoading = resourceType && (resources.isPending || apps.isPending);
-  if (failed)
-    return <ErrorState message={extractProxyErrorMessage(failed.error)} onRetry={() => void failed.refetch()} />;
-  if (definition.isPending || resourcesLoading) return <p role="status">{t("apps.loading")}</p>;
   return (
-    <section className="mt-6 space-y-4 border-t pt-6" aria-labelledby={`app-${scope}-default-heading`}>
+    <section
+      className={singleApp ? "space-y-4" : "mt-6 space-y-4 border-t pt-6"}
+      aria-labelledby={`app-${scope}-default-heading`}
+    >
       <div className="space-y-1">
         <h3 id={`app-${scope}-default-heading`} className="font-semibold">
           {t(title)}
@@ -223,10 +248,12 @@ export default function AppBudgetDefaults({ scope = "organization" }: { scope?: 
       </div>
       <form onSubmit={save} className="space-y-4">
         <div className="divide-y rounded-lg border">
-          <div className={`${defaultRowClass} bg-muted/40 text-xs text-muted-foreground`}>
-            <span>{t("apps.alias")}</span>
-            <span>{t("apps.profile")}</span>
-          </div>
+          {!singleApp && (
+            <div className={`${defaultRowClass} bg-muted/40 text-xs text-muted-foreground`}>
+              <span>{t("apps.alias")}</span>
+              <span>{t("apps.profile")}</span>
+            </div>
+          )}
           {rows
             .filter(({ app, resource }) => app || drafts[resource.resource_id])
             .map((row) => {
@@ -240,9 +267,9 @@ export default function AppBudgetDefaults({ scope = "organization" }: { scope?: 
                   key={row.resource.resource_id}
                   role="group"
                   aria-label={t("apps.defaultsFor", { alias: row.resource.alias })}
-                  className={defaultRowClass}
+                  className={singleApp ? "p-5" : defaultRowClass}
                 >
-                  <span className="py-2 text-sm">{row.resource.alias}</span>
+                  {!singleApp && <span className="py-2 text-sm">{row.resource.alias}</span>}
                   <div className="space-y-2">
                     <CustomerBudgetSourceSelect
                       profiles={groups.data?.default_budgets ?? []}
@@ -302,17 +329,19 @@ export default function AppBudgetDefaults({ scope = "organization" }: { scope?: 
               />
             </div>
           )}
-          <div className="p-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={pending || adding || !available.length}
-              onClick={() => setAdding(true)}
-            >
-              {t("apps.addAppDefault")}
-            </Button>
-          </div>
+          {!singleApp && (
+            <div className="p-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={pending || adding || !available.length}
+                onClick={() => setAdding(true)}
+              >
+                {t("apps.addAppDefault")}
+              </Button>
+            </div>
+          )}
         </div>
         {groups.isError && (
           <ErrorState message={extractProxyErrorMessage(groups.error)} onRetry={() => void groups.refetch()} />

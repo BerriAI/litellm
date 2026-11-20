@@ -14,12 +14,14 @@ import {
   testQueryClient,
 } from "../../../../../tests/test-utils";
 import CustomerOrganizationApps from "./CustomerOrganizationApps";
+import { AppOrganizationBudgetDialog } from "./AppOrganizationBudgetDialog";
 import { organizationAppKey } from "./appApi";
 
-const resource = { resource_type: "team", resource_id: "team-chat", alias: "chat", app_id: null };
+const resource = { resource_type: "team" as const, resource_id: "team-chat", alias: "chat", app_id: null };
 const app = {
   ...resource,
   app_id: "app-chat",
+  auto_create_customers: true,
   spend: 0,
   created_at: "",
   updated_at: "",
@@ -67,6 +69,7 @@ beforeEach(() => {
         { ...resource, app_id: bound ? app.app_id : null },
         { ...resource, resource_id: "team-search", alias: "search", app_id: null },
       ]);
+    if (path.endsWith("/apps/app-chat")) return json(app);
     if (path.endsWith("/apps")) {
       if (request.method === "POST") {
         bound = true;
@@ -111,6 +114,42 @@ async function openBudget() {
 const saveBudget = (user: UserEvent) => saveAppBudget(user, requests, "Save app budget");
 
 describe("customer app budgets", () => {
+  it("opens the reusable dialog for one pair, validates periods and preserves temporary increases", async () => {
+    assigned = true;
+    customAssociation = {
+      ...assignedBudget,
+      budget: { max_budget: 50, budget_duration: "1mo", rpm_limit: 10 },
+      budget_override: { max_budget: 100 },
+      budget_override_expires_at: "2099-01-01T00:00:00Z",
+    };
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <AppOrganizationBudgetDialog app={app} organizationId="org-1" organizationAlias="Customer Y" onClose={onClose} />,
+    );
+    const dialog = within(screen.getByRole("dialog", { name: "Customer Y's app budget" }));
+    expect(dialog.getByRole("textbox", { name: "App" })).toHaveValue("chat");
+    await user.click(await dialog.findByRole("button", { name: "Add another spend limit" }));
+    fireEvent.change(dialog.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+      target: { value: "25" },
+    });
+    await chooseAppOption(user, dialog.getAllByRole("combobox", { name: "Reset period" })[1], "Custom period");
+    fireEvent.change(dialog.getByRole("textbox", { name: "Custom period" }), { target: { value: "30d" } });
+    fireEvent.submit(dialog.getByRole("form"));
+    await waitFor(() =>
+      expect(dialog.getAllByRole("alert").at(-1)).toHaveTextContent("A spend limit already uses this period."),
+    );
+    expect(requests.some((request) => request.method === "PUT")).toBe(false);
+    await user.click(dialog.getByRole("button", { name: "Remove limit" }));
+    fireEvent.change(dialog.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "11" } });
+    expect(await saveBudget(user)).toEqual({ budget: { rpm_limit: 11 } });
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(new URL(requests.find((request) => request.method === "PUT")!.url).pathname).toBe(
+      "/management/v1/apps/app-chat/customer_organizations/org-1",
+    );
+    expect(requests.some((request) => new URL(request.url).pathname === "/management/v1/apps")).toBe(false);
+  });
+
   it("offers only the app's models and clears the optional allowlist without removing other limits", async () => {
     bound = true;
     assigned = true;

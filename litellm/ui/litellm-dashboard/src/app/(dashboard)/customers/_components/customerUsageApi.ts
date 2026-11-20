@@ -232,6 +232,27 @@ export const customerAppsUsageCall = async (
   return new Map(totals);
 };
 
+export const customerAppUsageCall = async (
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal"> & { appId: string },
+) => {
+  const usage = mergeCustomerActivityPages(await activityPages("customer_organizations", [], request));
+  return {
+    ...usage,
+    results: usage.results.map((day) => ({
+      ...day,
+      breakdown: {
+        ...day.breakdown,
+        entities: Object.fromEntries(
+          Object.entries(day.breakdown.entities).map(([id, value]) => [
+            id === "Unassigned" && !("alias" in value.metadata) ? "" : id,
+            value,
+          ]),
+        ),
+      },
+    })),
+  };
+};
+
 export const customerChildSpendCall = async ({
   organizationId,
   kind,

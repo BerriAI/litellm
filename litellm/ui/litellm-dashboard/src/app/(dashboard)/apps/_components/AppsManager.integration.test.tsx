@@ -13,6 +13,7 @@ import {
   testQueryClient,
 } from "../../../../../tests/test-utils";
 import AppsManager from "./AppsManager";
+import AppSettingsPage from "../settings/page";
 import type { App } from "./appForms";
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
 
@@ -115,6 +116,36 @@ async function openAppSettings(settings?: Partial<App>) {
   await user.click(await screen.findByRole("button", { name: "Edit chat" }));
   return user;
 }
+
+it("saves the selected app on its Settings page and keeps member defaults untouched", async () => {
+  const fallback = fetchMock.getMockImplementation()!;
+  let currentApp = { ...app, auto_create_customers: true, customer_margin: 0.025 };
+  fetchMock.mockImplementation(async (input) => {
+    const request = new Request(input);
+    if (!new URL(request.url).pathname.endsWith("/apps/app-chat")) return fallback(input);
+    requests.push(request.clone());
+    if (request.method === "PATCH") currentApp = { ...currentApp, ...(await request.clone().json()) };
+    return json(currentApp);
+  });
+  const user = userEvent.setup();
+  render(<AppSettingsPage />, { searchParams: "?app_id=app-chat" });
+  const form = within(await screen.findByRole("form", { name: "Defaults for chat" }));
+  fireEvent.change(form.getByRole("spinbutton", { name: "Surcharge on customer requests (%)" }), {
+    target: { value: "3.5" },
+  });
+  await user.click(form.getByRole("checkbox", { name: "This app may create new customers" }));
+  await user.click(form.getByRole("button", { name: "Save app settings" }));
+  await waitFor(() => expect(requests.filter((request) => request.method === "PATCH")).toHaveLength(1));
+  const patch = requests.find((request) => request.method === "PATCH")!;
+  expect(await patch.json()).toEqual({ budget_id: null, auto_create_customers: false, customer_margin: 0.035 });
+  await waitFor(() => expect(form.getByRole("button", { name: "Save app settings" })).toBeDisabled());
+  expect(form.getByRole("spinbutton", { name: "Surcharge on customer requests (%)" })).toHaveValue(3.5);
+  expect(screen.getByRole("link", { name: "Usage" })).toHaveAttribute(
+    "href",
+    `${uiHref("apps/usage")}?app_id=app-chat`,
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
 
 async function saveAppSettings(user: UserEvent, method: "PATCH" | "POST" = "PATCH", index = 0) {
   await user.click(screen.getByRole("button", { name: "Save app settings" }));
@@ -338,6 +369,14 @@ describe("Gateway app definition", () => {
     await user.click(add);
     expect(editor.getByText("Additional spend limit (USD)")).toBeInTheDocument();
     expect(editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveLength(2);
+    await user.click(editor.getAllByRole("combobox", { name: "Reset period" })[2]);
+    await user.click(await screen.findByRole("option", { name: "Custom period", exact: true }));
+    const duplicatePeriod = editor.getByRole("textbox", { name: "Custom period" });
+    fireEvent.change(duplicatePeriod, { target: { value: "30d" } });
+    expect(duplicatePeriod).toBeInvalid();
+    expect(editor.getByRole("alert")).toHaveTextContent("A spend limit already uses this period.");
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    expect(requests.filter((request) => request.method === "PATCH")).toHaveLength(0);
     await user.click(editor.getAllByRole("button", { name: "Remove limit" })[1]);
     await user.click(editor.getByRole("button", { name: "Remove limit" }));
     expect(editor.queryByText("Additional spend limit (USD)")).not.toBeInTheDocument();
@@ -416,7 +455,10 @@ describe("Gateway app definition", () => {
     await screen.findByRole("button", { name: "1,500 total tokens. View breakdown" });
     const table = screen.getByRole("table", { name: "Applications" });
     const [chat, search] = within(table).getAllByRole("row").slice(1);
-    expect(chat).toHaveTextContent("chat");
+    expect(within(chat).getByRole("link", { name: "chat", exact: true })).toHaveAttribute(
+      "href",
+      `${uiHref("apps/usage")}?app_id=app-chat`,
+    );
     expect(chat).toHaveTextContent("$12.50");
     expect(within(chat).getByRole("meter", { name: "Overall spend share" })).toHaveAttribute("aria-valuenow", "25");
     expect(within(chat).getByRole("button", { name: "1,500 total tokens. View breakdown" })).toHaveTextContent("1.5K");
@@ -466,33 +508,37 @@ describe("Gateway app definition", () => {
       {
         ...app,
         spend: 900,
-        budget: { budget_limits: [{ budget_duration: "1mo", max_budget: 100 }] },
-        budget_usage: [{ budget_duration: "1mo", max_budget: 100, spend: 40, reset_at: null }],
+        budget: { max_budget: 1000, budget_limits: [{ budget_duration: "1mo", max_budget: 100 }] },
+        budget_usage: [
+          { source: "scalar", budget_duration: null, max_budget: 1000, spend: 900, reset_at: null },
+          { source: "window", budget_duration: "1mo", max_budget: 100, spend: 40, reset_at: null },
+        ],
       },
     ];
     render(<AppsManager />);
-    await screen.findByRole("button", { name: "chat" });
+    await screen.findByRole("link", { name: "chat" });
     const usage = within(screen.getByRole("table", { name: "Applications" })).getByRole("progressbar");
     expect(usage).toHaveAttribute("aria-valuenow", "40");
     expect(usage).toHaveAttribute("aria-valuetext", expect.stringContaining("$100"));
+    expect(within(screen.getByRole("table", { name: "Applications" })).queryByText("$900.00")).not.toBeInTheDocument();
   });
 
   it("should show one page of applications at a time and move to the next page", async () => {
     const user = userEvent.setup();
     resources = paginatedResources;
     render(<AppsManager />);
-    await screen.findByRole("button", { name: "app-00" });
-    expect(screen.queryByRole("button", { name: "app-25" })).not.toBeInTheDocument();
+    await screen.findByRole("button", { name: "Edit app-00", exact: true });
+    expect(screen.queryByRole("button", { name: "Edit app-25", exact: true })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page" }));
-    expect(await screen.findByRole("button", { name: "app-25" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "app-00" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Edit app-25", exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit app-00", exact: true })).not.toBeInTheDocument();
   });
 
   it("should open the second page of applications from a link that says page 2", async () => {
     resources = paginatedResources;
     render(<AppsManager />, { searchParams: "?page=2" });
-    expect(await screen.findByRole("button", { name: "app-25" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "app-00" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Edit app-25", exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit app-00", exact: true })).not.toBeInTheDocument();
   });
 
   it("should open the edit modal from an application link", async () => {
@@ -513,15 +559,15 @@ describe("Gateway app definition", () => {
     "should still list applications when the URL carries %s",
     async (searchParams) => {
       render(<AppsManager />, { searchParams });
-      expect(await screen.findByRole("button", { name: "chat" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Edit chat", exact: true })).toBeInTheDocument();
     },
   );
 
   it("should narrow the list with the search box and say when nothing matches", async () => {
     render(<AppsManager />);
-    await screen.findByRole("button", { name: "chat" });
+    await screen.findByRole("button", { name: "Edit chat", exact: true });
     fireEvent.change(screen.getByRole("textbox", { name: "Search applications" }), { target: { value: "billing" } });
-    expect(screen.queryByRole("button", { name: "chat" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit chat", exact: true })).not.toBeInTheDocument();
     expect(screen.getByText("No applications match your search.")).toBeInTheDocument();
   });
 

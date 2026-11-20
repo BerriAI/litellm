@@ -1,5 +1,5 @@
 import type { components } from "@/lib/http/schema";
-import { isValidBudgetDuration } from "@/utils/budgetUtils";
+import { isValidBudgetDuration, normalizeBudgetDuration } from "@/utils/budgetUtils";
 
 export type Budget = components["schemas"]["Budget"];
 const budgetKeys = [
@@ -112,6 +112,22 @@ export const budgetEditorValue = (fields: BudgetEditorFields, original?: Budget 
     if (maxBudget == null) return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
     windows.push({ ...window.budget, max_budget: maxBudget });
   }
+  const periods = [
+    ...(parsed.max_budget == null ? [] : [fields.budgetDuration]),
+    ...windows.map((window) => window.budget_duration),
+  ].map(normalizeBudgetDuration);
+  const originalPeriods = [
+    ...(original?.max_budget == null ? [] : [original.budget_duration ?? ""]),
+    ...(original?.budget_limits ?? []).map((window) => window.budget_duration),
+  ].map(normalizeBudgetDuration);
+  if (
+    periods.some(
+      (period) =>
+        periods.filter((value) => value === period).length >
+        Math.max(1, originalPeriods.filter((value) => value === period).length),
+    )
+  )
+    return { ok: false, error: "customerPortal.budgetEditor.duplicatePeriod" } as const;
   return {
     ok: true,
     value: { ...budgetSettings(original), ...parsed, budget_limits: windows.length ? windows : null },

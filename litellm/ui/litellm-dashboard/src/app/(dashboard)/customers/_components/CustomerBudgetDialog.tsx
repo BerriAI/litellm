@@ -57,7 +57,7 @@ export function CustomerBudgetForm({
   pending: boolean;
   error: string | null;
   onSubmit: FormEventHandler<HTMLFormElement>;
-  onClose: () => void;
+  onClose?: () => void;
   children: ReactNode;
   dirty?: boolean;
   saveLabel?: string;
@@ -78,9 +78,11 @@ export function CustomerBudgetForm({
           </p>
         )}
         <DialogFooter>
-          <Button type="button" variant="outline" disabled={pending} onClick={onClose}>
-            {t("customerPortal.common.cancel")}
-          </Button>
+          {onClose && (
+            <Button type="button" variant="outline" disabled={pending} onClick={onClose}>
+              {t("customerPortal.common.cancel")}
+            </Button>
+          )}
           <Button type="submit" disabled={pending || !dirty}>
             {saveLabel ?? t(pending ? "customerPortal.hierarchy.saving" : "customerPortal.hierarchy.save")}
           </Button>

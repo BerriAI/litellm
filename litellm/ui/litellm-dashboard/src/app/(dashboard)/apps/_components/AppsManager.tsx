@@ -1,38 +1,23 @@
 "use client";
 
-import {
-  budgetEditorFields,
-  budgetPolicyChanges,
-  permanentBudgetEditorValue,
-} from "../../customers/_components/customerBudgetForm";
-
 import { useMemo, useState } from "react";
-import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { DataTablePagination } from "@/components/shared/DataTable";
+import { parseAsString, useQueryState } from "nuqs";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import useAuthorized from "../../hooks/useAuthorized";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
-import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
-import { appSurchargeField, appSurchargeValue, type App, type AppResource } from "./appForms";
+import type { App, AppResource } from "./appForms";
 import { useManagedApps } from "./useManagedApps";
-import { invalidateAppBudgets } from "./appApi";
 import { applicationRows, grantedApplicationRows } from "./applications";
 import { readsEveryApp, useGrantedApps } from "./useGrantedApps";
 import ApplicationsTable from "./ApplicationsTable";
-import AppBudgetEditor from "./AppBudgetEditor";
+import AppSettingsForm from "./AppSettingsForm";
 import AppDefinitionSetting from "./AppDefinitionSetting";
 import { useOverallAppBudgetGroups } from "./useAppBudgetGroups";
-import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
-import { uiHref } from "@/utils/uiHref";
-import { CustomerBudgetDialog, CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
-
-const APPLICATIONS_PAGE_SIZE = 25;
+import { CustomerBudgetDialog } from "../../customers/_components/CustomerBudgetDialog";
 
 export default function AppsManager() {
   const { t } = useTranslation();
@@ -93,7 +78,7 @@ function GrantedApps({ apps }: { apps: readonly App[] }) {
         <p className="mt-1 text-sm text-muted-foreground">{t("apps.grantedHint")}</p>
       </header>
       <section className="rounded-lg border bg-card" aria-label={t("apps.list.title")}>
-        <ApplicationsTable rows={grantedApplicationRows(apps)} loading={false} searching={false} />
+        <ApplicationsTable rows={grantedApplicationRows(apps)} loading={false} />
       </section>
     </main>
   );
@@ -109,33 +94,9 @@ function ApplicationsList({
   onOpen: (resourceId: string) => void;
 }) {
   const { t } = useTranslation();
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
-  const [requestedPageSize, setPageSize] = useQueryState(
-    "page_size",
-    parseAsInteger.withDefault(APPLICATIONS_PAGE_SIZE),
-  );
-  const pageSize = requestedPageSize > 0 ? requestedPageSize : APPLICATIONS_PAGE_SIZE;
-  const rows = useMemo(
-    () => applicationRows(resources.data ?? [], apps.data ?? [], search),
-    [resources.data, apps.data, search],
-  );
-  const currentPage = Math.max(0, Math.min(page, Math.ceil(rows.length / pageSize)) - 1);
+  const rows = useMemo(() => applicationRows(resources.data ?? [], apps.data ?? [], ""), [resources.data, apps.data]);
   return (
     <section className="rounded-lg border bg-card" aria-label={t("apps.list.title")}>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
-        <Input
-          className="max-w-xs"
-          aria-label={t("apps.list.searchPlaceholder")}
-          placeholder={t("apps.list.searchPlaceholder")}
-          value={search}
-          onChange={(event) => {
-            setSearch(event.target.value);
-            void setPage(1);
-          }}
-        />
-        <span className="text-xs text-muted-foreground">{t("apps.list.count", { count: rows.length })}</span>
-      </div>
       {resources.isError || apps.isError ? (
         <div className="p-3">
           <ErrorState
@@ -144,24 +105,8 @@ function ApplicationsList({
           />
         </div>
       ) : (
-        <ApplicationsTable
-          rows={rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize)}
-          loading={resources.isPending || apps.isPending}
-          searching={search.trim() !== ""}
-          onOpen={onOpen}
-        />
+        <ApplicationsTable rows={rows} loading={resources.isPending || apps.isPending} onOpen={onOpen} />
       )}
-      <DataTablePagination
-        page={currentPage}
-        pageSize={pageSize}
-        rowCount={rows.length}
-        onPageChange={(pageIndex) => void setPage(pageIndex + 1)}
-        onPageSizeChange={(size) => {
-          void setPageSize(size);
-          void setPage(1);
-        }}
-        isLoading={resources.isFetching || apps.isFetching}
-      />
     </section>
   );
 }
@@ -199,7 +144,7 @@ function ResourceDefaults({ resource, onClose }: { resource: AppResource; onClos
         </div>
       )}
       {ready && groups.data && (
-        <AppDefaultsForm
+        <AppSettingsForm
           resource={resource}
           app={app.data}
           profiles={groups.data.default_budgets}
@@ -208,145 +153,5 @@ function ResourceDefaults({ resource, onClose }: { resource: AppResource; onClos
         />
       )}
     </CustomerBudgetDialog>
-  );
-}
-
-const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default_budgets"]) => {
-  const customSource = app?.budget ? "custom" : "inherit";
-  return {
-    budget: budgetEditorFields(app?.budget),
-    policy: app?.budget,
-    budgetSource: profiles.some((profile) => profile.budget_id === app?.budget_id)
-      ? `profile:${app?.budget_id}`
-      : customSource,
-    autoCreate: app?.auto_create_customers ?? true,
-    surcharge: appSurchargeField(app?.customer_margin),
-  };
-};
-
-function AppDefaultsForm({
-  resource,
-  app,
-  profiles,
-  onClose,
-  onPendingChange,
-}: {
-  resource: AppResource;
-  app?: App;
-  profiles: BudgetGroups["default_budgets"];
-  onClose: () => void;
-  onPendingChange: (pending: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const { fields, setFields, update, pending, error, save } = useCustomerBudgetForm(
-    {
-      initial: appDefaultsFields(app, profiles),
-      parse: (fields) => {
-        const budget =
-          fields.budgetSource === "custom"
-            ? permanentBudgetEditorValue(fields.budget, app?.budget)
-            : ({ ok: true, value: null } as const);
-        if (!budget.ok) return { ok: false, error: t("customerPortal.hierarchy.invalidNumber") };
-        const margin = appSurchargeValue(fields.surcharge);
-        if (!margin.ok) return { ok: false, error: t("apps.surchargeInvalid") };
-        return {
-          ok: true,
-          value: {
-            ...(fields.budgetSource === "custom"
-              ? { budget: { ...budget.value, ...budgetPolicyChanges(fields.policy, app?.budget) } }
-              : { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null }),
-            auto_create_customers: fields.autoCreate,
-            customer_margin: margin.value,
-          },
-        };
-      },
-      write: async (body) => {
-        const response = app
-          ? await fetchClient.PATCH("/management/v1/apps/{app_id}", { params: { path: { app_id: app.app_id } }, body })
-          : await fetchClient.POST("/management/v1/apps", {
-              body: { ...body, resource_id: resource.resource_id, resource_type: resource.resource_type },
-            });
-        if (response.data) setFields(appDefaultsFields(response.data, profiles));
-        await invalidateAppBudgets(queryClient);
-        onClose();
-      },
-    },
-    onPendingChange,
-  );
-  const changeBudgetSource = (source: string | null) => {
-    if (!source) return;
-    setFields((current) => {
-      const selected =
-        source === "custom"
-          ? profiles.find((profile) => `profile:${profile.budget_id}` === current.budgetSource)
-          : null;
-      return {
-        ...current,
-        budgetSource: source,
-        budget: { ...(selected ? budgetEditorFields(selected) : current.budget), budgetEnabled: source === "custom" },
-        policy: selected ?? current.policy,
-      };
-    });
-  };
-  return (
-    <CustomerBudgetForm
-      pending={pending}
-      error={error}
-      onSubmit={save}
-      onClose={onClose}
-      saveLabel={t("apps.save")}
-      label={t("apps.defaultsFor", { alias: resource.alias })}
-    >
-      <AppBudgetEditor
-        modelScope={resource}
-        title={t("apps.appBudget")}
-        description={t("apps.appBudgetHint")}
-        id="app-budget"
-        fields={fields.budget}
-        onChange={(value) => update("budget", value)}
-        disabled={pending}
-        source={{
-          profiles,
-          value: fields.budgetSource,
-          onChange: changeBudgetSource,
-        }}
-      />
-      <a href={`${uiHref("customers/settings")}?tab=overall-app`} className="text-xs text-primary hover:underline">
-        {t("apps.manageOverallProfiles")}
-      </a>
-      <div className="border-t pt-6">
-        <a href={`${uiHref("customers/settings")}?tab=app-member`} className="text-sm text-primary hover:underline">
-          {t("apps.manageMemberProfiles")}
-        </a>
-      </div>
-      <div className="space-y-1.5 border-t pt-4">
-        <label className="flex items-center gap-2 text-sm font-medium">
-          <Checkbox
-            checked={fields.autoCreate}
-            disabled={pending}
-            onCheckedChange={(checked) => update("autoCreate", checked === true)}
-          />
-          {t("apps.autoCreateCustomers")}
-        </label>
-        <p className="text-xs text-muted-foreground">{t("apps.autoCreateCustomersHint")}</p>
-      </div>
-      <div className="max-w-md space-y-1.5 border-t pt-4">
-        <label htmlFor="app-surcharge" className="block text-sm font-medium">
-          {t("apps.surcharge")}
-        </label>
-        <Input
-          id="app-surcharge"
-          type="number"
-          step="any"
-          className="w-full"
-          placeholder={t("apps.surchargePlaceholder")}
-          disabled={pending}
-          value={fields.surcharge}
-          onChange={(event) => update("surcharge", event.target.value)}
-        />
-        <p className="text-xs text-muted-foreground">{t("apps.surchargeHint")}</p>
-      </div>
-    </CustomerBudgetForm>
   );
 }

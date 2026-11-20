@@ -74,7 +74,7 @@ export default function CustomerBudgetWindows({
               disabled={disabled}
               unavailablePeriods={unavailablePeriods}
               onChange={(value) => {
-                if (value === period || unavailablePeriods.includes(normalizeBudgetDuration(value))) return;
+                if (value === period) return;
                 onChange(
                   windows.map((entry, i) =>
                     i === index

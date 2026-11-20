@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
 import type { SortingState } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown, Pencil } from "lucide-react";
+import { Pencil } from "lucide-react";
 import { createSerializer, parseAsString } from "nuqs";
 import { Button } from "@/components/ui/button";
+import { SortableTableHead } from "@/components/shared/DataTable/SortableTableHead";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
@@ -15,7 +16,6 @@ import CustomerTokenTotal from "./CustomerTokenTotal";
 import { EMPTY_CUSTOMER_USAGE, type CustomerUsageTotals } from "./customerUsageTotals";
 
 const usageHref = createSerializer({ org: parseAsString, from: parseAsString, to: parseAsString });
-const SORT_DIRECTIONS = ["ascending", "descending"] as const;
 const COLUMNS = [
   { id: "customer", label: "customerPortal.list.columns.customer" },
   { id: "group", label: "customerPortal.list.columns.tier" },
@@ -72,27 +72,18 @@ export default function CustomerOrganizationsTable({
                 </TableHead>
               );
             }
-            const active = sorting[0]?.id === id;
-            const descending = sorting[0]?.desc ?? false;
-            const SortIcon = descending ? ArrowDown : ArrowUp;
-            const Icon = active ? SortIcon : ArrowUpDown;
-            const direction = SORT_DIRECTIONS[Number(descending)];
             return (
-              <TableHead
+              <SortableTableHead
                 key={id}
-                aria-sort={active ? direction : "none"}
+                id={id}
+                sorting={sorting}
+                onSort={onSort}
+                defaultDescending={id !== "customer" && id !== "budget"}
                 className={cn("px-4", id === "spend" && "w-[30%] min-w-80", id === "status" && "text-right")}
+                buttonClassName={id === "share" ? "h-auto min-h-8 py-1 text-left whitespace-normal" : undefined}
               >
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className={cn("-mx-2 gap-2", id === "share" && "h-auto min-h-8 py-1 text-left whitespace-normal")}
-                  onClick={() => onSort([{ id, desc: active ? !descending : id !== "customer" && id !== "budget" }])}
-                >
-                  {t(label)}
-                  <Icon aria-hidden="true" className="size-3.5" />
-                </Button>
-              </TableHead>
+                {t(label)}
+              </SortableTableHead>
             );
           })}
         </TableRow>
