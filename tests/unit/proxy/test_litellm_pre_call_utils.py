@@ -9213,11 +9213,11 @@ def test_client_typesafe_danger_zone_headers_stay_off_other_providers(custom_llm
     assert _headers_forwarded_to(TYPESAFE_DANGER_ZONE_HEADERS, custom_llm_provider) == {}
 
 
-def _unsigned_jwt_segment(payload: dict) -> str:
+def _unsigned_jwt_segment(payload: Mapping[str, str | Mapping[str, str]]) -> str:
     return base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
 
 
-_UNSIGNED_CHATGPT_JWT = ".".join(
+_UNSIGNED_CHATGPT_JWT: Final = ".".join(
     (_unsigned_jwt_segment({"alg": "none"}), _unsigned_jwt_segment({"https://api.openai.com/auth": {}}), "")
 )
 
