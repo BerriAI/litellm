@@ -30,6 +30,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.responses.instructions_length import RESPONSES_INSTRUCTIONS_MAX_LENGTH
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, StandardLoggingPayload, TextCompletionResponse
@@ -7694,3 +7695,55 @@ def test_transform_request_forwards_vertex_credentials_only_for_vertex_muse_mode
     assert {key: request.get(key) for key in credentials} == (
         credentials if forwards else dict.fromkeys(credentials)
     )
+
+
+_USER_HI: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+_WIRE_RESPONSE: Final = {
+    "id": "resp_wire",
+    "object": "response",
+    "created_at": 1789788253,
+    "status": "completed",
+    "model": "gpt-6.2-sol",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_wire",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["acompletion", "completion"])
+@pytest.mark.parametrize(
+    ("length", "moves_to_input"),
+    [(RESPONSES_INSTRUCTIONS_MAX_LENGTH, False), (RESPONSES_INSTRUCTIONS_MAX_LENGTH + 1, True)],
+    ids=["at_limit_stays_in_instructions", "over_limit_goes_in_input"],
+)
+async def test_truncation_auto_sends_a_system_prompt_too_long_for_instructions_as_a_system_input_item(
+    length: int, moves_to_input: bool, sync: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    prompt: Final = "a" * length
+    call: Final = {
+        "model": "openai/responses/gpt-6.2-sol",
+        "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": "hi"}],
+        "api_key": "sk-test",
+        "extra_body": {"truncation": "auto"},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=_WIRE_RESPONSE)
+        )
+        if sync:
+            litellm.completion(**call)
+        else:
+            await litellm.acompletion(**call)
+    (call_sent,) = upstream.calls
+    sent: Final = json.loads(call_sent.request.content)
+    expected: Final = (None, [_system_input_item(prompt), _USER_HI]) if moves_to_input else (prompt, [_USER_HI])
+    assert (sent.get("instructions"), sent["input"]) == expected

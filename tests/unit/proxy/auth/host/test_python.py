@@ -54,6 +54,7 @@ def _host(
     route: str = "/chat/completions",
     request_data: dict[str, object] | None = None,  # mutable-ok: the host takes the request body it rewrites
     cache: UserApiKeyCache | None = None,
+    jwks_cache: DualCache | None = None,
     http_handler: HTTPHandler | None = None,
     shared_fetches: SharedFetches | None = None,
     api_key: str | None = None,
@@ -74,6 +75,7 @@ def _host(
         else None,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        jwks_cache=jwks_cache or DualCache(),
         proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
         llm_router=None,
         llm_model_list=None,
@@ -189,7 +191,12 @@ def _token(claims: dict[str, object]) -> str:
 
 
 async def _authorize(
-    token: str, route: str, cache: UserApiKeyCache, jwks: _Jwks, shared_fetches: SharedFetches | None = None
+    token: str,
+    route: str,
+    cache: UserApiKeyCache,
+    jwks: _Jwks,
+    shared_fetches: SharedFetches | None = None,
+    jwks_cache: DualCache | None = None,
 ):
     settings: Final = RustAuthSettings(
         {"enable_jwt_auth": True},
@@ -199,6 +206,7 @@ async def _authorize(
     host: Final = _host(
         route=route,
         cache=cache,
+        jwks_cache=jwks_cache,
         http_handler=jwks,  # pyright: ignore[reportArgumentType]  # serves only the GET the host makes
         shared_fetches=shared_fetches,
         api_key=token,
@@ -234,10 +242,11 @@ async def test_admin_scope_authorizes_a_proxy_admin_from_the_fetched_jwks() -> N
 async def test_a_cached_jwks_is_not_fetched_again() -> None:
     jwks: Final = _Jwks()
     cache: Final = UserApiKeyCache()
+    jwks_cache: Final = DualCache()
     token: Final = _token({"sub": "admin-1", "scope": "litellm_proxy_admin"})
 
-    _ = await _authorize(token, "/key/generate", cache, jwks)
-    _ = await _authorize(token, "/key/generate", cache, jwks)
+    _ = await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache)
+    _ = await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache)
 
     assert jwks.fetches == 1
 
