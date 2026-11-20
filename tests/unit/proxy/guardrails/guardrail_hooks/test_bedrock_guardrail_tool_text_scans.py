@@ -237,3 +237,59 @@ def test_latest_role_only_mode_supports_neither_tool_text_scan():
 
     assert guardrail.supports_scan_tool_calls_as_text() is False
     assert guardrail.supports_scan_tool_descriptions_as_text() is False
+
+
+async def _scanned_history_tool_call(arguments: object) -> str:
+    guardrail: Final = _guardrail(scan_tool_calls=True)
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock, return_value=PASS) as mock_api:
+        await guardrail.apply_guardrail(
+            inputs={
+                "texts": [],
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "send_payment", "arguments": arguments}}
+                ],
+            },
+            request_data={},
+            input_type="request",
+        )
+    return _scanned_input_text(mock_api)
+
+
+@pytest.mark.asyncio
+async def test_json_escaped_tool_call_arguments_are_scanned_decoded():
+    escaped: Final = "".join(f"\\u{ord(char):04x}" for char in SECRET)
+
+    assert SECRET in await _scanned_history_tool_call(f'{{"note": "{escaped}"}}')
+
+
+@pytest.mark.asyncio
+async def test_non_ascii_tool_call_arguments_are_scanned_unescaped():
+    assert "número de tarjeta" in await _scanned_history_tool_call({"note": "número de tarjeta"})
+
+
+@pytest.mark.asyncio
+async def test_tool_call_text_that_json_still_escapes_is_scanned_raw():
+    assert 'say "4111"\n1111' in await _scanned_history_tool_call('{"note": "say \\"4111\\"\\n1111"}')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("depth", [200, 100_000])
+async def test_tool_call_arguments_nested_too_deep_to_scan_are_blocked(depth):
+    with pytest.raises(HTTPException) as blocked:
+        await _scanned_history_tool_call("[" * depth + f'"{SECRET}"' + "]" * depth)
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_tool_call_arguments_that_are_not_json_are_scanned_as_written():
+    assert SECRET in await _scanned_history_tool_call(f'{{"note": "{SECRET}')
+
+
+def test_during_call_mode_supports_neither_tool_text_scan():
+    guardrail: Final = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT", event_hook=["pre_call", "during_call"]
+    )
+
+    assert guardrail.supports_scan_tool_calls_as_text() is False
+    assert guardrail.supports_scan_tool_descriptions_as_text() is False

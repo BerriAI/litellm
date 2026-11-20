@@ -1199,6 +1199,21 @@ class TestScanOnlyToolResultsInitRefusal:
             )
 
     @pytest.mark.parametrize("flag", ["scan_tool_descriptions_as_text", "scan_tool_calls_as_text"])
+    @pytest.mark.parametrize("mode", ["during_call", ["pre_call", "during_call"]])
+    def test_tool_text_scans_are_rejected_on_bedrock_during_call(self, flag, mode):
+        with pytest.raises(ValueError, match=f"{flag} is only supported"):
+            self._initialize(
+                "bedrock-tool-text-during-call",
+                {
+                    "guardrail": "bedrock",
+                    "mode": mode,
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    flag: True,
+                },
+            )
+
+    @pytest.mark.parametrize("flag", ["scan_tool_descriptions_as_text", "scan_tool_calls_as_text"])
     def test_tool_text_scans_are_accepted_on_bedrock(self, flag):
         result = self._initialize(
             "bedrock-tool-text",

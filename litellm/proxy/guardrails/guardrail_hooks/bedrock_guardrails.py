@@ -18,7 +18,7 @@ import sys
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from datetime import datetime, timezone
-from itertools import accumulate, groupby
+from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, Protocol, cast
 
@@ -46,7 +46,6 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_cost_by_unit,
     guardrail_cost_total,
 )
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -69,6 +68,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
     is_raw_sse_stream,
     model_response_text,
 )
+from litellm.proxy.mcp_server.utils import MAX_STRUCTURED_CONTENT_SCAN_DEPTH, json_string_leaves
 from litellm.types.guardrails import (
     BedrockChecksConfigModel,
     BedrockGuardrailOutputScope,
@@ -271,14 +271,47 @@ def _tool_call_field(value: object, name: str) -> object:
     return value.get(name) if isinstance(value, Mapping) else getattr(value, name, None)
 
 
-def _tool_call_as_text(tool_call: object) -> str:
+def _json_escapes_survive(text: str) -> bool:
+    return json.dumps(text, ensure_ascii=False)[1:-1] != text
+
+
+def _tool_call_arguments_as_text(arguments: object) -> str | None:
+    """Decoded text of tool-call arguments, or None when they nest too deep to scan.
+
+    Arguments are decoded first so JSON escapes cannot hide text from the guardrail;
+    a key or string value that still needs escaping is appended in its raw form.
+    """
+    if not arguments:
+        return ""
+    try:
+        decoded: Final[object] = json.loads(arguments) if isinstance(arguments, str) else arguments
+    except RecursionError:
+        return None
+    except ValueError:
+        return str(arguments)
+    if isinstance(decoded, str):
+        return decoded
+    leaves: Final = json_string_leaves(decoded)
+    if leaves is None:
+        return None
+    key_parts: Final = chain.from_iterable(path for path, _ in leaves)
+    keys: Final = (part for part in key_parts if isinstance(part, str))
+    values: Final = (text for _, text in leaves)
+    escaped: Final = dict.fromkeys(text for text in (*keys, *values) if _json_escapes_survive(text))
+    return "\n".join((json.dumps(decoded, ensure_ascii=False, default=str), *escaped))
+
+
+def _tool_call_as_text(tool_call: object) -> str | None:
+    """Name and decoded arguments of a tool call, or None when the arguments cannot be scanned."""
     function: Final = _tool_call_field(tool_call, "function")
     source: Final = tool_call if function is None else function
     name: Final = _tool_call_field(source, "name")
     arguments: Final = next(
         (value for key in ("arguments", "input") if (value := _tool_call_field(source, key)) is not None), None
     )
-    arguments_text: Final = arguments if isinstance(arguments, str) else safe_dumps(arguments) if arguments else ""
+    arguments_text: Final = _tool_call_arguments_as_text(arguments)
+    if arguments_text is None:
+        return None
     return "\n".join(part for part in (name if isinstance(name, str) else "", arguments_text) if part)
 
 
@@ -633,11 +666,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def supports_scan_only_tool_results(self) -> bool:
         return self.experimental_use_latest_role_message_only is not True
 
+    def _supports_tool_text_scans(self) -> bool:
+        """The tool text scans run in apply_guardrail, which the native during_call hook never reaches."""
+        return self.experimental_use_latest_role_message_only is not True and not self._event_hook_is_event_type(
+            GuardrailEventHooks.during_call
+        )
+
     def supports_scan_tool_descriptions_as_text(self) -> bool:
-        return self.experimental_use_latest_role_message_only is not True
+        return self._supports_tool_text_scans()
 
     def supports_scan_tool_calls_as_text(self) -> bool:
-        return self.experimental_use_latest_role_message_only is not True
+        return self._supports_tool_text_scans()
 
     def supports_structured_messages(self) -> bool:
         return False
@@ -3395,7 +3434,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _scan_tool_calls_as_text(
         self,
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
         input_type: Literal["request", "response"],
     ) -> None:
         """Scan tool-call names and arguments as text, raising when Bedrock blocks them.
@@ -3404,9 +3443,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         if self.scan_tool_calls_as_text is not True or effective_scan_only_tool_results_for_guardrail(self):
             return
-        tool_call_texts: Final = [
-            text for tool_call in inputs.get("tool_calls") or [] if (text := _tool_call_as_text(tool_call))
-        ]
+        scanned_texts: Final = [_tool_call_as_text(tool_call) for tool_call in inputs.get("tool_calls") or []]
+        if None in scanned_texts:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Content blocked: tool call arguments exceed the maximum nesting depth of "
+                    f"{MAX_STRUCTURED_CONTENT_SCAN_DEPTH} and cannot be scanned by the configured guardrail"
+                },
+            )
+        tool_call_texts: Final = [text for text in scanned_texts if text]
         if not tool_call_texts:
             return
         if input_type == "response":
