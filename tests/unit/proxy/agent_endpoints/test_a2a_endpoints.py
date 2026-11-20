@@ -3343,3 +3343,82 @@ def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseab
     assert body["error"]["code"] == -32000
     assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
     assert body["error"]["data"]["code"] == "403"
+
+
+def _a2a_app_reading_the_body_in_auth() -> TestClient:
+    from fastapi import FastAPI, Request
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+
+    async def authenticate(request: Request) -> UserAPIKeyAuth:
+        await read_request_body(request)
+        return UserAPIKeyAuth(api_key="hashed-caller")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = authenticate
+    return TestClient(app)
+
+
+_PARSE_ERROR: Final = MappingProxyType(
+    {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+)
+_NOT_AN_OBJECT: Final = MappingProxyType(
+    {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request: body must be a JSON object"}}
+)
+
+
+@pytest.mark.parametrize("path", ["/a2a/agent-1", "/a2a/agent-1/message/send", "/v1/a2a/agent-1/message/send"])
+@pytest.mark.parametrize(
+    ("raw_body", "expected"),
+    [
+        pytest.param(b"", _PARSE_ERROR, id="empty"),
+        pytest.param(b"{", _PARSE_ERROR, id="malformed"),
+        pytest.param(b'{"jsonrpc": "2.0", "id": "req-7", "method": "message/send"', _PARSE_ERROR, id="truncated"),
+        pytest.param(b'{"jsonrpc": "2.0", "id": "\\ud800"}', _PARSE_ERROR, id="lone-surrogate"),
+        pytest.param(b"[]", _NOT_AN_OBJECT, id="array"),
+        pytest.param(b'"x"', _NOT_AN_OBJECT, id="string"),
+        pytest.param(b"null", _NOT_AN_OBJECT, id="null"),
+    ],
+)
+def test_a2a_body_that_is_not_a_json_object_answers_a_jsonrpc_parse_or_invalid_request_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    path: str,
+    raw_body: bytes,
+    expected: Mapping[str, object],
+) -> None:
+    from litellm.proxy import proxy_server
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging_obj)
+
+    response: Final = _a2a_app_reading_the_body_in_auth().post(
+        path, content=raw_body, headers={"content-type": "application/json"}
+    )
+
+    assert (response.status_code, response.json()) == (400, expected), response.text
+    assert [record.getMessage() for record in caplog.records if record.exc_info] == []
+
+
+def test_a2a_empty_body_is_logged_once_as_a_rejected_call_to_the_target_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging
+
+    recorder: Final = _RejectionRecorder()
+    for name in ("callbacks", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [recorder])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+
+    response: Final = _a2a_app_reading_the_body_in_auth().post("/a2a/agent-1", content=b"")
+
+    assert response.status_code == 400, response.text
+    assert len(recorder.hook_calls) == 1
+    hook_data, hook_exception = recorder.hook_calls[0]
+    assert (hook_data["agent_id"], hook_data["model"]) == ("agent-1", "a2a_agent/agent-1")
+    assert isinstance(hook_exception, HTTPException)
+    assert (hook_exception.status_code, hook_exception.detail) == (400, "Parse error")
