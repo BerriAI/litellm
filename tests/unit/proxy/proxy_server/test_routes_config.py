@@ -203,6 +203,38 @@ def test_config_update_persists_only_the_general_settings_keys_the_request_set(
     assert persisted == {"alerting_threshold": 600}
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "payload"),
+    [
+        ("/config/update", {"general_settings": {"required_customer_headers": ["X-Tenant-ID"]}}),
+        ("/config/update", {"general_settings": {"required_customer_headers": []}}),
+        (
+            "/config/field/update",
+            {
+                "config_type": "general_settings",
+                "field_name": "required_customer_headers",
+                "field_value": ["X-Tenant-ID"],
+            },
+        ),
+    ],
+)
+def test_required_customer_headers_cannot_be_updated_through_admin_api(
+    client, auth_as, mock_prisma, monkeypatch, endpoint, payload
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(endpoint, json=payload)
+
+    assert response.status_code == 400, response.text
+    assert "general_settings.required_customer_headers can only be set in the YAML config file." in response.text
+    table.upsert.assert_not_called()
+
+
 def test_config_update_persists_only_the_router_settings_keys_the_request_set(
     client, auth_as, mock_prisma, monkeypatch
 ):

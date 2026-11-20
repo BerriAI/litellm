@@ -3180,7 +3180,7 @@ async def _authorize_authenticated_request(
 def _check_required_inference_customer_headers(
     headers: Mapping[str, object], route: str, settings: Mapping[str, object]
 ) -> None:
-    required_headers: Final = settings.get("required_customer_headers")
+    required_headers: Final = settings.get(REQUIRED_CUSTOMER_HEADERS_SETTING)
     if required_headers is None or not RouteChecks.runs_inference_checks(route) or RouteChecks.is_info_route(route):
         return
     if not RustAuth.is_public_route(route, core.proxy_settings()):

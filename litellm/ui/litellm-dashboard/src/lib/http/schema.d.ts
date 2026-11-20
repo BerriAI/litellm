@@ -33136,12 +33136,6 @@ export interface components {
              */
             request_tag_mappings?: components["schemas"]["RequestTagMapping"][] | null;
             /**
-             * Required Customer Headers
-             * @description Request header names that must each have a non-blank value on authenticated inference requests. Use the actual header names, including any custom customer header names. Header names are case-insensitive. Missing headers return HTTP 403 even if the caller uses a JWT. An empty list (the default) requires no headers. This does not change how customer identity is resolved.
-             * @default []
-             */
-            required_customer_headers: string[];
-            /**
              * Responses Websocket Session Limit Seconds
              * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.
              * @default 3600

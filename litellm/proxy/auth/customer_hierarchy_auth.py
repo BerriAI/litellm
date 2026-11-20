@@ -20,11 +20,11 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    REQUIRED_CUSTOMER_HEADERS_ADAPTER,
     JWTIssuerConfig,
     LiteLLM_JWTAuth,
     ProxyErrorTypes,
     ProxyException,
-    RequiredCustomerHeaders,
 )
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
@@ -149,11 +149,8 @@ def _header_value(headers: Mapping[str, object] | None, header: str) -> str | No
     return values[0] if values else None
 
 
-_REQUIRED_CUSTOMER_HEADERS: Final = TypeAdapter[RequiredCustomerHeaders](RequiredCustomerHeaders)
-
-
 def check_required_customer_headers(headers: Mapping[str, object], specified: object) -> None:
-    for header in _REQUIRED_CUSTOMER_HEADERS.validate_python(specified):
+    for header in REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(specified):
         if _header_value(headers, header) is None:
             raise _forbidden(f"Missing required customer header {header}", header)
 

@@ -5392,6 +5392,33 @@ async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_run
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("load_at_startup", [True, False])
+async def test_stored_required_customer_headers_are_ignored_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, load_at_startup: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    pc: Final = ProxyConfig()
+    stored: Final = {"required_customer_headers": ["X-Tenant-ID"]}
+    monkeypatch.setattr(proxy_server, "general_settings", pc.settings)
+
+    async def get_config_param(_, param_name):
+        return SimpleNamespace(param_value=stored) if param_name == "general_settings" else None
+
+    monkeypatch.setattr(proxy_server, "get_config_param", get_config_param)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        if load_at_startup:
+            await pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
+        else:
+            await pc._update_general_settings(stored)
+
+    assert "required_customer_headers" not in pc.settings
+    assert "general_settings.required_customer_headers is stored in the database, but the proxy does not apply" in (
+        caplog.text
+    )
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stores(monkeypatch):
     pc = ProxyConfig()
     config = {
