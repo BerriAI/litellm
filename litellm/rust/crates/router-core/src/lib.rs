@@ -86,6 +86,7 @@
 //! - [`reach`]: the groups a name can be served by and the host steps each one asks for.
 //! - [`eligibility`]: the endpoints a deployment refuses to serve.
 //! - [`precall`]: the `enable_pre_call_checks` filter.
+//! - [`pre_call_checks`]: the `optional_pre_call_checks` the config has the core run itself.
 //! - [`model_info`]: model info merged from the cost map, asked of the host at query time.
 //! - [`host`]: the `RouterHost` and `RegistryHost` boundaries.
 
@@ -106,6 +107,7 @@ pub mod lookup;
 pub mod mock;
 pub mod model_info;
 pub mod outcome;
+pub mod pre_call_checks;
 pub mod precall;
 pub mod prerouting;
 pub mod ptu;
@@ -139,7 +141,7 @@ pub use crate::{
     },
     call::RouterResponse,
     config::{Op, RouterConfig, RouterDynamicConfig},
-    error::{AttemptError, ConfigError, Error, FailureKind, RaisedAt},
+    error::{AttemptError, ConfigError, Error, FailureKind, RaisedAt, RaisedBy, Refused},
     health::{Clock, Health, Outcome, SystemClock},
     host::{
         Attempt, AttemptFailure, Blocked, BuildAsk, BuildPath, Built, CallError, CallbackFiltered,
@@ -228,7 +230,7 @@ impl<'a, H: RouterHost> Call<'a, H> {
                 own,
                 Error::Attempt {
                     failure: facts,
-                    raised_at: Some(slot),
+                    raised_by: RaisedBy::Host(slot),
                 },
             ),
             AttemptFailure::Refused(own) => (own, Error::Refused(slot)),
@@ -243,8 +245,11 @@ impl<'a, H: RouterHost> Call<'a, H> {
     /// The error the call ends on, with the host error behind it when an attempt raised it.
     pub(crate) fn ended(&self, error: Error) -> Box<CallError<H::Failure>> {
         let slot = match &error {
-            Error::Attempt { raised_at, .. } => *raised_at,
-            Error::Refused(slot) => Some(*slot),
+            Error::Attempt {
+                raised_by: RaisedBy::Host(slot),
+                ..
+            }
+            | Error::Refused(slot) => Some(*slot),
             _ => None,
         };
         let raised =
@@ -603,6 +608,16 @@ impl Router {
         let Some(deployment) = snapshot.registry.deployment(id) else {
             return Ok(None);
         };
+        self.core
+            .config
+            .pre_call_checks
+            .succeeded(
+                cache,
+                &deployment,
+                total_tokens as u64,
+                self.core.clock.now(),
+            )
+            .await;
         let health = self.health(cache);
         health.count_success(id).await?;
         if !report
