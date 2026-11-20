@@ -12396,3 +12396,22 @@ def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_respons
         )
 
     assert (image_data in str(exc_info.value)) is echoes_response
+
+
+@pytest.mark.parametrize("model", ["canopylabs/orpheus-3b-0.1-ft", "Qwen/Qwen3-TTS-12Hz-1.7B"])
+def test_together_speech_row_priced_per_character_is_not_billed_as_a_chat_size_bucket(model: str) -> None:
+    text: Final = "Hello from the cost tracking check."
+    response: Final = HttpxBinaryResponseContent(
+        httpx.Response(200, content=b"RIFF....WAVE", headers={"content-type": "audio/wav"})
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=f"together_ai/{model}",
+        custom_llm_provider="together_ai",
+        call_type="speech",
+        prompt=text,
+    )
+
+    per_character: Final = litellm.model_cost[f"together_ai/{model}"]["input_cost_per_character"]
+    assert cost == pytest.approx(litellm.utils.count_characters(text=text) * per_character)

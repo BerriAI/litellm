@@ -1534,8 +1534,18 @@ def _billed_earlier_attempts(
     ``base_model`` or model, which a fallback hop can make a different model than the final one).
     Only the exception class survives on the record, so an earlier connect timeout is billed too;
     any other failure class is not."""
-    final_attempt: Final = _retry_metadata_bucket(litellm_params).get("attempted_retries")
-    final_identity: Final = (deployment_id, final_attempt if isinstance(final_attempt, int) else None)
+    retry_metadata: Final = _retry_metadata_bucket(litellm_params)
+    final_attempt: Final = retry_metadata.get("attempted_retries")
+    routed_model_info: Final = retry_metadata.get("model_info")
+    routed_id: Final = (
+        cast("Mapping[str, object]", routed_model_info).get("id")  # cast-ok: untyped router dict, read with .get
+        if isinstance(routed_model_info, dict)
+        else None
+    )
+    final_identity: Final = (
+        routed_id if isinstance(routed_id, str) else deployment_id,
+        final_attempt if isinstance(final_attempt, int) else None,
+    )
     return tuple(
         _billed_earlier_attempt(model_call_details, record, index, estimated_usage, base_model)
         for index, record in enumerate(_timed_out_earlier_records(litellm_params, final_identity))

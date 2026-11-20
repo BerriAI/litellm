@@ -47,6 +47,7 @@ export default function CustomerBudgetSpend({
   compact = false,
   stacked = false,
   showLimit = true,
+  limitKnown = true,
 }: {
   spend: number | null;
   limit: number | null;
@@ -54,6 +55,7 @@ export default function CustomerBudgetSpend({
   compact?: boolean;
   stacked?: boolean;
   showLimit?: boolean;
+  limitKnown?: boolean;
 }) {
   const { t } = useTranslation();
   const spendValue = spend === null ? t("customerPortal.analytics.unknownSpend") : formatUsd(spend);
@@ -64,7 +66,7 @@ export default function CustomerBudgetSpend({
         <div>{spendValue}</div>
         <div className="text-xs text-muted-foreground">
           {limit === null
-            ? t("customerPortal.analytics.noLimit")
+            ? t(limitKnown ? "customerPortal.analytics.noLimit" : "customerPortal.analytics.unknownSpend")
             : t("customerPortal.analytics.limitAmount", { amount: formatUsd(limit) })}
         </div>
       </div>

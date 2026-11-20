@@ -2689,6 +2689,12 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
     prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    prisma_client.jsonify_object = PrismaClient.jsonify_object.__get__(prisma_client)
+    transaction: Final = prisma_client.tx.return_value.__aenter__.return_value
+    transaction.query_raw = mocker.AsyncMock(return_value=[{
+        "budget_limits": saved_user.model_dump(mode="json")["budget_limits"],
+    }])
+    transaction.litellm_usertable.upsert = mocker.AsyncMock(return_value=saved_user)
     mocker.patch(
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
@@ -2704,7 +2710,27 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
         user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
-    _assert_resent_windows_keep_their_resets(prisma_client.update_data.call_args.kwargs["data"]["budget_limits"])
+    _assert_resent_windows_keep_their_resets(transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]["budget_limits"])
+
+
+@pytest.mark.asyncio
+async def test_user_window_write_keeps_a_reset_committed_after_admin_read() -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _write_user_update
+
+    original: Final = {"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2030-01-02T00:00:00+00:00"}
+    reset: Final = "2030-01-03T00:00:00+00:00"
+    user: Final = LiteLLM_UserTable(user_id="window-user", budget_limits=[original])
+    database: Final = MagicMock()
+    database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": [{**original, "reset_at": reset}]}])
+    transaction.litellm_usertable.upsert = AsyncMock(return_value=user)
+    await _write_user_update(database, user.user_id, {
+        "user_id": user.user_id, "budget_limits": json.dumps([{**original, "max_budget": 50.0}]),
+    }, user)
+    assert json.loads(transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]["budget_limits"]) == [
+        {**original, "max_budget": 50.0, "reset_at": reset},
+    ]
 
 
 @pytest.mark.asyncio

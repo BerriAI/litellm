@@ -9806,6 +9806,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/apps/resources/{resource_type}/{resource_id}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List App Resource Models
+         * @description List models accessible to an app's underlying team, project, or virtual key. Proxy admins only.
+         */
+        get: operations["list_app_resource_models_management_v1_apps_resources__resource_type___resource_id__models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/apps/{app_id}": {
         parameters: {
             query?: never;
@@ -32056,6 +32076,11 @@ export interface components {
             circuit_breaker_enabled: boolean;
             /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
+            /**
+             * Max Output Tokens
+             * @description Optional output token limit for LLM classifier calls. Leave unset to keep the classifier deployment or provider default. When set, overrides the deployment limit. Leave room for reasoning tokens when reasoning_effort is set.
+             */
+            max_output_tokens?: number | null;
             /**
              * Model
              * @description Model name (from the router's model_list) to call for classification
@@ -70693,6 +70718,38 @@ export interface operations {
             };
         };
     };
+    list_app_resource_models_management_v1_apps_resources__resource_type___resource_id__models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resource_type: components["schemas"]["AppResourceType"];
+                resource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_app_management_v1_apps__app_id__get: {
         parameters: {
             query?: never;
@@ -74991,7 +75048,18 @@ export interface operations {
     };
     get_response_input_items_openai_v1_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -78877,7 +78945,18 @@ export interface operations {
     };
     get_response_input_items_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -91024,7 +91103,18 @@ export interface operations {
     };
     get_response_input_items_v1_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;

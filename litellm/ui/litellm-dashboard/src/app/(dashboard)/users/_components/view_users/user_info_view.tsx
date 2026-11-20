@@ -30,7 +30,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
-import { hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
+import { availableRoleDisplayLabel, hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
@@ -401,9 +401,8 @@ export default function UserInfoView({
   };
 
   const unknownTimestamp = t("users.userInfo.details.unknown");
-  const unlimitedLabel = t("users.userInfo.unlimited");
-  const budgetLimit =
-    userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : unlimitedLabel;
+  const unlimited = t("users.userInfo.unlimited");
+  const budgetLimit = userData.max_budget === null ? unlimited : `$${formatNumberWithCommas(userData.max_budget, 2)}`;
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
   // Build a legacy-compatible shape for UserEditView
@@ -426,6 +425,7 @@ export default function UserInfoView({
     },
   };
 
+  const roleId = userData.user_role;
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -479,7 +479,7 @@ export default function UserInfoView({
           { label: t("users.userInfo.deleteModal.userId"), value: userData.user_id, code: true },
           {
             label: t("users.userInfo.deleteModal.globalProxyRole"),
-            value: (userData.user_role && possibleUIRoles?.[userData.user_role]?.ui_label) || userData.user_role || "-",
+            value: (roleId && availableRoleDisplayLabel(roleId, possibleUIRoles?.[roleId]?.ui_label)) || "-",
           },
           {
             label: t("users.userInfo.deleteModal.totalSpend"),
@@ -681,7 +681,7 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.globalProxyRole")}</p>
-                  <p>{userData.user_role || t("users.userInfo.details.notSet")}</p>
+                  <p>{availableRoleDisplayLabel(roleId || "") || t("users.userInfo.details.notSet")}</p>
                 </div>
 
                 <div>
@@ -714,7 +714,7 @@ export default function UserInfoView({
                   <p>
                     {userData.max_budget !== null && userData.max_budget !== undefined
                       ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                      : unlimitedLabel}
+                      : unlimited}
                   </p>
                 </div>
 

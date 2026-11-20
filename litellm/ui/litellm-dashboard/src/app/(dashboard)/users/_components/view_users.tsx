@@ -21,7 +21,7 @@ import {
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import { all_admin_roles, isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { availableRoleDisplayLabel, all_admin_roles, isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -421,7 +421,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           {
             label: t("users.page.deleteModal.globalProxyRole"),
             value:
-              (userToDelete?.user_role && possibleUIRoles?.[userToDelete.user_role]?.ui_label) ||
+              (userToDelete?.user_role &&
+                availableRoleDisplayLabel(
+                  userToDelete.user_role,
+                  possibleUIRoles?.[userToDelete.user_role]?.ui_label,
+                )) ||
               userToDelete?.user_role ||
               "-",
           },

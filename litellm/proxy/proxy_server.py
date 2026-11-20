@@ -389,6 +389,8 @@ from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+from litellm.integrations.lens.proxy.adapter import router as lens_router
+from litellm.integrations.lens.proxy.internal import LensInternalMiddleware
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -743,10 +745,13 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
+    deployment_ids,
     filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
     perform_health_check,
+    public_wildcard_children,
+    split_by_model_ids,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
@@ -765,8 +770,6 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF10
     run_spend_event,
 )
 from litellm.proxy.image_endpoints.endpoints import router as image_router
-from litellm.proxy.lens.adapter import router as lens_router
-from litellm.proxy.lens.internal import LensInternalMiddleware
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,
@@ -977,8 +980,10 @@ from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
+from litellm.integrations.lens.config import is_lens_tracing_enabled
+from litellm.integrations.lens.proxy import tracing_endpoints
+from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream
-from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -1066,7 +1071,6 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.tracing_runtime import manage_tracing
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     router as latest_release_endpoints_router,
@@ -1141,7 +1145,6 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
-from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
@@ -3587,6 +3590,7 @@ async def get_current_spend(
     fallback_authoritative: bool = False,
     *,
     require_authoritative_window: bool = False,
+    recheck_recorded_spend: bool = False,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3639,8 +3643,8 @@ async def get_current_spend(
     # (fail_closed_budget_enforcement) always re-checks against the authoritative
     # source too, so a counter that is stale-low at the same time as the caller's
     # cached spend cannot slip through; the 5s cache keeps that bounded.
-    is_window: Final = window_start is not None
-    if fallback_spend > current or is_window or _fail_closed_budget_enforcement():
+    needs_recorded_floor: Final = window_start is not None or recheck_recorded_spend
+    if fallback_spend > current or needs_recorded_floor or _fail_closed_budget_enforcement():
         authoritative: Final = await _authoritative_floor_spend(
             counter_key=counter_key,
             window_entity_type=window_entity_type,
@@ -5301,6 +5305,19 @@ async def _adaptive_router_flusher_loop():
             verbose_proxy_logger.exception("adaptive_router flusher iteration failed")
 
 
+def _public_wildcard_children(
+    public_names: Iterable[str] | None,
+    router: Router | None,
+    has_db: bool,
+    model_groups: AbstractSet[str] | None,
+) -> tuple[tuple[Mapping[str, object], ...], frozenset[str]]:
+    """Background-check entries for public models only a wildcard serves, and their ids; none without a DB to save to."""
+    if router is None or not has_db or not public_names:
+        return (), frozenset()
+    children: Final = public_wildcard_children(public_names, router, model_groups)
+    return children, deployment_ids(children)
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -5364,7 +5381,13 @@ async def _run_background_health_check():
         scoped_model_groups = (
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
-        _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
+        wildcard_children, wildcard_child_ids = _public_wildcard_children(
+            litellm.public_model_groups, llm_router, prisma_client is not None, scoped_model_groups
+        )
+        _llm_model_list = [
+            *filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups),
+            *wildcard_children,
+        ]
         if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
                 "background_health_check_model_groups matched no deployments; groups=%s",
@@ -5439,18 +5462,22 @@ async def _run_background_health_check():
                 instrumentation_context,
             )
 
+        routing_healthy, child_healthy = split_by_model_ids(healthy_endpoints, wildcard_child_ids)
+        routing_unhealthy, child_unhealthy = split_by_model_ids(unhealthy_endpoints, wildcard_child_ids)
+
         # Update the global variable with the health check results
-        health_check_results["healthy_endpoints"] = healthy_endpoints
-        health_check_results["unhealthy_endpoints"] = unhealthy_endpoints
-        health_check_results["healthy_count"] = len(healthy_endpoints)
-        health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
+        health_check_results["healthy_endpoints"] = list(routing_healthy)
+        health_check_results["unhealthy_endpoints"] = list(routing_unhealthy)
+        health_check_results["healthy_count"] = len(routing_healthy)
+        health_check_results["unhealthy_count"] = len(routing_unhealthy)
         cycle_duration_ms = (time.monotonic() - cycle_start_time) * 1000
         verbose_proxy_logger.debug(
-            "background_health_check_cycle_complete cycle_id=%s model_count_enabled=%d healthy_count=%d unhealthy_count=%d duration_ms=%.2f interval_seconds=%s thread_count=%d rss_mb=%s",
+            "background_health_check_cycle_complete cycle_id=%s model_count_enabled=%d healthy_count=%d unhealthy_count=%d child_count=%d duration_ms=%.2f interval_seconds=%s thread_count=%d rss_mb=%s",
             cycle_id,
             model_count_enabled,
-            len(healthy_endpoints),
-            len(unhealthy_endpoints),
+            len(routing_healthy),
+            len(routing_unhealthy),
+            len(child_healthy) + len(child_unhealthy),
             cycle_duration_ms,
             health_check_interval,
             threading.active_count(),
@@ -5476,7 +5503,7 @@ async def _run_background_health_check():
         )
 
         # Write health state to router cache for health-check-driven routing
-        _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id)
+        _write_health_state_to_router_cache(list(routing_healthy), list(routing_unhealthy), _exceptions_by_model_id)
 
         await asyncio.sleep(health_check_interval)
 
@@ -13190,6 +13217,27 @@ async def _key_model_listing(
         entries=entries,
         labels=label_entries(listed_entries, entries),
     )
+
+
+async def accessible_model_names(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+
+    listing: Final = await _key_model_listing(
+        auth,
+        await request_caller_aliases(auth),
+        await _listing_hidden_names(None),
+        include_wildcard_routes=True,
+        offered_model_names=llm_router.registry().names(team_id=auth.team_id) if llm_router else (),
+    )
+
+    async def allowed(model: str) -> bool:
+        try:
+            await can_key_call_resolved_model(model, None, auth, llm_router)
+        except ModelAccessDeniedProxyException:
+            return False
+        return True
+
+    return tuple([row["id"] for row in listing.rows if await allowed(row["id"])])
 
 
 async def codex_catalog_rows_for_key(user_api_key_dict: UserAPIKeyAuth) -> tuple[CodexCatalogRow, ...]:

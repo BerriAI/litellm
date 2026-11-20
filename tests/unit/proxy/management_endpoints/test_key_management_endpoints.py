@@ -54,6 +54,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheI
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    app_key_resource_cache_key,
     project_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
@@ -2666,6 +2667,90 @@ async def test_prepare_key_update_data_restarts_a_resubmitted_window_whose_perio
     )
 
     assert datetime.fromisoformat(windows["7d"]["reset_at"]) > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("writer", ["ordinary", "project", "soft_budget", "regeneration"])
+@pytest.mark.parametrize("sibling", [
+    None,
+    {"max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00"},
+    {"budget_duration": "1mo", "max_budget": None, "reset_at": "2030-02-01T00:00:00+00:00"},
+    {"budget_duration": "1mo", "max_budget": 200.0, "reset_at": "invalid"},
+], ids=["no_sibling", "missing_duration", "invalid_cap", "invalid_reset"])
+@pytest.mark.parametrize("current_cap,current_reset,expected_reset", [
+    (10.0, "2030-01-03T00:00:00+00:00", "2030-01-03T00:00:00+00:00"),
+    (30.0, "2030-01-03T00:00:00+00:00", "2030-01-02T00:00:00+00:00"),
+    (None, "2030-01-03T00:00:00+00:00", "2030-01-02T00:00:00+00:00"),
+    (10.0, "2030-01-02T00:00:00+00:00", "2030-01-02T00:00:00+00:00"),
+], ids=["reset", "admin_edit", "malformed_current", "no_conflict"])
+async def test_key_window_writers_keep_committed_resets_without_merging_admin_edits(
+    writer: str, sibling: dict[str, object] | None, current_cap: float | None,
+    current_reset: str, expected_reset: str,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_row, _update_key_row_with_soft_budget, _write_key_update,
+    )
+    from litellm.proxy.utils import PrismaClient
+
+    original: Final = {"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2030-01-02T00:00:00+00:00"}
+    siblings: Final = [sibling] if sibling is not None else []
+    existing: Final = LiteLLM_VerificationToken(token="window-key", budget_limits=[original, *siblings])
+    proposed: Final = [{**original, "max_budget": 50.0}, {
+        "budget_duration": "1mo", "max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00",
+    }]
+    database: Final = MagicMock()
+    database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
+    tx: Final = database.tx.return_value.__aenter__.return_value
+    tx.query_raw = AsyncMock(return_value=[{"budget_limits": [{
+        **original, "max_budget": current_cap, "reset_at": current_reset,
+    }, *siblings]}])
+    tx.litellm_verificationtoken.update = AsyncMock(return_value=existing)
+    tx.litellm_verificationtoken.update_many = AsyncMock(return_value=1)
+    tx.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
+    tx.litellm_budgettable.create = AsyncMock(return_value=SimpleNamespace(budget_id="window-budget"))
+    payload: Final = {"budget_limits": json.dumps(proposed)}
+
+    if writer == "ordinary":
+        await _update_key_row(database, existing.token, payload, existing)
+    elif writer == "project":
+        await _update_key_row_assigning_project(database, existing.token, {**payload, "project_id": "p"}, existing)
+    elif writer == "soft_budget":
+        await _update_key_row_with_soft_budget(
+            database, existing.token, UpdateKeyRequest(key=existing.token, soft_budget=5.0), payload, existing, "admin",
+        )
+    else:
+        await _write_key_update(database, existing.token, {**payload, "token": "rotated"}, existing)
+
+    write: Final = tx.litellm_verificationtoken.update_many if writer == "project" else tx.litellm_verificationtoken.update
+    assert json.loads(write.call_args.kwargs["data"]["budget_limits"]) == [
+        {**proposed[0], "reset_at": expected_reset}, proposed[1],
+    ]
+    assert tx.query_raw.await_count == 1
+    assert database.tx.return_value.__aexit__.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested", [None, [], [{"budget_duration": "1mo", "max_budget": 200.0}]])
+@pytest.mark.parametrize("missing_field", [None, "budget_duration", "max_budget"])
+async def test_key_window_rebase_does_not_restore_removed_durations(
+    requested: list[dict[str, object]] | None, missing_field: str | None,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import _update_key_row
+    from litellm.proxy.utils import PrismaClient
+
+    existing: Final = _key_with_weekly_window(datetime(2030, 1, 2, tzinfo=timezone.utc))
+    database: Final = MagicMock()
+    database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
+    tx: Final = database.tx.return_value.__aenter__.return_value
+    current: Final = {
+        name: value for name, value in {
+            "budget_duration": "7d", "max_budget": 50.0, "reset_at": "2030-01-09T00:00:00+00:00",
+        }.items() if name != missing_field
+    }
+    tx.query_raw = AsyncMock(return_value=[{"budget_limits": [current]}])
+    tx.litellm_verificationtoken.update = AsyncMock(return_value=existing)
+    await _update_key_row(database, existing.token, {"budget_limits": json.dumps(requested)}, existing)
+    assert json.loads(tx.litellm_verificationtoken.update.call_args.kwargs["data"]["budget_limits"]) == requested
 
 
 @pytest.mark.asyncio
@@ -6053,11 +6138,16 @@ async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_
     raw_key: Final = "sk-" + uuid4().hex
     hashed_token: Final = hash_token(raw_key)
     other_team_counter: Final = "spend:team:other-team"
+    resource_key: Final = app_key_resource_cache_key(hashed_token)
+    unrelated_resource_key: Final = app_key_resource_cache_key(hash_token("sk-other-owner"))
     deleting_worker_cache: Final = UserApiKeyCache()
     peer_worker_cache: Final = UserApiKeyCache()
     peer_spend_counters: Final = InMemoryCache()
     peer_spend_counters.set_cache(other_team_counter, 42.0)
-    peer_worker_cache.set_cache(key=hashed_token, value=UserAPIKeyAuth(token=hashed_token, user_id="user-123"))
+    for cache in (deleting_worker_cache, peer_worker_cache):
+        cache.set_cache(key=hashed_token, value=UserAPIKeyAuth(token=hashed_token, user_id="user-123"))
+        cache.set_cache(key=resource_key, value={"team_id": "owned-team"})
+        cache.set_cache(key=unrelated_resource_key, value={"team_id": "other-team"})
     coordination_redis: Final = _SharedCoordinationRedis()
     peer_subscriber: Final = AuthCacheInvalidationSubscriber(
         redis_cache=coordination_redis,
@@ -6070,7 +6160,7 @@ async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_
 
     try:
         await delete_verification_tokens(
-            tokens=[other_team_counter, raw_key],
+            tokens=[other_team_counter, unrelated_resource_key, raw_key],
             user_api_key_cache=deleting_worker_cache,
             user_api_key_dict=UserAPIKeyAuth(
                 user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value
@@ -6080,9 +6170,15 @@ async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_
     finally:
         await peer_subscriber.stop()
 
-    assert peer_worker_cache.get_cache(key=hashed_token) is None
+    for cache in (deleting_worker_cache, peer_worker_cache):
+        assert cache.get_cache(key=hashed_token) is None
+        assert cache.get_cache(key=resource_key) is None
+        assert cache.get_cache(key=unrelated_resource_key) == {"team_id": "other-team"}
     assert peer_spend_counters.get_cache(other_team_counter) == 42.0
-    assert coordination_redis.published == (json.dumps({"cache_key": hashed_token}),)
+    assert coordination_redis.published == (
+        json.dumps({"cache_key": hashed_token}),
+        json.dumps({"cache_key": resource_key}),
+    )
 
 
 @pytest.mark.asyncio
@@ -8923,6 +9019,13 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
         return_value=updated_key
     )
+    transaction: Final = mock_prisma_client.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": [
+        {"budget_duration": "1d", "max_budget": 75.0, "reset_at": "2020-01-01T00:00:00+00:00"},
+        {"budget_duration": "1mo", "max_budget": 200.0, "reset_at": "2020-02-01T00:00:00+00:00"},
+        {"max_budget": 20.0, "reset_at": "2020-01-01T00:00:00+00:00"},
+    ]}])
+    transaction.litellm_verificationtoken.update = AsyncMock(return_value=updated_key)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr(
@@ -8991,15 +9094,38 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     # get_budget_reset_time("1d") call would give) is the wrong value here --
     # it would put window_start at the start of the day already in progress,
     # which still covers that spend.
-    assert mock_prisma_client.db.litellm_verificationtoken.update.call_count == 2
-    window_update_call = mock_prisma_client.db.litellm_verificationtoken.update.call_args_list[1]
+    assert mock_prisma_client.db.litellm_verificationtoken.update.call_count == 1
+    window_update_call = transaction.litellm_verificationtoken.update.call_args
     assert window_update_call.kwargs["where"] == {"token": hashed_key}
     persisted_windows = json.loads(window_update_call.kwargs["data"]["budget_limits"])
-    assert len(persisted_windows) == 1
+    assert len(persisted_windows) == 3
     assert persisted_windows[0]["budget_duration"] == "1d"
-    assert persisted_windows[0]["max_budget"] == 50.0
+    assert persisted_windows[0]["max_budget"] == 75.0
+    assert persisted_windows[1]["max_budget"] == 200.0
+    assert persisted_windows[2] == {"max_budget": 20.0, "reset_at": "2020-01-01T00:00:00+00:00"}
+    assert spend.memory[f"spend:key:{hashed_key}:window:1mo"] == 0.0
     persisted_reset_at = datetime.fromisoformat(persisted_windows[0]["reset_at"])
     assert before_call + timedelta(days=1) <= persisted_reset_at <= after_call + timedelta(days=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_windows", [None, [], [{"budget_duration": "1d", "max_budget": 50.0}]])
+async def test_manual_window_reset_never_publishes_before_commit(
+    monkeypatch: pytest.MonkeyPatch, current_windows: list[dict[str, object]] | None,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import _reset_key_budget_windows
+
+    database: Final = MagicMock()
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": current_windows}])
+    transaction.litellm_verificationtoken.update = AsyncMock()
+    database.tx.return_value.__aexit__.side_effect = RuntimeError("commit failed")
+    spend: Final = FakeSpendCounters()
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await _reset_key_budget_windows(database, "window-key")
+    assert spend.commands == []
+    assert transaction.litellm_verificationtoken.update.await_count == int(bool(current_windows))
 
 
 @pytest.mark.asyncio
@@ -9952,7 +10078,7 @@ async def test_key_does_not_override_explicit_budget_duration():
 
 @pytest.mark.asyncio
 @patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
-async def test_rotate_master_key_reencrypts_model_params_in_place(
+async def test_reencrypt_credentials_for_aes_migration_reencrypts_model_params_in_place(
     mock_rotate_mcp,
 ):
     """
@@ -9968,7 +10094,7 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        rotate_master_key,
+        reencrypt_credentials_for_aes_migration,
     )
 
     # Setup mock prisma client
@@ -10036,7 +10162,7 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
         "litellm.proxy.proxy_server.proxy_config",
         mock_proxy_config,
     ):
-        await rotate_master_key(
+        await reencrypt_credentials_for_aes_migration(
             prisma_client=mock_prisma_client,
             user_api_key_dict=user_api_key_dict,
             current_master_key="sk-old-master-key",
@@ -10073,13 +10199,13 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(monkeypatch):
+async def test_reencrypt_credentials_for_aes_migration_keeps_environment_variables_it_cannot_decrypt(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
-    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.management_endpoints.key_management_endpoints import reencrypt_credentials_for_aes_migration
     from litellm.proxy.proxy_server import ProxyConfig
 
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
@@ -10107,7 +10233,7 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(m
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=prisma_client,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
         current_master_key="sk-old-master-key",
@@ -10124,13 +10250,13 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(m
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(monkeypatch):
+async def test_reencrypt_credentials_for_aes_migration_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
-    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.management_endpoints.key_management_endpoints import reencrypt_credentials_for_aes_migration
     from litellm.proxy.proxy_server import ProxyConfig
 
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
@@ -10152,7 +10278,7 @@ async def test_rotate_master_key_keeps_an_environment_variable_the_read_replica_
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=prisma_client,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
         current_master_key="sk-old-master-key",
@@ -10174,12 +10300,12 @@ def _rotated_value(table: MagicMock, field: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_salt_key(
+async def test_reencrypt_credentials_for_aes_migration_with_a_salt_key_keeps_stored_values_under_the_salt_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
-    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.management_endpoints.key_management_endpoints import reencrypt_credentials_for_aes_migration
     from litellm.proxy.proxy_server import ProxyConfig
     from litellm.types.utils import CredentialItem
 
@@ -10246,7 +10372,7 @@ async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_s
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=prisma_client,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
         current_master_key="sk-old-master-key",
@@ -19402,7 +19528,7 @@ async def test_list_keys_without_expires_param_forwards_none():
 @patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_env_vars_master_key")
 @patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_credentials_master_key")
 @patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
-async def test_rotate_master_key_rotates_sso_identity_assertions(
+async def test_reencrypt_credentials_for_aes_migration_rotates_sso_identity_assertions(
     mock_rotate_mcp_server,
     mock_rotate_mcp_user,
     mock_rotate_env_vars,
@@ -19416,7 +19542,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        rotate_master_key,
+        reencrypt_credentials_for_aes_migration,
     )
 
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
@@ -19451,7 +19577,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         "litellm.proxy.proxy_server.proxy_config",
         mock_proxy_config,
     ):
-        await rotate_master_key(
+        await reencrypt_credentials_for_aes_migration(
             prisma_client=mock_prisma_client,
             user_api_key_dict=user_api_key_dict,
             current_master_key="sk-old-master-key",
@@ -19465,7 +19591,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_rotates_search_tools(monkeypatch):
+async def test_reencrypt_credentials_for_aes_migration_rotates_search_tools(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
@@ -19475,7 +19601,7 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
         encrypt_value_helper,
     )
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        rotate_master_key,
+        reencrypt_credentials_for_aes_migration,
     )
 
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
@@ -19510,7 +19636,7 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
         user_id="test-user",
     )
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=mock_prisma_client,
         user_api_key_dict=user_api_key_dict,
         current_master_key="sk-old-master-key",
@@ -24314,7 +24440,7 @@ async def test_member_key_request_with_the_setting_off_is_refused_without_readin
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
+async def test_reencrypt_credentials_for_aes_migration_reencrypts_guardrail_params(monkeypatch):
     import json
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
@@ -24326,7 +24452,7 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
     )
     from litellm.proxy.management_endpoints import key_management_endpoints
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        rotate_master_key,
+        reencrypt_credentials_for_aes_migration,
     )
 
     for rotator in (
@@ -24351,7 +24477,7 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[guardrail_row])
     mock_prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(return_value=1)
 
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=mock_prisma_client,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
         current_master_key="sk-old-master-key",
