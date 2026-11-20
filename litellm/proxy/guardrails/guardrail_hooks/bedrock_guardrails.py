@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_cost_by_unit,
     guardrail_cost_total,
 )
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -264,6 +265,21 @@ def _apply_guardrail_status(response: BedrockGuardrailResponse, images_sent: int
 
 def _allowed_dynamic_body_params(params: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in params.items() if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST}
+
+
+def _tool_call_field(value: object, name: str) -> object:
+    return value.get(name) if isinstance(value, Mapping) else getattr(value, name, None)
+
+
+def _tool_call_as_text(tool_call: object) -> str:
+    function: Final = _tool_call_field(tool_call, "function")
+    source: Final = tool_call if function is None else function
+    name: Final = _tool_call_field(source, "name")
+    arguments: Final = next(
+        (value for key in ("arguments", "input") if (value := _tool_call_field(source, key)) is not None), None
+    )
+    arguments_text: Final = arguments if isinstance(arguments, str) else safe_dumps(arguments) if arguments else ""
+    return "\n".join(part for part in (name if isinstance(name, str) else "", arguments_text) if part)
 
 
 def _overridden(guardrail: object, name: str) -> bool:
@@ -615,6 +631,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return [*sources, *queries]
 
     def supports_scan_only_tool_results(self) -> bool:
+        return self.experimental_use_latest_role_message_only is not True
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return self.experimental_use_latest_role_message_only is not True
+
+    def supports_scan_tool_calls_as_text(self) -> bool:
         return self.experimental_use_latest_role_message_only is not True
 
     def supports_structured_messages(self) -> bool:
@@ -3370,6 +3392,44 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         return inputs
 
+    async def _scan_tool_calls_as_text(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict,
+        input_type: Literal["request", "response"],
+    ) -> None:
+        """Scan tool-call names and arguments as text, raising when Bedrock blocks them.
+
+        Masked output is discarded: rewriting arguments could leave them invalid JSON.
+        """
+        if self.scan_tool_calls_as_text is not True or effective_scan_only_tool_results_for_guardrail(self):
+            return
+        tool_call_texts: Final = [
+            text for tool_call in inputs.get("tool_calls") or [] if (text := _tool_call_as_text(tool_call))
+        ]
+        if not tool_call_texts:
+            return
+        if input_type == "response":
+            await self.make_bedrock_api_request(
+                source="OUTPUT",
+                response=ModelResponse(
+                    choices=[
+                        Choices(index=idx, message=Message(role="assistant", content=text), finish_reason="stop")
+                        for idx, text in enumerate(tool_call_texts)
+                    ]
+                ),
+                messages=request_data.get("messages"),
+                request_data=request_data,
+                logging_event_type=GuardrailEventHooks.post_call,
+            )
+            return
+        await self.make_bedrock_api_request(
+            source="INPUT",
+            messages=[ChatCompletionUserMessage(role="user", content=text) for text in tool_call_texts],
+            request_data=request_data,
+            logging_event_type=GuardrailEventHooks.pre_call,
+        )
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -3400,6 +3460,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         texts: Final = inputs.get("texts") or []
         try:
             verbose_proxy_logger.debug("Bedrock Guardrail: Applying guardrail to %s text(s)", len(texts))
+
+            await self._scan_tool_calls_as_text(inputs=inputs, request_data=request_data, input_type=input_type)
 
             if input_type == "request":
                 incremental_result: Final = await self._apply_incremental_request_scan(

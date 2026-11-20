@@ -1341,7 +1341,15 @@ class OpenAIResponsesHandler(BaseTranslation):
             skip_tool=skip_tool,
             scan_only=scan_only,
         )
-        if not extracted.inputs.get("texts"):
+        if guardrail_to_apply.scan_tool_calls_as_text is True and not scan_only and not isinstance(input_data, str):
+            history_tool_calls: Final = [
+                _scanned_tool_call(item, item_idx)
+                for item_idx, item in enumerate(input_data)
+                if isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
+            ]
+            if history_tool_calls:
+                extracted.inputs["tool_calls"] = history_tool_calls
+        if not extracted.inputs.get("texts") and not extracted.inputs.get("tool_calls"):
             return data
         if scoped_structured_messages:
             extracted.inputs["structured_messages"] = scoped_structured_messages
