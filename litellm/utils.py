@@ -72,6 +72,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
+    GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS,
     HF_CONFIG_FETCH_TIMEOUT_SECONDS,
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     INITIAL_RETRY_DELAY,
@@ -4798,11 +4799,7 @@ def get_optional_params_transcription(
         if sends_through_openai_sdk or drops_unsupported_params or custom_llm_provider == "gnani"
         else [param for param in OPENAI_TRANSCRIPTION_PARAMS if param not in _OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS]
     )
-    extra_openai_params: Final = (
-        ("chunking_strategy", "include", "known_speaker_names", "known_speaker_references")
-        if custom_llm_provider == "gnani"
-        else ()
-    )
+    extra_openai_params: Final = GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS if custom_llm_provider == "gnani" else ()
     default_params: Final = {
         param: None for param in (*transcription_params, "prompt", "temperature", *extra_openai_params)
     }
@@ -4814,11 +4811,13 @@ def get_optional_params_transcription(
             message="`stream` must be a boolean. To drop it from the call, set `litellm.drop_params = True`.",
         )
 
+    gnani_stream_off: Final = custom_llm_provider == "gnani" and transcription_stream_flag(stream) is False
+    stream_ignored: Final = stream_unset or malformed_stream or gnani_stream_off
     passed_entries: Final[Mapping[str, object]] = MappingProxyType(passed_params)
     non_default_params: Final = {
         k: v
         for k, v in passed_entries.items()
-        if k in default_params and v != default_params[k] and not (k == "stream" and (stream_unset or malformed_stream))
+        if k in default_params and v != default_params[k] and not (k == "stream" and stream_ignored)
     }
     optional_params = {}
 

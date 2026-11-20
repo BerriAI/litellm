@@ -251,18 +251,64 @@ def test_prompt_becomes_previous_text_unless_set(
     assert "prompt" not in sent
 
 
-@pytest.mark.parametrize("stream", [None, ""])
-def test_unset_stream_is_not_rejected(stream: str | None, respx_mock: MockRouter) -> None:
+@pytest.mark.parametrize("stream", [None, "", False, "false"])
+def test_unset_or_false_stream_is_not_rejected(stream: str | bool | None, respx_mock: MockRouter) -> None:
     route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
     litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, stream=stream)
-    assert route.called
+    assert "stream" not in _form(route.calls.last.request)
+
+
+@pytest.mark.parametrize(("model", "language"), [("gnani/prisma-v3.0", None), ("gnani/prisma-v2.5", "hi")])
+def test_fields_litellm_does_not_know_reach_gnani(model: str, language: str | None, respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(
+        model=model,
+        file=_AUDIO,
+        api_key="test",
+        api_base=_BASE,
+        language=language,
+        diarize=True,
+        extra_body={"keyterm": "Lincoln"},
+    )
+    sent: Final = _form(route.calls.last.request)
+    assert {key: sent.get(key) for key in ("diarize", "keyterm")} == {"diarize": b"true", "keyterm": b"Lincoln"}
+
+
+@pytest.mark.parametrize(
+    ("model", "options", "expected"),
+    [
+        ("gnani/prisma-v2.5", {"language_code": "en-IN"}, b"en-IN"),
+        ("gnani/prisma-v3.0", {"language_code": "hi-in"}, b"hi-IN"),
+        ("gnani/prisma-v3.0", {"language": "en", "language_code": "hi-IN"}, b"hi-IN"),
+        ("gnani/prisma-v3.0", {"language": "en", "language_code": ""}, b"en-IN"),
+    ],
+)
+def test_gnani_language_code_is_normalized_and_wins_over_language(
+    model: str, options: dict[str, object], expected: bytes, respx_mock: MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=model, file=_AUDIO, api_key="test", api_base=_BASE, **options)
+    assert _form(route.calls.last.request)["language_code"] == expected
 
 
 def test_global_drop_params_drops_unsupported_options(respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", True)
     route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
     litellm.transcription(
-        model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, response_format="srt", temperature=0
+        model=_MODEL,
+        file=_AUDIO,
+        api_key="test",
+        api_base=_BASE,
+        response_format="srt",
+        temperature=0,
+        stream=True,
+        languages=["en"],
+        keywords=["x"],
+        timestamp_granularities=["word"],
+        chunking_strategy="auto",
+        include=["logprobs"],
+        known_speaker_names=["Ada"],
+        known_speaker_references=["data:audio/wav;base64,AA=="],
     )
     assert _form(route.calls.last.request) == {
         "language_code": b"indic-auto",
