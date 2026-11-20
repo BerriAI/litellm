@@ -13,7 +13,8 @@ import litellm
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
-from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
+from litellm.responses.additional_tools import additional_tools_in_input, hoist_additional_tools
+from litellm.responses.configuration_update import with_configuration_updates_applied
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler, StoredTurns
@@ -55,21 +56,34 @@ def _chat_verbosity(responses_api_request: Mapping[str, object]) -> Mapping[str,
 class _BridgedRequest:
     input: str | ResponseInputParam
     responses_api_request: ResponsesAPIOptionalRequestParams
+    configured_request: ResponsesAPIOptionalRequestParams
 
 
 def _bridged_request(
-    hoisted: HoistedAdditionalTools,
+    input: str | ResponseInputParam,
     responses_api_request: ResponsesAPIOptionalRequestParams,
-    loaded_earlier: Sequence[Mapping[str, object]],
+    *,
+    drop_params: bool,
+    earlier_items: Sequence[object] = (),
+    loaded_earlier: Sequence[Mapping[str, object]] = (),
 ) -> _BridgedRequest:
-    searched: Final = bridge_client_tool_search(hoisted.input, hoisted.tools, loaded_earlier)
+    earlier_tools: Final = additional_tools_in_input(list(earlier_items))
+    hoisted: Final = hoist_additional_tools(
+        input, (*(responses_api_request.get("tools") or ()), *earlier_tools), drop_params=drop_params
+    )
+    searched: Final = bridge_client_tool_search(
+        hoisted.input, hoisted.tools, loaded_earlier if has_client_tool_search(hoisted.tools) else ()
+    )
+    echoed: Final[ResponsesAPIOptionalRequestParams] = (
+        {**responses_api_request, "tools": list(searched.tools)}
+        if hoisted.hoisted or earlier_tools or searched.bridged
+        else responses_api_request
+    )
+    configured: Final = with_configuration_updates_applied(searched.input, echoed, earlier_items)
     return _BridgedRequest(
-        input=searched.input,
-        responses_api_request=(
-            {**responses_api_request, "tools": list(searched.tools)}
-            if hoisted.hoisted or searched.bridged
-            else responses_api_request
-        ),
+        input=configured.input,
+        responses_api_request=echoed,
+        configured_request=configured.responses_api_request,
     )
 
 
@@ -108,17 +122,11 @@ class LiteLLMCompletionTransformationHandler:
         | BaseResponsesAPIStreamingIterator
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
-        hoisted: Final = hoist_additional_tools(
-            input,
-            responses_api_request.get("tools"),
-            drop_params=drops_unsupported_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")),
-        )
         previous_response_id: Final = responses_api_request.get("previous_response_id")
-        if _is_async and previous_response_id and has_client_tool_search(hoisted.tools):
-            return self._async_response_api_handler_after_earlier_searches(
+        if _is_async and previous_response_id:
+            return self._async_response_api_handler_after_earlier_turns(
                 previous_response_client_ids,
                 previous_response_id,
-                hoisted,
                 model=model,
                 caller_input=input,
                 responses_api_request=responses_api_request,
@@ -127,7 +135,11 @@ class LiteLLMCompletionTransformationHandler:
                 extra_headers=extra_headers,
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
             )
-        bridged: Final = _bridged_request(hoisted, responses_api_request, ())
+        bridged: Final = _bridged_request(
+            input,
+            responses_api_request,
+            drop_params=drops_unsupported_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")),
+        )
         bridged_input: Final = bridged.input
         bridged_request: Final = bridged.responses_api_request
         litellm_completion_request: Final[dict] = {
@@ -136,13 +148,13 @@ class LiteLLMCompletionTransformationHandler:
                 input=bridged_input,
                 caller_input=input,
                 names_non_string_fields=True,
-                responses_api_request=bridged_request,
+                responses_api_request=bridged.configured_request,
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
                 **_without_bridge_transform_keywords(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)),
             ),
-            **_chat_verbosity(bridged_request),
+            **_chat_verbosity(bridged.configured_request),
         }
         echoed_request: Final = _with_the_tool_choice_sent(
             bridged_request, custom_llm_provider, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
@@ -186,11 +198,10 @@ class LiteLLMCompletionTransformationHandler:
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
-    async def _async_response_api_handler_after_earlier_searches(
+    async def _async_response_api_handler_after_earlier_turns(
         self,
         previous_response_client_ids: tuple[str, ...],
         previous_response_id: str,
-        hoisted: HoistedAdditionalTools,
         /,
         *,
         model: str,
@@ -205,9 +216,13 @@ class LiteLLMCompletionTransformationHandler:
             previous_response_id, previous_response_client_ids
         )
         bridged: Final = _bridged_request(
-            hoisted,
+            caller_input,
             responses_api_request,
-            ResponsesSessionHandler.client_tool_search_tools_loaded_before(
+            drop_params=drops_unsupported_params(request_kwargs.get("drop_params")),
+            earlier_items=ResponsesSessionHandler.input_items_sent_before(
+                stored_turns, previous_response_id, previous_response_client_ids
+            ),
+            loaded_earlier=ResponsesSessionHandler.client_tool_search_tools_loaded_before(
                 stored_turns, previous_response_id, previous_response_client_ids
             ),
         )
@@ -220,13 +235,13 @@ class LiteLLMCompletionTransformationHandler:
                     input=bridged.input,
                     caller_input=caller_input,
                     names_non_string_fields=True,
-                    responses_api_request=bridged.responses_api_request,
+                    responses_api_request=bridged.configured_request,
                     custom_llm_provider=custom_llm_provider,
                     stream=stream,
                     extra_headers=extra_headers,
                     **_without_bridge_transform_keywords(request_kwargs),
                 ),
-                **_chat_verbosity(bridged.responses_api_request),
+                **_chat_verbosity(bridged.configured_request),
             },
             request_input=bridged.input,
             responses_api_request=_with_the_tool_choice_sent(

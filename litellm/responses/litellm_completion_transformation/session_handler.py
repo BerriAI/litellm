@@ -7,6 +7,8 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
@@ -306,6 +308,14 @@ def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> 
     return proxy_server_request.get("tools") if proxy_server_request is not None else None
 
 
+_STORED_INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _stored_input_items(proxy_server_request: Mapping[str, object]) -> tuple[object, ...]:
+    stored_input: Final = proxy_server_request.get("input")
+    return _STORED_INPUT_ITEMS.validate_python(stored_input) if isinstance(stored_input, list) else ()
+
+
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
@@ -429,6 +439,23 @@ class ResponsesSessionHandler:
         return tuple(
             chain.from_iterable(
                 client_tool_search_loaded_tools(request.get("input"))
+                for request in stored_turns.proxy_server_requests[:turns]
+                if request is not None
+            )
+        )
+
+    @staticmethod
+    def input_items_sent_before(
+        stored_turns: StoredTurns,
+        previous_response_id: str,
+        client_response_ids: tuple[str, ...] = (),
+    ) -> tuple[object, ...]:
+        turns: Final = _turns_through_referenced_response(
+            stored_turns.spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
+        )
+        return tuple(
+            chain.from_iterable(
+                _stored_input_items(request)
                 for request in stored_turns.proxy_server_requests[:turns]
                 if request is not None
             )

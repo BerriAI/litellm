@@ -510,3 +510,112 @@ async def test_converse_turn_after_a_blank_user_turn_resends_the_messages_that_f
     assert isinstance(follow_up_messages, list) and isinstance(next_turn_messages, list)
     assert [message["role"] for message in next_turn_messages] == ["user", "assistant", "user", "assistant", "user"]
     assert next_turn_messages[: len(follow_up_messages)] == follow_up_messages
+
+
+_CITY_FORMAT: Final = {
+    "type": "json_schema",
+    "name": "city",
+    "schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+_GET_WEATHER: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+_GET_TIME: Final = {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.asyncio
+async def test_bridged_turn_applies_configuration_updates_and_echoes_the_request_level_reasoning():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    response = await litellm.aresponses(
+        model="azure_ai/claude-sonnet-4-6",
+        api_base="https://fake-foundry-resource.services.ai.azure.com",
+        api_key="fake-api-key",
+        input=[
+            {"type": "message", "role": "user", "content": "Pick a city"},
+            {"type": "configuration_update", "reasoning": {"effort": "medium"}},
+            {"type": "configuration_update", "reasoning": {"effort": "high"}, "text": {"format": _CITY_FORMAT}},
+        ],
+        reasoning={"effort": "low"},
+        client=client,
+    )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert provider.request_body["output_config"] == {"effort": "high"}
+    assert provider.request_body["output_format"] == {"type": "json_schema", "schema": _CITY_FORMAT["schema"]}
+    assert [message["role"] for message in provider.request_body["messages"]] == ["user"]
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.reasoning == {"effort": "low"}
+
+
+def _stored_configured_turn(request_id: str) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "configured-session",
+        "proxy_server_request": {
+            "model": "claude-sonnet-4-6",
+            "reasoning": {"effort": "low"},
+            "tools": [_GET_WEATHER],
+            "input": [
+                {"type": "message", "role": "user", "content": "What is the weather?"},
+                {"type": "configuration_update", "reasoning": {"effort": "high"}},
+                {"type": "additional_tools", "role": "developer", "tools": [_GET_TIME]},
+            ],
+        },
+        "response": {
+            "id": request_id,
+            "object": "response",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Sunny.", "annotations": []}],
+                }
+            ],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_bridged_follow_up_keeps_the_configuration_and_tools_an_earlier_turn_added():
+    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+    )
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch(  # test-quality-ok: no DI seam; the file stubs this same boundary
+        "litellm.proxy.proxy_server.prisma_client",
+        SimpleNamespace(db=_StoredTurns((_stored_configured_turn(previous_response_id),))),
+    ):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input=[
+                {"type": "message", "role": "user", "content": "Which city is warmest?"},
+                {"type": "configuration_update", "text": {"format": _CITY_FORMAT}},
+            ],
+            reasoning={"effort": "low"},
+            tools=[_GET_WEATHER],
+            previous_response_id=previous_response_id,
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert provider.request_body["output_config"] == {"effort": "high"}
+    assert provider.request_body["output_format"] == {"type": "json_schema", "schema": _CITY_FORMAT["schema"]}
+    assert [tool["name"] for tool in provider.request_body["tools"]] == ["get_weather", "get_time"]
+    assert [message["role"] for message in provider.request_body["messages"]] == ["user", "assistant", "user"]
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.reasoning == {"effort": "low"}
+    assert [tool.name for tool in response.tools] == ["get_weather", "get_time"]
