@@ -54,33 +54,6 @@ pub struct AnthropicMessagesConfig;
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
 impl BaseMessagesConfig for AnthropicMessagesConfig {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        _litellm_params: &LitellmParams,
-        _stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(complete_anthropic_url(api_base, env_lookup))
-    }
-
-    fn transform_anthropic_messages_request(
-        &self,
-        request: MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, &context.keeping_display_updates())
-    }
-
     fn tool_custom_field(&self, model: &str) -> ToolCustomField {
         ToolCustomField::Rewrite {
             hoist_defer_loading: is_claude_model(model),
@@ -129,6 +102,48 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        _model: &str,
+        _litellm_params: &LitellmParams,
+        _stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        Ok(complete_anthropic_url(api_base, env_lookup))
+    }
+
+    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
+        if !is_foundry_url(url) {
+            return headers;
+        }
+        let betas = existing_betas(&headers);
+        if betas.is_empty() {
+            return headers;
+        }
+        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
+        if kept.is_empty() {
+            return without_headers(headers, &[BETA_HEADER]);
+        }
+        with_header(headers, BETA_HEADER, kept.to_string())
+    }
+
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, options)
+    }
+
+    fn transform_anthropic_messages_request(
+        &self,
+        request: MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        transform_messages_request(request, &context.keeping_display_updates())
+    }
+
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         merge_beta_headers(
             headers,
@@ -161,21 +176,6 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
         retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
-        if !is_foundry_url(url) {
-            return headers;
-        }
-        let betas = existing_betas(&headers);
-        if betas.is_empty() {
-            return headers;
-        }
-        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
-        if kept.is_empty() {
-            return without_headers(headers, &[BETA_HEADER]);
-        }
-        with_header(headers, BETA_HEADER, kept.to_string())
     }
 }
 

@@ -2,7 +2,7 @@
 
 ## Scope
 
-- This crate mirrors `litellm/llms/`: base config traits in `src/base_llm/<format>/`, provider transformations in `src/<provider>/<format>/transformation.rs`
+- This crate mirrors `litellm/llms/`: base config traits in `src/base_llm/<format>/`, provider transformations in `src/<provider>/<format>/transformation.rs`. Messages providers follow `## Messages providers` instead
 - Transport (clients, media fetching, header helpers, transport errors) lives in `litellm-http`. See `../inference/AGENTS.md` for crate layering
 
 ## Layering
@@ -39,10 +39,16 @@
 - Decoding is strict: a malformed event, or `[DONE]` on a Messages stream, is `InvalidResponse` and ends the stream. Python never fails a stream this way; the divergence is deliberate and `src/base_llm/sse.rs` lists what Python does per format. A stream cut inside an event drops that event, as the SSE spec requires
 - What ends or fails a stream belongs on the format's event type (`is_terminal`, `is_failure`). The cache's success check in `inference/src/caching.rs` still matches type strings; move it onto the typed events rather than adding new string matches
 
+## Messages providers
+
+- Every Messages provider config lives at `src/<provider>/messages/transformation.rs`. A provider with several Messages routes uses one subfolder per route, `src/<provider>/messages/<route>/transformation.rs`, and `src/<provider>/messages/` holds only what its routes share
+- The config type is `<Provider>[<Route>]MessagesConfig` and its value `<PROVIDER>[_<ROUTE>]_MESSAGES_CONFIG`, in Rust acronym casing (`AzureAiMessagesConfig`, `AZURE_AI_MESSAGES_CONFIG`). A route whose name would read as another provider's adds `Route` (`bedrock/messages/mantle/` is `BedrockMantleRouteMessagesConfig`, the `bedrock_mantle` provider is `BedrockMantleMessagesConfig`)
+- The Python counterpart of each config, path and class, is listed in that folder's AGENTS.md `# references`, not in the type name or the module path. Every route folder gets its own AGENTS.md
+
 ## Python pairs
 
 - Python paths identify counterparts but do not dictate Rust module names or class hierarchy. Preserve behavior and concepts, not structure
-- Keep operation and parameter names when responsibilities match. Rust types keep the Python name with Rust acronym casing (`BaseOCRConfig` -> `BaseOcrConfig`). Private Python helpers drop the leading underscore
+- Keep operation and parameter names when responsibilities match. Outside Messages provider configs, Rust types keep the Python name with Rust acronym casing (`BaseOCRConfig` -> `BaseOcrConfig`). Private Python helpers drop the leading underscore
 - Give Rust-only helpers distinct responsibility names instead of reusing trait method names
 - Use trait defaults for unchanged inherited behavior and explicit delegation for shared provider behavior. Config traits represent real provider contracts, so do not recreate inheritance with extra traits
 - Every provider format writes out its own `impl Base<Format>Config for <Provider><Format>Config`. Do not route several providers' methods through one cross-provider wrapper

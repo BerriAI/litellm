@@ -34,32 +34,18 @@ const API_BASE_ENV: &str = "TENCENT_API_BASE";
 const ANTHROPIC_API_BASE_ENV: &str = "TENCENT_ANTHROPIC_API_BASE";
 const DEFAULT_BASE: &str = "https://tokenhub-intl.tencentcloudmaas.com";
 
-pub struct TencentAnthropicMessagesConfig;
-pub const TENCENT_MESSAGES_CONFIG: TencentAnthropicMessagesConfig = TencentAnthropicMessagesConfig;
+pub struct TencentMessagesConfig;
+pub const TENCENT_MESSAGES_CONFIG: TencentMessagesConfig = TencentMessagesConfig;
 
-impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
+impl BaseMessagesConfig for TencentMessagesConfig {
     fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
         crate::base_llm::messages::tools::ToolCustomField::Rewrite {
             hoist_defer_loading: false,
         }
     }
 
-    fn retry_after_http_error(
-        &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+    fn secret_names(&self) -> &'static [&'static str] {
+        &[API_KEY_ENV, ANTHROPIC_API_BASE_ENV, API_BASE_ENV]
     }
 
     fn validate_environment(
@@ -92,6 +78,10 @@ impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
         })
     }
 
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        DEFAULT_HEADERS
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -113,6 +103,14 @@ impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
         Ok(format!("{base}{MESSAGES_PATH}"))
     }
 
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, options)
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
@@ -131,16 +129,18 @@ impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
         })
     }
 
-    fn secret_names(&self) -> &'static [&'static str] {
-        &[API_KEY_ENV, ANTHROPIC_API_BASE_ENV, API_BASE_ENV]
-    }
-
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
-    }
-
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 }
 

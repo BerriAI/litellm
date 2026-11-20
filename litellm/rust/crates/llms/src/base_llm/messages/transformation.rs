@@ -24,31 +24,9 @@ pub enum FederatedEnvironment {
 }
 
 pub trait BaseMessagesConfig: Sync {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        _options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        Ok(request)
+    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
+        ToolCustomField::Keep
     }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        litellm_params: &LitellmParams,
-        stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
-
-    fn transform_anthropic_messages_request(
-        &self,
-        request: MessagesRequest,
-        _context: &MessagesTransformContext,
-    ) -> Result<MessagesRequest, Error> {
-        Ok(request)
-    }
-
     /// The request without the params the deployment says its endpoint rejects, dropped before
     /// the transform so no beta is chosen for them.
     fn without_rejected_params(
@@ -58,7 +36,6 @@ pub trait BaseMessagesConfig: Sync {
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
     }
-
     fn clamp_requested_effort(
         &self,
         request: MessagesRequest,
@@ -67,64 +44,7 @@ pub trait BaseMessagesConfig: Sync {
         Ok(request)
     }
 
-    fn native_output_fallback(
-        &self,
-        _request: &MessagesRequest,
-        _context: &MessagesTransformContext,
-    ) -> Option<MessagesTransformContext> {
-        None
-    }
-
-    fn retries_without_native_output(
-        &self,
-        _status: u16,
-        _error_text: &str,
-        _request_body: &Value,
-        _model: &str,
-    ) -> bool {
-        false
-    }
-
-    /// A reply body that did not parse as a message, such as a 200 error envelope, as the caller gets it.
-    fn transform_unchecked_response(
-        &self,
-        body: Map<String, Value>,
-    ) -> Result<Map<String, Value>, Error> {
-        Ok(body)
-    }
-
-    /// The requested params the call logs as its model parameters.
-    fn logged_params(
-        &self,
-        params: MessagesOptionalParams,
-        _context: &MessagesTransformContext,
-    ) -> Result<MessagesOptionalParams, Error> {
-        Ok(params)
-    }
-
-    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
-        ToolCustomField::Keep
-    }
-
-    fn transform_anthropic_messages_response(
-        &self,
-        _model: &str,
-        response: MessagesResponse,
-    ) -> Result<MessagesResponse, Error> {
-        Ok(response)
-    }
-
-    fn reported_cost(&self, _response: &MessagesResponse) -> Option<serde_json::Number> {
-        None
-    }
-
     fn secret_names(&self) -> &'static [&'static str];
-
-    /// The model Python's handler logs the call under, once `get_llm_provider` has resolved it.
-    fn logged_model(&self, model: &str) -> String {
-        model.to_string()
-    }
-
     /// Secrets read only on some paths, as Python's lazy `get_secret_str` calls are: resolved
     /// just before `validate_environment`, and only when this call names them. `python_host` is
     /// whether the route has a Python host for flows only Python runs.
@@ -139,7 +59,6 @@ pub trait BaseMessagesConfig: Sync {
     ) -> &'static [&'static str] {
         &[]
     }
-
     /// Shapes the forwarded headers and names the credential, the way Python's
     /// `validate_environment` does, without applying it: `resolve_auth` does that once
     /// for every config.
@@ -152,7 +71,6 @@ pub trait BaseMessagesConfig: Sync {
         litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
-
     fn validate_federated_environment(
         &self,
         headers: Headers,
@@ -172,26 +90,36 @@ pub trait BaseMessagesConfig: Sync {
         )
         .map(FederatedEnvironment::Validated)
     }
-
-    /// `None` relays the upstream bytes untouched, which is right for every host that already
-    /// speaks Anthropic SSE. A host on another wire returns the decoder that lifts its frames
-    /// into Anthropic stream events, and the route re-encodes those as Anthropic SSE.
-    fn stream_decoder(&self) -> Option<StreamDecoder> {
-        None
-    }
-
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[("content-type", "application/json")]
     }
 
-    fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
-        headers
-    }
-
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        model: &str,
+        litellm_params: &LitellmParams,
+        stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error>;
     fn headers_for_url(&self, headers: Headers, _url: &str) -> Headers {
         headers
     }
 
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        _options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
+    }
+    fn transform_anthropic_messages_request(
+        &self,
+        request: MessagesRequest,
+        _context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
+    }
     fn request_body(
         &self,
         request: MessagesRequest,
@@ -200,7 +128,9 @@ pub trait BaseMessagesConfig: Sync {
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
     }
-
+    fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
+        headers
+    }
     /// The request steps Python runs once the final `anthropic-beta` header is known, which
     /// read that header, must not change which betas the request asks for, or rewrite the
     /// headers that go out with the body.
@@ -212,13 +142,64 @@ pub trait BaseMessagesConfig: Sync {
     ) -> Result<(MessagesRequest, Headers), Error> {
         Ok((request, headers))
     }
-
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
     /// Python's configs `pop("model")` when the model is addressed by the URL.
     fn wire_body(&self, body: Value) -> Value {
         body
     }
 
+    fn transform_anthropic_messages_response(
+        &self,
+        _model: &str,
+        response: MessagesResponse,
+    ) -> Result<MessagesResponse, Error> {
+        Ok(response)
+    }
+    /// A reply body that did not parse as a message, such as a 200 error envelope, as the caller gets it.
+    fn transform_unchecked_response(
+        &self,
+        body: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Error> {
+        Ok(body)
+    }
+    /// `None` relays the upstream bytes untouched, which is right for every host that already
+    /// speaks Anthropic SSE. A host on another wire returns the decoder that lifts its frames
+    /// into Anthropic stream events, and the route re-encodes those as Anthropic SSE.
+    fn stream_decoder(&self) -> Option<StreamDecoder> {
+        None
+    }
+    fn reported_cost(&self, _response: &MessagesResponse) -> Option<serde_json::Number> {
+        None
+    }
+
+    /// The requested params the call logs as its model parameters.
+    fn logged_params(
+        &self,
+        params: MessagesOptionalParams,
+        _context: &MessagesTransformContext,
+    ) -> Result<MessagesOptionalParams, Error> {
+        Ok(params)
+    }
+    /// The model Python's handler logs the call under, once `get_llm_provider` has resolved it.
+    fn logged_model(&self, model: &str) -> String {
+        model.to_string()
+    }
+    fn native_output_fallback(
+        &self,
+        _request: &MessagesRequest,
+        _context: &MessagesTransformContext,
+    ) -> Option<MessagesTransformContext> {
+        None
+    }
+    fn retries_without_native_output(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+        _model: &str,
+    ) -> bool {
+        false
+    }
     fn retry_after_http_error(
         &self,
         _status: u16,
@@ -243,17 +224,6 @@ mod tests {
             &[]
         }
 
-        fn get_complete_url(
-            &self,
-            _api_base: Option<&str>,
-            _model: &str,
-            _litellm_params: &LitellmParams,
-            _stream: bool,
-            _env_lookup: &dyn Fn(&str) -> Option<String>,
-        ) -> Result<String, Error> {
-            Ok(String::new())
-        }
-
         fn validate_environment(
             &self,
             headers: Headers,
@@ -267,6 +237,17 @@ mod tests {
                 headers,
                 auth: AuthScheme::Forwarded,
             })
+        }
+
+        fn get_complete_url(
+            &self,
+            _api_base: Option<&str>,
+            _model: &str,
+            _litellm_params: &LitellmParams,
+            _stream: bool,
+            _env_lookup: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<String, Error> {
+            Ok(String::new())
         }
     }
 

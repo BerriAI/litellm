@@ -25,7 +25,7 @@ use litellm_llms::{
     },
     base_llm::messages::context::MessagesModelCapabilities,
     bedrock::chat::invoke_handler::BedrockStreamRaise,
-    bedrock::claude_platform::messages::transformation::{
+    bedrock::messages::claude_platform::transformation::{
         is_claude_platform_route, is_missing_region, logged_model as claude_platform_logged_model,
     },
     bedrock_mantle::messages::transformation::{mantle_capability_lookup, mantle_logged_model},

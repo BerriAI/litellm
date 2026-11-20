@@ -31,24 +31,18 @@ const API_KEY_ENV: &str = "EDENAI_API_KEY";
 const API_BASE_ENV: &str = "EDENAI_API_BASE";
 const DEFAULT_BASE: &str = "https://api.edenai.run/v3";
 
-pub struct EdenAIAnthropicMessagesConfig;
-pub const EDENAI_MESSAGES_CONFIG: EdenAIAnthropicMessagesConfig = EdenAIAnthropicMessagesConfig;
+pub struct EdenAiMessagesConfig;
+pub const EDENAI_MESSAGES_CONFIG: EdenAiMessagesConfig = EdenAiMessagesConfig;
 
-impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
+impl BaseMessagesConfig for EdenAiMessagesConfig {
     fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
         crate::base_llm::messages::tools::ToolCustomField::Rewrite {
             hoist_defer_loading: false,
         }
     }
 
-    fn retry_after_http_error(
-        &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    fn secret_names(&self) -> &'static [&'static str] {
+        &[API_KEY_ENV, API_BASE_ENV]
     }
 
     fn validate_environment(
@@ -81,6 +75,10 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
         })
     }
 
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        DEFAULT_HEADERS
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -111,14 +109,6 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
         })
     }
 
-    fn secret_names(&self) -> &'static [&'static str] {
-        &[API_KEY_ENV, API_BASE_ENV]
-    }
-
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
-    }
-
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
     }
@@ -137,6 +127,16 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
             return None;
         }
         serde_json::Number::from_f64(cost)
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 }
 
