@@ -3786,6 +3786,7 @@ dependencies = [
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
+ "litellm-cost",
  "litellm-error",
  "litellm-host",
  "litellm-host-python",
@@ -4299,6 +4300,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "litellm-coroutine",
+ "litellm-cost",
  "litellm-secret-value",
  "rstest",
  "serde",
@@ -4451,6 +4453,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "http 1.4.2",
+ "jiff",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-gcp",
@@ -4458,6 +4461,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-cost",
  "litellm-env",
  "litellm-error",
  "litellm-framer",

@@ -10,12 +10,14 @@ import httpx
 import pytest
 from pydantic import TypeAdapter
 
+import litellm
 from litellm._internal_context import is_internal_call
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import AdjustFacts, CallFacts, price, priced_usage
 from litellm.rust_bridge.host import callbacks_legacy_python as legacy
 from litellm.rust_bridge.host.callbacks_legacy_python import failure_handler, setup
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Usage
 
 _OCR_KWARGS: Final = MappingProxyType(
     {
@@ -571,3 +573,62 @@ def test_a_stream_logs_the_flag_python_logs(requested: object, keeps_requested: 
 
     assert logger.model_call_details["stream"] == expected
     assert logger.stream == expected
+
+
+_ROUTE_USAGE: Final = MappingProxyType({"prompt_tokens": 1200, "completion_tokens": 300, "total_tokens": 1500})
+
+
+def _routed_messages_logger() -> Logging:
+    logger: Final = _messages_logger()
+    logger.update_environment_variables(
+        model="claude-opus-5-5", user=None, optional_params={}, litellm_params={}, custom_llm_provider="anthropic"
+    )
+    return logger
+
+
+def test_a_route_priced_messages_call_is_logged_as_main_prices_it_and_never_repriced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usage: Final = Usage(**_ROUTE_USAGE)
+    receipt: Final = price(
+        CallFacts(
+            by="call",
+            provider="anthropic",
+            request_model="claude-opus-5-5",
+            response_model="claude-opus-5-5",
+            base_model=None,
+            custom_pricing=False,
+            deployment_id=None,
+            region=None,
+            invoked_model_id=None,
+            provider_response_model=None,
+            hidden_model=None,
+        ),
+        priced_usage(usage, web_search=None),
+        requested_model="claude-opus-5-5",
+        adjust=AdjustFacts(provider="anthropic", model=None, region=None),
+    )
+    assert receipt is not None
+    priced_by_python: Final = _routed_messages_logger()
+    expected_cost: Final = litellm.completion_cost(
+        completion_response=ModelResponse(model="claude-opus-5-5", usage=Usage(**_ROUTE_USAGE)),
+        model="claude-opus-5-5",
+        custom_llm_provider="anthropic",
+        call_type="anthropic_messages",
+        litellm_logging_obj=priced_by_python,
+    )
+    logger: Final = _routed_messages_logger()
+
+    legacy.record_route_cost(logger, receipt, None, None, None)
+
+    def repriced(**_kwargs: object) -> float:
+        raise AssertionError("a route-priced call was priced again")
+
+    monkeypatch.setattr(litellm, "response_cost_calculator", repriced)
+    logged: Final = logger.response_cost_calculator(
+        result=ModelResponse(model="claude-opus-5-5", usage=Usage(**_ROUTE_USAGE))
+    )
+    assert logged == expected_cost
+    assert logger.model_call_details["response_cost"] == expected_cost
+    assert logger.cost_breakdown == priced_by_python.cost_breakdown
+    assert logger.billed_token_rates == priced_by_python.billed_token_rates

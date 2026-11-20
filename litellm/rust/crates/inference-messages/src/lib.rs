@@ -4,6 +4,7 @@ mod encoding;
 mod handler;
 mod host_answer;
 mod pre_request;
+mod pricing;
 mod reads;
 mod relay;
 mod request;
@@ -11,6 +12,7 @@ pub mod route;
 mod safeguards;
 mod transport;
 mod types;
+mod usage;
 mod workload_identity;
 
 use futures_util::FutureExt;
@@ -29,6 +31,7 @@ pub use encoding::DecodingError;
 pub use host_answer::HostAnswer;
 pub use litellm_inference::Error;
 pub use pre_request::PreRequestHooks;
+pub use pricing::{PricedCall, Pricing, PricingIdentity, billable_tier, price_call};
 pub use safeguards::Safeguards;
 pub use transport::{
     Delivered, Transport, TransportRequest, TransportResponse, UnencodableHeader, UnsendableUrl,
@@ -51,6 +54,7 @@ pub struct MessagesRoute {
     pre_request_hooks: Option<Arc<dyn PreRequestHooks>>,
     safeguards: Option<Arc<dyn Safeguards>>,
     host_answer: Option<Arc<dyn HostAnswer>>,
+    pricing: Option<Arc<dyn Pricing>>,
 }
 
 impl MessagesRoute {
@@ -70,6 +74,7 @@ impl MessagesRoute {
             pre_request_hooks: None,
             safeguards: None,
             host_answer: None,
+            pricing: None,
         }
     }
 
@@ -120,6 +125,15 @@ impl MessagesRoute {
     pub fn with_host_answer(self, host_answer: Arc<dyn HostAnswer>) -> Self {
         Self {
             host_answer: Some(host_answer),
+            ..self
+        }
+    }
+
+    /// Prices each call that carries a pricing identity, see [`PricingIdentity`]
+    #[must_use]
+    pub fn with_pricing(self, pricing: Arc<dyn Pricing>) -> Self {
+        Self {
+            pricing: Some(pricing),
             ..self
         }
     }

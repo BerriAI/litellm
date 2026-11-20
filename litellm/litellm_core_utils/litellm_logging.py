@@ -1257,6 +1257,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.deferred_success_result: tuple[object, datetime.datetime, datetime.datetime] | None = None
         self.billed_token_rates: BilledTokenRates | None = None
         self._provider_reported_cost: float | None = None
+        self._route_priced_cost: float | None = None
+        self._route_prices: bool = False
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -2616,6 +2618,24 @@ class Logging(LiteLLMLoggingBaseClass):
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
 
+    def record_route_cost(self, cost: float) -> None:
+        """The cost the Rust route priced the call at, which every later pricing of this call reads instead."""
+        self._route_prices = True
+        self._route_priced_cost = cost
+        self.model_call_details["response_cost"] = cost
+
+    def record_route_metering(self) -> None:
+        """The Rust route prices this stream once its usage is final and injects the cost of each event it prices."""
+        self._route_prices = True
+
+    @property
+    def route_priced_cost(self) -> float | None:
+        return self._route_priced_cost
+
+    @property
+    def route_prices_call(self) -> bool:
+        return self._route_prices
+
     def response_cost_calculator(
         self,
         result: object,
@@ -2761,8 +2781,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         try:
             reported_cost: Final = self._provider_reported_cost
+            route_cost: Final = self._route_priced_cost
             response_cost: Final = (
-                reported_cost
+                route_cost
+                if route_cost is not None
+                else reported_cost
                 if isinstance(reported_cost, float)
                 and math.isfinite(reported_cost)
                 and reported_cost >= 0

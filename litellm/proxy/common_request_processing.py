@@ -6048,6 +6048,8 @@ class ProxyBaseLLMRequestProcessing:
         usage: Final = obj.get("usage")
         if not isinstance(usage, dict):
             return None
+        if "cost" in usage and getattr(litellm_logging_obj, "route_prices_call", False) is True:
+            return None
         stream_usage: Final = ProxyBaseLLMRequestProcessing._stream_usage_for_event(obj, usage)
         if stream_usage is None:
             return None

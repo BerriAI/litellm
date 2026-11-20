@@ -346,6 +346,9 @@ class AnthropicPassthroughLoggingHandler:
         )
         if subscription_usage is not None and not subscription_usage["is_overage"]:
             return 0.0
+        route_cost: Final = logging_obj.route_priced_cost
+        if isinstance(route_cost, float):
+            return route_cost
         custom_llm_provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
         model_for_cost: Final = (
             f"{custom_llm_provider}/{model}"
