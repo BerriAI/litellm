@@ -6905,6 +6905,24 @@ async def test_custom_pass_through_forwards_only_the_id_among_litellm_fields(
     assert upstream_body == {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}}
 
 
+async def test_custom_pass_through_preserves_a_json_rpc_1_request_id() -> None:
+    body: Final = {"method": "getblockcount", "params": [], "id": "curltest"}
+
+    upstream_body: Final = await _relay_through_pass_through(
+        body, "http://upstream.test/rpc", guardrails_config=None, custom_endpoint=True
+    )
+
+    assert upstream_body == body
+
+
+async def test_built_in_pass_through_drops_id_from_a_json_rpc_body() -> None:
+    body: Final = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+
+    upstream_body: Final = await _relay_through_pass_through(body, "http://upstream.test/mcp", guardrails_config=None)
+
+    assert upstream_body == {"jsonrpc": "2.0", "method": "tools/list", "params": {}}
+
+
 async def test_custom_pass_through_drops_id_from_a_body_that_is_not_json_rpc() -> None:
     body: Final = {"model": "claude-haiku-5-5", "id": "req-1", "max_tokens": 20, "messages": []}
 

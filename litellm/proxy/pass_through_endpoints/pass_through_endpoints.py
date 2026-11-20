@@ -792,9 +792,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body[k] for k in types_utils.all_litellm_params if k in _parsed_body}
         )
+        is_json_rpc_request: Final = "jsonrpc" in _parsed_body or "method" in _parsed_body
         kept_in_upstream_body: Final = (
             _KEPT_IN_CONFIGURED_JSON_RPC_BODY
-            if request_dispatched_to_pass_through_endpoint(request) and "jsonrpc" in _parsed_body
+            if request_dispatched_to_pass_through_endpoint(request) and is_json_rpc_request
             else frozenset[str]()
         )
         for key in litellm_keys_in_body.keys() - kept_in_upstream_body:
