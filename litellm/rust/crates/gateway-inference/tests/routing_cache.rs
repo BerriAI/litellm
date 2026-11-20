@@ -14,7 +14,8 @@ use litellm_redis_store::{
 };
 use litellm_redis_testing::{RedisDeployment, Topology};
 use litellm_router_core::{
-    HealthState, Outcomes, RouterCache, UsageCounts, UsageWindow, health::CooldownValue,
+    HealthState, LimitCounter, LimitKind, Outcomes, RouterCache, UsageCounts, UsageWindow,
+    health::CooldownValue,
 };
 use rstest::rstest;
 
@@ -202,6 +203,57 @@ async fn usage_one_gateway_adds_is_read_by_another_from_the_global_router_counte
             requests: Some(2.0),
         }
     );
+}
+
+fn limit(kind: LimitKind, window: &str) -> LimitCounter {
+    LimitCounter {
+        deployment_id: "dep".to_owned(),
+        model: "anthropic/claude-sonnet-5-5".to_owned(),
+        kind,
+        window: window.to_owned(),
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_deployments_limit_counters_are_shared_under_the_model_rate_limit_checks_keys(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let (first, second) = (routing(&deployment), routing(&deployment));
+    let rpm = limit(LimitKind::Rpm, "12-34");
+    let tpd = limit(LimitKind::Tpd, "2026-01-01");
+    let minute = Duration::from_secs(60);
+
+    let charged = first
+        .add_limit_usages(&[
+            (rpm.clone(), 1, minute),
+            (tpd.clone(), 7, Duration::from_secs(86_400)),
+        ])
+        .await
+        .unwrap();
+    let recharged = second.add_limit_usage(&rpm, 1, minute).await.unwrap();
+
+    let stored: [Option<String>; 2] = [
+        raw.send(commands::get("dep:anthropic/claude-sonnet-5-5:rpm:12-34"))
+            .await
+            .unwrap(),
+        raw.send(commands::get(
+            "dep:anthropic/claude-sonnet-5-5:tpd:2026-01-01",
+        ))
+        .await
+        .unwrap(),
+    ];
+    assert_eq!(
+        (charged, recharged, stored),
+        (
+            Some(vec![1.0, 7.0]),
+            Some(2.0),
+            [Some("2".to_owned()), Some("7".to_owned())]
+        )
+    );
+    assert_eq!(first.limit_usage(&tpd, 100.0).await.unwrap(), Some(7.0));
 }
 
 #[rstest]

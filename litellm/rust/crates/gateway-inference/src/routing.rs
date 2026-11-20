@@ -466,7 +466,8 @@ pub(crate) fn api_key(deployment: &Deployment) -> Option<String> {
         .map(|key| key.expose().to_owned())
 }
 
-/// The tokens a response's `usage` counts: its `total_tokens`, else its input plus output.
+/// The tokens a response's `usage` counts: its `total_tokens`, else its input plus output. An
+/// Anthropic `usage` reports the cache tokens beside its `input_tokens`, so they count with it.
 pub(crate) fn total_tokens(usage: Option<&Value>) -> u64 {
     let count = |name: &str| {
         usage
@@ -474,9 +475,12 @@ pub(crate) fn total_tokens(usage: Option<&Value>) -> u64 {
             .and_then(Value::as_u64)
     };
     count("total_tokens").unwrap_or_else(|| {
-        count("input_tokens")
-            .or(count("prompt_tokens"))
-            .unwrap_or(0)
+        let input = count("input_tokens").map(|input| {
+            input
+                + count("cache_creation_input_tokens").unwrap_or(0)
+                + count("cache_read_input_tokens").unwrap_or(0)
+        });
+        input.or(count("prompt_tokens")).unwrap_or(0)
             + count("output_tokens")
                 .or(count("completion_tokens"))
                 .unwrap_or(0)

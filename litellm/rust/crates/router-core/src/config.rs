@@ -184,6 +184,9 @@ pub struct RouterConfig {
     /// (`async_callback_filter_deployments`).
     pub callback_filters: bool,
     pub enable_health_check_routing: bool,
+    /// The core runs `enforce_model_rate_limits` itself ([`crate::model_rate_limits`]). A host
+    /// that runs Python's check leaves it off, so the rule never runs twice.
+    pub enforce_model_rate_limits: bool,
     /// How old (seconds) a background health check result may be and still count
     /// (`health_check_staleness_threshold`, else the default interval times its multiplier).
     pub health_check_staleness_threshold: Option<f64>,
@@ -299,6 +302,11 @@ impl RouterConfig {
             request_timeout: settings.request_timeout,
             enable_pre_call_checks: settings.enable_pre_call_checks.unwrap_or(false),
             enable_health_check_routing: settings.enable_health_check_routing.unwrap_or(false),
+            enforce_model_rate_limits: settings
+                .optional_pre_call_checks
+                .iter()
+                .flatten()
+                .any(|check| check == crate::model_rate_limits::SETTING),
             enable_weighted_failover: settings.enable_weighted_failover.unwrap_or(false),
             enable_cross_model_group_collision_check: settings
                 .enable_cross_model_group_collision_check

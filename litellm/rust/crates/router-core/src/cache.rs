@@ -51,6 +51,29 @@ pub struct Outcomes {
     pub fails: u64,
 }
 
+/// What a [`LimitCounter`] counts, as the model rate limit check names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::IntoStaticStr, strum::VariantArray)]
+pub enum LimitKind {
+    #[strum(serialize = "tpm")]
+    Tpm,
+    #[strum(serialize = "rpm")]
+    Rpm,
+    #[strum(serialize = "tpd")]
+    Tpd,
+    #[strum(serialize = "rpd")]
+    Rpd,
+}
+
+/// A deployment's counter the model rate limit check reads (`UsageCounter.for_deployment`):
+/// `window` is `HH-MM` in UTC for a per-minute kind, the day for a per-day one.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LimitCounter {
+    pub deployment_id: String,
+    pub model: String,
+    pub kind: LimitKind,
+    pub window: String,
+}
+
 pub trait RouterCache: Send + Sync {
     /// The stored cooldown of each of `ids`, in order, `None` for one without.
     fn cooldowns(
@@ -101,6 +124,29 @@ pub trait RouterCache: Send + Sync {
     fn count_success(&self, id: &str) -> impl Future<Output = Result<(), Error>> + Send;
 
     fn count_failure(&self, id: &str) -> impl Future<Output = Result<(), Error>> + Send;
+
+    /// The model rate limit check's current count (`RouterUsage.current`): this worker's when it
+    /// already reaches `limit`, else every worker's. `None` for a counter nothing has written.
+    fn limit_usage(
+        &self,
+        counter: &LimitCounter,
+        limit: f64,
+    ) -> impl Future<Output = Result<Option<f64>, Error>> + Send;
+
+    /// Add `amount` to `counter`, which lives for `ttl` from its first write, and answer its
+    /// total, `None` when it could not be counted.
+    fn add_limit_usage(
+        &self,
+        counter: &LimitCounter,
+        amount: i64,
+        ttl: Duration,
+    ) -> impl Future<Output = Result<Option<f64>, Error>> + Send;
+
+    /// [`Self::add_limit_usage`] for every increment in one round trip, answering their totals.
+    fn add_limit_usages(
+        &self,
+        increments: &[(LimitCounter, i64, Duration)],
+    ) -> impl Future<Output = Result<Option<Vec<f64>>, Error>> + Send;
 }
 
 impl<T: RouterCache + ?Sized> RouterCache for &T {
@@ -166,6 +212,30 @@ impl<T: RouterCache + ?Sized> RouterCache for &T {
     fn count_failure(&self, id: &str) -> impl Future<Output = Result<(), Error>> + Send {
         (**self).count_failure(id)
     }
+
+    fn limit_usage(
+        &self,
+        counter: &LimitCounter,
+        limit: f64,
+    ) -> impl Future<Output = Result<Option<f64>, Error>> + Send {
+        (**self).limit_usage(counter, limit)
+    }
+
+    fn add_limit_usage(
+        &self,
+        counter: &LimitCounter,
+        amount: i64,
+        ttl: Duration,
+    ) -> impl Future<Output = Result<Option<f64>, Error>> + Send {
+        (**self).add_limit_usage(counter, amount, ttl)
+    }
+
+    fn add_limit_usages(
+        &self,
+        increments: &[(LimitCounter, i64, Duration)],
+    ) -> impl Future<Output = Result<Option<Vec<f64>>, Error>> + Send {
+        (**self).add_limit_usages(increments)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -175,6 +245,7 @@ enum Counter {
     Requests(UsageWindow),
     Successes(String),
     Fails(String),
+    Limit(LimitCounter),
 }
 
 struct Expiring<T> {
@@ -314,6 +385,37 @@ impl RouterCache for InMemoryRouterCache {
     async fn count_failure(&self, id: &str) -> Result<(), Error> {
         self.increment(Counter::Fails(id.to_owned()), 1.0, MINUTE);
         Ok(())
+    }
+
+    async fn limit_usage(&self, counter: &LimitCounter, _limit: f64) -> Result<Option<f64>, Error> {
+        Ok(self.count(&Counter::Limit(counter.clone())))
+    }
+
+    async fn add_limit_usage(
+        &self,
+        counter: &LimitCounter,
+        amount: i64,
+        ttl: Duration,
+    ) -> Result<Option<f64>, Error> {
+        Ok(Some(self.increment(
+            Counter::Limit(counter.clone()),
+            amount as f64,
+            ttl,
+        )))
+    }
+
+    async fn add_limit_usages(
+        &self,
+        increments: &[(LimitCounter, i64, Duration)],
+    ) -> Result<Option<Vec<f64>>, Error> {
+        Ok(Some(
+            increments
+                .iter()
+                .map(|(counter, amount, ttl)| {
+                    self.increment(Counter::Limit(counter.clone()), *amount as f64, *ttl)
+                })
+                .collect(),
+        ))
     }
 }
 

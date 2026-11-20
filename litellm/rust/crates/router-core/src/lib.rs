@@ -86,6 +86,7 @@
 //! - [`reach`]: the groups a name can be served by and the host steps each one asks for.
 //! - [`eligibility`]: the endpoints a deployment refuses to serve.
 //! - [`precall`]: the `enable_pre_call_checks` filter.
+//! - [`model_rate_limits`]: `enforce_model_rate_limits`, when the config has the core run it.
 //! - [`model_info`]: model info merged from the cost map, asked of the host at query time.
 //! - [`host`]: the `RouterHost` and `RegistryHost` boundaries.
 
@@ -105,6 +106,7 @@ pub mod host_index;
 pub mod lookup;
 pub mod mock;
 pub mod model_info;
+pub mod model_rate_limits;
 pub mod outcome;
 pub mod precall;
 pub mod prerouting;
@@ -133,7 +135,10 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 
 pub use crate::{
-    cache::{HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow},
+    cache::{
+        HealthState, InMemoryRouterCache, LimitCounter, LimitKind, Outcomes, RouterCache,
+        UsageCounts, UsageWindow,
+    },
     call::RouterResponse,
     config::{Op, RouterConfig, RouterDynamicConfig},
     error::{AttemptError, ConfigError, Error, FailureKind, RaisedAt},
@@ -520,6 +525,15 @@ impl Router {
         let Some(deployment) = snapshot.registry.deployment(id) else {
             return Ok(None);
         };
+        if self.core.config.enforce_model_rate_limits {
+            model_rate_limits::count_tokens(
+                cache,
+                &deployment,
+                total_tokens as u64,
+                self.core.clock.now(),
+            )
+            .await;
+        }
         let health = self.health(cache);
         health.count_success(id).await?;
         if !report

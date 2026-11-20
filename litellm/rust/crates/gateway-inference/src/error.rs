@@ -1,4 +1,4 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::{
     Extension, Json,
     response::{AppendHeaders, IntoResponse, Response},
@@ -149,6 +149,7 @@ impl Ended {
             ErrorFormat::Anthropic => (
                 self.error.status(),
                 self.routing(),
+                AppendHeaders(self.error.retry_after()),
                 Json(self.error.body(request_id)),
             )
                 .into_response(),
@@ -198,8 +199,19 @@ impl Error {
                 body,
             )
                 .into_response(),
-            other => (other.status(), body).into_response(),
+            other => (other.status(), AppendHeaders(other.retry_after()), body).into_response(),
         }
+    }
+
+    /// `retry-after` in whole seconds on a refusal the router made itself, as it refuses a
+    /// deployment past its declared rate limits.
+    pub(crate) fn retry_after(&self) -> Option<(HeaderName, HeaderValue)> {
+        let Self::Routing(error) = self else {
+            return None;
+        };
+        let after = error.attempt()?.retry_after?;
+        let seconds = after.as_secs() + u64::from(after.subsec_nanos() > 0);
+        Some((RETRY_AFTER, HeaderValue::from(seconds)))
     }
 
     /// A refusal names its own `type` and `code` when the proxy's exception does.
@@ -249,6 +261,7 @@ impl Error {
         match self {
             Self::Refused(refusal) => refusal.message.clone(),
             Self::ModelAccess(_) => self.to_string(),
+            Self::Routing(error) if let Some(refused) = model_rate_limit(error) => refused,
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)
@@ -260,6 +273,20 @@ impl Error {
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
     }
+}
+
+/// The message Python's proxy answers a deployment past its declared rate limits with.
+fn model_rate_limit(error: &litellm_router_core::Error) -> Option<String> {
+    let litellm_router_core::Error::Attempt {
+        failure,
+        raised_at: None,
+    } = error
+    else {
+        return None;
+    };
+    let detail = failure.detail.as_deref()?;
+    (failure.kind == litellm_router_core::FailureKind::RateLimit)
+        .then(|| format!("litellm.RateLimitError: {detail}"))
 }
 
 fn route_status(error: &InferenceError) -> StatusCode {

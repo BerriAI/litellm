@@ -22,11 +22,11 @@ use std::{
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered,
-    Deployment, Error, HealthState, Outcomes, PreRoute, PreRouted, Provided, Randomness,
-    RegistryHost, RouterCache, RouterEvent, RouterHost, RouterResponse, RoutingContext, SecretRef,
-    SelectStage, Served, ThreadRandomness, UsageCounts, UsageWindow, build::BuiltDeployment,
-    health::CooldownValue, host::ModelInfoLookup, model_info::MergedModelInfo,
-    precall::PreCallFacts, shape::AttemptShape,
+    Deployment, Error, HealthState, LimitCounter, Outcomes, PreRoute, PreRouted, Provided,
+    Randomness, RegistryHost, RouterCache, RouterEvent, RouterHost, RouterResponse, RoutingContext,
+    SecretRef, SelectStage, Served, ThreadRandomness, UsageCounts, UsageWindow,
+    build::BuiltDeployment, health::CooldownValue, host::ModelInfoLookup,
+    model_info::MergedModelInfo, precall::PreCallFacts, shape::AttemptShape,
 };
 use pyo3::{PyResult, Python, types::PyAnyMethods};
 use serde_json::{Map, Value};
@@ -762,6 +762,31 @@ impl RouterCache for PythonRouterCache {
 
     async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
         stored(CacheCall::CountFailure { id: id.to_owned() }).await
+    }
+
+    /// Python's `ModelRateLimitingCheck` counts the model rate limits on this host.
+    async fn limit_usage(
+        &self,
+        _counter: &LimitCounter,
+        _limit: f64,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        Ok(None)
+    }
+
+    async fn add_limit_usage(
+        &self,
+        _counter: &LimitCounter,
+        _amount: i64,
+        _ttl: Duration,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        Ok(None)
+    }
+
+    async fn add_limit_usages(
+        &self,
+        _increments: &[(LimitCounter, i64, Duration)],
+    ) -> Result<Option<Vec<f64>>, litellm_cache::Error> {
+        Ok(None)
     }
 }
 
