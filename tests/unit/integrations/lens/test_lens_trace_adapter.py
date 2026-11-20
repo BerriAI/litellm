@@ -1,6 +1,21 @@
-import pytest
+from datetime import datetime, timezone
+from typing import Final
 
-from litellm.integrations.lens.lens_trace_adapter import AgentCall, ToolExchange, agent_call, agent_name, tool_exchanges
+import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from litellm.integrations.lens.lens_trace_adapter import (
+    AgentCall,
+    ToolExchange,
+    _LensTraceLogger,
+    agent_call,
+    agent_name,
+    tool_exchanges,
+)
+from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+from litellm.integrations.otel.plumbing.providers import build_tracer_provider
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _LS = ToolExchange(call_id="call-ls", name="Bash", arguments='{"command": "ls"}', result="a.txt")
 _PWD = ToolExchange(call_id="call-pwd", name="Bash", arguments='{"command": "pwd"}', result="/work")
@@ -172,3 +187,51 @@ def test_a_model_call_payload_gives_the_agent_and_its_new_tool_results() -> None
 @pytest.mark.parametrize("payload", [None, "text", {"metadata": "broken"}])
 def test_an_unreadable_payload_names_no_agent_and_no_tool_result(payload: object) -> None:
     assert agent_call(payload) == AgentCall()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", (False, True), ids=("success", "failure"))
+@pytest.mark.parametrize("enabled", (False, True), ids=("disabled", "enabled"))
+async def test_lens_control_applies_to_model_and_tool_spans_without_disabling_other_telemetry(
+    failed: bool, enabled: bool
+) -> None:
+    config: Final = OpenTelemetryV2Config(exporter="in_memory")
+    lens_spans: Final = InMemorySpanExporter()
+    other_spans: Final = InMemorySpanExporter()
+    lens: Final = _LensTraceLogger(config=config, tracer_provider=build_tracer_provider(config, exporter=lens_spans))
+    other: Final = OpenTelemetryV2(config=config, tracer_provider=build_tracer_provider(config, exporter=other_spans))
+    at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    kwargs: Final = {
+        "api_call_start_time": at,
+        "litellm_params": {
+            "litellm_session_id": "session-policy",
+            "metadata": {
+                "user_api_key_auth": UserAPIKeyAuth(metadata={"lens_enabled": enabled}),
+                "lens_enabled": not enabled,
+            },
+        },
+        "standard_logging_object": {
+            "id": "response-policy",
+            "litellm_call_id": "call-policy",
+            "call_type": "acompletion",
+            "model": "test-model",
+            "custom_llm_provider": "openai",
+            "status": "failure" if failed else "success",
+            "metadata": {"user_agent": "codex"},
+            "messages": [
+                {"role": "assistant", "tool_calls": [{"id": "call-ls", "function": {"name": "Bash"}}]},
+                {"role": "tool", "tool_call_id": "call-ls", "content": "a.txt"},
+            ],
+            "response": {"id": "response-policy", "choices": [{"finish_reason": "stop"}]},
+        },
+    }
+    lens.log_pre_api_call("test-model", [], kwargs)
+    other.log_pre_api_call("test-model", [], kwargs)
+    lens_callback: Final = lens.async_log_failure_event if failed else lens.async_log_success_event
+    other_callback: Final = other.async_log_failure_event if failed else other.async_log_success_event
+    await lens_callback(kwargs, None, at, at)
+    await other_callback(kwargs, None, at, at)
+    assert len(lens_spans.get_finished_spans()) == (2 if enabled else 0)
+    assert len(other_spans.get_finished_spans()) == 1
+    lens.tracer_provider.shutdown()
+    other.tracer_provider.shutdown()

@@ -24626,6 +24626,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/{trace_id}/conversation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace Conversation */
+        get: operations["get_agent_trace_conversation_v1_traces__trace_id__conversation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/traces/{trace_id}/spans/{span_id}": {
         parameters: {
             query?: never;
@@ -52790,6 +52807,32 @@ export interface components {
             /** Agents */
             agents: components["schemas"]["TraceAgent"][];
         };
+        /** TraceConversationPage */
+        TraceConversationPage: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Turns */
+            turns: components["schemas"]["TraceConversationTurn"][];
+        };
+        /** TraceConversationTurn */
+        TraceConversationTurn: {
+            /** Input */
+            input: string;
+            /** Input Ui */
+            input_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Output */
+            output: string;
+            /** Output Ui */
+            output_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Span Id */
+            span_id: string;
+            /** Start Time */
+            start_time: string;
+            /** Trace Id */
+            trace_id: string;
+            /** Trace Ref */
+            trace_ref: string;
+        };
         /** TracePage */
         TracePage: {
             /** Data */
@@ -52825,7 +52868,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Truncated */
             truncated: boolean;
         };
@@ -52889,7 +52932,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Truncated */
             truncated: boolean;
         };
@@ -52914,7 +52957,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Type */
             type: string;
         };
@@ -52942,7 +52985,7 @@ export interface components {
              * Name
              * @enum {string}
              */
-            name: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            name: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
         };
         /** TraceSQLResponse */
         TraceSQLResponse: {
@@ -53461,6 +53504,11 @@ export interface components {
             key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /**
+             * Lens Enabled
+             * @description Enable or disable Lens tracing for this key. Omit to retain its policy or send null to inherit the team policy. This updates only metadata.lens_enabled and preserves other stored metadata. When metadata is also supplied, this field takes precedence over metadata.lens_enabled.
+             */
+            lens_enabled?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -92056,11 +92104,14 @@ export interface operations {
     list_agent_traces_v1_traces_get: {
         parameters: {
             query?: {
-                cursor?: string | null;
-                /** @description Window end, unix ms. Default: now */
-                end_ms?: number | null;
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 /** @description Window start, unix ms. Default: 24h ago */
                 start_ms?: number | null;
+                /** @description Window end, unix ms. Default: now */
+                end_ms?: number | null;
+                agent?: string | null;
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -92111,6 +92162,8 @@ export interface operations {
     list_trace_agents_v1_traces_agents_get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 start_ms?: number | null;
                 end_ms?: number | null;
             };
@@ -92196,9 +92249,11 @@ export interface operations {
     get_agent_trace_v1_traces__trace_id__get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
+                trace_ref?: string;
                 cursor?: string | null;
                 page_size?: number | null;
-                trace_ref?: string;
             };
             header?: never;
             path: {
@@ -92228,9 +92283,48 @@ export interface operations {
             };
         };
     };
+    get_agent_trace_conversation_v1_traces__trace_id__conversation_get: {
+        parameters: {
+            query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
+                trace_ref?: string;
+                cursor?: string | null;
+                page_size?: number | null;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceConversationPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_agent_trace_span_v1_traces__trace_id__spans__span_id__get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 trace_ref?: string;
             };
             header?: never;
@@ -92265,8 +92359,10 @@ export interface operations {
     get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
         parameters: {
             query?: {
-                cursor?: string | null;
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 trace_ref?: string;
+                cursor?: string | null;
             };
             header?: never;
             path: {

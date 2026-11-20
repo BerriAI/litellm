@@ -25,6 +25,7 @@ from typing_extensions import override
 
 import litellm
 from litellm.integrations.clickhouse.context import is_lens_analysis
+from litellm.integrations.lens.policy import lens_logging_enabled_for_call
 from litellm.integrations.lens.remote import LensConnection
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
@@ -254,6 +255,11 @@ class _LensTraceLogger(OpenTelemetryV2):
         return None
 
     @override
+    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+        if lens_logging_enabled_for_call(kwargs):
+            super().log_pre_api_call(model, messages, kwargs)
+
+    @override
     def _close_llm_call(
         self,
         kwargs: Mapping[str, object],
@@ -261,7 +267,7 @@ class _LensTraceLogger(OpenTelemetryV2):
         end_time: datetime | float | None,
     ) -> Span | None:
         call: Final = LLMCallEvent.from_dict(kwargs)
-        if is_lens_analysis():
+        if is_lens_analysis() or not lens_logging_enabled_for_call(kwargs):
             self._release_carrier(self._open_llm_calls.pop(call.call_id, None) if call.call_id else None)
             return None
         made_by: Final = agent_call(call.payload)

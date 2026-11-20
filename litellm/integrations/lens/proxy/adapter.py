@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import JSONResponse
 
+from litellm.integrations.lens.config import LensController
 from litellm.integrations.lens.proxy.buffering import (
     FORWARD_BUFFER_BUDGET,
     AdmittedBody,
@@ -109,6 +110,12 @@ class ServiceConnection(BaseModel):
     release: str = ""
 
 
+class _GatewaySettings(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    general_settings: Mapping[str, object]
+
+
 async def service_status(connection: Connection, client: httpx.AsyncClient) -> ServiceStatus:
     try:
         async with client.stream(
@@ -125,6 +132,9 @@ async def service_status(connection: Connection, client: httpx.AsyncClient) -> S
 async def service_connection(
     identity: Annotated[Identity, Depends(delegated_identity)],
 ) -> ServiceConnection:
+    from litellm.proxy import proxy_server
+
+    settings: Final = _GatewaySettings.model_validate(vars(proxy_server)).general_settings
     connection: Final = Connection.from_env()
     status: Final = (
         await service_status(connection, connection.remote.control_client()) if connection else ServiceStatus()
@@ -133,7 +143,7 @@ async def service_connection(
         url=os.environ.get("LITELLM_LENS_PUBLIC_URL", "").rstrip("/"),
         connected=bool(connection) and status.public_contract == PUBLIC_CONTRACT,
         status=status,
-        configured=bool(os.environ.get("LITELLM_LENS_URL")),
+        configured=LensController.is_lens_setup(settings.get("tracing")),
         release=status.release,
     )
 

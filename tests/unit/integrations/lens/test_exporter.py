@@ -15,6 +15,57 @@ from litellm.integrations.lens.exporter import (
     LensExporter,
     encode_record,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", (False, True), ids=("success", "failure"))
+@pytest.mark.parametrize(
+    ("key_metadata", "team_metadata", "expected_count"),
+    (
+        pytest.param(None, None, 1, id="global-default"),
+        pytest.param({}, {"lens_enabled": False}, 0, id="team-disabled"),
+        pytest.param({"lens_enabled": None}, {"lens_enabled": False}, 0, id="key-inherits-disabled-team"),
+        pytest.param({"lens_enabled": False}, {"lens_enabled": True}, 0, id="key-disabled"),
+        pytest.param({"lens_enabled": True}, {"lens_enabled": False}, 1, id="key-overrides-disabled-team"),
+    ),
+)
+async def test_lens_policy_controls_success_and_failure_exports(
+    failed: bool,
+    key_metadata: dict[str, object] | None,
+    team_metadata: dict[str, object] | None,
+    expected_count: int,
+) -> None:
+    requests: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(204)
+
+    auth: Final = UserAPIKeyAuth(metadata=key_metadata or {}, team_metadata=team_metadata)
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(client)
+        exporter.start()
+        callback: Final = exporter.async_log_failure_event if failed else exporter.async_log_success_event
+        await callback(
+            {
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key_auth": auth,
+                        "lens_enabled": True,
+                        "user_api_key_metadata": {"lens_enabled": True},
+                    }
+                },
+                "standard_logging_object": {"id": "policy-request", "status": "failure" if failed else "success"},
+            },
+            None,
+            None,
+            None,
+        )
+        await exporter.aclose()
+    assert requests.qsize() == expected_count
+    assert exporter.rows_written == expected_count
+    assert exporter.rows_dropped == 0
 
 
 @pytest.mark.asyncio

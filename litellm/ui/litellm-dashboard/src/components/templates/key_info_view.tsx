@@ -1,3 +1,7 @@
+import { LensControls, LensTabTrigger } from "@/components/lens/LensControls";
+import { readLensPolicy, type LensPolicy } from "@/components/lens/lensPolicy";
+import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { lensEntityHref } from "@/components/lens/entityLinks";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -117,11 +121,11 @@ export default function KeyInfoView({
   tabParam = "detail_tab",
 }: KeyInfoViewProps) {
   const { t } = useTranslation();
-  const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const { accessToken, userId: userID, userRole, premiumUser, isViewOnly } = useAuthorized();
   const accessGroupNames = useModelAccessGroupNames();
   const activityDateRange = useActivityDateRange();
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "activity", "savings", "auto-router-usage", "settings"],
+    ["overview", "activity", "lens", "savings", "auto-router-usage", "settings"],
     "overview",
     tabParam,
   );
@@ -143,6 +147,7 @@ export default function KeyInfoView({
   const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
+  const lensTeam = useTeam(activeTab === "lens" ? currentKeyData?.team_id ?? undefined : undefined);
   const memberBudgetUserIds = useMemo(
     (): Record<string, string[]> =>
       currentKeyData?.max_budget === null && currentKeyData.team_id && currentKeyData.user_id
@@ -518,6 +523,18 @@ export default function KeyInfoView({
   };
 
   const canModifyKey = canModifyVirtualKey(currentKeyData, teamsData, userID, userRole);
+  const canEditLens = canModifyKey && !isViewOnly && !editingMemberKeyAsTeamAdmin;
+  const lensTeamStatus = currentKeyData.team_id && lensTeam.isPending ? "loading" : "ready";
+  const inheritedLensStatus = lensTeam.isError ? "error" : lensTeamStatus;
+
+  const updateLensPolicy = async (policy: LensPolicy): Promise<void> => {
+    if (!accessToken || !canEditLens) return;
+    const metadata = { ...currentKeyData.metadata, lens_enabled: policy };
+    await keyUpdateCall(accessToken, { key: currentKeyData.token, lens_enabled: policy });
+    setCurrentKeyData((current) => (current ? { ...current, metadata } : current));
+    onKeyDataUpdate?.({ metadata });
+    void queryClient.invalidateQueries({ queryKey: keyKeys.all });
+  };
 
   const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||
@@ -767,6 +784,7 @@ export default function KeyInfoView({
           <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
             {t("shared.resourceActivity.title")}
           </TabsTrigger>
+          <LensTabTrigger />
           <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.savings")}
           </TabsTrigger>
@@ -996,6 +1014,22 @@ export default function KeyInfoView({
               />
             </TabsContent>
           )}
+
+          <TabsContent value="lens">
+            <LensControls
+              kind="key"
+              policy={readLensPolicy(currentKeyData.metadata)}
+              teamPolicy={readLensPolicy(lensTeam.data?.metadata)}
+              teamPolicyStatus={inheritedLensStatus}
+              canEdit={canEditLens}
+              href={lensEntityHref({
+                kind: "key",
+                teamId: currentKeyData.team_id,
+                keyHash: currentKeyData.token_id || currentKeyData.token,
+              })}
+              onPolicyChange={updateLensPolicy}
+            />
+          </TabsContent>
 
           {/* Settings Panel */}
           <TabsContent value="settings" keepMounted>
