@@ -171,6 +171,11 @@ async def test_azure_ai_acompletion_posts_the_conversation_to_the_models_endpoin
             id="resource-openai-base-preview",
         ),
         pytest.param(
+            "https://example-resource.services.ai.azure.com/openai/?api-version=2024-10-21",
+            "/openai/deployments/gpt-4.1-mini/chat/completions",
+            id="resource-openai-base-dated-version",
+        ),
+        pytest.param(
             "https://example-resource.services.ai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions"
             "?api-version=2023-03-15-preview",
             "/openai/deployments/gpt-4.1-mini/chat/completions",
@@ -1547,12 +1552,30 @@ API_KEY_HEADER: Final = ("api-key", "azure-ai-test-key")
         ),
         pytest.param(
             AZURE_OPENAI_RESOURCE_HOST,
+            "/openai/",
+            "v1",
+            "/openai/v1/chat/completions",
+            b"api-version=v1",
+            API_KEY_HEADER,
+            id="v1-version-param",
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
             "/openai?api-version=2024-10-21",
             None,
-            "/openai/chat/completions",
+            "/openai/deployments/chat-deployment/chat/completions",
             b"api-version=2024-10-21",
             API_KEY_HEADER,
-            id="dated-version-preserved",
+            id="dated-version-in-base",
+        ),
+        pytest.param(
+            AZURE_COGNITIVE_SERVICES_HOST,
+            "",
+            "2024-10-21",
+            "/openai/deployments/chat-deployment/chat/completions",
+            b"api-version=2024-10-21",
+            ("authorization", "Bearer azure-ai-test-key"),
+            id="cognitive-services-dated-version",
         ),
         pytest.param(
             AZURE_COGNITIVE_SERVICES_HOST,

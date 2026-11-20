@@ -350,11 +350,13 @@ class AzureAIStudioConfig(OpenAIConfig):
             query_params["api-version"] = api_version
 
         requested_api_version: Final = query_params.get("api-version")
-        if is_openai_v1_resource_base(original_url) and (
-            requested_api_version is None or BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
-        ):
-            v1_chat_path: Final = "/" + "/".join((*OPENAI_V1_PATH, *CHAT_COMPLETIONS_PATH))
-            return str(original_url.copy_with(path=v1_chat_path, params=query_params))
+        if is_openai_v1_resource_base(original_url):
+            resource_path: Final = (
+                (*OPENAI_V1_PATH, *CHAT_COMPLETIONS_PATH)
+                if requested_api_version is None or BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
+                else ("openai", "deployments", model, *CHAT_COMPLETIONS_PATH)
+            )
+            return str(original_url.copy_with(path="/" + "/".join(resource_path), params=query_params))
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:

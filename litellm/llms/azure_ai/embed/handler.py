@@ -2,10 +2,15 @@ from collections.abc import Mapping
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from openai import OpenAI
 
 import litellm
-from litellm.llms.azure_ai.common_utils import is_foundry_model_inference_base
+from litellm.llms.azure_ai.common_utils import (
+    OPENAI_V1_PATH,
+    is_foundry_model_inference_base,
+    is_openai_v1_resource_base,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -19,8 +24,13 @@ from litellm.utils import convert_to_model_response_object
 from .cohere_transformation import AzureAICohereConfig
 
 
-def _foundry_models_route_base(api_base: str | None) -> str | None:
-    if api_base is None or not is_foundry_model_inference_base(api_base):
+def _embedding_api_base(api_base: str | None) -> str | None:
+    if api_base is None:
+        return None
+    base_url: Final = httpx.URL(api_base)
+    if is_openai_v1_resource_base(base_url):
+        return str(base_url.copy_with(path="/" + "/".join(OPENAI_V1_PATH)))
+    if not is_foundry_model_inference_base(api_base):
         return api_base
     parts: Final = urlsplit(api_base)
     path: Final = parts.path.rstrip("/")
@@ -228,7 +238,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
 
         assemble result in-order, and return
         """
-        resolved_api_base: Final = _foundry_models_route_base(api_base)
+        resolved_api_base: Final = _embedding_api_base(api_base)
         if aembedding is True:
             return self.async_embedding(
                 model,
