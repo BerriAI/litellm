@@ -39414,25 +39414,11 @@
         "max_output_tokens": 100000
     },
     "gradium/default": {
-        "input_cost_per_character": 6.9e-05,
+        "input_cost_per_character": 7e-05,
         "litellm_provider": "gradium",
         "metadata": {
-            "calculation": "1 credit per character synthesized; $6.9 per 100k add-on credits (XS plan) = $0.000069/char. Larger plans are cheaper (down to $3.8/100k on L) -- override input_cost_per_character for your plan.",
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character, so override input_cost_per_character on the deployment for either.",
             "notes": "Gradium TTS bills per character of input text, not per second of audio."
-        },
-        "mode": "audio_speech",
-        "output_cost_per_character": 0.0,
-        "source": "https://gradium.ai/pricing",
-        "supported_endpoints": [
-            "/v1/audio/speech"
-        ]
-    },
-    "gradium/pro-voice-clone": {
-        "input_cost_per_character": 8.28e-05,
-        "litellm_provider": "gradium",
-        "metadata": {
-            "calculation": "Pro Voice Clones bill 1.2 credits per character: 1.2 x $0.000069 = $0.0000828/char. Excludes the one-time 1M-credit training fee.",
-            "notes": "Gradium TTS using a Pro Voice Clone voice."
         },
         "mode": "audio_speech",
         "output_cost_per_character": 0.0,
