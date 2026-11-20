@@ -123904,5 +123904,21 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "runwayml/seedance2_5_flash": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"Output: 13/20 credits per second at 480p/720p @ $0.01 per credit; input and reference video billed additionally at 7/10 credits per second and the 52 credit minimum per generation are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.2,
+        "output_cost_per_second_480p": 0.13,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
