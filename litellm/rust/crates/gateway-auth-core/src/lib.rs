@@ -1,6 +1,7 @@
 mod admission;
 pub mod authn;
 pub mod authz;
+pub mod body;
 mod commit;
 mod error;
 mod host;
