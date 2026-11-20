@@ -30,6 +30,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from litellm.integrations.langfuse.langfuse import (
     MINIMUM_LANGFUSE_VERSION,
+    LangFuseLogger,
     installed_langfuse_version,
     raise_if_unsupported_langfuse_version,
 )
@@ -1529,6 +1530,52 @@ def test_exporter_names_the_server_floor_when_the_otlp_route_is_missing(monkeypa
         assert exporter.export((_finished_span(),)) is SpanExportResult.FAILURE
 
     assert "HTTP 404" in caplog.text and "3.63.0" in caplog.text
+
+
+@pytest.mark.parametrize("public_key,secret_key", [(None, None), (None, "example-secret"), ("example-public", None)])
+def test_logger_with_incomplete_credentials_reports_failed_batches_without_posting(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, public_key: str | None, secret_key: str | None
+) -> None:
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    requests: list[httpx.Request] = []
+    handler = HTTPHandler(client=_recording_transport(requests))
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse.get_httpx_client", lambda: handler)
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.get_httpx_client", lambda: handler)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        logger = LangFuseLogger(
+            langfuse_public_key=public_key, langfuse_secret=secret_key, langfuse_host="https://lf.example"
+        )
+        try:
+            for name in ("first", "second"):
+                logger.tracing.tracer.start_span(name).end()
+                assert logger.tracing.flush() is False
+        finally:
+            logger.stop()
+
+    assert [request for request in requests if request.method == "POST"] == []
+    assert caplog.text.count("Langfuse span export requires both a public key and a secret key") == 1
+
+
+@pytest.mark.parametrize("status,pair", [(401, "environment"), (403, "other")])
+def test_export_auth_error_identifies_the_effective_pair_without_logging_credentials(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: int, pair: str
+) -> None:
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "example-env-public")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "example-env-secret")
+    requests: list[httpx.Request] = []
+    handler = HTTPHandler(client=_recording_transport(requests, status=status))
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.get_httpx_client", lambda: handler)
+    public_key = "example-env-public" if pair == "environment" else "example-other-public"
+    secret_key = "example-env-secret" if pair == "environment" else "example-other-secret"
+    exporter = _build_span_exporter(public_key=public_key, secret_key=secret_key, base_url="https://lf.example")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        assert exporter.export((_finished_span(),)) is SpanExportResult.FAILURE
+    assert len(requests) == 1
+    assert f"credential_pair={pair}" in caplog.text
+    assert public_key not in caplog.text and secret_key not in caplog.text
+    assert requests[0].headers["Authorization"] not in caplog.text
 
 
 def _finished_span_named(name: object):

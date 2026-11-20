@@ -425,8 +425,8 @@ class LangFuseLogger:
         )
 
         tracing: Final = acquire_langfuse_tracing(
-            public_key=str(self.public_key),
-            secret_key=str(self.secret_key),
+            public_key=_optional_str(self.public_key),
+            secret_key=_optional_str(self.secret_key),
             base_url=self.langfuse_host,
             environment=self.langfuse_environment,
             release=self.langfuse_release,
