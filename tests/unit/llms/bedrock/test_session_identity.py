@@ -61,3 +61,10 @@ def test_long_keys_and_duplicate_case_variants_do_not_produce_invalid_tags(monke
         ({"Key": "user_api_key_alias", "Value": "first"},),
         None,
     )
+
+
+def test_caller_supplied_end_user_id_never_becomes_session_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_end_user_id"])
+    monkeypatch.setattr(litellm, "bedrock_session_name_fields", ["user_api_key_end_user_id"])
+    params: Final = {"metadata": {"user_api_key_end_user_id": "caller-chosen"}}
+    assert resolve_bedrock_session_identity(params, None, None) == (None, None)

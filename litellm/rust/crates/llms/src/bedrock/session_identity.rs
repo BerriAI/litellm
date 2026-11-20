@@ -25,8 +25,10 @@ static SESSION_NAME: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\A[a-zA-Z0-9_+=,.@-]{2,64}\z").expect("constant STS session name pattern")
 });
 
+const CALLER_SUPPLIED_FIELDS: [&str; 1] = ["user_api_key_end_user_id"];
+
 fn identity<'a>(params: &'a SessionIdentity, field: &str) -> Option<&'a str> {
-    if !field.starts_with("user_api_key_") {
+    if !field.starts_with("user_api_key_") || CALLER_SUPPLIED_FIELDS.contains(&field) {
         return None;
     }
     [&params.metadata, &params.litellm_metadata]
@@ -212,6 +214,21 @@ mod tests {
                 .map(str::to_owned)
         });
         assert_eq!(resolved.aws_session_name.as_deref(), Some(expected));
+    }
+
+    #[rstest]
+    fn caller_supplied_end_user_id_is_never_used(aws: AwsParams) {
+        let identity = SessionIdentity {
+            tag_fields: vec!["user_api_key_end_user_id".into()],
+            name_fields: vec!["user_api_key_end_user_id".into()],
+            metadata: [("user_api_key_end_user_id".into(), "caller-chosen".into())].into(),
+            ..Default::default()
+        };
+        let resolved = session_identity(&aws, &identity, &|_| None);
+        assert_eq!(
+            (resolved.aws_session_tags, resolved.aws_session_name),
+            (None, None)
+        );
     }
 
     #[rstest]

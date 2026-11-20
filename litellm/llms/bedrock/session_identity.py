@@ -8,10 +8,11 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.bedrock import AwsSessionTag
 
 _SESSION_NAME: Final = re.compile(r"[\w+=,.@-]{2,64}", re.ASCII)
+_CALLER_SUPPLIED_FIELDS: Final = frozenset({"user_api_key_end_user_id"})
 
 
 def _identity_value(params: Mapping[str, object], field: str) -> str | None:
-    if not field.startswith("user_api_key_"):
+    if not field.startswith("user_api_key_") or field in _CALLER_SUPPLIED_FIELDS:
         return None
     sources: Final = tuple(
         source for name in ("metadata", "litellm_metadata") if (source := as_str_mapping(params.get(name))) is not None
