@@ -948,6 +948,14 @@ describe("ModelInfoView", () => {
     const payload = mockModelPatchUpdateCall.mock.calls[0][1];
     expect(payload.litellm_params.input_cost_per_token_above_272k_tokens).toBe(20);
     expect(payload.litellm_params).not.toHaveProperty("output_cost_per_token_above_272k_tokens");
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledTimes(2));
+
+    const resave = mockModelPatchUpdateCall.mock.calls[1][1];
+    expect(resave.litellm_params.input_cost_per_token_above_272k_tokens).toBe(20);
+    expect(resave).not.toHaveProperty("litellm_params_to_remove");
   });
 
   describe("PTU cost attribution gate", () => {
