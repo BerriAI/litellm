@@ -18,7 +18,6 @@ from typing import (
     TypeVar,
 )
 
-from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
@@ -112,7 +111,6 @@ from litellm.repositories.verification_token_repository import (
 from litellm.types.services import ServiceTypes
 
 CustomerSpendEntity: TypeAlias = Literal["member", "team", "org"]
-_WINDOW_LIMITS: Final = TypeAdapter(tuple[dict[str, object], ...])
 
 
 class _CustomerOrgRow(Protocol):
@@ -617,34 +615,34 @@ class _Lease(Enum):
     FOLLOWER = "follower"
 
 
-async def _write_key_windows(prisma_client: PrismaClient, row_id: str, payload: str, expected: str) -> int:
+async def _write_key_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
     async with db_span("write_budget_windows", "LiteLLM_VerificationToken"):
-        return await VerificationTokenRepository(prisma_client).table.update_many(
-            where={"token": row_id, "budget_limits": {"equals": expected}},
+        await VerificationTokenRepository(prisma_client).table.update(
+            where={"token": row_id},
             data={"budget_limits": payload},
         )
 
 
-async def _write_user_windows(prisma_client: PrismaClient, row_id: str, payload: str, expected: str) -> int:
+async def _write_user_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
     async with db_span("write_budget_windows", "LiteLLM_UserTable"):
-        return await UserRepository(prisma_client).table.update_many(
-            where={"user_id": row_id, "budget_limits": {"equals": expected}},
+        await UserRepository(prisma_client).table.update(
+            where={"user_id": row_id},
             data={"budget_limits": payload},
         )
 
 
-async def _write_budget_windows(prisma_client: PrismaClient, row_id: str, payload: str, expected: str) -> int:
+async def _write_budget_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
     async with db_span("write_budget_windows", "LiteLLM_BudgetTable"):
-        return await BudgetRepository(prisma_client).table.update_many(
-            where={"budget_id": row_id, "budget_limits": {"equals": expected}},
+        await BudgetRepository(prisma_client).table.update(
+            where={"budget_id": row_id},
             data={"budget_limits": payload},
         )
 
 
-async def _write_team_windows(prisma_client: PrismaClient, row_id: str, payload: str, expected: str) -> int:
+async def _write_team_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
     async with db_span("write_budget_windows", "LiteLLM_TeamTable"):
-        return await TeamRepository(prisma_client).table.update_many(
-            where={"team_id": row_id, "budget_limits": {"equals": expected}},
+        await TeamRepository(prisma_client).table.update(
+            where={"team_id": row_id},
             data={"budget_limits": payload},
         )
 
@@ -657,7 +655,7 @@ class _WindowSource:
     id_column: str
     log_subject: str
     retry_subject: str
-    write: Callable[[PrismaClient, str, str, str], Awaitable[int]]
+    write: Callable[[PrismaClient, str, str], Awaitable[None]]
     counters: tuple[Litellm_EntityType, Callable[[str, str], str]] | None
 
     def page_query(self) -> str:
@@ -1891,14 +1889,9 @@ class ResetBudgetJob:
         prisma_client: PrismaClient,
         entity_type: Litellm_EntityType,
         entity_id: str,
-        planned_reset_at: datetime | None = None,
     ) -> bool:
         """Reset a single budget window if expired. Returns True if the window was reset."""
-        next_reset_at: Final = (
-            planned_reset_at
-            if planned_reset_at is not None
-            else ResetBudgetJob._next_window_reset(window, now, reset_settings)
-        )
+        next_reset_at: Final = ResetBudgetJob._next_window_reset(window, now, reset_settings)
         if next_reset_at is None:
             return False
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_store)
@@ -2062,57 +2055,40 @@ class ResetBudgetJob:
             reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
         )
         for row in rows:
-            await self._reset_window_row(source, row, now, spend_counter_store)
+            raw = row["budget_limits"]
+            if not raw:
+                continue
+            row_id: str = row[source.id_column]
+            windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
+            changed = False
+            for window in windows:
+                if source.counters is None:
+                    next_reset_at = ResetBudgetJob._next_window_reset(window, now, self.reset_settings)
+                    if next_reset_at is not None:
+                        window["reset_at"] = next_reset_at.isoformat()
+                        changed = True
+                    continue
+                entity_type, window_counter = source.counters
+                if await ResetBudgetJob._reset_expired_window(
+                    window,
+                    window_counter(row_id, str(window["budget_duration"])),
+                    spend_counter_store,
+                    now,
+                    self.reset_settings,
+                    prisma_client=self.prisma_client,
+                    entity_type=entity_type,
+                    entity_id=row_id,
+                ):
+                    changed = True
+            if changed:
+                await self._with_db_write_retry(
+                    lambda: source.write(self.prisma_client, row_id, json.dumps(windows)),
+                    reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
+                )
 
         if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
             return None
         return rows[-1][source.id_column]
-
-    async def _reset_window_row(
-        self,
-        source: _WindowSource,
-        row: Mapping[str, object],
-        now: datetime,
-        spend_counter_store: SpendCounterStore,
-    ) -> None:
-        raw: Final = row["budget_limits"]
-        if not raw:
-            return
-        row_id: Final = str(row[source.id_column])
-        windows: Final = (
-            _WINDOW_LIMITS.validate_json(raw) if isinstance(raw, str) else _WINDOW_LIMITS.validate_python(raw)
-        )
-        resets: Final = tuple(self._next_window_reset(window, now, self.reset_settings) for window in windows)
-        if all(reset_at is None for reset_at in resets):
-            return
-        payload: Final = json.dumps(
-            tuple(
-                {**window, "reset_at": reset_at.isoformat()} if reset_at is not None else window
-                for window, reset_at in zip(windows, resets)
-            )
-        )
-        expected: Final = json.dumps(windows)
-        updated: Final = await self._with_db_write_retry(
-            lambda: source.write(self.prisma_client, row_id, payload, expected),
-            reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
-        )
-        if updated == 0 or source.counters is None:
-            return
-        entity_type, window_counter = source.counters
-        for window, next_reset_at in zip(windows, resets):
-            if next_reset_at is None:
-                continue
-            await ResetBudgetJob._reset_expired_window(
-                window,
-                window_counter(row_id, str(window["budget_duration"])),
-                spend_counter_store,
-                now,
-                self.reset_settings,
-                prisma_client=self.prisma_client,
-                entity_type=entity_type,
-                entity_id=row_id,
-                planned_reset_at=next_reset_at,
-            )
 
     @staticmethod
     async def _reset_budget_common(
