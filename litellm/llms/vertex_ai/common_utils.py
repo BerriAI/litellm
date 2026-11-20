@@ -5,7 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache
-from itertools import accumulate, chain, repeat, takewhile
+from itertools import accumulate, chain, repeat, starmap, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
 
@@ -866,6 +866,48 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
                 _fix_enum_types(item, depth=depth + 1, send_integer_enums=send_integer_enums)
 
 
+_MAP_SCHEMA_KEYWORDS: Final = frozenset({"properties", "$defs", "definitions", "patternProperties"})
+_SINGLE_SCHEMA_KEYWORDS: Final = frozenset({"items", "additionalProperties", "not", "contains"})
+_LIST_SCHEMA_KEYWORDS: Final = frozenset({"items", "anyOf", "oneOf", "allOf", "prefixItems"})
+
+
+def _json_schema_type_of(value: JsonValue) -> Literal["boolean", "integer", "number", "string"] | None:
+    match value:
+        case bool():
+            return "boolean"
+        case int():
+            return "integer"
+        case float():
+            return "number"
+        case str():
+            return "string"
+        case _:
+            return None
+
+
+def _subschemas(keyword: str, value: JsonValue) -> Iterable[JsonValue]:
+    match value:
+        case dict() if keyword in _MAP_SCHEMA_KEYWORDS:
+            return value.values()
+        case dict() if keyword in _SINGLE_SCHEMA_KEYWORDS:
+            return (value,)
+        case list() if keyword in _LIST_SCHEMA_KEYWORDS:
+            return value
+        case _:
+            return ()
+
+
+def _pin_scalar_consts(schema: JsonValue, depth: int = 0) -> None:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH or not isinstance(schema, dict):
+        return
+    json_type: Final = _json_schema_type_of(schema.get("const"))
+    if json_type is not None:
+        schema["enum"] = [schema.pop("const")]  # rebind-ok: the schema builders edit their own copy in place
+        schema.setdefault("type", json_type)
+    for subschema in chain.from_iterable(starmap(_subschemas, schema.items())):
+        _pin_scalar_consts(subschema, depth + 1)
+
+
 def build_vertex_schema(
     parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
 ) -> dict[str, object]:
@@ -891,6 +933,7 @@ def build_vertex_schema(
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
+    _pin_scalar_consts(cast(JsonValue, parameters))  # cast-ok: tool and response schemas are JSON request data
 
     _convert_schema_types(parameters)
 
@@ -1046,7 +1089,11 @@ def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str,
     if "$ref" not in parameters and not _root_cannot_be_vertex_parameters(parameters):
         return None
     json_schema: Final = _JSON_SCHEMA.validate_python(to_jsonable_python(parameters))
-    return json_schema if needs_parameters_json_schema(json_schema) else None
+    if not needs_parameters_json_schema(json_schema):
+        return None
+    pinned: Final = dict(json_schema)
+    _pin_scalar_consts(pinned)
+    return pinned
 
 
 def build_json_schema(parameters: dict) -> dict:
@@ -1065,13 +1112,11 @@ def build_json_schema(parameters: dict) -> dict:
     Returns:
         dict - the processed schema in standard JSON Schema format
     """
-    # Gemini 2.0+ with responseJsonSchema accepts standard JSON Schema as-is,
-    # including $ref, $defs, anyOf, etc. No transformations needed — the
-    # OpenAPI-specific fixes (unpack_defs, add_object_type, convert_anyof, etc.)
+    # The OpenAPI-specific fixes (unpack_defs, add_object_type, convert_anyof, etc.)
     # are only required for responseSchema (Gemini 1.5) and can break valid
     # JSON Schema by adding conflicting fields to $ref nodes.
     # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
-
+    _pin_scalar_consts(cast(JsonValue, parameters))  # cast-ok: response schemas are JSON request data
     return parameters
 
 

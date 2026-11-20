@@ -3097,6 +3097,139 @@ def test_vertex_keeps_a_union_root_tool_on_parameters_when_the_call_can_be_force
 
 
 @pytest.mark.parametrize(
+    ("model", "kind_schema", "expected_kind"),
+    [
+        ("gemini-2.5-flash", {"const": "card"}, {"type": "string", "enum": ["card"]}),
+        ("gemini-2.5-flash", {"const": "ledger-7", "type": "string"}, {"type": "string", "enum": ["ledger-7"]}),
+        ("gemini-2.5-flash", {"const": "card", "enum": ["card", "bank"]}, {"type": "string", "enum": ["card"]}),
+        ("gemini-4-argon", {"const": 7}, {"type": "integer", "enum": ["7"]}),
+        ("gemini-2.5-flash", {"const": 7}, {"type": "integer"}),
+        ("gemini-2.5-flash", {"const": 1.5}, {"type": "number"}),
+        ("gemini-2.5-flash", {"const": True}, {"type": "boolean"}),
+    ],
+    ids=[
+        "const-only-string",
+        "typed-string",
+        "const-beside-enum",
+        "integer-with-integer-enums",
+        "integer-without-integer-enums",
+        "number",
+        "boolean",
+    ],
+)
+def test_vertex_sends_a_tool_parameter_const_as_its_type_and_the_one_enum_value_gemini_enforces(
+    model: str, kind_schema: dict[str, object], expected_kind: dict[str, object]
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "pay", "parameters": {"type": "object", "properties": {"kind": kind_schema}}},
+                }
+            ]
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["kind"] == expected_kind
+
+
+_CARD_PAYMENT: Final = {
+    "type": "object",
+    "properties": {"kind": {"const": "card"}, "number": {"type": "string"}},
+    "required": ["kind", "number"],
+}
+_BANK_PAYMENT: Final = {
+    "type": "object",
+    "properties": {"kind": {"const": "bank"}, "iban": {"type": "string"}},
+    "required": ["kind", "iban"],
+}
+_PINNED_PAYMENTS: Final = {
+    "anyOf": [
+        {
+            "type": "object",
+            "properties": {"kind": {"type": "string", "enum": ["card"]}, "number": {"type": "string"}},
+            "required": ["kind", "number"],
+        },
+        {
+            "type": "object",
+            "properties": {"kind": {"type": "string", "enum": ["bank"]}, "iban": {"type": "string"}},
+            "required": ["kind", "iban"],
+        },
+    ]
+}
+
+
+@pytest.mark.parametrize(
+    ("parameters", "tool_choice", "expected_declaration"),
+    [
+        (
+            {"anyOf": [_CARD_PAYMENT, _BANK_PAYMENT]},
+            "auto",
+            {"name": "pay", "parametersJsonSchema": _PINNED_PAYMENTS},
+        ),
+        (
+            {"anyOf": [_CARD_PAYMENT, _BANK_PAYMENT]},
+            {"type": "function", "function": {"name": "pay"}},
+            {"name": "pay", "parameters": _PINNED_PAYMENTS},
+        ),
+        (
+            {"$ref": "#/$defs/Card", "$defs": {"Card": _CARD_PAYMENT}},
+            "auto",
+            {"name": "pay", "parameters": _PINNED_PAYMENTS["anyOf"][0]},
+        ),
+    ],
+    ids=["union-root-auto", "union-root-forced", "root-ref-to-object"],
+)
+def test_vertex_pins_tool_consts_on_whichever_schema_field_the_tool_goes_on(
+    parameters: dict[str, object], tool_choice: str | dict[str, object], expected_declaration: dict[str, object]
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tool_choice": tool_choice,
+            "tools": [{"type": "function", "function": {"name": "pay", "parameters": deepcopy(parameters)}}],
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"] == [expected_declaration]
+
+
+def test_vertex_response_json_schema_pins_a_const_inside_the_defs_it_keeps() -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "payment",
+            "schema": {
+                "type": "object",
+                "properties": {"payment": {"$ref": "#/$defs/Card"}},
+                "required": ["payment"],
+                "$defs": {"Card": {"type": "object", "properties": {"kind": {"const": "card", "type": "string"}}}},
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="gemini-4-argon",
+        drop_params=False,
+    )
+
+    assert request_params["response_json_schema"] == {
+        "type": "object",
+        "properties": {"payment": {"$ref": "#/$defs/Card"}},
+        "required": ["payment"],
+        "$defs": {"Card": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["card"]}}}},
+    }
+
+
+@pytest.mark.parametrize(
     ("model", "expected_level"),
     [
         ("gemini-3.8-flash", {"type": "integer", "enum": ["1", "2", "5"]}),
