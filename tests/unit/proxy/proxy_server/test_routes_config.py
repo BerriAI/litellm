@@ -2008,7 +2008,7 @@ def test_config_list_reflects_env_resolved_store_model_in_db(client, auth_as, mo
     # pre-publish state: the config-load normalization wrote the YAML-resolved false
     monkeypatch.setitem(ps.general_settings, "store_model_in_db", False)
 
-    ps._publish_store_model_in_db(True, ps.proxy_config.settings)  # what startup_event does after resolving the flag
+    ps._publish_store_model_in_db(True)  # what startup_event does after resolving the flag
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/config/list", params={"config_type": "general_settings"})
@@ -2033,7 +2033,7 @@ def test_config_field_info_reflects_env_resolved_store_model_in_db(client, auth_
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(ps, "store_model_in_db", True)
 
-    ps._publish_store_model_in_db(True, ps.proxy_config.settings)
+    ps._publish_store_model_in_db(True)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/config/field/info", params={"field_name": "store_model_in_db"})
@@ -2060,7 +2060,7 @@ def test_publish_store_model_in_db_skips_store_write_for_config_owned_key(client
     monkeypatch.setattr(ps, "store_model_in_db", True)
     monkeypatch.setitem(ps.general_settings, "store_model_in_db", True)
 
-    ps._publish_store_model_in_db(True, ps.proxy_config.settings)
+    ps._publish_store_model_in_db(True)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/config/list", params={"config_type": "general_settings"})
@@ -2103,6 +2103,6 @@ def test_store_model_in_db_publish_skips_config_owned_store_when_general_setting
     monkeypatch.setattr(ps.proxy_config, "settings", store)
     monkeypatch.setattr(ps, "general_settings", store, raising=False)
 
-    ps._publish_store_model_in_db(False, store)  # the DB row said false; the config file owns the key
+    ps._publish_store_model_in_db(False)  # the DB row said false; the config file owns the key
 
     assert store["store_model_in_db"] == "os.environ/PROOF_FLAG"
