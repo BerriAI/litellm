@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { BudgetEditorFields } from "./customerBudgetForm";
+import { isCalendarBudgetDuration } from "@/lib/forms/budgetWindows";
 
 type Windows = BudgetEditorFields["budgetWindows"];
 
@@ -21,7 +22,7 @@ export default function CustomerBudgetWindows({
   const WindowLabel = removable ? "label" : Label;
   const rows = windows.map(({ budget, maxBudget }, index) => {
     const period = budget.budget_duration;
-    if (!removable && (period === "1mo" || period === "12mo")) return null;
+    if (!removable && isCalendarBudgetDuration(period)) return null;
     const inputId = `${id}-window-${index}`;
     return (
       <div key={`${period}-${index}`} className={removable ? "space-y-1.5" : "space-y-2"}>

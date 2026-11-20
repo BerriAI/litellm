@@ -1,8 +1,3 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-
 use litellm_python_compat::Value;
 
 use super::keys::SpendCounter;
@@ -34,17 +29,6 @@ impl Reading {
         match self {
             Self::Redis(value) | Self::Memory(value) => value,
         }
-    }
-}
-
-/// One `increment_many_post_call`: settled once every increment it declared has its reply and
-/// memory mirrors it, whether `flush_post` or the post-call deadline sent the batch.
-#[derive(Clone, Debug)]
-pub struct PostCallSettlement(pub(super) Arc<AtomicBool>);
-
-impl PostCallSettlement {
-    pub fn is_settled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
     }
 }
 

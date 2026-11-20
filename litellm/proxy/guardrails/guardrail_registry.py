@@ -666,6 +666,7 @@ def _configure_callback_scoping(
         "skip_tool_message_in_guardrail",
         "scan_only_tool_results",
         "scan_tool_descriptions_as_text",
+        "scan_tool_calls_as_text",
     ):
         setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
     if (
@@ -674,7 +675,17 @@ def _configure_callback_scoping(
     ):
         raise ValueError(
             f"Guardrail {guardrail_name}: scan_tool_descriptions_as_text is only supported by the "
-            "panw_prisma_airs and presidio guardrails. Remove it from this guardrail."
+            "panw_prisma_airs, presidio and bedrock guardrails, and on bedrock not with mode during_call or "
+            "experimental_use_latest_role_message_only. Remove it from this guardrail."
+        )
+    if (
+        litellm_params.scan_tool_calls_as_text is True
+        and not custom_guardrail_callback.supports_scan_tool_calls_as_text()
+    ):
+        raise ValueError(
+            f"Guardrail {guardrail_name}: scan_tool_calls_as_text is only supported by the bedrock "
+            "guardrail, and not with mode during_call or experimental_use_latest_role_message_only. "
+            "Remove it from this guardrail."
         )
     scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
     if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():

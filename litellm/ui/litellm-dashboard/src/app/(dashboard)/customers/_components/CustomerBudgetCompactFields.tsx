@@ -1,4 +1,5 @@
 import { type BudgetEditorFields, budgetPeriodAmount, updateBudgetPeriod } from "./customerBudgetForm";
+import { CALENDAR_BUDGET_DURATIONS, isCalendarBudgetDuration } from "@/lib/forms/budgetWindows";
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import CustomerBudgetAmountInput from "./CustomerBudgetAmountInput";
@@ -22,9 +23,8 @@ export default function CustomerBudgetCompactFields({
   id: string;
 }) {
   const { t } = useTranslation();
-  const periods = ["1mo", "12mo"] as const;
-  const hasOtherSpendLimit =
-    original?.max_budget != null && original.budget_duration !== "1mo" && original.budget_duration !== "12mo";
+  const periods = CALENDAR_BUDGET_DURATIONS;
+  const hasOtherSpendLimit = original?.max_budget != null && !isCalendarBudgetDuration(original.budget_duration);
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

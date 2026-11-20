@@ -2097,7 +2097,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         supported_responses_api_params: Final = set(ResponsesAPIOptionalRequestParams.__annotations__.keys())
         # Also include params we handle specially
-        supported_responses_api_params.add("reasoning_effort")  # We map this to "reasoning"
+        supported_responses_api_params.add("reasoning_effort")
 
         # Extract supported params from extra_body and merge into optional_params
         extra_body_copy: Final = extra_body.copy()

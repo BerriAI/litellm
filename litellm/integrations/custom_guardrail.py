@@ -402,6 +402,7 @@ class CustomGuardrail(CustomLogger):
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
     scan_tool_descriptions_as_text: bool | None = None
+    scan_tool_calls_as_text: bool | None = None
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
@@ -1341,6 +1342,9 @@ class CustomGuardrail(CustomLogger):
         )
 
     def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return False
+
+    def supports_scan_tool_calls_as_text(self) -> bool:
         return False
 
     def supports_scan_only_tool_results(self) -> bool:
