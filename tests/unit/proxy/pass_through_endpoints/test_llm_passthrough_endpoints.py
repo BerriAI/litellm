@@ -291,6 +291,11 @@ async def _call_gemini_pass_through(method: str, endpoint: str, override_header:
         ("GET", "v1beta/files/other/%252e%252e/abc123"),
         ("DELETE", "v1beta/files/other/%25252e%25252e/abc123"),
         ("GET", "v1beta/files/%252e/abc123"),
+        ("GET", "v1beta/files\\abc123"),
+        ("DELETE", "v1beta/files\\abc123"),
+        ("GET", "v1beta/files%5Cabc123"),
+        ("GET", "v1beta\\files\\abc123"),
+        ("DELETE", "v1beta/files/other%5c..%5cabc123"),
     ],
 )
 async def test_gemini_pass_through_refuses_a_file_the_caller_does_not_own(

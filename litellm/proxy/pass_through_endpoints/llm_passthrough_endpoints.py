@@ -508,7 +508,7 @@ def _is_gemini_get_or_delete(method: str, headers: Mapping[str, str]) -> bool:
 
 
 def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
-    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(posixpath.normpath(f"/{decoded_path}"))
+    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(posixpath.normpath(f"/{decoded_path}".replace("\\", "/")))
     return single_file.group(1) if single_file is not None else None
 
 
