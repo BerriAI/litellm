@@ -433,15 +433,8 @@ def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, .
     )
 
 
-def _keeps_one_upload_per_target(llm_router: Router, model_id: str) -> bool:
-    credentials: Final = _provider_file_retrieve_credentials(llm_router=llm_router, model_id=model_id)
-    return (credentials or {}).get("custom_llm_provider") == LlmProviders.LITELLM_PROXY.value
-
-
-def _is_kept_upload(uploads: Sequence[_ProviderUpload], index: int, per_target_model_ids: frozenset[str]) -> bool:
-    upload: Final = uploads[index]
-    other_uploads: Final = uploads[index + 1 :] if upload.model_id in per_target_model_ids else uploads[:index]
-    return all(other.model_id != upload.model_id for other in other_uploads)
+def _is_kept_upload(uploads: Sequence[_ProviderUpload], index: int) -> bool:
+    return all(earlier.model_id != uploads[index].model_id for earlier in uploads[:index])
 
 
 def _upload_from_trailing_id_fields(decoded_unified_file_id: str) -> _ProviderUpload:
@@ -2186,7 +2179,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
         responses = []
         for model in target_model_names_list:
-            individual_response = await llm_router.acreate_file(model=model, **_create_file_request)
+            individual_response = await llm_router.acreate_file(
+                model=model, target_model_names=tuple(target_model_names_list), **_create_file_request
+            )
             responses.append(individual_response)
 
         return responses
@@ -2214,14 +2209,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         uploads: Final = tuple(chain.from_iterable(map(_provider_uploads, responses)))
-        per_target_model_ids: Final = frozenset(
-            model_id
-            for model_id in {upload.model_id for upload in uploads}
-            if _keeps_one_upload_per_target(llm_router, model_id)
-        )
-        kept_uploads: Final = tuple(
-            upload for index, upload in enumerate(uploads) if _is_kept_upload(uploads, index, per_target_model_ids)
-        )
+        kept_uploads: Final = tuple(upload for index, upload in enumerate(uploads) if _is_kept_upload(uploads, index))
         model_mappings: Final = {upload.model_id: upload.provider_file_id for upload in kept_uploads}
 
         await self.store_unified_file_id(
@@ -2232,13 +2220,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             user_api_key_dict=user_api_key_dict,
         )
         _start_deleting_redundant_uploads(
-            llm_router,
-            tuple(
-                upload
-                for upload in uploads
-                if upload not in kept_uploads and upload.model_id not in per_target_model_ids
-            ),
-            create_file_request,
+            llm_router, tuple(upload for upload in uploads if upload not in kept_uploads), create_file_request
         )
 
         # Emit Prometheus metrics for managed file creation

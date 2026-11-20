@@ -691,6 +691,27 @@ def is_batch_upload(request: Mapping[str, object]) -> bool:
     return request.get("purpose") == "batch"
 
 
+_TARGET_MODEL_NAMES_KEY: Final = "target_model_names"
+_TARGET_MODEL_NAMES: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+_NO_SERVED_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _served_target_names(
+    deployment_id: str,
+    targets: Sequence[str],
+    requested: tuple[str, str],
+    names_by_target: Mapping[str, Mapping[str, str]],
+) -> str:
+    requested_target, requested_name = requested
+    names: Final = (
+        requested_name
+        if target == requested_target
+        else names_by_target.get(target, _NO_SERVED_NAMES).get(deployment_id)
+        for target in targets
+    )
+    return ",".join(dict.fromkeys(name for name in names if name is not None))
+
+
 def endpoint_names() -> frozenset[str]:
     """Every endpoint name ``RustEndpoints.member`` may serve: what ``dir()`` of a router lists."""
     return frozenset(
@@ -2375,18 +2396,28 @@ class RustEndpoints:
         )
         from litellm.types.utils import LlmProviders
 
+        target_model_names: Final = _TARGET_MODEL_NAMES.validate_python(kwargs.get(_TARGET_MODEL_NAMES_KEY, ()))
+        request: Final = without(kwargs, _TARGET_MODEL_NAMES_KEY)
         healthy: Final = await self._core.select(
             requested,
-            dict(kwargs),
+            dict(request),
             kind="healthy",
             specific_deployment=bool(specific) or None,
             messages=_user_message(_PICK_TEXTS["create_file"]),
-            batch_upload=is_batch_upload(kwargs),
+            batch_upload=is_batch_upload(request),
         )
         deployments: Final = list(healthy) if isinstance(healthy, Sequence) else [healthy]
+        names_by_target: Final = await self._stripped_names_by_target(
+            request,
+            tuple(target for target in dict.fromkeys(target_model_names) if target != requested),
+            deployments,
+        )
+        ordered_targets: Final = (
+            target_model_names if requested in target_model_names else (requested, *target_model_names)
+        )
 
         async def create_for(deployment: Mapping[str, object]) -> object:
-            kwargs_copy: Final = safe_deep_copy(dict(kwargs))  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
+            kwargs_copy: Final = safe_deep_copy(dict(request))  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
             update_kwargs_with_deployment(
                 self._core.shaping,
                 deployment,
@@ -2397,18 +2428,14 @@ class RustEndpoints:
             data: Final = as_dict(deployment.get("litellm_params"))
             model_name: Final = str(data.get("model"))
             self.counters.total_calls[model_name] += 1
-            declared: Final = data.get("custom_llm_provider")
-            stripped, inferred, _, _ = self._core.host.invoke("get_llm_provider")(
-                model=data["model"], custom_llm_provider=declared
-            )
-            provider: Final = declared or inferred
-            purpose: Final = kwargs.get("purpose")
-            file: object = kwargs.get("file")  # rebind-ok: rewritten for the deployment
+            stripped, provider = self._stripped_model_and_provider(data)
+            purpose: Final = request.get("purpose")
+            file: object = request.get("file")  # rebind-ok: rewritten for the deployment
             if not file or not purpose:
                 raise Exception("file and file_purpose are required for create_file")  # noqa: TRY002  # as the Python router
             replaces: Final = batch_utils.should_replace_model_in_jsonl(
                 purpose=purpose,  # pyright: ignore[reportArgumentType]  # the caller's purpose
-                passthrough=kwargs.get("passthrough") is True,
+                passthrough=request.get("passthrough") is True,
             )
             if replaces:
                 file = batch_utils.replace_model_in_jsonl(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # an untyped helper  # rebind-ok: rewritten for the deployment
@@ -2418,8 +2445,14 @@ class RustEndpoints:
                 )
                 kwargs_copy["file"] = file
             if provider == LlmProviders.LITELLM_PROXY.value:
+                served_names: Final = _served_target_names(
+                    str(as_dict(deployment.get("model_info")).get("id")),
+                    ordered_targets,
+                    (requested, stripped),
+                    names_by_target,
+                )
                 kwargs_copy["extra_body"] = MappingProxyType(
-                    {**as_dict(kwargs_copy.get("extra_body")), "target_model_names": stripped}  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # litellm's untyped helpers and request values
+                    {**as_dict(kwargs_copy.get("extra_body")), _TARGET_MODEL_NAMES_KEY: served_names}  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # litellm's untyped helpers and request values
                 )
             if "gcs_bucket_name" in data:
                 metadata_bucket(kwargs_copy, "litellm_metadata")["gcs_bucket_name"] = data["gcs_bucket_name"]  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
@@ -2448,6 +2481,48 @@ class RustEndpoints:
         if hidden is not None:
             hidden["model_file_id_mapping"] = mapping
         return returned
+
+    def _stripped_model_and_provider(self, params: Mapping[str, object]) -> tuple[str, object]:
+        declared: Final = params.get("custom_llm_provider")
+        stripped, inferred, _, _ = self._core.host.invoke("get_llm_provider")(
+            model=params["model"], custom_llm_provider=declared
+        )
+        return stripped, declared or inferred
+
+    def _is_litellm_proxy(self, deployment: object) -> bool:
+        from litellm.types.utils import LlmProviders
+
+        params: Final = as_dict(as_dict(deployment).get("litellm_params"))
+        return self._stripped_model_and_provider(params)[1] == LlmProviders.LITELLM_PROXY.value
+
+    async def _stripped_names_by_target(
+        self, request: Mapping[str, object], targets: Sequence[str], deployments: Sequence[object]
+    ) -> Mapping[str, Mapping[str, str]]:
+        if not targets or not any(self._is_litellm_proxy(d) for d in deployments):
+            return MappingProxyType({})
+        served: Final = await asyncio.gather(*(self._stripped_names_by_deployment(t, request) for t in targets))
+        return MappingProxyType(dict(zip(targets, served, strict=True)))
+
+    async def _stripped_names_by_deployment(self, target: str, request: Mapping[str, object]) -> Mapping[str, str]:
+        try:
+            healthy: Final = await self._core.select(
+                target,
+                dict(request),
+                kind="healthy",
+                messages=_user_message(_PICK_TEXTS["create_file"]),
+                batch_upload=is_batch_upload(request),
+            )
+        except Exception:  # noqa: BLE001  # a target the router cannot serve now is served by no deployment, as `healthy_deployments` treats it
+            return _NO_SERVED_NAMES
+        records: Final = healthy if isinstance(healthy, Sequence) else (healthy,)
+        return MappingProxyType(
+            {
+                str(as_dict(record.get("model_info")).get("id")): self._stripped_model_and_provider(
+                    as_dict(record.get("litellm_params"))
+                )[0]
+                for record in records
+            }
+        )
 
     # -- search tools -------------------------------------------------------------------------
 

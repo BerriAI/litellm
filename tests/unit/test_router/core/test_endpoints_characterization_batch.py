@@ -125,6 +125,60 @@ async def test_acreate_file_sends_target_model_names_to_a_litellm_proxy_deployme
     assert dict(host.calls[0].kwargs["extra_body"]) == {"keep": 1, "target_model_names": "remote-model"}  # pyright: ignore[reportArgumentType]  # a mapping
 
 
+async def _sent_target_model_names(core: RouterCore, host: EndpointHost, targets: tuple[str, ...]) -> list[str]:
+    for target in targets:
+        await core.acreate_file(model=target, target_model_names=targets, file=_jsonl(), purpose="batch")
+    assert all("target_model_names" not in call.kwargs for call in host.calls)
+    return [_bucket(call.kwargs, "extra_body")["target_model_names"] for call in host.calls]
+
+
+async def test_acreate_file_sends_every_target_a_litellm_proxy_wildcard_serves(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(model_list=[deployment("litellm_proxy/*", "wild", model="litellm_proxy/*")])
+    targets: Final = ("litellm_proxy/gpt-a", "litellm_proxy/claude-b")
+    assert await _sent_target_model_names(core, host, targets) == ["gpt-a,claude-b", "gpt-a,claude-b"]
+
+
+async def test_acreate_file_sends_each_litellm_proxy_deployment_only_the_target_it_serves(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(
+        model_list=[
+            deployment("proxy-gpt", "d-gpt", model="litellm_proxy/gpt-a"),
+            deployment("proxy-claude", "d-claude", model="litellm_proxy/claude-b"),
+        ]
+    )
+    assert await _sent_target_model_names(core, host, ("proxy-gpt", "proxy-claude")) == ["gpt-a", "claude-b"]
+
+
+async def test_acreate_file_leaves_out_a_target_no_deployment_serves_and_keeps_the_rest(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(model_list=[deployment("litellm_proxy/*", "wild", model="litellm_proxy/*")])
+    await core.acreate_file(
+        model="litellm_proxy/gpt-a",
+        target_model_names=("unknown-model", "litellm_proxy/gpt-a", "litellm_proxy/claude-b"),
+        file=_jsonl(),
+        purpose="batch",
+    )
+    assert _bucket(host.calls[0].kwargs, "extra_body")["target_model_names"] == "gpt-a,claude-b"
+
+
+async def test_acreate_file_names_a_repeated_target_once(make_core: MakeCore, host: EndpointHost):
+    core: Final = make_core(model_list=[deployment("litellm_proxy/*", "wild", model="litellm_proxy/*")])
+    targets: Final = ("litellm_proxy/gpt-a", "litellm_proxy/claude-b", "litellm_proxy/gpt-a")
+    await core.acreate_file(model="litellm_proxy/gpt-a", target_model_names=targets, file=_jsonl(), purpose="batch")
+    assert _bucket(host.calls[0].kwargs, "extra_body")["target_model_names"] == "gpt-a,claude-b"
+
+
+async def test_acreate_file_sends_other_providers_no_target_model_names(make_core: MakeCore, host: EndpointHost):
+    core: Final = make_core(model_list=[*TWO_DEPLOYMENTS, deployment("h", "d3")])
+    await core.acreate_file(model="g", target_model_names=("g", "h"), file=_jsonl(), purpose="batch")
+    assert sorted(host.deployments_called("acreate_file")) == ["d1", "d2"]
+    assert all("target_model_names" not in call.kwargs and "extra_body" not in call.kwargs for call in host.calls)
+
+
 @pytest.mark.parametrize(
     "request_bucket,expected_bucket", [({}, "model-bucket"), ({"s3_bucket_name": "team-a-bucket"}, "team-a-bucket")]
 )
