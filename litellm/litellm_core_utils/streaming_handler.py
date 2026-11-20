@@ -210,6 +210,11 @@ def _finish_reasons_by_index(upstream_chunk: object) -> Mapping[int, str]:
     return MappingProxyType(dict(filter(None, map(_indexed_finish_reason, object_items(choices)))))
 
 
+def _has_unfinished_hidden_param(upstream_chunk: object) -> bool:
+    hidden_params: Final = get_hidden_params(upstream_chunk)
+    return hidden_params is not None and hidden_params.get("is_finished") is False
+
+
 def _upstream_first_choice(upstream_chunk: object) -> BaseModel | None:
     match getattr(upstream_chunk, "choices", None):
         case [BaseModel() as first_choice, *_]:
@@ -1893,8 +1898,13 @@ class CustomStreamWrapper:
             if response_obj is None:
                 return _ProviderChunkEarlyReturn(None)
             completion_obj["content"] = response_obj["text"]
-            self.intermittent_finish_reason = response_obj.get("finish_reason", None)
-            self.received_any_finish_reason |= response_obj["finish_reason"] is not None
+            effective_finish_reason: Final[str | None] = (
+                _finish_reasons_by_index(chunk).get(_upstream_choice_index(chunk))
+                if _has_unfinished_hidden_param(chunk)
+                else response_obj.get("finish_reason", None)
+            )
+            self.intermittent_finish_reason = effective_finish_reason
+            self.received_any_finish_reason |= effective_finish_reason is not None
             if response_obj["is_finished"]:
                 if response_obj["finish_reason"] == "error":
                     raise Exception(

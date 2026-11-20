@@ -2594,6 +2594,129 @@ async def test_gemini_stream_with_a_usage_chunk_after_its_finish_reason_still_co
     assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
 
 
+@pytest.mark.parametrize(
+    ("candidate", "expected_content"),
+    [
+        pytest.param(
+            {"content": {"parts": [{"text": "One, two,"}], "role": "model"}, "index": 0},
+            "One, two,",
+            id="text-without-finish-reason",
+        ),
+        pytest.param(
+            {
+                "content": {"parts": [{"text": "Thinking about the request", "thought": True}], "role": "model"},
+                "index": 0,
+            },
+            "",
+            id="thought-without-finish-reason",
+        ),
+        pytest.param(
+            {
+                "content": {"parts": [{"text": "One, two,"}], "role": "model"},
+                "finishReason": "FINISH_REASON_UNSPECIFIED",
+                "index": 0,
+            },
+            "One, two,",
+            id="unspecified-finish-reason-sentinel",
+        ),
+        pytest.param(
+            {
+                "content": {"parts": [{"functionCall": {"name": "lookup", "args": {"q": "fox"}}}], "role": "model"},
+                "index": 0,
+            },
+            "",
+            id="tool-call-without-finish-reason",
+        ),
+    ],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_stream_that_ends_before_finish_reason_fails_with_the_eof_message(
+    sync_mode: bool,
+    custom_llm_provider: str,
+    candidate: Mapping[str, object],
+    expected_content: str,
+    logging_obj: Logging,
+) -> None:
+    lines: Final = [f"data: {json.dumps({'candidates': [candidate]})}"]
+    logging_obj.update_environment_variables(
+        model="gemini-2.5-flash",
+        user=None,
+        optional_params={},
+        litellm_params={"litellm_call_id": "gemini-cut-eof"},
+    )
+    iterator: Final = GeminiModelResponseIterator(
+        streaming_response=iter(lines) if sync_mode else _as_async(iter(lines)),
+        sync_stream=sync_mode,
+        logging_obj=logging_obj,
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(iterator) if sync_mode else iterator,
+        model="gemini-2.5-flash",
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _collect(wrapper, sync_mode)
+
+    assert excinfo.value.generated_content == expected_content
+    assert excinfo.value.is_pre_first_chunk is False
+    assert isinstance(excinfo.value.original_exception, litellm.APIConnectionError)
+    assert "Stream ended before a finish_reason was received" in str(excinfo.value)
+    assert wrapper.received_finish_reason is None
+    assert wrapper.intermittent_finish_reason is None
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_tool_call_stream_with_finish_reason_in_later_chunk_completes_as_tool_calls(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = [
+        f"data: {json.dumps(event)}"
+        for event in (
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"functionCall": {"name": "lookup", "args": {"q": "fox"}}}],
+                            "role": "model",
+                        },
+                        "index": 0,
+                    }
+                ]
+            },
+            {
+                "candidates": [{"finishReason": "STOP", "index": 0}],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 3, "totalTokenCount": 8},
+            },
+        )
+    ]
+    logging_obj.update_environment_variables(
+        model="gemini-2.5-flash",
+        user=None,
+        optional_params={},
+        litellm_params={"litellm_call_id": "gemini-tool-finish"},
+    )
+    iterator: Final = GeminiModelResponseIterator(
+        streaming_response=iter(lines) if sync_mode else _as_async(iter(lines)),
+        sync_stream=sync_mode,
+        logging_obj=logging_obj,
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(iterator) if sync_mode else iterator,
+        model="gemini-2.5-flash",
+        custom_llm_provider="gemini",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["tool_calls"]
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):
