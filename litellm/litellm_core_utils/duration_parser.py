@@ -9,6 +9,7 @@ duration_in_seconds is used in diff parts of the code base, example
 import re
 import time as time_module
 from datetime import datetime, time, timedelta, timezone, tzinfo
+from types import MappingProxyType
 from typing import Final
 from zoneinfo import ZoneInfo
 
@@ -21,21 +22,55 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "monthly": "30d",
 }
 
+_UNIT_ALIASES: Final[MappingProxyType[str, str]] = MappingProxyType(
+    {
+        "s": "s",
+        "sec": "s",
+        "secs": "s",
+        "second": "s",
+        "seconds": "s",
+        "m": "m",
+        "min": "m",
+        "mins": "m",
+        "minute": "m",
+        "minutes": "m",
+        "h": "h",
+        "hr": "h",
+        "hrs": "h",
+        "hour": "h",
+        "hours": "h",
+        "d": "d",
+        "day": "d",
+        "days": "d",
+        "w": "w",
+        "wk": "w",
+        "wks": "w",
+        "week": "w",
+        "weeks": "w",
+        "mo": "mo",
+        "mos": "mo",
+        "month": "mo",
+        "months": "mo",
+    }
+)
+
 
 def normalize_duration(duration: str) -> str:
-    return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
+    cleaned: Final = duration.strip().lower()
+    return _BUDGET_DURATION_WORD_ALIASES.get(cleaned, cleaned)
 
 
 def _extract_from_regex(duration: str) -> tuple[int, str]:
-    match: Final = re.match(r"(\d+)(mo|[smhdw]?)", duration)
-
+    match: Final = re.fullmatch(r"(\d+)\s*([a-z]+)", duration.strip().lower())
     if not match:
         raise ValueError("Invalid duration format")
 
-    value, unit = match.groups()
-    value = int(value)
+    value_str, unit_str = match.groups()
+    unit: Final = _UNIT_ALIASES.get(unit_str)
+    if unit is None:
+        raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
 
-    return value, unit
+    return int(value_str), unit
 
 
 def get_last_day_of_month(year, month):
@@ -244,13 +279,14 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
 
 def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     """Parse the duration string into value and unit."""
-    match: Final = re.match(r"(\d+)([a-z]+)", duration)
+    match: Final = re.fullmatch(r"(\d+)\s*([a-z]+)", duration.strip().lower())
     if not match:
         return None, None
 
     value: Final = int(match.group(1))
     spelled_unit: Final = match.group(2)
-    unit: Final = _extract_from_regex(duration)[1] or spelled_unit
+    canonical_unit: Final = _UNIT_ALIASES.get(spelled_unit)
+    unit: Final = canonical_unit or spelled_unit
     if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
         return value, spelled_unit
     return value, unit

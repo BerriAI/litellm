@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-import litellm.litellm_core_utils.duration_parser as duration_parser
+from litellm.litellm_core_utils import duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     duration_in_seconds_from,
@@ -549,6 +549,30 @@ def test_a_month_starting_now_matches_duration_in_seconds():
     now: Final = datetime(2026, 1, 31, 9, 30, 0, 250000, tzinfo=timezone.utc).astimezone()
     with patch.object(duration_parser.time_module, "time", return_value=now.timestamp()):
         assert duration_in_seconds("1mo") == duration_in_seconds_from(now, "1mo")
+
+
+@pytest.mark.parametrize(
+    "invalid_duration",
+    [
+        "5dogs",
+        "5meters",
+        "5wolves",
+        "5monkeys",
+        "5seconds_budget",
+        "5d_extra",
+        "100",
+        "invalid",
+    ],
+)
+def test_unanchored_and_invalid_durations_raise_value_error(invalid_duration: str) -> None:
+    with pytest.raises(ValueError):
+        duration_in_seconds(invalid_duration)
+
+
+def test_invalid_duration_word_does_not_reset_on_embedded_unit() -> None:
+    now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
+    reset: Final = get_next_standardized_reset_time("5dogs", now, "UTC")
+    assert reset == datetime(2026, 11, 14, tzinfo=timezone.utc)
 
 
 if __name__ == "__main__":
