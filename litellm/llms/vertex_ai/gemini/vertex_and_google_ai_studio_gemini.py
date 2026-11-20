@@ -1663,6 +1663,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "name" in tool:  # functions list
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)
 
+                if (
+                    parameters_json_schema is None
+                    and "parameters" in openai_function_object
+                    and openai_function_object["parameters"] is not None
+                    and isinstance(openai_function_object["parameters"], dict)
+                ):
+                    openai_function_object["parameters"] = build_vertex_schema(
+                        openai_function_object["parameters"], send_integer_enums=send_integer_enums
+                    )
+
             if "type" in tool and tool["type"] == "computer_use":
                 computer_use_config = {k: v for k, v in tool.items() if k != "type"}
                 tool = {VertexToolName.COMPUTER_USE.value: computer_use_config}
