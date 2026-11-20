@@ -863,7 +863,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     _route: ClassVar[str] = "vertex_ai"
     _removes_undeclared_thinking_levels: ClassVar[bool] = False
-    _flags_server_side_tool_invocations_for_mixed_tools: ClassVar[bool] = False
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -1137,8 +1136,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         Drop search tools from optional_params when mixed with function declarations
         and include_server_side_tool_invocations is not enabled. A model that keeps
-        search tools next to function declarations (Gemini 3+) keeps both, and a route
-        that needs it gets include_server_side_tool_invocations set instead.
+        search tools next to function declarations (Gemini 3+) keeps both and gets
+        include_server_side_tool_invocations set instead.
 
         Runs after map_openai_params merges tools and web_search_options so both
         code paths (single _map_function call vs split tools + web_search_options)
@@ -1150,8 +1149,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ):
             return
         if keeps_search_tools:
-            if cls._flags_server_side_tool_invocations_for_mixed_tools:
-                optional_params["include_server_side_tool_invocations"] = True
+            optional_params["include_server_side_tool_invocations"] = True
             return
 
         verbose_logger.warning(

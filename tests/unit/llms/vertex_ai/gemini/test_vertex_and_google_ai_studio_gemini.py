@@ -6419,13 +6419,9 @@ def _tool_keys(body: RequestBody) -> frozenset[str]:
 
 @pytest.mark.parametrize("model", ["gemini-3-flash-preview", "gemini-3.1-pro-preview"])
 @pytest.mark.parametrize(("params", "search_key"), _SEARCH_NEXT_TO_FUNCTIONS.values(), ids=_SEARCH_NEXT_TO_FUNCTIONS)
-@pytest.mark.parametrize(
-    ("route", "tool_config"),
-    [("vertex", None), ("studio", {"includeServerSideToolInvocations": True})],
-)
+@pytest.mark.parametrize("route", ["vertex", "studio"])
 def test_gemini_3_keeps_search_tools_next_to_function_tools(
     route: Literal["vertex", "studio"],
-    tool_config: Mapping[str, object] | None,
     params: Mapping[str, object],
     search_key: str,
     model: str,
@@ -6435,19 +6431,22 @@ def test_gemini_3_keeps_search_tools_next_to_function_tools(
         body: Final = _mapped_request_body(route, model, params)
 
     assert _tool_keys(body) == {"function_declarations", search_key}
-    assert body.get("toolConfig") == tool_config
+    assert body.get("toolConfig") == {"includeServerSideToolInvocations": True}
     assert "Dropping search tools" not in caplog.text
 
 
+@pytest.mark.parametrize("route", ["vertex", "studio"])
 @pytest.mark.parametrize(
     "tool_choice", ["auto", "required", {"type": "function", "function": {"name": "exec_command"}}]
 )
-def test_ai_studio_gemini_3_adds_the_server_side_flag_next_to_the_tool_choice_config(tool_choice: object) -> None:
+def test_gemini_3_adds_the_server_side_flag_next_to_the_tool_choice_config(
+    route: Literal["vertex", "studio"], tool_choice: object
+) -> None:
     function_only: Final = _mapped_request_body(
-        "studio", "gemini-3-flash-preview", {"tools": [_EXEC_TOOL]} | {"tool_choice": tool_choice}
+        route, "gemini-3-flash-preview", {"tools": [_EXEC_TOOL]} | {"tool_choice": tool_choice}
     )
     mixed: Final = _mapped_request_body(
-        "studio",
+        route,
         "gemini-3-flash-preview",
         {"tools": [_EXEC_TOOL], "web_search_options": {}, "tool_choice": tool_choice},
     )
