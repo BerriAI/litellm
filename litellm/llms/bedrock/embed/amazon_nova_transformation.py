@@ -12,7 +12,8 @@ Supports:
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from itertools import zip_longest
 from typing import Final
 
 from litellm.types.utils import (
@@ -21,6 +22,21 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+
+
+def _estimated_item_tokens(item: Mapping[str, object]) -> int:
+    truncated: Final = item.get("truncatedCharLength")
+    embedding: Final = item.get("embedding")
+    if isinstance(truncated, int):
+        return truncated // 4
+    return len(embedding) // 4 if isinstance(embedding, list) else 0
+
+
+def _estimated_input_tokens(response: Mapping[str, object]) -> int:
+    items: Final = response.get("embeddings")
+    if isinstance(items, list):
+        return sum(_estimated_item_tokens(item) for item in items if isinstance(item, Mapping) and "embedding" in item)
+    return _estimated_item_tokens({"embedding": response.get("embedding")})
 
 
 def _is_audio_or_video_request(request_data: Mapping[str, object]) -> bool:
@@ -259,7 +275,7 @@ class AmazonNovaEmbeddingConfig:
         response_list: list[dict],
         model: str,
         batch_data: list[dict] | None = None,
-        metered_input_tokens: int | None = None,
+        metered_input_tokens: Sequence[int | None] = (),
     ) -> EmbeddingResponse:
         """
         Transform Nova response to OpenAI format.
@@ -276,7 +292,6 @@ class AmazonNovaEmbeddingConfig:
         }
         """
         embeddings: Final[list[Embedding]] = []
-        total_tokens = 0
 
         for response in response_list:
             # Nova response has an "embeddings" array
@@ -289,14 +304,6 @@ class AmazonNovaEmbeddingConfig:
                             object="embedding",
                         )
                         embeddings.append(embedding)
-
-                        # Estimate token count
-                        # For text, use truncatedCharLength if available
-                        if "truncatedCharLength" in item:
-                            total_tokens += item["truncatedCharLength"] // 4
-                        else:
-                            # Rough estimate based on embedding dimension
-                            total_tokens += len(item["embedding"]) // 4
             elif "embedding" in response:
                 # Direct embedding response (fallback)
                 embedding = Embedding(
@@ -305,7 +312,6 @@ class AmazonNovaEmbeddingConfig:
                     object="embedding",
                 )
                 embeddings.append(embedding)
-                total_tokens += len(response["embedding"]) // 4
 
         # Count images from original requests for cost calculation
         image_count = 0
@@ -325,7 +331,10 @@ class AmazonNovaEmbeddingConfig:
                 image_count=image_count,
             )
 
-        prompt_tokens: Final = total_tokens if metered_input_tokens is None else metered_input_tokens
+        prompt_tokens: Final = sum(
+            _estimated_input_tokens(response) if metered is None else metered
+            for response, metered in zip_longest(response_list, metered_input_tokens)
+        )
         usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             total_tokens=prompt_tokens,
@@ -339,12 +348,13 @@ class AmazonNovaEmbeddingConfig:
         response_list: list[dict[str, object]],  # mutable-ok: mirrors override contract
         model: str,
         batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
-        metered_input_tokens: int | None = None,
+        metered_input_tokens: Sequence[int | None] = (),
     ) -> EmbeddingResponse:
-        has_audio_or_video: Final = any(_is_audio_or_video_request(request_data) for request_data in batch_data or ())
-        return self._transform_response(
-            response_list, model, batch_data, None if has_audio_or_video else metered_input_tokens
+        text_and_image_metered: Final = tuple(
+            None if _is_audio_or_video_request(request_data) else metered
+            for request_data, metered in zip(batch_data or (), metered_input_tokens)
         )
+        return self._transform_response(response_list, model, batch_data, text_and_image_metered)
 
     def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
         """

@@ -2223,26 +2223,31 @@ def _sent_body(
     return json.loads(route.calls.last.request.read())
 
 
-def test_bedrock_nova_embedding_keeps_the_estimate_for_audio_that_bedrock_meters_as_zero_tokens(
+def test_bedrock_nova_embedding_estimates_audio_and_meters_the_text_beside_it(
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
-        return_value=httpx.Response(
-            200,
-            headers={"x-amzn-bedrock-input-token-count": "0"},
-            json={"embeddings": [{"embeddingType": "AUDIO", "embedding": [0.1] * 3072}]},
-        )
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={"x-amzn-bedrock-input-token-count": metered},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for metered, embedding_type in (("3", "TEXT"), ("0", "AUDIO"))
+        ]
     )
 
     response: Final = litellm.embedding(
         model=f"bedrock/{_NOVA_MODEL_ID}",
-        input=["data:audio/mp3;base64,AAAA"],
+        input=["hi", "data:audio/mp3;base64,AAAA"],
         api_key="test-bearer-token",
         aws_region_name="us-east-1",
     )
 
-    assert response.usage.prompt_tokens == 768
-    assert response._hidden_params["response_cost"] > 0
+    assert response.usage.prompt_tokens == 771
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        771 * litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"]
+    )
 
 
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
@@ -2251,8 +2256,8 @@ def test_bedrock_nova_embedding_keeps_the_estimate_for_audio_that_bedrock_meters
     [
         (("3", "403"), 406),
         (("0", "0"), 0),
-        (("3", None), 1536),
-        (("3", "not-a-number"), 1536),
+        (("3", None), 771),
+        (("3", "not-a-number"), 771),
     ],
     ids=["metered", "zero", "one-header-missing", "one-header-invalid"],
 )

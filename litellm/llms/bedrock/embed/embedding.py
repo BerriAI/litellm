@@ -135,11 +135,6 @@ def _invoke_result(response: httpx.Response) -> _InvokeResult:
     )
 
 
-def _total_metered_input_tokens(results: Sequence[_InvokeResult]) -> int | None:
-    known: Final = tuple(count for _, count in results if count is not None)
-    return sum(known) if known and len(known) == len(results) else None
-
-
 def _fields(value: object) -> Mapping[str, object]:
     return _FIELDS.validate_python(value) if isinstance(value, Mapping) else _NO_FIELDS
 
@@ -383,7 +378,7 @@ class BedrockEmbedding(BaseAWSLLM):
         is_async_invoke: bool | None = False,
         batch_data: list[dict] | None = None,
         aws_region_name: str | None = None,
-        metered_input_tokens: int | None = None,
+        metered_input_tokens: Sequence[int | None] = (),
     ) -> EmbeddingResponse | None:
         """
         Transforms the response from the Bedrock embedding provider to the OpenAI format.
@@ -529,7 +524,7 @@ class BedrockEmbedding(BaseAWSLLM):
             is_async_invoke=is_async_invoke,
             batch_data=batch_data,
             aws_region_name=aws_region_name,
-            metered_input_tokens=_total_metered_input_tokens(results),
+            metered_input_tokens=tuple(count for _, count in results),
         )
 
     async def _async_single_func_embeddings(
@@ -604,7 +599,7 @@ class BedrockEmbedding(BaseAWSLLM):
             is_async_invoke=is_async_invoke,
             batch_data=batch_data,
             aws_region_name=aws_region_name,
-            metered_input_tokens=_total_metered_input_tokens(results),
+            metered_input_tokens=tuple(count for _, count in results),
         )
 
     def embeddings(
