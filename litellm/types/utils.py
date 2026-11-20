@@ -4911,6 +4911,7 @@ class LlmProviders(str, Enum):
     SAIL = "sail"
     REKA = "reka"
     STREAMLAKE = "streamlake"
+    ITERACOMPUTE = "iteracompute"
     WALLY = "wally"
     SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
