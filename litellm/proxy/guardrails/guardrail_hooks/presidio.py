@@ -60,7 +60,11 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
-from litellm.proxy.guardrails._content_utils import DuplicateToolArgumentKeyError, parse_tool_arguments
+from litellm.proxy.guardrails._content_utils import (
+    DuplicateToolArgumentKeyError,
+    UnsafeToolArgumentsError,
+    parse_tool_arguments,
+)
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
@@ -309,15 +313,23 @@ def _set_tool_call_arguments(tool_call: _ToolCall, arguments: str) -> None:
         function_chunk["arguments"] = arguments
 
 
+def _unsafe_tool_arguments_exception(message: str) -> GuardrailRaisedException:
+    return GuardrailRaisedException(
+        message=message,
+        should_wrap_with_default_message=False,
+        blocked_content=True,
+    )
+
+
 def _parsed_arguments(arguments: str) -> JsonValue:
     try:
         return parse_tool_arguments(arguments)
     except DuplicateToolArgumentKeyError as error:
-        raise GuardrailRaisedException(
-            message="Presidio cannot safely scan tool arguments with duplicate JSON object keys",
-            should_wrap_with_default_message=False,
-            blocked_content=True,
+        raise _unsafe_tool_arguments_exception(
+            "Presidio cannot safely scan tool arguments with duplicate JSON object keys"
         ) from error
+    except UnsafeToolArgumentsError as error:
+        raise _unsafe_tool_arguments_exception(f"Presidio cannot safely scan tool arguments: {error}") from error
 
 
 def _json_literal_tokens(value: JsonValue) -> frozenset[str]:
@@ -338,9 +350,14 @@ def _segment_literal_tokens(segment: tuple[_TextSlot | _ToolCallSlot, str]) -> f
         return _literal_tokens(source)
     try:
         parsed: Final = _parsed_arguments(source)
-    except ValueError:
+    except json.JSONDecodeError:
         return _literal_tokens(source)
-    return _json_literal_tokens(parsed)
+    try:
+        return _json_literal_tokens(parsed)
+    except RecursionError as error:
+        raise _unsafe_tool_arguments_exception(
+            "Presidio cannot safely scan tool arguments: Tool arguments exceed maximum JSON nesting depth"
+        ) from error
 
 
 async def _rewritten_json_strings(value: JsonValue, rewrite: Callable[[str, bool], Awaitable[str]]) -> JsonValue:
@@ -368,10 +385,15 @@ async def _rewritten_arguments(arguments: str, rewrite: Callable[[str, bool], Aw
     """
     try:
         parsed: Final = _parsed_arguments(arguments)
-    except ValueError:
+    except json.JSONDecodeError:
         return await rewrite(arguments, True)
-    rewritten: Final = await _rewritten_json_strings(parsed, rewrite)
-    return arguments if rewritten == parsed else json.dumps(rewritten, ensure_ascii=False)
+    try:
+        rewritten: Final = await _rewritten_json_strings(parsed, rewrite)
+        return arguments if rewritten == parsed else json.dumps(rewritten, ensure_ascii=False)
+    except RecursionError as error:
+        raise _unsafe_tool_arguments_exception(
+            "Presidio cannot safely scan tool arguments: Tool arguments exceed maximum JSON nesting depth"
+        ) from error
 
 
 def _conversation_segments(

@@ -9,7 +9,6 @@ every text fragment.
 """
 
 import json
-import math
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -102,7 +101,11 @@ def _text_object(value: object) -> Mapping[str, object] | None:
         return None
 
 
-class DuplicateToolArgumentKeyError(ValueError):
+class UnsafeToolArgumentsError(ValueError):
+    pass
+
+
+class DuplicateToolArgumentKeyError(UnsafeToolArgumentsError):
     pass
 
 
@@ -113,23 +116,19 @@ def _tool_json_object(pairs: Sequence[tuple[str, JsonValue]]) -> JsonValue:
     return value
 
 
-def _finite_number(literal: str) -> float:
-    number: Final = float(literal)
-    if not math.isfinite(number):
-        raise ValueError("Non-finite tool argument number")
-    return number
-
-
 def parse_tool_arguments(arguments: str) -> JsonValue:
-    parsed: Final = _tool_json(
-        json.loads(
-            arguments,
-            object_pairs_hook=_tool_json_object,
-            parse_float=_finite_number,
-            parse_constant=_finite_number,
-        )
-    )
-    json.dumps(parsed, ensure_ascii=False).encode("utf-8")  # raises for lone surrogates, which stay raw text
+    try:
+        parsed: Final = _tool_json(json.loads(arguments, object_pairs_hook=_tool_json_object))
+    except (json.JSONDecodeError, UnsafeToolArgumentsError):
+        raise
+    except (ValueError, RecursionError) as error:
+        raise UnsafeToolArgumentsError("Tool arguments failed JSON safety validation") from error
+    try:
+        json.dumps(parsed, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise UnsafeToolArgumentsError("Tool arguments contain an unpaired UTF-16 surrogate") from error
+    except (ValueError, RecursionError) as error:
+        raise UnsafeToolArgumentsError("Tool arguments failed JSON safety validation") from error
     return parsed
 
 

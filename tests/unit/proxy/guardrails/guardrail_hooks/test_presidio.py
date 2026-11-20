@@ -5671,6 +5671,107 @@ async def test_duplicate_tool_argument_keys_cannot_hide_values_from_presidio(
 
 
 @pytest.mark.parametrize(
+    ("input_type", "action"),
+    [("request", PiiAction.MASK), ("request", PiiAction.BLOCK), ("response", PiiAction.MASK)],
+)
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param(r'{"email":"test\u0040example.com","unused":"\ud800"}', id="lone-high-surrogate-value"),
+        pytest.param(r'{"\udfff":"test\u0040example.com"}', id="lone-low-surrogate-key"),
+        pytest.param(r'{"email":"\u003cEMAIL_ADDRESS_1\u003e","unused":"\ud800"}', id="lone-surrogate-with-token"),
+        pytest.param(r'{"email":"test\u0040example.com","limit":1e309}', id="non-finite-float-overflow"),
+        pytest.param(r'{"email":"test\u0040example.com","ratio":NaN}', id="nan-constant"),
+        pytest.param(r'{"email":"test\u0040example.com","limit":-Infinity}', id="infinity-constant"),
+        pytest.param(r'{"email":"test\u0040example.com","huge":' + "1" * 5000 + "}", id="oversized-integer"),
+        pytest.param(
+            '{"a":' * 1000 + r'{"email":"test\u0040example.com"}' + "}" * 1000,
+            id="excessive-nesting-depth",
+        ),
+    ],
+)
+async def test_unsafe_json_tool_arguments_cannot_bypass_presidio_scanning(
+    arguments: str, input_type: Literal["request", "response"], action: PiiAction
+) -> None:
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, output_parse_pii=True, action=action)
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+    )
+    try:
+        with pytest.raises(GuardrailRaisedException, match="cannot safely scan tool arguments") as excinfo:
+            await guardrail.apply_guardrail(
+                inputs={"texts": [], "tool_calls": [tool_call]},
+                request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": _EMAIL}}},
+                input_type=input_type,
+            )
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.blocked_content is True
+        assert _EMAIL not in str(excinfo.value)
+        assert analyzed.empty()
+    finally:
+        await guardrail._close_http_session()
+
+
+@pytest.mark.parametrize("action", [PiiAction.MASK, PiiAction.BLOCK])
+async def test_valid_surrogate_pair_tool_arguments_scan_decoded_pii(action: PiiAction) -> None:
+    arguments: Final = r'{"email":"test\u0040example.com","emoji":"\ud83d\ude00"}'
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, output_parse_pii=True, action=action)
+    request_data: Final[dict[str, dict[str, dict[str, str]]]] = {"metadata": {}}
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+    )
+    try:
+        if action is PiiAction.BLOCK:
+            with pytest.raises(BlockedPiiEntityError) as excinfo:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": [], "tool_calls": [tool_call]},
+                    request_data=request_data,
+                    input_type="request",
+                )
+            assert excinfo.value.entity_type == "EMAIL_ADDRESS"
+        else:
+            await guardrail.apply_guardrail(
+                inputs={"texts": [], "tool_calls": [tool_call]},
+                request_data=request_data,
+                input_type="request",
+            )
+            masked: Final = json.loads(tool_call.function.arguments)
+            assert masked == {"email": "<EMAIL_ADDRESS_1>", "emoji": "\U0001f600"}
+            assert request_data["metadata"]["pii_tokens"] == {"<EMAIL_ADDRESS_1>": _EMAIL}
+    finally:
+        await guardrail._close_http_session()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param("Infinity contact test@example.com", id="plain-text-starting-with-infinity"),
+        pytest.param('{"email":"test@example.com",', id="truncated-json"),
+    ],
+)
+async def test_non_json_tool_arguments_still_fall_back_to_raw_pii_scanning(arguments: str) -> None:
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, output_parse_pii=True)
+    request_data: Final[dict[str, dict[str, dict[str, str]]]] = {"metadata": {}}
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+    )
+    try:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [tool_call]},
+            request_data=request_data,
+            input_type="request",
+        )
+        assert _EMAIL not in tool_call.function.arguments
+        assert "<EMAIL_ADDRESS_1>" in tool_call.function.arguments
+        assert request_data["metadata"]["pii_tokens"] == {"<EMAIL_ADDRESS_1>": _EMAIL}
+    finally:
+        await guardrail._close_http_session()
+
+
+@pytest.mark.parametrize(
     "arguments",
     [
         '{ "count": 42, "fraction": 1.25, "enabled": true, "absent": null, "items": [false, 0] }',
