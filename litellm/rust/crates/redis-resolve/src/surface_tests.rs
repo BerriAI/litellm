@@ -1005,3 +1005,20 @@ async fn a_configured_surface_reads_its_references_through_the_secret_resolver()
         resolved.target
     );
 }
+
+#[rstest]
+#[case::a_url("redis_url: redis://router:6390", true)]
+#[case::a_host_with_a_port("redis_host: router\n  redis_port: 6380", true)]
+#[case::a_host_alone("redis_host: router", false)]
+#[case::a_port_alone("redis_port: 6380", false)]
+#[case::a_password_alone("redis_password: secret", false)]
+fn router_settings_name_a_redis_by_a_url_or_a_host_with_a_port(
+    #[case] settings: &str,
+    #[case] named: bool,
+) {
+    let config = Config::from_yaml(&format!("router_settings:\n  {settings}")).unwrap();
+    assert_eq!(
+        ConfiguredRedis::router(&config.router_settings.redis).is_some(),
+        named
+    );
+}

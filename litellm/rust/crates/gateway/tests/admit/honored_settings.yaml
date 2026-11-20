@@ -14,6 +14,11 @@ config:
   router_settings:
     routing_strategy: simple-shuffle
     num_retries: 1
+    redis_host: localhost
+    redis_port: 6379
+    redis_password: redis-key
+    redis_db: 1
+    cache_kwargs: {socket_timeout: 1}
     fallbacks:
       - claude-down: [claude]
   litellm_settings:

@@ -55,6 +55,7 @@ pub(crate) fn environment_secrets(
 pub async fn build_inference(
     config: &Config,
     resources: &Resources,
+    redis: &RedisClients,
 ) -> Result<Arc<Gateway>, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
@@ -67,7 +68,8 @@ pub async fn build_inference(
             shaping,
             host::NativeHost,
         )?
-        .with_client_side_credentials(config.general_settings.allow_client_side_credentials),
+        .with_client_side_credentials(config.general_settings.allow_client_side_credentials)
+        .with_routing(redis::routing(redis, resources.environment.as_ref())?),
     ))
 }
 

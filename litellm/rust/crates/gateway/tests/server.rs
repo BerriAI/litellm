@@ -36,9 +36,13 @@ impl Sink for LogSink {
 }
 
 async fn inference_for(config: &Config) -> Arc<Gateway> {
-    litellm_gateway::build_inference(config, &Resources::build(config).unwrap())
-        .await
-        .unwrap()
+    litellm_gateway::build_inference(
+        config,
+        &Resources::build(config).unwrap(),
+        &litellm_gateway::RedisClients::default(),
+    )
+    .await
+    .unwrap()
 }
 
 fn global(router: axum::Router) -> axum::Router {

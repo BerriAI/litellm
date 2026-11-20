@@ -3,11 +3,13 @@ use std::{sync::Arc, time::Duration};
 use litellm_circuit_breaker::Config as BreakerConfig;
 use litellm_config::{CacheSettings, Config, RedisSettings};
 use litellm_env::Lookup;
+use litellm_gateway_inference::{RouterTiers, RoutingCache};
 use litellm_http::ClientVariant;
 use litellm_python_compat::flags::{lower_is_true, str_to_bool_or_truthy};
 use litellm_redis_client::{RedisClient, RedisEvents};
 use litellm_redis_connect::{HostServices, RedisHosts, TracingEvents};
 use litellm_redis_resolve::{Expected, Surface};
+use litellm_redis_store::{Remote, TierPolicy};
 use litellm_redis_types::Resolution;
 use litellm_secrets::SecretResolver;
 use serde::Deserialize;
@@ -15,6 +17,8 @@ use serde::Deserialize;
 use crate::{Error, Resources};
 
 const ENVIRONMENT_PING_TIMEOUT: Duration = Duration::from_secs(2);
+/// `BaseCache`'s `default_ttl`, which `RedisCache` keeps while `litellm.default_redis_ttl` is unset.
+const ROUTER_REDIS_DEFAULT_TTL: Duration = Duration::from_secs(60);
 type Params = Resolution;
 
 #[derive(Clone, Default)]
@@ -22,10 +26,14 @@ pub struct RedisClients {
     pub coordination: Option<RedisClient>,
     pub transaction_buffer: Option<RedisClient>,
     pub response_cache: Option<RedisClient>,
+    /// The Redis `router_settings` names, else the coordination Redis, which the proxy attaches to
+    /// a router that names none.
+    pub router: Option<RedisClient>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Plan {
+    router: Option<Params>,
     coordination: Option<Target>,
     transaction_buffer_fallback: Option<Params>,
     response_cache: Option<Params>,
@@ -38,6 +46,7 @@ enum Target {
 }
 
 pub(crate) async fn plan(config: &Config, secrets: &SecretResolver) -> Result<Plan, Error> {
+    let router = resolve(Surface::Router(&config.router_settings.redis), secrets).await?;
     let response_cache = match redis_cache_params(config) {
         Some(settings) => resolve(Surface::CacheParams(settings), secrets).await?,
         None => None,
@@ -61,6 +70,7 @@ pub(crate) async fn plan(config: &Config, secrets: &SecretResolver) -> Result<Pl
         }
     };
     Ok(Plan {
+        router,
         coordination,
         transaction_buffer_fallback,
         response_cache,
@@ -108,11 +118,56 @@ pub(crate) async fn connect(config: &Config, resources: &Resources) -> Result<Re
         (None, None) => None,
     };
     let response_cache = plan.response_cache.map(client).transpose()?;
+    let router = match plan.router {
+        Some(params) => Some(client(params)?),
+        None => coordination.clone(),
+    };
     Ok(RedisClients {
         coordination,
         transaction_buffer,
         response_cache,
+        router,
     })
+}
+
+/// The routing state on the router's Redis, read at the intervals Python's router reads it:
+/// `DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS` and `DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE`.
+pub(crate) fn routing(
+    redis: &RedisClients,
+    environment: &dyn Lookup,
+) -> Result<RoutingCache, Error> {
+    let defaults = RouterTiers::default();
+    let tracked_reads = environment_value(
+        environment,
+        "DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE",
+        Expected::Integer,
+        |text| text.parse().ok(),
+    )?
+    .unwrap_or(defaults.usage.tracked_reads);
+    let cooldown_interval = environment_value(
+        environment,
+        "DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS",
+        Expected::Seconds,
+        parse_seconds,
+    )?
+    .unwrap_or(defaults.cooldowns.refresh_after);
+    let tiers = RouterTiers {
+        cooldowns: TierPolicy {
+            refresh_after: cooldown_interval,
+            tracked_reads,
+            ..defaults.cooldowns
+        },
+        usage: TierPolicy {
+            tracked_reads,
+            ..defaults.usage
+        },
+        ..defaults
+    };
+    let remote = redis.router.clone().map(|client| Remote {
+        client,
+        default_ttl: ROUTER_REDIS_DEFAULT_TTL,
+    });
+    Ok(RoutingCache::new(remote, tiers))
 }
 
 fn redis_cache_params(config: &Config) -> Option<&RedisSettings> {
@@ -235,6 +290,7 @@ mod tests {
     use litellm_redis_client::{Standalone, StaticAuth, commands};
     use litellm_redis_testing::RedisServer;
     use litellm_redis_types::{Auth, HealthCheck};
+    use litellm_router_core::{RouterCache, health::CooldownValue};
     use rstest::rstest;
 
     use super::{Params, Plan, Target, plan, use_transaction_buffer};
@@ -259,14 +315,18 @@ mod tests {
         super::connect(config, &resources(config, environment)).await
     }
 
+    fn standalone(name: &str, port: u16, db: i64) -> litellm_redis_client::Target {
+        litellm_redis_client::Target::Standalone(Standalone {
+            host: name.to_owned(),
+            port,
+            tls: None,
+            db,
+        })
+    }
+
     fn host(name: &str, port: u16) -> Params {
         Params {
-            target: litellm_redis_client::Target::Standalone(Standalone {
-                host: name.to_owned(),
-                port,
-                tls: None,
-                db: 0,
-            }),
+            target: standalone(name, port, 0),
             auth: Auth::Static(StaticAuth::default()),
             namespace: None,
             timeout: None,
@@ -284,6 +344,7 @@ mod tests {
 
     fn configured(coordination: Params, response_cache: Option<Params>) -> Plan {
         Plan {
+            router: None,
             coordination: Some(Target::Configured(coordination)),
             transaction_buffer_fallback: None,
             response_cache,
@@ -291,6 +352,7 @@ mod tests {
     }
 
     const NO_REDIS: Plan = Plan {
+        router: None,
         coordination: None,
         transaction_buffer_fallback: None,
         response_cache: None,
@@ -316,12 +378,17 @@ mod tests {
     #[case::environment_only_coordination_is_probed(
         "model_list: []",
         &[("REDIS_HOST", "env")],
-        Plan { coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: None, response_cache: None }
+        Plan { router: None, coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: None, response_cache: None }
     )]
     #[case::the_transaction_buffer_falls_back_to_the_environment_only_when_enabled(
         "general_settings:\n  use_redis_transaction_buffer: \"true\"",
         &[("REDIS_HOST", "env")],
-        Plan { coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: Some(host("env", 6379)), response_cache: None }
+        Plan { router: None, coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: Some(host("env", 6379)), response_cache: None }
+    )]
+    #[case::router_settings_name_the_routers_own_redis(
+        "router_settings:\n  redis_host: router\n  redis_port: 6380\n  redis_db: 2\n  cache_kwargs:\n    port: 6381",
+        &[("REDIS_HOST", "env")],
+        Plan { router: Some(Params { target: standalone("router", 6381, 2), ..host("router", 6381) }), coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: None, response_cache: None }
     )]
     #[tokio::test]
     async fn resolves_each_redis_role_like_the_proxy(
@@ -518,6 +585,63 @@ mod tests {
 
     fn port_of(server: &RedisServer) -> String {
         server.url().rsplit(':').next().unwrap().to_owned()
+    }
+
+    #[rstest]
+    #[case::the_coordination_redis_when_router_settings_name_none(false)]
+    #[case::the_redis_router_settings_name(true)]
+    #[tokio::test]
+    async fn routing_state_is_shared_through(#[case] named: bool) {
+        let coordination = RedisServer::start().await.unwrap();
+        let own = RedisServer::start().await.unwrap();
+        let router_settings = match named {
+            true => format!(
+                "\nrouter_settings:\n  redis_host: 127.0.0.1\n  redis_port: {}",
+                port_of(&own)
+            ),
+            false => String::new(),
+        };
+        let config = Config::from_yaml(&format!(
+            "general_settings:\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}{router_settings}",
+            port_of(&coordination)
+        ))
+        .unwrap();
+        let resources = resources(&config, &[]);
+        let clients = super::connect(&config, &resources).await.unwrap();
+        let routing = super::routing(&clients, resources.environment.as_ref()).unwrap();
+
+        routing
+            .put_cooldown(
+                "dep-a",
+                &CooldownValue {
+                    exception_received: "RateLimitError".to_owned(),
+                    status_code: "429".to_owned(),
+                    timestamp: 1_730_000_000.0,
+                    cooldown_time: 30.0,
+                },
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let held = |server: &RedisServer| {
+            let config = coordination_config(server);
+            async move {
+                connect(&config, &[])
+                    .await
+                    .unwrap()
+                    .coordination
+                    .unwrap()
+                    .send(commands::get::<String>("deployment:dep-a:cooldown"))
+                    .await
+                    .unwrap()
+                    .is_some()
+            }
+        };
+        assert_eq!(
+            (held(&coordination).await, held(&own).await),
+            (!named, named)
+        );
     }
 
     fn coordination_config(server: &RedisServer) -> Config {
