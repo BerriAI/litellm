@@ -4900,7 +4900,18 @@ class MCPServerManager:
         on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
     ) -> Callable[[], Awaitable[ListToolsResult]]:
         if params is None:
-            return partial(self._fetch_tools_with_timeout, client, server.name, on_page=on_page)
+            if on_page is None and server.timeout is None:
+                return partial(self._fetch_tools_with_timeout, client, server.name)
+            deadline: Final = (
+                MCP_TOOL_LISTING_TIMEOUT if server.timeout is None else max(server.timeout, MCP_TOOL_LISTING_TIMEOUT)
+            )
+            return partial(
+                self._fetch_tools_with_timeout,
+                client,
+                server.name,
+                on_page=on_page,
+                listing_deadline=deadline,
+            )
         if on_page is not None:
 
             async def fetch_observed_page() -> ListToolsResult:
@@ -6006,6 +6017,8 @@ class MCPServerManager:
         client: MCPClient,
         server_name: str,
         on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
+        *,
+        listing_deadline: float | None = None,
     ) -> ListToolsResult:
         """
         Fetch tools from MCP client with timeout and error handling.
@@ -6029,19 +6042,21 @@ class MCPServerManager:
             client: MCP client instance
             server_name: Name of the server for logging
             on_page: Callback invoked for each upstream page during the complete walk.
+            listing_deadline: Deadline for the complete upstream listing.
 
         Returns:
             The tools from the server with the upstream freshness of the complete walk
         """
+        deadline: Final = MCP_TOOL_LISTING_TIMEOUT if listing_deadline is None else listing_deadline
         try:
-            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
+            with anyio.fail_after(deadline):
                 listing: Final = (
                     await client.list_tools_result(raise_on_error=True, on_page=on_page)
                     if on_page is not None
                     else await retry_upstream_rate_limit(
                         lambda: client.list_tools_result(raise_on_error=True),
                         server_name,
-                        deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+                        deadline_seconds=deadline,
                     )
                 )
                 verbose_logger.debug("Tools from %s: %s", server_name, listing.tools)

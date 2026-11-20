@@ -24,6 +24,32 @@ from litellm.types.mcp import MCPAuth
 mcp_server_manager = MCPServerManager()
 
 
+def _install_tool_page_adapter(manager) -> None:
+    async def get_tools_page(server, **kwargs):
+        legacy_names = (
+            "mcp_auth_header",
+            "extra_headers",
+            "add_prefix",
+            "raw_headers",
+            "user_api_key_auth",
+            "oauth2_headers",
+            "client_ip",
+            "proxy_logging_obj",
+            "catalog_auth_header",
+            "record_listing",
+            "use_tool_list_cache",
+        )
+        legacy_kwargs = {name: kwargs[name] for name in legacy_names if name in kwargs}
+        tools = await manager.get_tools_from_server(server=server, **legacy_kwargs)
+        result = ListToolsResult(tools=tools)
+        on_page = kwargs.get("on_page")
+        if on_page is not None:
+            await on_page(result)
+        return result
+
+    manager.get_tools_page = get_tools_page
+
+
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Local only test")
 async def test_mcp_server_manager():
@@ -940,10 +966,13 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id"]
         )
+        mock_manager.record_listed_tools = MagicMock()
+        mock_manager.listed_tools_generation = MagicMock(return_value=0)
         mock_manager.get_mcp_server_by_id = lambda server_id: (
             mock_server_1 if server_id == "server1_id" else mock_server_2
         )
         mock_manager.get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
+        _install_tool_page_adapter(mock_manager)
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -969,6 +998,8 @@ async def test_get_tools_from_mcp_servers():
             mock_manager_2.get_allowed_mcp_servers = AsyncMock(
                 return_value=["server1_id", "server2_id"]
             )
+            mock_manager_2.record_listed_tools = MagicMock()
+            mock_manager_2.listed_tools_generation = MagicMock(return_value=0)
             mock_manager_2.get_mcp_server_by_id = lambda server_id: (
                 mock_server_1 if server_id == "server1_id" else mock_server_2
             )
@@ -994,6 +1025,7 @@ async def test_get_tools_from_mcp_servers():
             mock_manager_2.get_tools_from_server = AsyncMock(
                 side_effect=mock_get_tools_side_effect
             )
+            _install_tool_page_adapter(mock_manager_2)
             # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
             mock_manager_2.filter_server_ids_by_ip_with_info = MagicMock(
                 side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -1021,12 +1053,15 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id", "server3_id"]
         )
+        mock_manager.record_listed_tools = MagicMock()
+        mock_manager.listed_tools_generation = MagicMock(return_value=0)
         mock_manager.get_mcp_server_by_id = lambda server_id: (
             mock_server_1
             if server_id == "server1_id"
             else (mock_server_2 if server_id == "server2_id" else mock_server_3)
         )
         mock_manager.get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
+        _install_tool_page_adapter(mock_manager)
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -2015,6 +2050,7 @@ async def test_get_tools_for_single_server():
         "litellm.proxy.mcp_server.rest_endpoints.global_mcp_server_manager"
     ) as mock_manager:
         mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
+        _install_tool_page_adapter(mock_manager)
 
         result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
 
@@ -2078,6 +2114,7 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
         "litellm.proxy.mcp_server.rest_endpoints.global_mcp_server_manager"
     ) as mock_manager:
         mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
+        _install_tool_page_adapter(mock_manager)
 
         result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
 
@@ -2133,6 +2170,7 @@ async def test_rest_listing_hides_key_grants_dispatch_would_refuse():
         AsyncMock(return_value=[f"{server_id}-read_wiki_contents"]),
     ):
         mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
+        _install_tool_page_adapter(mock_manager)
         mock_server_manager.get_mcp_server_by_id.return_value = mock_server
 
         result = await _get_tools_for_single_server(
@@ -2538,6 +2576,7 @@ async def test_filter_tools_by_allowed_tools_integration():
 
         # Mock the _get_tools_from_server method to return all tools
         mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
+        _install_tool_page_adapter(mock_manager)
 
         # Mock the MCPClient constructor
         with patch(
@@ -2653,6 +2692,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
         )
         # Mock the _get_tools_from_server method to return all tools
         mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
+        _install_tool_page_adapter(mock_manager)
 
         # Mock the MCPClient constructor
         with patch(
@@ -2756,6 +2796,7 @@ async def test_filter_tools_no_restrictions_integration():
 
         # Mock the _get_tools_from_server method to return all tools
         mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
+        _install_tool_page_adapter(mock_manager)
 
         # Mock the MCPClient constructor
         with patch(

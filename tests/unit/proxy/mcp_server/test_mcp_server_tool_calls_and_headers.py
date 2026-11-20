@@ -63,6 +63,34 @@ def _rendered_log_message(call):
     return message % values if values else message
 
 
+def _install_tool_page_adapter(manager) -> None:
+    from mcp.types import ListToolsResult
+
+    async def get_tools_page(server, **kwargs):
+        legacy_names = (
+            "mcp_auth_header",
+            "extra_headers",
+            "add_prefix",
+            "raw_headers",
+            "user_api_key_auth",
+            "oauth2_headers",
+            "client_ip",
+            "proxy_logging_obj",
+            "catalog_auth_header",
+            "record_listing",
+            "use_tool_list_cache",
+        )
+        legacy_kwargs = {name: kwargs[name] for name in legacy_names if name in kwargs}
+        tools = await manager.get_tools_from_server(server=server, **legacy_kwargs)
+        result = ListToolsResult(tools=tools)
+        on_page = kwargs.get("on_page")
+        if on_page is not None:
+            await on_page(result)
+        return result
+
+    manager.get_tools_page = get_tools_page
+
+
 @pytest.fixture(autouse=True)
 def cleanup_mcp_global_state():
     """Clean up MCP global state before and after each test.
@@ -1380,6 +1408,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
             raise Exception("Server connection failed")
 
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with patch(
         "litellm.proxy.mcp_server.operations.global_mcp_server_manager",
@@ -1479,6 +1508,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         raise Exception(f"Server {server.name} connection failed")
 
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with patch(
         "litellm.proxy.mcp_server.operations.global_mcp_server_manager",
@@ -4602,6 +4632,7 @@ async def test_list_tools_single_server_unprefixed_names():
         return [tool]
 
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with patch(
         "litellm.proxy.mcp_server.operations.global_mcp_server_manager",
@@ -4681,6 +4712,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         return [tool]
 
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with patch(
         "litellm.proxy.mcp_server.operations.global_mcp_server_manager",
@@ -5110,6 +5142,7 @@ async def test_list_tools_filters_by_key_team_permissions():
         return [tool1, tool2, tool3, tool4]
 
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with patch(
         "litellm.proxy.mcp_server.operations.global_mcp_server_manager",
@@ -5221,6 +5254,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
         return [tool1, tool2, tool3, tool4]
 
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with patch(
         "litellm.proxy.mcp_server.operations.global_mcp_server_manager",
@@ -5313,6 +5347,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
         return [tool1, tool2, tool3]
 
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with patch(
         "litellm.proxy.mcp_server.operations.global_mcp_server_manager",
@@ -5419,6 +5454,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         return [tool1, tool2, tool3, tool4]
 
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with patch(
         "litellm.proxy.mcp_server.operations.global_mcp_server_manager",
@@ -5960,6 +5996,7 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
         ),
     ):
         mock_manager.get_tools_from_server = AsyncMock(return_value=[tool_1])
+        _install_tool_page_adapter(mock_manager)
 
         listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -6011,6 +6048,7 @@ async def test_get_tools_from_mcp_servers_all_failed_listing_never_runs_proxy_fa
     proxy_logging_obj.post_call_failure_hook = AsyncMock()
     manager: Final = MagicMock()
     manager.get_tools_from_server = AsyncMock(side_effect=RuntimeError("server unavailable"))
+    _install_tool_page_adapter(manager)
 
     with (
         patch(
@@ -6112,6 +6150,7 @@ async def test_get_tools_from_mcp_servers_returns_tools_when_success_logging_fai
         ),
     ):
         mock_manager.get_tools_from_server = AsyncMock(return_value=[tool_1])
+        _install_tool_page_adapter(mock_manager)
 
         listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -6429,6 +6468,7 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
         ),
     ):
         mock_manager.get_tools_from_server = AsyncMock(return_value=[tool_1])
+        _install_tool_page_adapter(mock_manager)
 
         listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -7055,6 +7095,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(return_value=(["legacy-m2m-id"], 0))
         mock_manager.get_tools_from_server = AsyncMock(side_effect=capture_extra_headers)
+        _install_tool_page_adapter(mock_manager)
 
         listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -7971,8 +8012,11 @@ def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]
         dispatched.update(kwargs)
         return CallToolResult(content=[TextContent(type="text", text="ok")], is_error=False)
 
-    async def fake_fetch_tools(client, server_name):
-        return ListToolsResult(tools=[MCPTool(name=tool_name, inputSchema={}) for tool_name in upstream_tools])
+    async def fake_fetch_tools(client, server_name, on_page=None, *, listing_deadline=None):
+        result = ListToolsResult(tools=[MCPTool(name=tool_name, inputSchema={}) for tool_name in upstream_tools])
+        if on_page is not None:
+            await on_page(result)
+        return result
 
     with (
         patch.object(  # test-quality-ok: the upstream MCP session is the boundary; a real one needs an initialize handshake over a live server
@@ -10466,6 +10510,7 @@ async def test_aggregate_listing_reports_per_server_outcomes():
         raise MCPServerListError(ServerListFault(tag="upstream_error", status_code=500), server.name)
 
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with patch(
         "litellm.proxy.mcp_server.operations.global_mcp_server_manager",
@@ -11498,6 +11543,7 @@ async def test_list_tools_injects_byok_credential_for_non_oauth2_auth_types(auth
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
     mock_manager.get_tools_from_server = mock_get_tools_from_server
+    _install_tool_page_adapter(mock_manager)
 
     with (
         patch(

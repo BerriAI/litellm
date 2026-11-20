@@ -331,6 +331,19 @@ def _http_server(server_id: str, name: str, **kwargs) -> MCPServer:
     )
 
 
+def _legacy_page_fetch(fetch):
+    from mcp.types import ListToolsResult
+
+    async def list_tools_page(server, **kwargs):
+        result = ListToolsResult(tools=await fetch(server=server, **kwargs))
+        on_page = kwargs.get("on_page")
+        if on_page is not None:
+            await on_page(result)
+        return result
+
+    return list_tools_page
+
+
 @pytest.mark.asyncio
 async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     """Regression: across the aggregate (/mcp), a delegate/passthrough server that raises
@@ -356,14 +369,20 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
             raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
         return [good_tool]
 
-    with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate, working])), patch.object(
-        mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
-    ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
-        mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
-    ), patch.object(
-        mcp_operations, "filter_tools_by_key_team_permissions", AsyncMock(side_effect=lambda tools, **k: tools)
-    ), patch.object(
-        mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+    with (
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate, working])),
+        patch.object(mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})),
+        patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))),
+        patch.object(mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)),
+        patch.object(
+            mcp_operations, "filter_tools_by_key_team_permissions", AsyncMock(side_effect=lambda tools, **k: tools)
+        ),
+        patch.object(mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)),
+        patch.object(
+            mcp_operations.global_mcp_server_manager,
+            "get_tools_page",
+            new=_legacy_page_fetch(fake_get_tools),
+        ),
     ):
         listing = await mcp_operations._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
@@ -403,6 +422,10 @@ async def test_single_server_route_also_absorbs_upstream_auth_error() -> None:
             mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
         ), patch.object(
             mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+        ), patch.object(
+            mcp_operations.global_mcp_server_manager,
+            "get_tools_page",
+            new=_legacy_page_fetch(fake_get_tools),
         ):
             listing = await mcp_operations._get_tools_from_mcp_servers(
                 user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
@@ -434,12 +457,19 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
     async def fake_get_tools(server, **kwargs):
         raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
 
-    with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
-        mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
-    ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
-        mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
-    ), patch.object(
-        mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+    with (
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])),
+        patch.object(mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})),
+        patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))),
+        patch.object(mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)),
+        patch.object(
+            mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+        ),
+        patch.object(
+            mcp_operations.global_mcp_server_manager,
+            "get_tools_page",
+            new=_legacy_page_fetch(fake_get_tools),
+        ),
     ):
         # Aggregate route: no explicit server filter, even though only one server is accessible.
         listing = await mcp_operations._get_tools_from_mcp_servers(

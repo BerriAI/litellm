@@ -210,7 +210,13 @@ async def test_proxy_schema_and_call_resolve_tool_id_without_waiting_on_unrelate
     slow_teardown = asyncio.Event()
     served_as = with_mcp_proxy_identity(MCPTool(name="proxy-fast-echo", inputSchema={}), fast.server_id)
 
-    async def fetch_tools(client: object, server_name: str) -> ListToolsResult:
+    async def fetch_tools(
+        client: object,
+        server_name: str,
+        on_page=None,
+        *,
+        listing_deadline: float | None = None,
+    ) -> ListToolsResult:
         if server_name == slow.name:
             try:
                 await slow_release.wait()
@@ -218,7 +224,10 @@ async def test_proxy_schema_and_call_resolve_tool_id_without_waiting_on_unrelate
                 await slow_teardown.wait()
                 raise
         echo: Final = MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})
-        return ListToolsResult(tools=[echo])
+        result: Final = ListToolsResult(tools=[echo])
+        if on_page is not None:
+            await on_page(result)
+        return result
 
     async def call_regular_mcp_tool(*, tasks: list[asyncio.Task[object]], **_: object) -> CallToolResult:
         await asyncio.gather(*tasks)
