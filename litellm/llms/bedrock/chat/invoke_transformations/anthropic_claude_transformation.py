@@ -520,7 +520,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         return {**optional_params, "tools": [_bedrock_tool_search_tool(tool) for tool in tools]}
 
-    def transform_response(
+    def _transform_invoke_response(
         self,
         model: str,
         raw_response: httpx.Response,

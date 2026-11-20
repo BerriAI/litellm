@@ -3,6 +3,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{Error, ErrorDetail};
 
+pub mod guardrail;
 pub mod structured_output;
 
 const ROUTE_PREFIXES: [&str; 3] = ["bedrock/converse/", "bedrock/", "converse/"];

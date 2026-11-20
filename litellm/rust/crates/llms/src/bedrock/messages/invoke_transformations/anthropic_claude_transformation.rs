@@ -19,8 +19,13 @@ use litellm_auth_aws::{
     },
     resolve_bedrock_region,
 };
-use litellm_llms_types::formats::messages::{MessagesOptionalParams, MessagesRequest};
-use litellm_llms_types::providers::bedrock::{INVOKE_PATH, INVOKE_STREAM_PATH};
+use litellm_llms_types::formats::messages::{
+    MessagesOptionalParams, MessagesRequest, MessagesResponse, StopReason,
+};
+use litellm_llms_types::providers::bedrock::{
+    GUARDRAIL_ACTION_KEY, INVOKE_PATH, INVOKE_STREAM_PATH,
+};
+use litellm_python_compat::{Value as PythonValue, json as python_json};
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
@@ -40,6 +45,7 @@ use crate::bedrock::{
         GUARDRAIL_CONFIG_PARAM, bedrock_invoke_guardrail_headers,
     },
     common_utils::{
+        guardrail::invoke_guardrail_blocked,
         split_bedrock_region_path,
         structured_output::{
             NATIVE_OUTPUT_UNSUPPORTED, bedrock_native_output_format,
@@ -81,6 +87,29 @@ pub(crate) fn bearer_token(
         None => env_lookup(AWS_BEARER_TOKEN_BEDROCK),
     }
     .filter(|token| !token.is_empty())
+}
+
+/// Port of Python's `bedrock_invoke_guardrail_blocked` on a decoded reply, read only when Bedrock
+/// says a guardrail intervened.
+fn guardrail_blocked(response: &MessagesResponse) -> bool {
+    if !response.extra.contains_key(GUARDRAIL_ACTION_KEY) {
+        return false;
+    }
+    let reply: serde_json::Map<String, Value> = response
+        .extra
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .chain(
+            response
+                .usage
+                .iter()
+                .map(|usage| ("usage".to_string(), usage.clone())),
+        )
+        .collect();
+    match python_json::from_json(Value::Object(reply)) {
+        PythonValue::Dict(fields) => invoke_guardrail_blocked(&fields),
+        _ => false,
+    }
 }
 
 /// Port of Python's `BaseAWSLLM.encode_model_id`.
@@ -336,6 +365,22 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
             request_body,
             model,
         )
+    }
+
+    /// Port of Python's `transform_anthropic_messages_response`, which reports a guardrail block as
+    /// a refusal.
+    fn transform_anthropic_messages_response(
+        &self,
+        _model: &str,
+        response: MessagesResponse,
+    ) -> Result<MessagesResponse, Error> {
+        if !guardrail_blocked(&response) {
+            return Ok(response);
+        }
+        Ok(MessagesResponse {
+            stop_reason: Some(StopReason::Refusal.to_string()),
+            ..response
+        })
     }
 
     fn wire_body(&self, body: Value) -> Value {

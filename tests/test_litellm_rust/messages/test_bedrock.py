@@ -247,6 +247,123 @@ async def test_bedrock_invoke_stream_bills_the_guardrail_trace_of_message_stop_a
     assert_served_natively(server)
 
 
+_GUARDRAIL_BLOCKED_TEXT: Final = "Sorry, the model cannot answer this question."
+_INTERVENED: Final = {"amazon-bedrock-guardrailAction": "INTERVENED"}
+_MODEL_RAN_USAGE: Final = {"input_tokens": 11, "output_tokens": 7}
+_NO_MODEL_USAGE: Final = {"input_tokens": 0, "output_tokens": 0}
+_MODEL_RAN_METRICS: Final = {
+    "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": 11,
+        "outputTokenCount": 7,
+        "invocationLatency": 412,
+        "firstByteLatency": 380,
+    }
+}
+_BLOCKED_WORD_ASSESSMENT: Final = {
+    "wordPolicy": {"customWords": [{"match": "hexblade", "action": "BLOCKED", "detected": True}]}
+}
+_MASKED_SSN_ASSESSMENT: Final = {
+    "sensitiveInformationPolicy": {
+        "piiEntities": [
+            {"type": "US_SOCIAL_SECURITY_NUMBER", "match": "123-45-6789", "action": "ANONYMIZED", "detected": True}
+        ]
+    }
+}
+_MASKED_TRACE: Final = {"amazon-bedrock-trace": {"guardrail": {"input": {"6hbgpnnqoeb1": _MASKED_SSN_ASSESSMENT}}}}
+_BLOCKED_AND_MASKED_TRACE: Final = {
+    "amazon-bedrock-trace": {
+        "guardrail": {"input": {"6hbgpnnqoeb1": {**_BLOCKED_WORD_ASSESSMENT, **_MASKED_SSN_ASSESSMENT}}}
+    }
+}
+_GUARDRAILED_MESSAGE: Final = {
+    "id": "bedrock-guardrails-19a36670",
+    "type": "message",
+    "role": "assistant",
+    "content": [{"type": "text", "text": _GUARDRAIL_BLOCKED_TEXT}],
+    "model": "claude-sonnet-4-5-20250929",
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": _NO_MODEL_USAGE,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail_fields", "usage", "expected_stop_reason"),
+    (
+        pytest.param(_INTERVENED, _NO_MODEL_USAGE, "refusal", id="blocked"),
+        pytest.param(_INTERVENED, _MODEL_RAN_USAGE, "end_turn", id="masked"),
+        pytest.param({**_INTERVENED, **_MASKED_TRACE}, _NO_MODEL_USAGE, "end_turn", id="masked_per_trace"),
+        pytest.param(
+            {**_INTERVENED, **_BLOCKED_AND_MASKED_TRACE},
+            _MODEL_RAN_USAGE,
+            "refusal",
+            id="blocked_and_masked_per_trace",
+        ),
+        pytest.param({"amazon-bedrock-guardrailAction": "NONE"}, _MODEL_RAN_USAGE, "end_turn", id="guardrail_passed"),
+        pytest.param({}, _MODEL_RAN_USAGE, "end_turn", id="no_guardrail"),
+        pytest.param({}, _NO_MODEL_USAGE, "end_turn", id="no_guardrail_with_zero_usage"),
+    ),
+)
+async def test_bedrock_invoke_reports_a_guardrail_block_as_refusal(
+    server: RecordingServer,
+    guardrail_fields: Mapping[str, object],
+    usage: Mapping[str, int],
+    expected_stop_reason: str,
+) -> None:
+    body: Final = {**_GUARDRAILED_MESSAGE, "usage": usage, **guardrail_fields}
+    server.default_response = ResponseSpec(body=body)
+
+    response: Final = await _rust(server)
+
+    assert _public(response) == {**body, "stop_reason": expected_stop_reason}
+    assert_served_natively(server)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail_fields", "expected_stop_reason"),
+    (
+        pytest.param(_INTERVENED, "refusal", id="blocked"),
+        pytest.param({**_INTERVENED, **_MODEL_RAN_METRICS}, "end_turn", id="masked"),
+        pytest.param({**_INTERVENED, **_MASKED_TRACE}, "end_turn", id="masked_per_trace"),
+        pytest.param(
+            {**_INTERVENED, **_MODEL_RAN_METRICS, **_BLOCKED_AND_MASKED_TRACE},
+            "refusal",
+            id="blocked_and_masked_per_trace",
+        ),
+        pytest.param(
+            {"amazon-bedrock-guardrailAction": "NONE", **_MODEL_RAN_METRICS}, "end_turn", id="guardrail_passed"
+        ),
+        pytest.param({}, "end_turn", id="no_guardrail"),
+    ),
+)
+async def test_bedrock_invoke_stream_reports_a_guardrail_block_as_refusal(
+    server: RecordingServer, guardrail_fields: Mapping[str, object], expected_stop_reason: str
+) -> None:
+    upstream_events: Final = (
+        {"type": "message_start", "message": {**_GUARDRAILED_MESSAGE, "content": [], "stop_reason": None}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": _GUARDRAIL_BLOCKED_TEXT}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}},
+        {"type": "message_stop", **guardrail_fields},
+    )
+    server.default_response = ResponseSpec(
+        body=b"".join(_aws_frame(event) for event in upstream_events),
+        headers={"content-type": "application/vnd.amazon.eventstream"},
+    )
+
+    rust_chunks: Final = await _drain(await _rust(server, stream=True))
+
+    events: Final = tuple(map(_OBJECT.validate_python, _sse_events(rust_chunks)))
+    assert [event["delta"] for event in events if event["type"] == "message_delta"] == [
+        {"stop_reason": expected_stop_reason, "stop_sequence": None}
+    ]
+    assert [event["type"] for event in events][-2:] == ["message_delta", "message_stop"]
+    assert_served_natively(server)
+
+
 @pytest.fixture
 def no_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ROLE_NAME", "AWS_WEB_IDENTITY_TOKEN_FILE"):
