@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable, Container, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from itertools import chain
+from itertools import chain, filterfalse
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote, urlparse
@@ -1854,31 +1854,36 @@ def strip_advisor_blocks_from_messages(
         replace_with_text: When True, replace the advisor exchange with an
             <advisor_feedback> text block so the executor retains the semantic
             context of what the advisor said.  When False (default), strip silently.
-        drop_params: The request's drop_params. When it is on, advisor blocks whose
-            id is not a string are dropped too, otherwise they reach the provider as sent.
+        drop_params: The request's drop_params. When it is on, advisor blocks left without
+            their pair (a non-string or unmatched id) are dropped too, otherwise they reach
+            the provider as sent.
     """
-    drops_unreadable: Final = drops_unsupported_params(drop_params)
+    drops_unpaired: Final = drops_unsupported_params(drop_params)
     for message in messages:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         content = message.get("content")
         if not isinstance(content, list):
             continue
-        new_content = _without_advisor_exchanges(content, replace_with_text, drops_unreadable)
+        new_content = _without_advisor_blocks(content, replace_with_text, drops_unpaired)
         if new_content is not None:
             message["content"] = new_content
     return messages
 
 
-def _without_advisor_exchanges(
-    all_blocks: Sequence[object], replace_with_text: bool, drops_unreadable: bool
-) -> list[object] | None:
-    blocks: Final = (
-        [block for block in all_blocks if not _has_non_string_advisor_id(block)] if drops_unreadable else all_blocks
-    )
+def _without_advisor_blocks(
+    blocks: Sequence[object], replace_with_text: bool, drops_unpaired: bool
+) -> Sequence[object] | None:
+    paired: Final = _without_advisor_exchanges(blocks, replace_with_text)
+    if not drops_unpaired:
+        return paired
+    return list(filterfalse(_is_advisor_block, blocks if paired is None else paired))
+
+
+def _without_advisor_exchanges(blocks: Sequence[object], replace_with_text: bool) -> list[object] | None:
     advisor_ids: Final = frozenset(filter(None, map(_advisor_use_id, blocks)))
     if not advisor_ids:
-        return list(blocks) if len(blocks) != len(all_blocks) else None
+        return None
     advice_by_id: Final[Mapping[str, str]] = (
         MappingProxyType(
             {
@@ -1893,12 +1898,12 @@ def _without_advisor_exchanges(
     return list(chain.from_iterable(_without_advisor_exchange(block, advisor_ids, advice_by_id) for block in blocks))
 
 
-def _has_non_string_advisor_id(block: object) -> bool:
+def _is_advisor_block(block: object) -> bool:
     match message_field(block, "type"):
-        case "server_tool_use" if message_field(block, "name") == "advisor":
-            return not isinstance(message_field(block, "id"), str | None)
+        case "server_tool_use":
+            return message_field(block, "name") == "advisor"
         case "advisor_tool_result":
-            return not isinstance(message_field(block, "tool_use_id"), str | None)
+            return True
         case _:
             return False
 

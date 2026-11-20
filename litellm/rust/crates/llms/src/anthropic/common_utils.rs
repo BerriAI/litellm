@@ -663,6 +663,31 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
         .collect()
 }
 
+fn is_advisor_block(block: &ContentBlock) -> bool {
+    (block.is_type(ContentBlockType::ServerToolUse) && block.name.as_deref() == Some("advisor"))
+        || block.is_type(ContentBlockType::AdvisorToolResult)
+}
+
+pub fn drop_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .map(|message| {
+            if message.role != "assistant" {
+                return message;
+            }
+            let MessageContent::Blocks(blocks) = &message.content else {
+                return message;
+            };
+            let kept: Vec<ContentBlock> = blocks
+                .iter()
+                .filter(|block| !is_advisor_block(block))
+                .cloned()
+                .collect();
+            message.with_blocks(kept)
+        })
+        .collect()
+}
+
 #[derive(Deserialize)]
 struct ReplayedWebSearchResult {
     #[serde(default)]
@@ -1052,16 +1077,11 @@ pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
     })
 }
 
-fn has_non_string_raw_advisor_id(block: &Value) -> bool {
-    let id = match raw_block_type(block) {
-        Some("advisor_tool_result") => block.get("tool_use_id"),
-        _ if is_raw_advisor_use(block) => block.get("id"),
-        _ => None,
-    };
-    id.is_some_and(|id| !id.is_string() && !id.is_null())
+fn is_raw_advisor_block(block: &Value) -> bool {
+    is_raw_advisor_use(block) || raw_block_type(block) == Some("advisor_tool_result")
 }
 
-pub fn strip_raw_advisor_blocks_and_non_string_ids(message: Value) -> Option<Value> {
+pub fn drop_raw_advisor_blocks(message: Value) -> Option<Value> {
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
         return Some(message);
     }
@@ -1069,11 +1089,10 @@ pub fn strip_raw_advisor_blocks_and_non_string_ids(message: Value) -> Option<Val
         Some(
             blocks
                 .into_iter()
-                .filter(|block| !has_non_string_raw_advisor_id(block))
+                .filter(|block| !is_raw_advisor_block(block))
                 .collect(),
         )
     })
-    .and_then(strip_raw_advisor_blocks)
 }
 
 fn is_raw_encrypted_reasoning_block(block: &Value) -> bool {
@@ -1988,54 +2007,39 @@ mod tests {
     }
 
     #[rstest]
-    #[case::list_answering_a_string_id(
-        json!([advisor_use(json!("srvtoolu_1")), advisor_result(json!(["srvtoolu_1"])), unparsed_block()]),
-        json!([unparsed_block()])
-    )]
-    #[case::non_string_ids(
-        json!([
-            advisor_use(json!(["srvtoolu_1"])), advisor_result(json!(["srvtoolu_1"])),
-            advisor_use(json!({"id": "srvtoolu_2"})), advisor_result(json!({"id": "srvtoolu_2"})),
-            advisor_use(json!(7)), advisor_result(json!(7)),
-            unparsed_block()
-        ]),
-        json!([unparsed_block()])
-    )]
-    #[case::list_use_id_beside_a_string_result_id(
-        json!([advisor_use(json!(["srvtoolu_1"])), advisor_result(json!("srvtoolu_1")), unparsed_block()]),
-        json!([advisor_result(json!("srvtoolu_1")), unparsed_block()])
-    )]
-    #[case::null_and_missing_ids_are_kept(
-        json!([
-            advisor_use(Value::Null), advisor_result(Value::Null),
-            {"type": "server_tool_use", "name": "advisor", "input": {}},
-            {"type": "advisor_tool_result", "content": {}},
-            {"type": "server_tool_use", "id": 7, "name": "web_search", "input": {}}
-        ]),
-        json!([
-            advisor_use(Value::Null), advisor_result(Value::Null),
-            {"type": "server_tool_use", "name": "advisor", "input": {}},
-            {"type": "advisor_tool_result", "content": {}},
-            {"type": "server_tool_use", "id": 7, "name": "web_search", "input": {}}
-        ])
-    )]
-    fn strip_raw_advisor_blocks_and_non_string_ids_drops_advisor_blocks_with_a_non_string_id(
-        #[case] blocks: Value,
-        #[case] expected: Value,
-    ) {
+    #[case::string_ids(json!([advisor_use(json!("srvtoolu_1")), advisor_result(json!("srvtoolu_1"))]))]
+    #[case::non_string_ids(json!([
+        advisor_use(json!(["srvtoolu_1"])), advisor_result(json!(["srvtoolu_1"])),
+        advisor_use(json!({"id": "srvtoolu_2"})), advisor_result(json!({"id": "srvtoolu_2"})),
+        advisor_use(json!(7)), advisor_result(json!(7))
+    ]))]
+    #[case::list_use_id_beside_a_string_result_id(json!([
+        advisor_use(json!(["srvtoolu_1"])), advisor_result(json!("srvtoolu_1"))
+    ]))]
+    #[case::null_empty_and_missing_ids(json!([
+        advisor_use(Value::Null), advisor_result(Value::Null),
+        advisor_use(json!("")), advisor_result(json!("")),
+        {"type": "server_tool_use", "name": "advisor", "input": {}},
+        {"type": "advisor_tool_result", "content": {}}
+    ]))]
+    fn drop_raw_advisor_blocks_drops_every_advisor_block(#[case] advisor_blocks: Value) {
+        let web_search =
+            json!({"type": "server_tool_use", "id": 7, "name": "web_search", "input": {}});
+        let blocks = [
+            advisor_blocks.as_array().unwrap().clone(),
+            vec![web_search.clone(), unparsed_block()],
+        ]
+        .concat();
         assert_eq!(
-            strip_raw_advisor_blocks_and_non_string_ids(turn(blocks)),
-            Some(turn(expected))
+            drop_raw_advisor_blocks(turn(json!(blocks))),
+            Some(turn(json!([web_search, unparsed_block()])))
         );
     }
 
     #[rstest]
-    fn strip_raw_advisor_blocks_and_non_string_ids_leaves_a_user_turn() {
+    fn drop_raw_advisor_blocks_leaves_a_user_turn() {
         let message = json!({"role": "user", "content": advisor_exchange(json!(7))});
-        assert_eq!(
-            strip_raw_advisor_blocks_and_non_string_ids(message.clone()),
-            Some(message)
-        );
+        assert_eq!(drop_raw_advisor_blocks(message.clone()), Some(message));
     }
 
     const MANY_BLOCKS: usize = 20_000;
