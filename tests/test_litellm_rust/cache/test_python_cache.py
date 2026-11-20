@@ -6,10 +6,11 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.caching import Cache, CacheMode
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the existing background cache writer before the next request
 )
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     _add_headers_to_response,  # pyright: ignore[reportPrivateUsage]  # stamp the response the way the router does
     add_retry_headers_to_response,
@@ -27,10 +28,10 @@ from litellm.rust_bridge.catalog import Route
 from litellm.types.llms.anthropic import AnthropicResponseContentBlockText
 from litellm.types.utils import CallTypes, LLMResponseTypes
 from tests.test_litellm_rust.cache.support import cache_key, collect, invoke, payload
-from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.routing import native_route
+from tests.test_litellm_rust.support.routing import assert_served_natively, native_route
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -403,6 +404,25 @@ async def test_messages_cache_stores_the_response_a_yielding_deployment_hook_ret
     assert isinstance(hit, dict)
     assert [block.text for block in blocks.validate_python(hit["content"])] == ["redacted"]
     assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_messages_cache_skips_a_stream_returned_by_a_deployment_hook(
+    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(_backend=storage))
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"])])
+    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    recording_server.expected_requests = 2
+    tools: Final = [{"type": "web_search_20250305", "name": "web_search"}]
+    with native_route(Route.MESSAGES):
+        for _ in range(2):
+            result = await call(recording_server, stream=True, tools=tools)
+            assert b"event: message_stop" in await collect(result)
+            await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+            assert _entries(storage) == {}
+    assert_served_natively(recording_server, count=2)
 
 
 @pytest.mark.asyncio
