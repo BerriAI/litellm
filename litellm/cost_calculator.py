@@ -1175,12 +1175,18 @@ def _served_or_priced_requested_model(
     if served in (requested, requested.partition("/")[2]):
         return served
     pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
-    profile_of_served: Final = _is_bedrock_cross_region_profile_of(requested_model, served_model, pricing_provider)
-    if profile_of_served and _resolves_to_rates(requested, pricing_provider):
+    requested_sets_the_price: Final = _is_bedrock_cross_region_profile_of(
+        requested_model, served_model, pricing_provider
+    ) or _is_fireworks_router(requested_model, pricing_provider)
+    if requested_sets_the_price and _resolves_to_rates(requested, pricing_provider):
         return requested
     if _resolves_to_rates(served, pricing_provider):
         return served
     return requested if _resolves_to_rates(requested, pricing_provider) else served
+
+
+def _is_fireworks_router(requested_model: str, custom_llm_provider: str | None) -> bool:
+    return custom_llm_provider == "fireworks_ai" and "/routers/" in f"/{requested_model}"
 
 
 def _is_bedrock_cross_region_profile_of(profile: str, served_model: str, custom_llm_provider: str | None) -> bool:

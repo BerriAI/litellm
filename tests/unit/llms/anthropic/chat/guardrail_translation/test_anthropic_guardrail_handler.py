@@ -3096,6 +3096,47 @@ class TestStructuredWriteBackKeepsToolResults:
             {"type": "text", "text": "log for <EMAIL>"},
         ]
 
+    async def test_rewrite_keeps_tool_result_is_error_and_system_row_fields(self):
+        data: Final = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": "run the checks"},
+                {"role": "system", "content": "Stay terse.", "output_config": {"effort": "low"}},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_01", "name": "Bash", "input": {"cmd": "make"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_01", "content": "boom", "is_error": True}
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_02", "name": "Bash", "input": {"cmd": "ls"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_02", "content": "Makefile"},
+                        {"type": "text", "text": "what failed?"},
+                    ],
+                },
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        messages: Final = data["messages"]
+        assert messages[1] == {"role": "system", "content": "Stay terse.", "output_config": {"effort": "low"}}
+        assert messages[3]["content"] == [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": "boom", "is_error": True}
+        ]
+        assert messages[5]["content"][0] == {"type": "tool_result", "tool_use_id": "toolu_02", "content": "Makefile"}
+
 
 class NamelessComputerToolGuardrail(CustomGuardrail):
     """Guardrail that appends an OpenAI-format computer tool without a function name."""

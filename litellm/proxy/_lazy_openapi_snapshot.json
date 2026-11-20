@@ -5937,6 +5937,18 @@
               }
             },
             {
+              "description": "Add key_metadata and user_metadata for admin callers. Ignored for everyone else.",
+              "in": "query",
+              "name": "include_metadata",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Add key_metadata and user_metadata for admin callers. Ignored for everyone else.",
+                "title": "Include Metadata",
+                "type": "boolean"
+              }
+            },
+            {
               "in": "query",
               "name": "agent_ids",
               "required": false,

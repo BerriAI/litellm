@@ -233,6 +233,7 @@ from litellm.types.utils import (
     pricing_override_fields,
 )
 from litellm.utils import (
+    HuggingFaceTokenizerKind,
     acredential_updates,
     cost_map_omits_token_price,
     native_structured_output_support,
@@ -16072,28 +16073,33 @@ class _TokenizerLoads:
 
 
 _TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_tokenizer_loads")
+_BASE_MODEL_TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_base_model_tokenizer_loads")
 
 
-def _tokenizer_loads_for_this_loop() -> _TokenizerLoads:
-    existing: Final = _TOKENIZER_LOADS.get(None)
+def _tokenizer_loads_for_this_loop(loads: anyio.lowlevel.RunVar[_TokenizerLoads]) -> _TokenizerLoads:
+    existing: Final = loads.get(None)
     if existing is not None:
         return existing
     created: Final = _TokenizerLoads(threads=anyio.CapacityLimiter(TOKENIZER_LOAD_MAX_RUNNING))
-    _TOKENIZER_LOADS.set(created)
+    loads.set(created)
     return created
 
 
 @dataclass(slots=True)
 class _TokenizerLoadSlot:
-    model: str
-    custom_tokenizer: CustomHuggingfaceTokenizer | None
     current: _SharedTokenizerLoad | None = None
 
-    def load(self, loads: _TokenizerLoads, loop: asyncio.AbstractEventLoop) -> _SharedTokenizerLoad | None:
+    def load(
+        self,
+        model: str,
+        custom_tokenizer: CustomHuggingfaceTokenizer | None,
+        loads: _TokenizerLoads,
+        loop: asyncio.AbstractEventLoop,
+    ) -> _SharedTokenizerLoad | None:
         current: Final = self.current
         if current is not None and current.reusable(loop.time()):
             return current
-        self.current = loads.start(self.model, self.custom_tokenizer, loop)
+        self.current = loads.start(model, custom_tokenizer, loop)
         return self.current
 
 
@@ -16101,41 +16107,48 @@ class _TokenizerLoadSlot:
 def _tokenizer_load_slot(
     model: str, custom_tokenizer: _CustomTokenizerKey | None, loop: asyncio.AbstractEventLoop
 ) -> _TokenizerLoadSlot:
-    return _TokenizerLoadSlot(
-        model=model,
-        custom_tokenizer=None
+    return _TokenizerLoadSlot()
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _base_model_tokenizer_load_slot(
+    kind: HuggingFaceTokenizerKind, loop: asyncio.AbstractEventLoop
+) -> _TokenizerLoadSlot:
+    return _TokenizerLoadSlot()
+
+
+def _model_tokenizer_load_slot(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, loop: asyncio.AbstractEventLoop
+) -> _TokenizerLoadSlot:
+    return _tokenizer_load_slot(
+        model,
+        None
         if custom_tokenizer is None
-        else CustomHuggingfaceTokenizer(
-            identifier=custom_tokenizer.identifier,
-            revision=custom_tokenizer.revision,
-            auth_token=custom_tokenizer.auth_token,
+        else _CustomTokenizerKey(
+            identifier=custom_tokenizer["identifier"],
+            revision=custom_tokenizer["revision"],
+            auth_token=custom_tokenizer["auth_token"],
         ),
+        loop,
     )
 
 
-async def _tokenizer_after_provider_error(
-    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
+async def _tokenizer_within_load_wait(
+    model: str,
+    custom_tokenizer: CustomHuggingfaceTokenizer | None,
+    loads: _TokenizerLoads,
+    slot: Callable[[asyncio.AbstractEventLoop], _TokenizerLoadSlot],
 ) -> SelectTokenizerResponse | BaseException:
     loop: Final = asyncio.get_running_loop()
     try:
-        load: Final = _tokenizer_load_slot(
-            model,
-            None
-            if custom_tokenizer is None
-            else _CustomTokenizerKey(
-                identifier=custom_tokenizer["identifier"],
-                revision=custom_tokenizer["revision"],
-                auth_token=custom_tokenizer["auth_token"],
-            ),
-            loop,
-        ).load(_tokenizer_loads_for_this_loop(), loop)
+        load: Final = slot(loop).load(model, custom_tokenizer, loads, loop)
         if load is None:
             return _TokenizerLoadsBusy()
         outcome: Final = await asyncio.wait_for(
             asyncio.shield(load.outcome),
             timeout=max(load.started_at + TOKENIZER_LOAD_WAIT_SECONDS - loop.time(), 0),
         )
-    except Exception as e:  # noqa: BLE001  # a tokenizer that cannot be read, loaded in time, or loaded at all answers the provider's error
+    except Exception as e:  # noqa: BLE001  # each caller decides what a tokenizer that cannot be read, loaded in time, or loaded at all answers
         return e
     return outcome.tokenizer
 
@@ -16143,12 +16156,33 @@ async def _tokenizer_after_provider_error(
 async def _tokenizer_or_provider_error(
     model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure
 ) -> SelectTokenizerResponse:
-    tokenizer: Final = await _tokenizer_after_provider_error(model, custom_tokenizer)
+    tokenizer: Final = await _tokenizer_within_load_wait(
+        model,
+        custom_tokenizer,
+        _tokenizer_loads_for_this_loop(_TOKENIZER_LOADS),
+        partial(_model_tokenizer_load_slot, model, custom_tokenizer),
+    )
     if not isinstance(tokenizer, BaseException):
         return tokenizer
     if not _answers_provider_error(tokenizer):
         raise tokenizer.with_traceback(None)
     raise _provider_error_after_failed_estimate(provider_failure, tokenizer) from tokenizer
+
+
+async def _tokenizer_model(model: str, base_model: str | None) -> str:
+    kind: Final = litellm.utils.huggingface_tokenizer_kind
+    base_kind: Final = None if base_model is None or kind(model) is not None else kind(base_model)
+    if base_model is None or base_kind is None:
+        return model
+    if not litellm.utils.huggingface_tokenizer_may_download(base_model):
+        return base_model
+    loaded: Final = await _tokenizer_within_load_wait(
+        base_model,
+        None,
+        _tokenizer_loads_for_this_loop(_BASE_MODEL_TOKENIZER_LOADS),
+        partial(_base_model_tokenizer_load_slot, base_kind),
+    )
+    return model if isinstance(loaded, BaseException) else base_model
 
 
 async def _local_token_estimate(
@@ -16240,6 +16274,13 @@ def _deployment_base_model(deployment: _TokenCountDeployment) -> str | None:
     return _non_empty_str(deployment.get("model_info", {}).get("base_model")) or _non_empty_str(
         deployment.get("litellm_params", {}).get("base_model")
     )
+
+
+def _tokenizer_base_model(deployment: _TokenCountDeployment) -> str | None:
+    base_model: Final = _deployment_base_model(deployment)
+    if base_model is None or deployment.get("model_info", {}).get("custom_tokenizer") is not None:
+        return None
+    return base_model.split("/", 1)[-1]
 
 
 def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
@@ -16972,7 +17013,7 @@ async def _count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=openai_model or model_to_use,
+        model=openai_model or await _tokenizer_model(model_to_use, _tokenizer_base_model(deployment_view)),
         template_model=template_model,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
