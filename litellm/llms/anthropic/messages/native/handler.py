@@ -878,10 +878,12 @@ def anthropic_messages_handler(
             custom_llm_provider,
         )
         kwargs.pop("thread")  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
+    rejects_diagnostics: Final = (
+        anthropic_messages_provider_config is not None and not anthropic_messages_provider_config.supports_diagnostics()
+    )
     if (
-        kwargs.get("diagnostics") is not None  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
-        and anthropic_messages_provider_config is not None
-        and not anthropic_messages_provider_config.supports_diagnostics()
+        rejects_diagnostics
+        and kwargs.get("diagnostics") is not None  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
         and "diagnostics" not in additional_drop_paths(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs of the handler is untyped
     ):
         refusal: Final = diagnostics_refusal(custom_llm_provider, model, litellm_params.drop_params)
