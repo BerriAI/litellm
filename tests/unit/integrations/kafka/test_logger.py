@@ -1,0 +1,399 @@
+import asyncio
+import json
+import sys
+import threading
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Final
+
+import pytest
+from pydantic import BaseModel, ConfigDict
+
+import litellm
+from litellm.integrations.kafka.config import KafkaConfigValue
+from litellm.integrations.kafka.logger import KafkaLogger
+from litellm.integrations.kafka.producer import DeliveryCallback, DeliveryError
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.responses.streaming_iterator import drain_logging_tasks
+from litellm.types.integrations.kafka import KafkaInitParams
+from litellm.types.utils import ModelResponse
+
+NOW: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+
+class Payload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: str
+    metadata: Mapping[str, object]
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class Message:
+    topic: str
+    value: bytes
+    key: bytes | None
+    callback: DeliveryCallback
+
+
+@dataclass(frozen=True, slots=True)
+class Rejected:
+    def code(self) -> int:
+        return 1
+
+
+class RecordingProducer:
+    def __init__(self, *, full: bool = False, rejected: bool = False, fail_flush: bool = False) -> None:
+        self.full: Final = full
+        self.rejected: Final = rejected
+        self.fail_flush: Final = fail_flush
+        self.messages: tuple[Message, ...] = ()
+        self.waiting: tuple[Message, ...] = ()
+        self.flush_timeouts: tuple[float, ...] = ()
+        self.producing_threads: tuple[int, ...] = ()
+
+    def __len__(self) -> int:
+        return len(self.waiting)
+
+    def produce(self, topic: str, *, value: bytes, key: bytes | None, on_delivery: DeliveryCallback) -> None:
+        if self.full:
+            raise BufferError("queue full")
+        message: Final = Message(topic, value, key, on_delivery)
+        self.messages = (*self.messages, message)
+        self.waiting = (*self.waiting, message)
+        self.producing_threads = (*self.producing_threads, threading.get_ident())
+
+    def poll(self, timeout: float) -> int:
+        return 0
+
+    def flush(self, timeout: float) -> int:
+        self.flush_timeouts = (*self.flush_timeouts, timeout)
+        if self.fail_flush:
+            raise RuntimeError("a client error containing credentials must not be logged")
+        waiting: Final = self.waiting
+        self.waiting = ()
+        error: Final[DeliveryError | None] = Rejected() if self.rejected else None
+        for message in waiting:
+            message.callback(error, message)
+        return 0
+
+
+class RecordingFactory:
+    def __init__(self, producer: RecordingProducer) -> None:
+        self.producer: Final = producer
+        self.configurations: tuple[Mapping[str, KafkaConfigValue], ...] = ()
+
+    def __call__(self, configuration: Mapping[str, KafkaConfigValue]) -> RecordingProducer:
+        self.configurations = (*self.configurations, configuration)
+        return self.producer
+
+
+@contextmanager
+def configured(
+    producer: RecordingProducer, settings: Mapping[str, object] | None = None
+) -> Generator[tuple[KafkaLogger, RecordingFactory]]:
+    factory: Final = RecordingFactory(producer)
+    logger: Final = KafkaLogger(
+        KafkaInitParams.model_validate({"bootstrap_servers": "broker:9092", "topic": "events", **(settings or {})}),
+        producer_factory=factory,
+        start_polling=False,
+    )
+    try:
+        yield logger, factory
+    finally:
+        logger.close()
+
+
+def event(status: str = "success", fields: Mapping[str, object] | None = None) -> Mapping[str, object]:
+    return {
+        "standard_logging_object": {
+            "id": "response-id",
+            "litellm_call_id": "gateway-id",
+            "status": status,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "metadata": {"user_api_key_alias": "application-key", "user_api_key_hash": "key-hash"},
+            "messages": [{"role": "user", "content": "private-prompt"}],
+            "response": {"choices": [{"message": {"content": "private-answer"}}]},
+            **(fields or {}),
+        }
+    }
+
+
+def test_configuration_does_not_connect_and_requests_reuse_one_producer() -> None:
+    producer: Final = RecordingProducer()
+    with configured(producer) as (logger, factory):
+        assert factory.configurations == ()
+        logger.log_success_event(event(), None, NOW, NOW)
+        _ = logger.sink.flush()
+        logger.log_failure_event(event("failure"), None, NOW, NOW)
+
+        assert len(factory.configurations) == 1
+        assert tuple(json.loads(message.value)["status"] for message in producer.messages) == ("success", "failure")
+
+
+def test_the_standard_event_keeps_identity_usage_and_request_correlation() -> None:
+    producer: Final = RecordingProducer()
+    original: Final = event()
+    with configured(producer) as (logger, _):
+        logger.log_success_event(original, None, NOW, NOW)
+        message: Final = producer.messages[0]
+
+        assert message.topic == logger.sink.params.topic
+        assert message.key == b"gateway-id"
+        assert json.loads(message.value) == original["standard_logging_object"]
+        assert logger.statistics.accepted == 1
+        assert logger.statistics.delivered == 0
+        assert logger.sink.flush() == 0
+        assert logger.statistics.delivered == 1
+
+
+@pytest.mark.parametrize("status", ["success", "failure"])
+@pytest.mark.asyncio
+async def test_async_export_runs_serialization_and_produce_off_the_event_loop(status: str) -> None:
+    producer: Final = RecordingProducer()
+    event_loop_thread: Final = threading.get_ident()
+    with configured(producer) as (logger, _):
+        if status == "success":
+            await logger.async_log_success_event(event(status), None, NOW, NOW)
+        else:
+            await logger.async_log_failure_event(event(status), None, NOW, NOW)
+
+        assert producer.producing_threads
+        assert all(thread != event_loop_thread for thread in producer.producing_threads)
+        assert logger.statistics.delivered == 0
+        await logger.flush_queue()
+        assert logger.statistics.delivered == 1
+
+
+@pytest.mark.parametrize("status", ["success", "failure"])
+def test_per_destination_redaction_keeps_attribution_and_does_not_change_other_destinations(status: str) -> None:
+    producer: Final = RecordingProducer()
+    original: Final = event(status)
+    snapshot: Final = json.dumps(original)
+    with configured(producer, {"turn_off_message_logging": True}) as (logger, _):
+        logger.log_success_event(original, None, NOW, NOW)
+        body: Final = producer.messages[0].value
+        payload: Final = Payload.model_validate_json(body)
+
+        assert b"private-prompt" not in body
+        assert b"private-answer" not in body
+        assert payload.metadata["user_api_key_alias"] == "application-key"
+        assert payload.total_tokens == 15
+        assert json.dumps(original) == snapshot
+
+
+def test_global_redaction_applies_to_a_failure_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    producer: Final = RecordingProducer()
+    with configured(producer) as (logger, _):
+        logger.log_failure_event(event("failure"), None, NOW, NOW)
+
+        assert b"private-prompt" not in producer.messages[0].value
+        assert b"private-answer" not in producer.messages[0].value
+
+
+def test_excluded_fields_are_not_exported_or_removed_from_the_shared_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["messages"])
+    producer: Final = RecordingProducer()
+    original: Final = event()
+    with configured(producer) as (logger, _):
+        logger.log_success_event(original, None, NOW, NOW)
+
+        assert "messages" not in json.loads(producer.messages[0].value)
+        shared: Final = original["standard_logging_object"]
+        assert isinstance(shared, dict)
+        assert "messages" in shared
+
+
+def test_a_full_buffer_drops_the_log_without_failing_the_request() -> None:
+    producer: Final = RecordingProducer(full=True)
+    with configured(producer) as (logger, _):
+        logger.log_success_event(event(), None, NOW, NOW)
+
+        assert producer.messages == ()
+        assert logger.statistics.accepted == 0
+        assert logger.statistics.dropped == 1
+
+
+def test_a_delivery_error_is_observable_and_is_not_counted_as_delivered() -> None:
+    producer: Final = RecordingProducer(rejected=True)
+    with configured(producer) as (logger, _):
+        logger.log_success_event(event(), None, NOW, NOW)
+        _ = logger.sink.flush()
+
+        assert logger.statistics.accepted == 1
+        assert logger.statistics.delivered == 0
+        assert logger.statistics.dropped == 1
+
+
+def test_oversized_events_are_rejected_before_allocating_a_producer() -> None:
+    producer: Final = RecordingProducer()
+    with configured(producer, {"message_max_bytes": 1000}) as (logger, factory):
+        logger.log_success_event(event(fields={"messages": "large-prompt" * 1000}), None, NOW, NOW)
+
+        assert factory.configurations == ()
+        assert logger.statistics.dropped == 1
+
+
+def test_intermediate_events_without_a_standard_payload_are_ignored() -> None:
+    producer: Final = RecordingProducer()
+    with configured(producer) as (logger, factory):
+        logger.log_success_event({"stream": True}, None, NOW, NOW)
+
+        assert factory.configurations == ()
+        assert logger.statistics.dropped == 0
+
+
+def test_nonfinite_usage_values_produce_valid_json() -> None:
+    producer: Final = RecordingProducer()
+    with configured(producer) as (logger, _):
+        logger.log_success_event(event(fields={"response_cost": float("nan")}), None, NOW, NOW)
+
+        assert json.loads(producer.messages[0].value)["response_cost"] is None
+        assert b"NaN" not in producer.messages[0].value
+
+
+def test_shutdown_flush_is_bounded_idempotent_and_rejects_new_events() -> None:
+    producer: Final = RecordingProducer()
+    with configured(producer, {"flush_timeout": 2.0}) as (logger, _):
+        logger.log_success_event(event(), None, NOW, NOW)
+        logger.close(timeout=0.0)
+        logger.close()
+        logger.log_success_event(event(), None, NOW, NOW)
+
+        assert producer.flush_timeouts == (0.0,)
+        assert logger.statistics.delivered == 1
+        assert logger.statistics.dropped == 1
+        assert len(producer.messages) == 1
+
+
+def test_a_flush_failure_does_not_expose_client_exception_text(caplog: pytest.LogCaptureFixture) -> None:
+    producer: Final = RecordingProducer(fail_flush=True)
+    with configured(producer) as (logger, _):
+        logger.log_success_event(event(), None, NOW, NOW)
+
+        assert logger.sink.flush() is None
+        assert "a client error containing credentials" not in caplog.text
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_sdk_success_and_streams_export_one_final_event(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    producer: Final = RecordingProducer()
+    with configured(producer) as (logger, _):
+        monkeypatch.setattr(litellm, "callbacks", [logger])
+        response: Final = await litellm.acompletion(
+            model="openai/gpt-6-luna",
+            api_key="unit-test-key",
+            messages=[{"role": "user", "content": "sdk-event"}],
+            mock_response="sdk-reply",
+            metadata={"user_api_key_alias": "sdk-key"},
+            stream=stream,
+        )
+        if stream:
+            assert isinstance(response, CustomStreamWrapper)
+            async for _ in response:
+                pass
+        await drain_logging_tasks()
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
+
+        assert len(producer.messages) == 1
+        payload: Final = Payload.model_validate_json(producer.messages[0].value)
+        assert payload.status == "success"
+        assert payload.metadata["user_api_key_alias"] == "sdk-key"
+        assert payload.total_tokens == payload.prompt_tokens + payload.completion_tokens
+        assert "sdk-reply" in producer.messages[0].value.decode()
+
+
+@pytest.mark.asyncio
+async def test_sdk_failures_export_a_terminal_failure_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    producer: Final = RecordingProducer()
+    with configured(producer) as (logger, _):
+        monkeypatch.setattr(litellm, "callbacks", [logger])
+        with pytest.raises(litellm.RateLimitError):
+            await litellm.acompletion(
+                model="openai/gpt-6-luna",
+                api_key="unit-test-key",
+                messages=[{"role": "user", "content": "sdk-failure"}],
+                mock_response="litellm.RateLimitError",
+                num_retries=0,
+            )
+        await drain_logging_tasks()
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
+
+        assert len(producer.messages) == 1
+        assert json.loads(producer.messages[0].value)["status"] == "failure"
+
+
+@pytest.mark.asyncio
+async def test_queue_saturation_does_not_change_a_successful_model_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    producer: Final = RecordingProducer(full=True)
+    with configured(producer) as (logger, _):
+        monkeypatch.setattr(litellm, "callbacks", [logger])
+        response: Final = await litellm.acompletion(
+            model="openai/gpt-6-luna",
+            api_key="unit-test-key",
+            messages=[{"role": "user", "content": "queue-full"}],
+            mock_response="still-served",
+        )
+        await drain_logging_tasks()
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
+
+        assert isinstance(response, ModelResponse)
+        assert response.choices[0].message.content == "still-served"
+        assert logger.statistics.dropped == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_flushes_each_active_destination_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.shutdown.kafka import close_kafka_loggers
+
+    producer: Final = RecordingProducer()
+    with configured(producer) as (logger, _):
+        logger.log_success_event(event(), None, NOW, NOW)
+        monkeypatch.setattr(litellm, "callbacks", [logger])
+        monkeypatch.setattr(litellm, "success_callback", [logger])
+
+        await close_kafka_loggers(0.0)
+
+        assert producer.flush_timeouts == (0.0,)
+        assert logger.statistics.delivered == 1
+
+
+def test_the_native_callback_name_constructs_a_cached_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setattr(litellm, "kafka_params", {"bootstrap_servers": "broker:9092", "topic": "events"})
+    first: Final = litellm_logging.init_custom_logger_compatible_class_at_startup("kafka", None, None)
+    second: Final = litellm_logging.init_custom_logger_compatible_class_at_startup("kafka", None, None)
+
+    assert first is second
+    assert isinstance(first, KafkaLogger)
+    assert CustomLoggerRegistry.get_callback_str_from_class_type(type(first)) == "kafka"
+
+
+def test_invalid_native_callback_configuration_fails_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pydantic import ValidationError
+
+    from litellm.litellm_core_utils import litellm_logging
+
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setattr(litellm, "kafka_params", {"topic": "events"})
+    with pytest.raises(ValidationError, match="bootstrap_servers"):
+        litellm_logging.init_custom_logger_compatible_class_at_startup("kafka", None, None)
+
+
+def test_enabling_kafka_without_the_optional_client_explains_how_to_install_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "confluent_kafka", None)
+    with pytest.raises(ImportError, match=r"Install litellm\[kafka\]"):
+        KafkaLogger(KafkaInitParams(bootstrap_servers="broker:9092", topic="events"))

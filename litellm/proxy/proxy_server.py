@@ -1498,6 +1498,9 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         await _drain_audit_tasks_on_shutdown()
 
     await drain_post_call_redis_batches()
+    from litellm.proxy.shutdown.kafka import close_kafka_loggers
+
+    await close_kafka_loggers(GracefulShutdownManager.remaining(5.0))
     if litellm.cache is not None:
         await litellm.cache.disconnect()
 
