@@ -15,10 +15,12 @@ import {
   within,
 } from "../../../../../tests/test-utils";
 import AppBudgetDefaults from "./AppBudgetDefaults";
-import AppSettingsPage from "../settings/page";
+import AppBudgetGroupsPage from "../budget-groups/page";
 import type { App, Budget } from "./appForms";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
+const auth = vi.hoisted(() => ({ accessToken: "test-session", userId: "user-1", userRole: "Admin" }));
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => auth }));
 const resources = ["Chat", "Support", "Search"].map((alias) => ({
   resource_type: "team",
   resource_id: alias.toLowerCase(),
@@ -37,6 +39,7 @@ let staleApps: AppFixture[] | null;
 let rejectedIds: Set<string>;
 
 beforeEach(() => {
+  auth.userRole = "Admin";
   apps = resources.slice(0, 2).map((resource, index) => ({
     ...resource,
     app_id: `app-${resource.resource_id}`,
@@ -103,10 +106,10 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-it("changes only the current app's member default from its Settings page without loading other apps", async () => {
+it("changes only the current app's member default from its Budget groups page without loading other apps", async () => {
   rejectedIds.clear();
   const user = userEvent.setup();
-  render(<AppSettingsPage />, { searchParams: "?app_id=app-chat&section=members" });
+  render(<AppBudgetGroupsPage />, { searchParams: "?app_id=app-chat" });
   const chat = within(await screen.findByRole("group", { name: "Defaults for Chat" }));
   const select = chat.getByRole("combobox", { name: "Budget group" });
   await waitFor(() => expect(select).toBeEnabled());
@@ -135,7 +138,7 @@ it("edits shared app-member templates from the app page without changing the app
     return catalog({ "member-1": "Member 1", "member-2": "Member 2" });
   });
   const user = userEvent.setup();
-  render(<AppSettingsPage />, { searchParams: "?app_id=app-chat&section=members" });
+  render(<AppBudgetGroupsPage />, { searchParams: "?app_id=app-chat" });
   const row = within(await screen.findByRole("row", { name: "Member 1" }));
   expect(screen.getByText(/These templates are shared across apps/)).toBeInTheDocument();
   fireEvent.change(row.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "500" } });
@@ -146,6 +149,13 @@ it("edits shared app-member templates from the app page without changing the app
   expect(await writes[0].json()).toMatchObject({
     default_budgets: expect.arrayContaining([expect.objectContaining({ budget_id: "member-1", tpm_limit: 500 })]),
   });
+});
+
+it.each(["Internal User", "Admin Viewer"])("keeps app budget groups inaccessible to %s", async (role) => {
+  auth.userRole = role;
+  render(<AppBudgetGroupsPage />, { searchParams: "?app_id=app-chat" });
+  expect(await screen.findByRole("alert")).toHaveTextContent("Only proxy admins");
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 async function expectWrites(

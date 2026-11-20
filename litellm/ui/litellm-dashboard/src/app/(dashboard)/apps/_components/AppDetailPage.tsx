@@ -17,20 +17,24 @@ import type { App } from "./appForms";
 
 const detailParsers = { ...customerAppParsers, ...customerUsageDateParsers };
 const detailHref = createSerializer(detailParsers);
-const pages = ["usage", "settings"] as const;
+const pages = [
+  ["usage", "customerPortal.hierarchy.usage"],
+  ["budget-groups", "customerPortal.budgetGroups.title"],
+  ["settings", "customerPortal.hierarchy.settings"],
+] as const;
 
 export default function AppDetailPage({
   active,
   children,
 }: {
-  active: (typeof pages)[number];
+  active: (typeof pages)[number][0];
   children: (app: App) => ReactNode;
 }) {
   const { t } = useTranslation();
   const [params] = useQueryStates(detailParsers);
   const { accessToken, userRole, isViewOnly, isLoading } = useAuthorized();
   const canEdit = isProxyAdminRole(userRole) && !isViewOnly;
-  const denied = active === "settings" && !canEdit;
+  const denied = active !== "usage" && !canEdit;
   const app = useQuery({
     queryKey: ["app", params.app_id],
     queryFn: async () => {
@@ -58,10 +62,10 @@ export default function AppDetailPage({
       <h1 className="text-xl font-semibold">{app.data?.alias ?? params.app_id ?? t("apps.selectApp")}</h1>
       {params.app_id && (
         <>
-          <nav aria-label={t("apps.navigation")} className="flex gap-6 border-b">
+          <nav aria-label={t("apps.navigation")} className="flex flex-wrap gap-x-6 gap-y-3 border-b">
             {pages
-              .filter((page) => page === "usage" || canEdit)
-              .map((page) => (
+              .filter(([page]) => page === "usage" || canEdit)
+              .map(([page, label]) => (
                 <a
                   key={page}
                   href={detailHref(uiHref(`apps/${page}`), params)}
@@ -71,7 +75,7 @@ export default function AppDetailPage({
                     active === page && "border-primary text-foreground",
                   )}
                 >
-                  {t(`customerPortal.hierarchy.${page}`)}
+                  {t(label)}
                 </a>
               ))}
           </nav>

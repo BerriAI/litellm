@@ -113,7 +113,7 @@ describe("CustomerBudgetGroups", () => {
       "/management/v1/app_customer_organization_budget_groups",
       "app",
     ],
-    ["App × member budget groups", "App × member", "/management/v1/app_customer_member_budget_groups", "app-member"],
+    ["Per App Member Budget Groups", "App × member", "/management/v1/app_customer_member_budget_groups", "app-member"],
   ] as const;
 
   const catalogCases = catalogs.flatMap(([title, tabTitle, endpoint, scope]) =>

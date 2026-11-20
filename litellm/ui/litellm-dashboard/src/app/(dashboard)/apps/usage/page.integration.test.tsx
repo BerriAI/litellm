@@ -116,6 +116,10 @@ it("shows app totals across paginated customers and keeps the app and dates in c
     "href",
     `${uiHref("apps/settings")}?app_id=app-chat&from=2026-11-01&to=2026-11-03`,
   );
+  expect(screen.getByRole("link", { name: "Budget groups" })).toHaveAttribute(
+    "href",
+    `${uiHref("apps/budget-groups")}?app_id=app-chat&from=2026-11-01&to=2026-11-03`,
+  );
   expect(
     within(screen.getByRole("region", { name: "Application usage totals" })).getByText("$40.00"),
   ).toBeInTheDocument();

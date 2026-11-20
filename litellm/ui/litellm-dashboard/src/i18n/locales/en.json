@@ -4,12 +4,7 @@
     "title": "Applications",
     "navigation": "Application navigation",
     "loadFailed": "The application could not be loaded.",
-    "settings": {
-      "sections": "Application settings",
-      "budget": "App budget & controls",
-      "members": "App × member budget groups",
-      "sharedGroupsHint": "These templates are shared across apps. Editing a template updates the limits for every member using it. Choose this app's default below."
-    },
+    "sharedMemberGroupsHint": "These templates are shared across apps. Editing a template updates the limits for every member using it. Choose this app's default below.",
     "usage": {
       "totals": "Application usage totals",
       "hint": "Usage for this application across all customer organizations in the selected period.",
@@ -21042,7 +21037,7 @@
       "help": "Each customer organization gets these limits separately within an app. Blank means no limit."
     },
     "appMemberGroups": {
-      "title": "App × member budget groups",
+      "title": "Per App Member Budget Groups",
       "help": "Reusable per-member allowances for apps. Each member receives these limits independently with their own usage counters. Choose a default separately for each app below."
     },
     "tokenUsage": {
