@@ -128,6 +128,26 @@ async def test_a_full_max_parallel_requests_client_turns_the_next_call_away(make
     assert limit.in_flight == 0
 
 
+def test_max_parallel_requests_client_retains_live_counter_across_ttl_expiry(make_core: MakeCore) -> None:
+    """A slot counter preserves in_flight and identity when its cache entry expires while requests are active."""
+    core: Final = make_core(model_list=[deployment("g", "a", max_parallel_requests=2)], default_in_memory_ttl=10)
+    entry: Final = deployment("g", "a", max_parallel_requests=2)
+    limit: Final = core.registry().client(entry, client_type="max_parallel_requests")
+    assert isinstance(limit, MaxParallelRequestsLimit)
+    limit.acquire()
+    assert limit.in_flight == 1
+
+    in_memory = getattr(core.routing_cache, "in_memory_cache", None)
+    if in_memory is not None:
+        in_memory._clock = lambda: 10000000000.0  # pyright: ignore[reportPrivateUsage]
+
+    refetched: Final = core.registry().client(entry, client_type="max_parallel_requests")
+    assert refetched is limit
+    assert refetched.in_flight == 1
+    limit.release()
+    assert limit.in_flight == 0
+
+
 # --- registry().plugins("routing") and zero_cost() ------------------------------------------------
 
 
