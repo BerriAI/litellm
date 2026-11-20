@@ -4,6 +4,8 @@
 
 use std::collections::BTreeSet;
 
+use super::surface::Surface;
+
 /// The Microsoft Entra credential fields the Azure provider resolves through `get_secret`. They
 /// stay usable as plain metadata tags, where no provider reads them.
 pub(crate) const ENTRA_CREDENTIAL_PARAMS: [&str; 6] = [
@@ -27,6 +29,12 @@ pub(crate) const NESTED_CONFIG_KEYS: [&str; 2] = ["litellm_embedding_config", "e
 
 /// Mappings the observability callbacks read per-request configuration from.
 pub(crate) const METADATA_KEYS: [&str; 2] = ["metadata", "litellm_metadata"];
+
+pub(crate) const FALLBACK_FIELDS: [&str; 3] = [
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+];
 
 pub(crate) const BUCKET_PARAMS: [&str; 2] = ["s3_bucket_name", "s3_output_bucket_name"];
 pub(crate) const ENDPOINT_URL_PARAM: &str = "s3_endpoint_url";
@@ -102,12 +110,71 @@ const OVERRIDE_PARAMS: &[&str] = &[
     "github_copilot_user_session",
 ];
 
+/// Root keys of a model call that carry what the caller says to the model. Their text reaches the
+/// provider's payload and is never read as a parameter, so a string there that looks like a secret
+/// reference is only text.
+const CONTENT_KEYS: &[&str] = &[
+    "messages",
+    "input",
+    "prompt",
+    "instructions",
+    "system",
+    "tools",
+    "functions",
+    "tool_choice",
+    "function_call",
+    "response_format",
+    "stop",
+    "stop_sequences",
+    "suffix",
+    "prediction",
+    "text",
+    "query",
+    "documents",
+    "document",
+    "contents",
+    "systemInstruction",
+    "system_instruction",
+    "toolConfig",
+    "tool_config",
+    "generationConfig",
+    "generation_config",
+    "safetySettings",
+    "safety_settings",
+    "image",
+    "images",
+    "mask",
+    "file",
+    "voice",
+    "user",
+    "name",
+    "description",
+    "conversation",
+    "output_config",
+    "output_format",
+    "thinking",
+    "reasoning",
+    "tags",
+];
+
+pub(crate) fn is_content_key(key: &str) -> bool {
+    CONTENT_KEYS.contains(&key)
+}
+
 /// Root keys whose value is a mapping the check walks.
 fn is_container_key(key: &str) -> bool {
     NESTED_CONFIG_KEYS.contains(&key)
         || METADATA_KEYS.contains(&key)
         || key == "user_config"
         || key == "litellm_params"
+}
+
+/// `metadata`, `litellm_metadata`, and the `metadata[tags]` spelling a form gives their entries.
+pub(crate) fn is_metadata_key(key: &str) -> bool {
+    METADATA_KEYS.iter().any(|metadata| {
+        key.strip_prefix(metadata)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('['))
+    })
 }
 
 /// How much of the value under a root key a host reads into [`super::Params`].
@@ -204,9 +271,17 @@ impl Names {
         &self.metadata_overrides
     }
 
-    /// How much of the value under a root key a host reads. A rule reads a value only under a
-    /// name it knows, and a body's content can be megabytes of text under names it does not.
-    pub fn reading(&self, key: &str) -> Reading {
+    /// How much of the value under a root key a host reads. A model call is read everywhere
+    /// outside its content, which can be megabytes of text. Any other body is read only under
+    /// the names a rule knows.
+    pub fn reading(&self, surface: &Surface, key: &str) -> Reading {
+        if surface.model_call {
+            return if is_content_key(key) {
+                Reading::Unread
+            } else {
+                Reading::Deep
+            };
+        }
         if is_container_key(key) {
             Reading::Deep
         } else if self.resolves_secrets(key) || key == CREDENTIAL_NAME || key == API_KEY {
@@ -327,11 +402,42 @@ mod tests {
     #[case::caller_supplied_router("user_config", Reading::Deep)]
     #[case::content("messages", Reading::Unread)]
     #[case::unknown_param("some_provider_param", Reading::Unread)]
-    fn a_host_reads_only_the_values_a_rule_looks_at(
+    fn a_host_reads_only_the_values_a_rule_looks_at_outside_a_model_call(
         names: Names,
         #[case] key: &str,
         #[case] expected: Reading,
     ) {
-        assert_eq!(names.reading(key), expected);
+        assert_eq!(
+            names.reading(&Surface::of(Some("/key/generate")), key),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::content("messages", Reading::Unread)]
+    #[case::tool_schemas("tools", Reading::Unread)]
+    #[case::override_param("api_base", Reading::Deep)]
+    #[case::unknown_param("some_provider_param", Reading::Deep)]
+    #[case::metadata("metadata", Reading::Deep)]
+    fn a_host_reads_a_model_call_everywhere_outside_its_content(
+        names: Names,
+        #[case] key: &str,
+        #[case] expected: Reading,
+    ) {
+        assert_eq!(names.reading(&Surface::of(None), key), expected);
+    }
+
+    #[rstest]
+    #[case::bare("metadata", true)]
+    #[case::litellm("litellm_metadata", true)]
+    #[case::form_entry("metadata[tags]", true)]
+    #[case::litellm_form_entry("litellm_metadata[spend_logs_metadata][owner]", true)]
+    #[case::longer_name("metadata_extra", false)]
+    #[case::unrelated("model", false)]
+    fn a_metadata_key_is_a_container_or_one_of_its_form_entries(
+        #[case] key: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(is_metadata_key(key), expected);
     }
 }

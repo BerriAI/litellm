@@ -14,6 +14,8 @@ pub enum CallerValue {
     Text(String),
     List(Vec<CallerValue>),
     Map(Params),
+    /// A list or mapping below the depth the host reads a body to, so what it holds is unknown.
+    TooDeep,
     /// A number, a flag, an uploaded file, or a value no rule reads, such as message content.
     Other,
 }
@@ -22,21 +24,21 @@ impl CallerValue {
     pub fn text(&self) -> Option<&str> {
         match self {
             Self::Text(text) => Some(text),
-            Self::Null | Self::List(_) | Self::Map(_) | Self::Other => None,
+            Self::Null | Self::List(_) | Self::Map(_) | Self::TooDeep | Self::Other => None,
         }
     }
 
     pub fn map(&self) -> Option<&Params> {
         match self {
             Self::Map(params) => Some(params),
-            Self::Null | Self::Text(_) | Self::List(_) | Self::Other => None,
+            Self::Null | Self::Text(_) | Self::List(_) | Self::TooDeep | Self::Other => None,
         }
     }
 
     pub fn list(&self) -> Option<&[CallerValue]> {
         match self {
             Self::List(items) => Some(items),
-            Self::Null | Self::Text(_) | Self::Map(_) | Self::Other => None,
+            Self::Null | Self::Text(_) | Self::Map(_) | Self::TooDeep | Self::Other => None,
         }
     }
 
@@ -57,6 +59,27 @@ impl CallerValue {
         self.text()
             .is_some_and(|text| text.starts_with(OIDC_REFERENCE_PREFIX))
     }
+
+    /// The first thing here or anywhere below that keeps a check from clearing this value.
+    pub(crate) fn concealed(&self) -> Option<Concealed> {
+        match self {
+            Self::Text(_) => self
+                .is_secret_reference()
+                .then_some(Concealed::SecretReference),
+            Self::List(items) => items.iter().find_map(Self::concealed),
+            Self::Map(params) => params.iter().find_map(|(_, value)| value.concealed()),
+            Self::TooDeep => Some(Concealed::BelowReadDepth),
+            Self::Null | Self::Other => None,
+        }
+    }
+}
+
+/// Why a value cannot be cleared by a check that reads every level of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Concealed {
+    SecretReference,
+    /// Part of it sits below the depth the host read, where a reference could hide.
+    BelowReadDepth,
 }
 
 /// Shows the shape alone, since a caller's own credential may sit in the text.
@@ -67,6 +90,7 @@ impl fmt::Debug for CallerValue {
             Self::Text(_) => formatter.write_str("Text(..)"),
             Self::List(items) => formatter.debug_list().entries(items).finish(),
             Self::Map(params) => params.fmt(formatter),
+            Self::TooDeep => formatter.write_str("TooDeep"),
             Self::Other => formatter.write_str("Other"),
         }
     }
@@ -136,6 +160,30 @@ mod tests {
     #[case::other_case("OS.ENVIRON/HOME", false)]
     fn a_string_is_a_secret_reference_only_by_prefix(#[case] value: &str, #[case] expected: bool) {
         assert_eq!(text(value).is_secret_reference(), expected);
+    }
+
+    #[rstest]
+    #[case::in_a_list(
+        CallerValue::List(vec![text("plain"), text("oidc/google/aud")]),
+        Some(Concealed::SecretReference)
+    )]
+    #[case::in_a_nested_map(
+        CallerValue::Map(Params::from_iter([(
+            "parameters".to_owned(),
+            CallerValue::Map(Params::from_iter([("key".to_owned(), text("os.environ/KEY"))])),
+        )])),
+        Some(Concealed::SecretReference)
+    )]
+    #[case::below_the_read_depth(
+        CallerValue::List(vec![text("plain"), CallerValue::List(vec![CallerValue::TooDeep])]),
+        Some(Concealed::BelowReadDepth)
+    )]
+    #[case::nowhere(CallerValue::List(vec![text("plain"), CallerValue::Other]), None)]
+    fn a_value_conceals_a_reference_or_an_unread_depth_at_any_level(
+        #[case] value: CallerValue,
+        #[case] expected: Option<Concealed>,
+    ) {
+        assert_eq!(value.concealed(), expected);
     }
 
     #[test]
