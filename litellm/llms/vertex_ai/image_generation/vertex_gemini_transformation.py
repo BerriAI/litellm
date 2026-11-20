@@ -6,7 +6,6 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.images.fan_out import image_request_count
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -16,8 +15,14 @@ from litellm.llms.gemini.common_utils import (
     map_gemini_image_tools_params,
 )
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size, pop_vertex_request_labels
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, pop_vertex_request_labels
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.gemini_image_params import (
+    UnsupportedImageParam,
+    map_vertex_gemini_image_params,
+    raise_unsupported_image_param,
+    vertex_gemini_image_config,
+)
 from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -40,6 +45,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
     Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
 )
+_OPENAI_ONLY_PARAMS: Final = ("background", "moderation", "output_compression")
 
 
 class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -71,6 +77,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "image_size",
             "tools",
             "web_search_options",
+            *_OPENAI_ONLY_PARAMS,
         ]
 
     def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
@@ -83,45 +90,18 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params: Final = self.get_supported_openai_params(model)
-        mapped_params = {}
-
-        for k, v in non_default_params.items():
-            if k not in optional_params:
-                if k in supported_params:
-                    # Map OpenAI parameters to Gemini format
-                    if k == "n":
-                        mapped_params["n"] = v
-                    elif k == "size":
-                        continue
-                    elif k in ("aspectRatio", "aspect_ratio"):
-                        mapped_params["aspectRatio"] = v
-                    elif k in ("imageSize", "image_size"):
-                        mapped_params["imageSize"] = v
-                    elif k == "imageConfig":
-                        if isinstance(v, dict):
-                            mapped_params["imageConfig"] = v
-                        else:
-                            verbose_logger.warning("imageConfig must be a dict, got %s — ignoring.", type(v).__name__)
-                    elif k not in ("tools", "web_search_options", "imageConfig"):
-                        mapped_params[k] = v
-
-        if "size" in non_default_params and "size" not in optional_params:
-            image_params: Final = _JSON_OBJECT.validate_python(mapped_params)
-            image_config: Final = _JSON_OBJECT.validate_python(image_params.get("imageConfig", {}))
-            size_params: Final = {
-                key: value
-                for key, value in (
-                    map_vertex_image_size(non_default_params["size"], model) or {"aspectRatio": "1:1"}
-                ).items()
-                if key not in image_config
-            }
-            return map_gemini_image_tools_params(
-                _JSON_OBJECT.validate_python(non_default_params), {**size_params, **image_params}
-            )
-
-        mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
-        return mapped_params
+        requested: Final = _JSON_OBJECT.validate_python(non_default_params)
+        unsupported_param: Final = next((param for param in _OPENAI_ONLY_PARAMS if param in requested), None)
+        if unsupported_param is not None and not drop_params:
+            raise_unsupported_image_param(UnsupportedImageParam(unsupported_param, "is not supported"), model)
+        params: Final = {key: value for key, value in requested.items() if key not in optional_params}
+        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params)
+        if isinstance(image_params, UnsupportedImageParam):
+            raise_unsupported_image_param(image_params, model)
+        return map_gemini_image_tools_params(
+            requested,
+            {**({"n": params["n"]} if "n" in params else {}), **image_params},
+        )
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -234,19 +214,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         # Prepare generation config
         generation_config: Final[dict[str, object]] = {"responseModalities": ["IMAGE"]}
 
-        # Seed from user-supplied imageConfig dict; flat params are overlaid for backward compat.
-        image_config: Final[dict[str, object]] = dict(optional_params.get("imageConfig") or {})
-
-        if "aspectRatio" in optional_params:
-            image_config["aspectRatio"] = optional_params["aspectRatio"]
-        elif "aspect_ratio" in optional_params:
-            image_config["aspectRatio"] = optional_params["aspect_ratio"]
-
-        if "imageSize" in optional_params:
-            image_config["imageSize"] = optional_params["imageSize"]
-        elif "image_size" in optional_params:
-            image_config["imageSize"] = optional_params["image_size"]
-
+        params: Final = _JSON_OBJECT.validate_python(optional_params)
+        image_config: Final = vertex_gemini_image_config(params)
         if image_config:
             generation_config["imageConfig"] = image_config
 
@@ -258,7 +227,6 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "generationConfig": generation_config,
         }
 
-        params: Final = _JSON_OBJECT.validate_python(optional_params)
         optional_fields: Final = {
             "tools": params.get("tools"),
             "toolConfig": params.get("toolConfig"),
