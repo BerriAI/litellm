@@ -41,6 +41,7 @@ import litellm
 
 litellm.kafka_params = {
     "bootstrap_servers": "localhost:9092",
+    "security_protocol": "PLAINTEXT",
     "topic": "litellm_events",
     "turn_off_message_logging": True,
 }
@@ -69,7 +70,7 @@ when the first record is produced.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `security_protocol` | `PLAINTEXT` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT` or `SASL_SSL` |
+| `security_protocol` | `SSL` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT` or `SASL_SSL` |
 | `sasl_mechanism` | `PLAIN` | `PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512` |
 | `ssl_ca_location` | system trust | PEM CA file or directory |
 | `ssl_certificate_location`, `ssl_key_location` | unset | PEM client certificate and key for mutual TLS |
@@ -89,7 +90,10 @@ when the first record is produced.
 | `enable_idempotence` | `true` | Broker deduplication of retries within a producer session |
 | `flush_timeout` | `5.0` | Maximum seconds for a flush or close |
 
-TLS verifies both the certificate chain and broker hostname. SASL passwords are
+TLS is enabled by default and verifies both the certificate chain and broker
+hostname. Set `PLAINTEXT` or `SASL_PLAINTEXT` explicitly only when unencrypted
+transport is acceptable for your deployment. The localhost SDK example opts in
+to plaintext for a local development broker. SASL passwords are
 passed to the Kafka client and masked in configuration representations. The
 integration does not support Kerberos or OAuth token refresh.
 
@@ -137,6 +141,9 @@ provide a durable outbox or end-to-end exactly-once delivery. Consumers should
 retain Kafka coordinates and deduplicate replayed records.
 
 ## Analysis fields and existing persistence
+
+See the [message format reference](message-format.md) for a complete JSON event,
+field descriptions, nullable values, redaction and field-exclusion scope.
 
 The Kafka value is the existing standard payload, without a vendor-specific
 envelope. Its key is `litellm_call_id`, falling back to `id`. Important paths are

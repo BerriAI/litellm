@@ -11,7 +11,7 @@ class KafkaInitParams(StandardCustomLoggerInitParams):
 
     bootstrap_servers: str = Field(min_length=1)
     topic: str = Field(pattern=r"^[a-zA-Z0-9._-]{1,249}$")
-    security_protocol: Literal["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"] = "PLAINTEXT"
+    security_protocol: Literal["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"] = "SSL"
     sasl_mechanism: Literal["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"] = "PLAIN"
     sasl_username: str | None = None
     sasl_password: SecretStr | None = None

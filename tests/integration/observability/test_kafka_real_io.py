@@ -90,7 +90,9 @@ def broker() -> Generator[Broker]:
 
 @pytest.mark.parametrize("status", ["success", "failure"])
 def test_native_client_delivers_standard_json_and_correlation_over_kafka(broker: Broker, status: str) -> None:
-    logger: Final = KafkaLogger(KafkaInitParams(bootstrap_servers=broker.servers, topic=broker.topic))
+    logger: Final = KafkaLogger(
+        KafkaInitParams(bootstrap_servers=broker.servers, topic=broker.topic, security_protocol="PLAINTEXT")
+    )
     consumer: Final = Consumer(
         {"bootstrap.servers": broker.servers, "group.id": uuid4().hex, "enable.auto.commit": False, "log_level": 0}
     )
@@ -135,6 +137,7 @@ def test_native_delivery_timeout_reports_a_drop_without_raising(broker: Broker) 
     _ = broker.owner.close()
     logger: Final = KafkaLogger(
         KafkaInitParams(
+            security_protocol="PLAINTEXT",
             bootstrap_servers=broker.servers,
             topic=broker.topic,
             request_timeout_ms=500,
@@ -156,6 +159,7 @@ def test_native_queue_limit_drops_extra_events_during_a_broker_outage(broker: Br
     _ = broker.owner.close()
     logger: Final = KafkaLogger(
         KafkaInitParams(
+            security_protocol="PLAINTEXT",
             bootstrap_servers=broker.servers,
             topic=broker.topic,
             queue_max_messages=1,
@@ -182,6 +186,7 @@ def test_native_retry_recovers_after_a_dropped_bootstrap_connection_without_resu
         server.start()
         logger: Final = KafkaLogger(
             KafkaInitParams(
+                security_protocol="PLAINTEXT",
                 bootstrap_servers=f"127.0.0.1:{relay.server_address[1]}",
                 topic=broker.topic,
                 request_timeout_ms=1000,
@@ -233,7 +238,7 @@ from datetime import datetime, timezone
 from litellm.integrations.kafka import KafkaLogger
 from litellm.types.integrations.kafka import KafkaInitParams
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-logger = KafkaLogger(KafkaInitParams(bootstrap_servers={broker.servers!r}, topic={broker.topic!r}))
+logger = KafkaLogger(KafkaInitParams(bootstrap_servers={broker.servers!r}, topic={broker.topic!r}, security_protocol="PLAINTEXT"))
 now = datetime(2025, 1, 1, tzinfo=timezone.utc)
 if {prime_producer!r}:
     logger.log_success_event({{"standard_logging_object": {{"id": "already-enqueued"}}}}, None, now, now)

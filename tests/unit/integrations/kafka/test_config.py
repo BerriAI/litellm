@@ -84,8 +84,27 @@ def test_mutual_tls_forwards_the_client_certificate_and_encrypted_key() -> None:
     assert config["ssl.endpoint.identification.algorithm"] == "https"
 
 
+@pytest.mark.parametrize("protocol", [None, "PLAINTEXT"])
+def test_transport_defaults_to_verified_tls_and_plaintext_requires_opt_in(protocol: str | None) -> None:
+    params: Final = resolve_params(
+        {
+            "bootstrap_servers": "broker:9092",
+            "topic": "events",
+            **({"security_protocol": protocol} if protocol else {}),
+        },
+        lambda _: None,
+    )
+    config: Final = producer_config(params)
+
+    assert config["security.protocol"] == (protocol or "SSL")
+    assert config["enable.ssl.certificate.verification"] is True
+    assert config["ssl.endpoint.identification.algorithm"] == "https"
+
+
 def test_plaintext_configuration_does_not_send_a_sasl_mechanism() -> None:
-    config: Final = producer_config(KafkaInitParams(bootstrap_servers="broker:9092", topic="events"))
+    config: Final = producer_config(
+        KafkaInitParams(bootstrap_servers="broker:9092", topic="events", security_protocol="PLAINTEXT")
+    )
 
     assert not any(name.startswith("sasl.") for name in config)
 

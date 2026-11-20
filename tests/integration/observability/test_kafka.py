@@ -69,6 +69,7 @@ def test_kafka_export_preserves_pg_spend_and_virtual_key_counters(gateway: Gatew
                     "litellm_settings": {
                         "callbacks": ["kafka"],
                         "kafka_params": {
+                            "security_protocol": "PLAINTEXT",
                             "bootstrap_servers": servers if mode == "healthy" else f"127.0.0.1:{allocate_port()}",
                             "topic": topic,
                             "turn_off_message_logging": True,
