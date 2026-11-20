@@ -1,10 +1,28 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { registerAuthTokenGetter } from "@/lib/http/runtime";
 import { setGlobalLitellmHeaderName, switchToWorkerUrl } from "@/components/networking";
 import { EmbeddedLens } from "./EmbeddedLens";
+import { Sidebar, SidebarContent, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { GatewayLensNavigationProvider, GatewayLensNavigationTarget } from "./GatewayLensNavigation";
+
+function GatewayLensShell({ collapsed = false }: { readonly collapsed?: boolean }) {
+  return (
+    <SidebarProvider defaultOpen={!collapsed}>
+      <GatewayLensNavigationProvider>
+        <Sidebar collapsible="icon" role="complementary" aria-label="Gateway navigation">
+          <SidebarContent>
+            <GatewayLensNavigationTarget />
+          </SidebarContent>
+        </Sidebar>
+        <SidebarTrigger />
+        <EmbeddedLens accessToken="gateway-session" userRole="Admin" readOnly={false} />
+      </GatewayLensNavigationProvider>
+    </SidebarProvider>
+  );
+}
 
 const network = vi.fn<typeof fetch>();
 
@@ -23,6 +41,37 @@ afterEach(() => {
   switchToWorkerUrl(null);
   setGlobalLitellmHeaderName();
   vi.unstubAllGlobals();
+});
+
+it("should render Lens views in the gateway navigation and preserve their URL state", async () => {
+  const user = userEvent.setup();
+  const onUrlUpdate = vi.fn();
+  renderWithProviders(<GatewayLensShell />, { searchParams: "?demo=true&tab=traces", onUrlUpdate });
+
+  const gatewayNavigation = within(screen.getByRole("complementary", { name: "Gateway navigation" }));
+  expect(await gatewayNavigation.findByRole("tab", { name: "Traces", selected: true })).toBeVisible();
+  expect(screen.getAllByRole("tablist", { name: "Lens" })).toHaveLength(1);
+  await user.click(gatewayNavigation.getByRole("tab", { name: "Findings" }));
+  expect(await screen.findByRole("grid", { name: "Findings" })).toBeVisible();
+  expect(gatewayNavigation.getByRole("tab", { name: "Findings", selected: true })).toBeVisible();
+  await waitFor(() => expect(String(onUrlUpdate.mock.lastCall?.[0].queryString)).toContain("tab=findings"));
+
+  await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
+  expect(gatewayNavigation.getByRole("tab", { name: "Findings", selected: true })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
+  expect(gatewayNavigation.getByRole("tab", { name: "Findings", selected: true })).toBeVisible();
+});
+
+it("should close the gateway mobile drawer after selecting a Lens view", async () => {
+  vi.stubGlobal("innerWidth", 390);
+  const user = userEvent.setup();
+  renderWithProviders(<GatewayLensShell collapsed />, { searchParams: "?demo=true&tab=traces" });
+
+  await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
+  const drawer = within(await screen.findByRole("dialog", { name: "Sidebar" }));
+  await user.click(await drawer.findByRole("tab", { name: "Findings" }));
+  expect(await screen.findByRole("grid", { name: "Findings" })).toBeVisible();
+  expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
 });
 
 it("renders the published Lens settings and uses the gateway session, prefix, and public contract", async () => {
