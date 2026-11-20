@@ -2730,6 +2730,8 @@ def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
     llm_provider: str,
+    *,
+    replays_mcp_calls: bool = True,
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -2756,7 +2758,7 @@ def anthropic_messages_pt(
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
-    mcp_replay: Final = mcp_replay_plan(messages)
+    mcp_replay: Final = mcp_replay_plan(messages, replays_mcp_calls=replays_mcp_calls)
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
 

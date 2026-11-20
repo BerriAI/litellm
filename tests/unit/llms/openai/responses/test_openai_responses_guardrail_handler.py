@@ -25,6 +25,7 @@ from openai.types.responses import (
     ResponseCustomToolCallInputDoneEvent,
     ResponseFunctionToolCall,
 )
+from openai.types.responses.response_output_item import McpCall
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -34,6 +35,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -46,6 +48,7 @@ from litellm.types.responses.main import (
     OutputText,
     OutputToolSearchCall,
 )
+from litellm.types.guardrails import BlockedWord, ContentFilterAction
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 
@@ -741,6 +744,180 @@ class TestOpenAIResponsesHandlerOutputProcessing:
 
         # Should return unchanged response
         assert result == response
+
+
+def _persimmon_masking_filter() -> ContentFilterGuardrail:
+    return ContentFilterGuardrail(
+        guardrail_name="mask-persimmon",
+        blocked_words=[BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK)],
+    )
+
+
+def _message_item(text: str) -> dict:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+
+
+def _mcp_call(item_id: str, arguments: str = "{}", **fields: str) -> McpCall:
+    return McpCall(
+        id=item_id,
+        type="mcp_call",
+        server_label="orchard",
+        name="lookup",
+        arguments=arguments,
+        status="failed" if "error" in fields else "completed",
+        **fields,
+    )
+
+
+class TestMcpCallResultsReachOutputGuardrails:
+    @pytest.mark.asyncio
+    async def test_mcp_call_arguments_output_and_error_are_masked_and_the_message_keeps_its_text(self) -> None:
+        response: Final = {
+            "output": [
+                _message_item("a fig"),
+                _mcp_call("mcp_toolu_1", arguments='{"fruit": "persimmon"}', output="two persimmon trees"),
+                _mcp_call("mcp_toolu_2", error="persimmon orchard unreachable"),
+            ]
+        }
+
+        await OpenAIResponsesHandler().process_output_response(
+            response, _persimmon_masking_filter(), request_data={"metadata": {}}
+        )
+
+        answered, failed = response["output"][1], response["output"][2]
+        assert "persimmon" not in answered.arguments and "fruit" in answered.arguments
+        assert "persimmon" not in answered.output and "trees" in answered.output
+        assert "persimmon" not in failed.error and "unreachable" in failed.error
+        assert response["output"][0]["content"][0]["text"] == "a fig"
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_masks_each_mcp_call_in_its_own_done_event_when_the_envelope_orders_items_differently(
+        self,
+    ) -> None:
+        streamed: Final = _mcp_call("mcp_toolu_1", output="two persimmon trees")
+        streamed_failure: Final = _mcp_call("mcp_toolu_2", error="persimmon orchard unreachable")
+        in_envelope: Final = streamed.model_copy()
+        failure_in_envelope: Final = streamed_failure.model_copy()
+        events: Final[list[object]] = [
+            {"type": "response.output_item.done", "output_index": 0, "item": streamed},
+            {"type": "response.output_item.done", "output_index": 1, "item": streamed_failure},
+            {"type": "response.output_item.done", "output_index": 2, "item": _message_item("a fig")},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "claude",
+                    "output": [_message_item("a fig"), failure_in_envelope, in_envelope],
+                },
+            },
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=_persimmon_masking_filter(),
+            request_data={"metadata": {}},
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert "persimmon" not in streamed.output and "trees" in streamed.output
+        assert "persimmon" not in streamed_failure.error and "unreachable" in streamed_failure.error
+        assert (in_envelope, failure_in_envelope) == (streamed, streamed_failure)
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_masks_mcp_call_arguments_in_their_delta_and_done_events(self) -> None:
+        arguments: Final = '{"fruit": "persimmon"}'
+        streamed: Final = _mcp_call("mcp_toolu_1", arguments=arguments, output="two trees")
+        delta_event: Final = {
+            "type": "response.mcp_call_arguments.delta",
+            "output_index": 0,
+            "item_id": "mcp_toolu_1",
+            "delta": arguments,
+        }
+        done_event: Final = {
+            "type": "response.mcp_call_arguments.done",
+            "output_index": 0,
+            "item_id": "mcp_toolu_1",
+            "arguments": arguments,
+        }
+        events: Final[list[object]] = [
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": streamed.model_copy(update={"arguments": ""}),
+            },
+            delta_event,
+            done_event,
+            {"type": "response.output_item.done", "output_index": 0, "item": streamed},
+            {"type": "response.output_item.done", "output_index": 1, "item": _message_item("a fig")},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "claude",
+                    "output": [streamed.model_copy(), _message_item("a fig")],
+                },
+            },
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=_persimmon_masking_filter(),
+            request_data={"metadata": {}},
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert "persimmon" not in streamed.arguments and "fruit" in streamed.arguments
+        assert delta_event["delta"] == done_event["arguments"] == streamed.arguments
+
+
+class TestReplayedMcpCallsReachInputGuardrails:
+    @pytest.mark.asyncio
+    async def test_replayed_mcp_call_output_and_error_are_masked_before_the_request_goes_upstream(self) -> None:
+        data: Final = {
+            "model": "claude",
+            "input": [
+                {"role": "user", "content": "Look up the orchard"},
+                _mcp_call(
+                    "mcp_mcptoolu_1", arguments='{"fruit": "persimmon"}', output="two persimmon trees"
+                ).model_dump(exclude_none=True),
+                _mcp_call("mcp_mcptoolu_2", error="persimmon orchard unreachable").model_dump(exclude_none=True),
+                {"role": "user", "content": "How many trees?"},
+            ],
+        }
+
+        await OpenAIResponsesHandler().process_input_messages(data, _persimmon_masking_filter())
+
+        answered, failed = data["input"][1], data["input"][2]
+        assert "persimmon" not in answered["arguments"] and "fruit" in answered["arguments"]
+        assert "persimmon" not in answered["output"] and "trees" in answered["output"]
+        assert "persimmon" not in failed["error"] and "unreachable" in failed["error"]
+        assert data["input"][3] == {"role": "user", "content": "How many trees?"}
+
+    @pytest.mark.asyncio
+    async def test_replayed_mcp_call_arguments_sent_as_an_object_are_masked_before_the_request_goes_upstream(
+        self,
+    ) -> None:
+        data: Final = {
+            "model": "claude",
+            "input": [
+                {"role": "user", "content": "Look up the orchard"},
+                {
+                    **_mcp_call("mcp_mcptoolu_1", output="two trees").model_dump(exclude_none=True),
+                    "arguments": {"fruit": "persimmon"},
+                },
+            ],
+        }
+
+        await OpenAIResponsesHandler().process_input_messages(data, _persimmon_masking_filter())
+
+        masked_arguments: Final = json.loads(data["input"][1]["arguments"])
+        assert list(masked_arguments) == ["fruit"] and "persimmon" not in masked_arguments["fruit"]
 
 
 class TestOpenAIResponsesHandlerHelperMethods:

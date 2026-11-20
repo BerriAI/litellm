@@ -66,6 +66,24 @@ class _PassingGuardrail(CustomGuardrail):
         return inputs
 
 
+class _PersimmonBlockingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        if any("persimmon" in text for text in inputs.get("texts", [])):
+            raise ModifyResponseException(
+                message=BLOCK_MESSAGE,
+                model="claude-haiku-5-5",
+                request_data=request_data,
+                guardrail_name=self.guardrail_name,
+            )
+        return inputs
+
+
 def _chat_chunk(delta: Delta, finish_reason: Optional[str] = None) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-live",
@@ -325,3 +343,82 @@ async def test_responses_end_of_stream_block_reports_original_usage():
     assert completed["id"] == "resp_live"
     assert completed["output"][0]["content"][0]["text"] == BLOCK_MESSAGE
     assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
+
+
+async def _responses_stream_ending_with_an_mcp_call() -> AsyncGenerator[JsonPayload, None]:
+    answer = "The orchard is listed."
+    yield {"type": "response.created", "response": {"id": "resp_mcp", "status": "in_progress", "output": []}}
+    yield {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {"id": "msg_mcp", "type": "message", "role": "assistant", "content": []},
+    }
+    yield {
+        "type": "response.content_part.added",
+        "item_id": "msg_mcp",
+        "output_index": 0,
+        "content_index": 0,
+        "part": {"type": "output_text", "text": "", "annotations": []},
+    }
+    yield {
+        "type": "response.output_text.delta",
+        "item_id": "msg_mcp",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": answer,
+    }
+    yield {
+        "type": "response.output_text.done",
+        "item_id": "msg_mcp",
+        "output_index": 0,
+        "content_index": 0,
+        "text": answer,
+    }
+    yield {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_mcp",
+            "model": "claude-haiku-5-5",
+            "status": "completed",
+            "output": [
+                {
+                    "id": "msg_mcp",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": answer, "annotations": []}],
+                },
+                {
+                    "id": "mcp_mcptoolu_01",
+                    "type": "mcp_call",
+                    "server_label": "orchard",
+                    "name": "lookup",
+                    "arguments": "{}",
+                    "status": "completed",
+                    "output": "two persimmon trees",
+                },
+            ],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_responses_end_of_stream_scan_blocks_mcp_output_after_a_sampled_round_scanned_the_text():
+    guardrail = _PersimmonBlockingGuardrail(guardrail_name="block-persimmon", event_hook="post_call")
+    guardrail.streaming_sampling_rate = 5
+    request_data = {
+        "input": "Look up the orchard",
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+
+    collected = [
+        chunk
+        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/responses"),
+            response=_responses_stream_ending_with_an_mcp_call(),
+            request_data=request_data,
+        )
+    ]
+
+    assert BLOCK_MESSAGE in json.dumps(_sse_payloads(tuple(collected)))

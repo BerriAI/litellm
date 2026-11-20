@@ -43,7 +43,7 @@ from litellm.caching import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -139,6 +139,7 @@ from .mcp_calls import (
     holds_mcp_call_items,
     mcp_calls_by_call_id,
     replayed_mcp_call_message,
+    without_mcp_server_tool_calls,
 )
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
@@ -146,12 +147,14 @@ from .tool_search import (
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
+    chat_config_builds_anthropic_request,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
     is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    provider_chat_config,
     request_runs_tool_search,
     route_runs_tool_search,
     tool_search_call_ids,
@@ -400,10 +403,17 @@ def _refuses_marks_on_tool_blocks(model: str, custom_llm_provider: str | None) -
 
 
 def _route_replays_mcp_calls(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
     try:
-        return provider_builds_anthropic_request(model, custom_llm_provider)
+        chat_config: Final = provider_chat_config(model, custom_llm_provider)
     except litellm.BadRequestError:
         return False
+    return (
+        chat_config_builds_anthropic_request(chat_config)
+        and isinstance(chat_config, AnthropicConfig)
+        and chat_config.runs_hosted_mcp()
+    )
 
 
 def _with_cache_control_on_last_block(
@@ -3096,10 +3106,13 @@ class LiteLLMCompletionResponsesConfig:
         # Surface provider-specific fields (generic passthrough from any provider)
         response_hidden_params: Final = get_hidden_params(responses_api_response)
         provider_fields: Final = (
-            response_hidden_params.get("provider_specific_fields") if response_hidden_params is not None else None
+            as_str_mapping(response_hidden_params.get("provider_specific_fields"))
+            if response_hidden_params is not None
+            else None
         )
-        if provider_fields:
-            setattr(responses_api_response, "provider_specific_fields", provider_fields)
+        surfaced_provider_fields: Final = without_mcp_server_tool_calls(provider_fields) if provider_fields else None
+        if surfaced_provider_fields:
+            setattr(responses_api_response, "provider_specific_fields", surfaced_provider_fields)
 
         return responses_api_response
 
@@ -3140,15 +3153,15 @@ class LiteLLMCompletionResponsesConfig:
         responses_output.extend(
             deferred_mcp_calls(tuple(message_field(choice, "message") for choice in choices), requested_mcp_calls)
         )
+        tool_output_items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=chat_completion_response,
+            responses_api_request=responses_api_request,
+        )
+        responses_output.extend(item for item in tool_output_items if isinstance(item, McpCall))
         responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
         )
-        responses_output.extend(
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
-                chat_completion_response=chat_completion_response,
-                responses_api_request=responses_api_request,
-            )
-        )
+        responses_output.extend(item for item in tool_output_items if not isinstance(item, McpCall))
 
         # Convert server-side tool results (e.g. Anthropic code execution)
         # into code_interpreter_call output items, replacing the corresponding

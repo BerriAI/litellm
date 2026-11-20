@@ -27275,6 +27275,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/OutputToolSearchOutput"
+                      },
+                      {
+                        "$ref": "#/components/schemas/McpCall"
                       }
                     ]
                   },

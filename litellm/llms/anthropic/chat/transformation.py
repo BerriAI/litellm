@@ -25,6 +25,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_items, object_mapping
+from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import holds_mcp_blocks
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     defs_unpacked,
     is_object_schema,
@@ -2240,7 +2241,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
     def update_headers_with_optional_anthropic_beta(
-        self, headers: dict, optional_params: dict, messages: Sequence[object] = ()
+        self, headers: dict[str, str], optional_params: dict, messages: Sequence[object] = ()
     ) -> dict:
         """Update headers with optional anthropic beta."""
 
@@ -2252,6 +2253,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if requires_native_compaction_beta(self._resolved_provider, optional_params, messages):
             self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
+        if holds_mcp_blocks(messages):
+            self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value)
 
         _tools: Final = optional_params.get("tools", [])
         for tool in _tools:
@@ -2397,6 +2400,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model,
                 messages=list(conversation),
                 llm_provider=self._resolved_provider,
+                replays_mcp_calls=self.runs_hosted_mcp(),
             )
         except Exception as e:
             raise AnthropicError(

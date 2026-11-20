@@ -18,6 +18,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import anth
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
 from tests.unit.llms.anthropic.anthropic_deferred_mcp_result import (
@@ -1223,8 +1224,8 @@ def test_responses_over_anthropic_return_an_mcp_connector_call_as_an_mcp_call_it
         model=_MODEL, input="List the wiki pages of facebook/react.", tools=[_DEEPWIKI_SERVER], api_key="sk-ant-fake"
     )
 
-    assert [item.type for item in response.output] == ["message", "mcp_call"]
-    assert response.output[1].model_dump(exclude_none=True) == {
+    assert [item.type for item in response.output] == ["mcp_call", "message"]
+    assert response.output[0].model_dump(exclude_none=True) == {
         "id": f"mcp_{_MCP_CALL_ID}",
         "type": "mcp_call",
         "name": "read_wiki_structure",
@@ -1232,6 +1233,97 @@ def test_responses_over_anthropic_return_an_mcp_connector_call_as_an_mcp_call_it
         "server_label": "deepwiki",
         **expected_result,
     }
+
+
+
+_WEB_SEARCH_CALL_ID: Final = "srvtoolu_01WebSearchReactFiber"
+_WEB_SEARCH_TOOL_USE: Final = {
+    "type": "server_tool_use",
+    "id": _WEB_SEARCH_CALL_ID,
+    "name": "web_search",
+    "input": {"query": "react fiber reconciler"},
+}
+
+
+def _streamed_block_events(index: int, block: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    if block["type"] == "text":
+        return (
+            {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": block["text"]}},
+            {"type": "content_block_stop", "index": index},
+        )
+    if "input" not in block:
+        return (
+            {"type": "content_block_start", "index": index, "content_block": block},
+            {"type": "content_block_stop", "index": index},
+        )
+    return (
+        {"type": "content_block_start", "index": index, "content_block": {**block, "input": {}}},
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": json.dumps(block["input"])},
+        },
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+def _anthropic_reply(stream: bool, *content: Mapping[str, object]) -> httpx.Response:
+    if not stream:
+        return _anthropic_message(*content)
+    message_start: Final = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_mcp_and_search",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    }
+    block_events: Final = chain.from_iterable(_streamed_block_events(index, block) for index, block in enumerate(content))
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=_anthropic_sse(
+            message_start,
+            *block_events,
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+            {"type": "message_stop"},
+        ),
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+def test_responses_over_anthropic_list_an_mcp_call_only_as_its_item_and_keep_other_provider_fields(
+    respx_mock: respx.MockRouter, stream: bool
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_reply(
+            stream,
+            _MCP_TOOL_USE,
+            _mcp_tool_result(False, "1 React Repository Overview"),
+            _WEB_SEARCH_TOOL_USE,
+            {"type": "text", "text": "Done."},
+        )
+    )
+
+    response: Final = litellm.responses(
+        model=_MODEL,
+        input="List the wiki pages of facebook/react.",
+        tools=[_DEEPWIKI_SERVER],
+        stream=stream,
+        api_key="sk-ant-fake",
+    )
+    completed: Final = tuple(response)[-1].response if stream else response
+
+    provider_fields: Final = completed.provider_specific_fields or {}
+    assert [item.id for item in completed.output if item.type == "mcp_call"] == [f"mcp_{_MCP_CALL_ID}"]
+    assert "server_tool_calls" not in provider_fields
+    assert "tool_results" in provider_fields
 
 
 def _mcp_call_item(item_id: str, **result: str) -> Mapping[str, object]:
@@ -1283,6 +1375,27 @@ def test_responses_over_anthropic_send_a_replayed_mcp_call_back_as_the_mcp_block
     )
 
     assert _sent_assistant_content(route) == [_MCP_TOOL_USE, expected_result_block]
+
+
+def test_responses_over_anthropic_send_a_replayed_mcp_call_with_the_mcp_beta_when_the_turn_has_no_mcp_tool(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "Page 2."})
+    )
+
+    litellm.responses(
+        model=_MODEL,
+        input=_replayed_mcp_input(
+            _mcp_call_item(f"mcp_{_MCP_CALL_ID}", status="completed", output="1 React Repository Overview")
+        ),
+        api_key="sk-ant-fake",
+    )
+
+    assert _sent_assistant_content(route) == [_MCP_TOOL_USE, _mcp_tool_result(False, "1 React Repository Overview")]
+    assert ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value in route.calls.last.request.headers[
+        "anthropic-beta"
+    ].split(",")
 
 
 def test_responses_over_anthropic_drop_a_replayed_mcp_call_that_holds_no_claude_call_id(
