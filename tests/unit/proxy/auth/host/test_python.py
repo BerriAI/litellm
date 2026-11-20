@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -11,24 +12,32 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Request
 
+from litellm import Router
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
-from litellm.proxy.auth.host.facts import AliasMissing, RegisteredAgentFacts, TeamMissing
+from litellm.proxy.auth.host.facts import AliasMissing, EndUserRow, RegisteredAgentFacts, TeamMissing
 from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.router_cooldowns import RouterCooldownStore
+from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustIdentity
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
+from tests.unit.redis.stores.auth_cache_double import shared_cache
+from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
 
 JWKS_URL: Final = "https://idp.example/jwks"
 JWT_AUTH: Final = LiteLLM_JWTAuth(user_id_jwt_field="sub")
@@ -456,3 +465,93 @@ async def test_a_registered_agent_is_found_by_name_when_no_id_matches() -> None:
     )
     assert await host.registered_agent("someone-else") is None
     assert await _host().registered_agent("billing-bot") is None
+
+
+def _router_recording_cooldown_reads() -> tuple[Router, FakeCooldowns]:
+    handle: Final = FakeCooldowns(has_redis=True)
+    router: Final = Router(
+        model_list=[
+            {"model_name": "claude", "litellm_params": {"model": "anthropic/claude-x"}, "model_info": {"id": "dep-a"}},
+            {"model_name": "other", "litellm_params": {"model": "anthropic/other"}, "model_info": {"id": "dep-other"}},
+        ]
+    )
+    router.cooldown_cache = CooldownCache(store=RouterCooldownStore(handle), default_cooldown_time=60)
+    return router, handle
+
+
+async def _identity_prefetch(host: PythonAuthHost) -> None:
+    await host.prefetch_identity("sk-test", None)
+
+
+async def _auth_object_prefetch(host: PythonAuthHost) -> None:
+    await host.prefetch_auth_objects(
+        UserAPIKeyAuth(token="hashed-key", user_id="user-1"), EndUserRow(end_user_id=None, end_user=None, params={})
+    )
+
+
+_PREFETCHES: Final = pytest.mark.parametrize(
+    "prefetch", [_identity_prefetch, _auth_object_prefetch], ids=["identity", "auth_objects"]
+)
+
+
+async def _run(prefetch: Callable[[PythonAuthHost], Awaitable[None]], host: PythonAuthHost) -> None:
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        await prefetch(host)
+
+
+def _declared(handle: FakeCooldowns) -> list[frozenset[str]]:
+    return [frozenset(ids) for ids in handle.declared]
+
+
+@pytest.mark.asyncio
+@_PREFETCHES
+@pytest.mark.parametrize(
+    ("request_data", "reads"),
+    [
+        pytest.param({"model": "claude"}, [frozenset({"dep-a"})], id="requested_model"),
+        pytest.param({}, [frozenset({"dep-a", "dep-other"})], id="no_model"),
+        pytest.param({"model": []}, [frozenset({"dep-a", "dep-other"})], id="non_string_model"),
+    ],
+)
+async def test_the_auth_prefetch_reads_the_cooldowns_of_the_deployments_the_requested_model_may_route_to(
+    monkeypatch: pytest.MonkeyPatch,
+    prefetch: Callable[[PythonAuthHost], Awaitable[None]],
+    request_data: dict[str, object],  # mutable-ok: the host takes the request body it rewrites
+    reads: list[frozenset[str]],
+) -> None:
+    router, handle = _router_recording_cooldown_reads()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    cache, _ = shared_cache()
+
+    await _run(prefetch, _host(request_data=request_data, cache=cache))
+
+    assert _declared(handle) == reads
+
+
+@pytest.mark.asyncio
+@_PREFETCHES
+async def test_the_auth_prefetch_reads_no_cooldowns_without_a_proxy_router(
+    monkeypatch: pytest.MonkeyPatch, prefetch: Callable[[PythonAuthHost], Awaitable[None]]
+) -> None:
+    captured, handle = _router_recording_cooldown_reads()
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    cache, _ = shared_cache()
+
+    await _run(prefetch, replace(_host(request_data={"model": "claude"}, cache=cache), llm_router=captured))
+
+    assert _declared(handle) == []
+
+
+@pytest.mark.asyncio
+@_PREFETCHES
+async def test_the_auth_prefetch_reads_from_the_proxy_router_current_when_it_reads_not_the_one_the_host_captured(
+    monkeypatch: pytest.MonkeyPatch, prefetch: Callable[[PythonAuthHost], Awaitable[None]]
+) -> None:
+    captured, captured_handle = _router_recording_cooldown_reads()
+    current, current_handle = _router_recording_cooldown_reads()
+    monkeypatch.setattr(proxy_server, "llm_router", current)
+    cache, _ = shared_cache()
+
+    await _run(prefetch, replace(_host(request_data={"model": "claude"}, cache=cache), llm_router=captured))
+
+    assert (_declared(captured_handle), _declared(current_handle)) == ([], [frozenset({"dep-a"})])

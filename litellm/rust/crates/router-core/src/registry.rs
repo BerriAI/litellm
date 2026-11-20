@@ -8,7 +8,7 @@ use std::{
 };
 
 use litellm_python_compat::{json, repr::float_repr, truthy::json_truthy};
-use litellm_router_types::{LitellmParams, Spelled};
+use litellm_router_types::{LitellmParams, RoutingGroupSpec, Spelled};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -36,17 +36,6 @@ pub struct DeploymentSpec {
     /// read from a config or an `apply`.
     #[serde(skip)]
     pub provider: Option<String>,
-}
-
-/// `routing_groups`: a named subset of model groups sharing a routing strategy.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct RoutingGroupSpec {
-    pub group_name: String,
-    pub models: Vec<String>,
-    pub routing_strategy: crate::config::RoutingStrategy,
-    /// A priority group's member priorities, served as each member's `order`.
-    #[serde(default)]
-    pub model_priorities: Option<BTreeMap<String, i64>>,
 }
 
 /// The `model_info` fields the router reads; every other key stays in [`Self::raw`].
@@ -988,7 +977,7 @@ impl Registry {
     pub fn resolve_routing_group_strategy(
         &self,
         group_name: &str,
-    ) -> Option<crate::config::RoutingStrategy> {
+    ) -> Option<litellm_router_types::RoutingStrategy> {
         self.routing_groups
             .iter()
             .find(|group| group.group_name == group_name)
