@@ -6585,6 +6585,13 @@ _GEMINI_OUTPUT_SPELLINGS: Final = (
     "https://example.invalid/batch-out1",
     "http://example.invalid/batch-out1?alt=media#download",
     "https%3A%2F%2Fexample.invalid%2Fbatch-out1",
+    "https://example.invalid/%23/files/batch-out1",
+    "https://example.invalid/%3F/files/batch-out1",
+    "https://generativelanguage.googleapis.com/%23/files/batch-out1",
+    "https://generativelanguage.googleapis.com/%3F/files/batch-out1",
+    "https://x%23/batch-out1",
+    "https://x%3F/batch-out1",
+    "https://x%2Ffiles%2F/batch-out1",
 )
 
 
