@@ -138,11 +138,19 @@ def test_prisma_v25_reports_unsupported_context(respx_mock: MockRouter) -> None:
         ("gnani/prisma-v3.0", {"bias_score": 1.5, "keyterms": ["x"]}, {"keyterms": b'["x"]'}),
     ],
 )
+@pytest.mark.parametrize("drop_globally", [False, True], ids=["per_call", "global"])
 def test_drop_params_drops_fields_the_model_does_not_support(
-    model: str, options: dict[str, object], kept: dict[str, bytes], respx_mock: MockRouter
+    model: str,
+    options: dict[str, object],
+    kept: dict[str, bytes],
+    drop_globally: bool,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    per_call: Final = {} if drop_globally else {"drop_params": True}
     route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
-    litellm.transcription(model=model, file=_AUDIO, api_key="test", api_base=_BASE, drop_params=True, **options)
+    litellm.transcription(model=model, file=_AUDIO, api_key="test", api_base=_BASE, **per_call, **options)
     sent: Final = _form(route.calls.last.request)
     assert {key: sent[key] for key in kept} == kept
     assert not {"topic", "bias_score"} & sent.keys()
@@ -372,6 +380,44 @@ def test_prisma_v25_rejects_keywords_gnani_would_silently_ignore(keywords: objec
     assert not respx_mock.calls
 
 
+@pytest.mark.parametrize("keywords", [[1, 2], ["Lincoln", None], "", ["  "]])
+def test_prisma_v3_rejects_keywords_that_are_not_text(keywords: object, respx_mock: MockRouter) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="non-blank strings"):
+        litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, keywords=keywords)
+    assert not respx_mock.calls
+
+
+def test_prisma_v3_takes_keywords_from_any_string_collection(respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, keywords={"Lincoln"})
+    assert _form(route.calls.last.request)["keyterms"] == b'["Lincoln"]'
+
+
+@pytest.mark.parametrize("model", [_MODEL, "gnani/prisma-v2.5"])
+def test_empty_keywords_send_no_boost(model: str, respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=model, file=_AUDIO, api_key="test", api_base=_BASE, language="hi", keywords=[])
+    assert not {"keyterms", "bias_list", "bias_score"} & _form(route.calls.last.request).keys()
+
+
+def test_additional_drop_params_drop_gnani_fields_and_never_reach_gnani(respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(
+        model=_MODEL,
+        file=_AUDIO,
+        api_key="test",
+        api_base=_BASE,
+        keywords=["Lincoln"],
+        extra_body={"topic": "math"},
+        additional_drop_params=["topic", "keywords"],
+    )
+    assert _form(route.calls.last.request) == {
+        "model": b"prisma-v3.0",
+        "language_code": b"indic-auto",
+        "audio_file": _AUDIO[1],
+    }
+
+
 def test_drop_params_drops_keywords_prisma_v25_cannot_boost(respx_mock: MockRouter) -> None:
     route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
     litellm.transcription(
@@ -415,10 +461,11 @@ def test_non_string_extra_header_values_reach_gnani_as_text(respx_mock: MockRout
         file=_AUDIO,
         api_key="request-key",
         api_base=_BASE,
-        extra_headers={"X-Num": 1, "X-Flag": True, "X-Unset": None},
+        extra_headers={"X-Num": 1, "X-Flag": True, "X-Meta": {"name": "राम"}, "X-Unset": None},
     )
     request: Final = route.calls.last.request
     assert (request.headers["X-Num"], request.headers["X-Flag"]) == ("1", "true")
+    assert json.loads(request.headers["X-Meta"]) == {"name": "राम"}
     assert "X-Unset" not in request.headers
 
 

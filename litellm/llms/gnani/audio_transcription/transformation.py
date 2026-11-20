@@ -39,6 +39,7 @@ _NOT_FORWARDED: Final = frozenset(
         "temperature",
         "extra_body",
         "extra_headers",
+        "additional_drop_params",
     )
 )
 _REGION_CODE: Final = re.compile(r"([A-Za-z]{2})-([A-Za-z]{2})")
@@ -105,53 +106,57 @@ def _is_single_word(term: str) -> bool:
     return bool(term) and all(unicodedata.category(char)[0] in "LM" for char in term)
 
 
-def _single_words(terms: object) -> tuple[str, ...] | None:
+def _is_phrase(term: str) -> bool:
+    return bool(term.strip())
+
+
+def _accepted_keywords(model: str, keywords: object) -> tuple[str, ...] | None:
     try:
-        words: Final = tuple(_STRING_LIST.validate_python(terms))
+        terms: Final = tuple(_STRING_LIST.validate_python([keywords] if isinstance(keywords, str) else keywords))
     except ValidationError:
         return None
-    return words if all(map(_is_single_word, words)) else None
+    accepts: Final = _is_single_word if _is_v25(model) else _is_phrase
+    return terms if all(map(accepts, terms)) else None
 
 
-def _with_keywords_as_keyterms(fields: Mapping[str, object], terms: object) -> Mapping[str, object]:
-    if fields.get("keyterms") is not None or fields.get("bias_list") is not None:
-        return fields
-    return {**fields, "keyterms": terms}
-
-
-def _with_keywords_as_bias_list(
-    fields: Mapping[str, object], terms: object, model: str, drops_unsupported: bool
-) -> Mapping[str, object]:
-    if fields.get("bias_list") is not None:
-        return fields
-    words: Final = _single_words(terms)
-    if words is None and drops_unsupported:
-        return fields
-    if words is None:
-        raise UnsupportedParamsError(
-            message=(
-                "Prisma v2.5 keywords must be single words made of letters only. "
-                "Use gnani/prisma-v3.0 for phrases, digits or punctuation, or set drop_params=True to drop them."
-            ),
-            model=model,
-            llm_provider="gnani",
-        )
-    bias_score: Final = fields.get("bias_score")
-    return {
-        **fields,
-        "bias_list": words,
-        "bias_score": _V25_RECOMMENDED_BIAS_SCORE if bias_score is None else bias_score,
-    }
+def _rejected_keywords(model: str) -> UnsupportedParamsError:
+    message: Final = (
+        "Prisma v2.5 keywords must be single words made of letters only. "
+        "Use gnani/prisma-v3.0 for phrases, digits or punctuation, or set drop_params=True to drop them."
+        if _is_v25(model)
+        else "Gnani keywords must be non-blank strings. Set drop_params=True to drop them."
+    )
+    return UnsupportedParamsError(message=message, model=model, llm_provider="gnani")
 
 
 def _with_keywords_as_terms(fields: Mapping[str, object], model: str, drops_unsupported: bool) -> Mapping[str, object]:
     keywords: Final = fields.get("keywords")
-    if keywords is None:
+    target: Final = "bias_list" if _is_v25(model) else "keyterms"
+    if keywords is None or fields.get("bias_list") is not None or fields.get(target) is not None:
         return fields
-    terms: Final = [keywords] if isinstance(keywords, str) else keywords
-    if _is_v25(model):
-        return _with_keywords_as_bias_list(fields, terms, model, drops_unsupported)
-    return _with_keywords_as_keyterms(fields, terms)
+    terms: Final = _accepted_keywords(model, keywords)
+    if terms is None and drops_unsupported:
+        return fields
+    if terms is None:
+        raise _rejected_keywords(model)
+    if not terms:
+        return fields
+    if not _is_v25(model):
+        return {**fields, "keyterms": terms}
+    bias_score: Final = fields.get("bias_score")
+    return {
+        **fields,
+        "bias_list": terms,
+        "bias_score": _V25_RECOMMENDED_BIAS_SCORE if bias_score is None else bias_score,
+    }
+
+
+def _without_dropped(fields: Mapping[str, object], dropped: object) -> Mapping[str, object]:
+    try:
+        names: Final = frozenset(_STRING_LIST.validate_python(dropped or ()))
+    except ValidationError:
+        return fields
+    return {key: value for key, value in fields.items() if key not in names}
 
 
 def _as_text(value: object) -> str:
@@ -160,7 +165,7 @@ def _as_text(value: object) -> str:
 
 def _caller_headers(headers: Mapping[str, object]) -> Mapping[str, str]:
     return {
-        name: _as_text(value)
+        name: value if isinstance(value, str) else json.dumps(value)
         for name, value in headers.items()
         if value is not None and name.lower() != _KEY_HEADER.lower()
     }
@@ -255,10 +260,9 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 message="Gnani transcription requires a non-empty audio file", model=model, llm_provider="gnani"
             )
         drops_unsupported: Final = litellm_params.get("drop_params") is True or litellm.drop_params is True
+        requested: Final = {**(as_str_mapping(optional_params.get("extra_body")) or {}), **optional_params}
         fields: Final = _with_keywords_as_terms(
-            _with_prompt_as_previous_text(
-                {**(as_str_mapping(optional_params.get("extra_body")) or {}), **optional_params}
-            ),
+            _with_prompt_as_previous_text(_without_dropped(requested, optional_params.get("additional_drop_params"))),
             model,
             drops_unsupported,
         )
