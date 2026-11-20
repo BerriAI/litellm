@@ -177,6 +177,7 @@ _SHELL_CALL_PART: Final = {
     "thoughtSignature": _SHELL_SIGNATURE,
 }
 _TEXT_PART: Final = {"text": "Checking the release."}
+_THOUGHT_PART: Final = {"text": "The release is on PyPI.", "thought": True}
 _SEARCH_PARTS: Final = (
     {
         "toolCall": {
@@ -374,6 +375,43 @@ async def test_streamed_gemini_web_searches_arrive_in_order_with_the_non_streami
     }
     assert len(set(added_indexes)) == len(added_indexes)
     assert added_positions[0] < added_positions[1] < first_text_position < added_positions[2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_parts",
+    [(*_SEARCH_PARTS, _TEXT_PART), (_THOUGHT_PART, *_SEARCH_PARTS)],
+    ids=["search_then_text", "thought_then_search"],
+)
+async def test_streamed_gemini_searches_sharing_a_chunk_with_the_first_output_open_in_output_order(
+    first_parts: tuple[Mapping[str, object], ...],
+) -> None:
+    with respx.mock() as mock_router:
+        mock_router.post(f"{_GEMINI_3_URL}:streamGenerateContent?alt=sse").mock(
+            return_value=_sse(_partial_body(first_parts), _searched_body([_SHELL_CALL_PART], _GROUNDING))
+        )
+        stream: Final = await litellm.aresponses(
+            model="gemini/gemini-3-flash-preview",
+            api_key="test-key",
+            input=_SEARCH_PROMPT,
+            tools=_SEARCH_AND_SHELL_TOOLS,
+            stream=True,
+        )
+        stream_events: Final = TypeAdapter(
+            AsyncIterable[object],
+            config=ConfigDict(arbitrary_types_allowed=True),
+        ).validate_python(stream)
+        events: Final = tuple(
+            [_STREAM_EVENT.validate_python(event, from_attributes=True) async for event in stream_events]
+        )
+
+    completed_output: Final = next(
+        event.response.output for event in events if event.response and event.type == "response.completed"
+    )
+    added: Final = tuple(event for event in events if event.type == "response.output_item.added" and event.item)
+
+    assert tuple(event.item.id for event in added if event.item) == tuple(item.id for item in completed_output)
+    assert tuple(event.output_index for event in added) == tuple(range(len(completed_output)))
 
 
 @pytest.mark.asyncio
