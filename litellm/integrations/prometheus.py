@@ -101,7 +101,8 @@ if TYPE_CHECKING:
         LiteLLM_EndUserTableInclude,
         LiteLLM_EndUserTableOrderByInput,
     )
-    from prometheus_client import Counter, Gauge
+    from prometheus_client import Counter as PrometheusCounter
+    from prometheus_client import Gauge
     from prometheus_client.metrics import MetricWrapperBase
 
     from litellm.proxy.utils import PrismaClient
@@ -1072,10 +1073,12 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_deployment_total_requests"),
             )
 
-            self.litellm_deployment_attempts_total: Counter | _LabeledMetric | NoOpMetric = self._counter_factory(  # pyright: ignore[reportUnknownMemberType]  # the shared factory is untyped
-                name="litellm_deployment_attempts_total",
-                documentation="Routed non-streaming Chat Completions provider call attempts, counted at completion",
-                labelnames=self.get_labels_for_metric("litellm_deployment_attempts_total"),
+            self.litellm_deployment_attempts_total: PrometheusCounter | _LabeledMetric | NoOpMetric = (
+                self._counter_factory(  # pyright: ignore[reportUnknownMemberType]  # the shared factory is untyped
+                    name="litellm_deployment_attempts_total",
+                    documentation="Routed non-streaming Chat Completions provider call attempts, counted at completion",
+                    labelnames=self.get_labels_for_metric("litellm_deployment_attempts_total"),
+                )
             )
 
             # Deployment Latency tracking
