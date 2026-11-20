@@ -779,6 +779,25 @@ class TestToolResultItemsReachTextsGuardrails:
         assert blocked.value.status_code == 400
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "output",
+        [
+            [{"type": "tool_reference", "tool_name": "get_weather"}],
+            [{"type": "input_text", "text": ""}, {"type": "tool_reference", "tool_name": "get_weather"}],
+        ],
+        ids=["reference_only", "empty_text_and_reference"],
+    )
+    async def test_tool_reference_output_without_text_is_scanned_as_its_json(self, output: object) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        call_item, output_type = _TOOL_TURNS[0]
+
+        await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(call_item, output_type, output), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Weather?", json.dumps(output)]]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(("call_item", "output_type"), _TOOL_TURNS, ids=["function", "custom"])
     @pytest.mark.parametrize(
         "empty_output",

@@ -49,6 +49,16 @@ pub trait BaseMessagesConfig: Sync {
         Ok(request)
     }
 
+    /// The request without the params the deployment says its endpoint rejects, dropped before
+    /// the transform so no beta is chosen for them.
+    fn without_rejected_params(
+        &self,
+        request: MessagesRequest,
+        _params: &LitellmParams,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
+    }
+
     fn clamp_requested_effort(
         &self,
         request: MessagesRequest,

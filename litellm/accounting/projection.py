@@ -288,7 +288,11 @@ def _window_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
             "LiteLLM_BudgetWindowSpend",
             tuple((column, _text(window[column])) for column in ("entity_type", "entity_id", "window_duration")),
             (("spend", _number(window.get("spend", row.get("spend")))),),
-            (("window_start", _text(window["window_start"])), ("started_at", _text(row.get("startTime")))),
+            (
+                ("window_start", _text(window["window_start"])),
+                ("started_at", _text(row.get("startTime"))),
+                ("reset_at", _text(window.get("reset_at")) or None),
+            ),
         )
         for window in windows
     )
