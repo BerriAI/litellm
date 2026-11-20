@@ -228,7 +228,6 @@ def spend_log_row_from_payload(
                 {
                     **request_metadata,
                     **metadata,
-                    "litellm_lens_internal": False,
                     **({} if track_end_user else {"user_api_key_end_user_id": None}),
                 }
             )

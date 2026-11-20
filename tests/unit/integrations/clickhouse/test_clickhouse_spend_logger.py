@@ -255,7 +255,6 @@ async def test_custom_request_metadata_is_redacted_before_clickhouse_logging(
             "litellm_metadata": {
                 "integration": "agent",
                 "shared": "model",
-                "litellm_lens_internal": True,
                 "user_api_key_auth": {"api_key": "internal-api-key"},
                 "user_api_key_budget_reservation": {"token": "internal-token"},
                 "proxy_server_request": {"headers": {"authorization": "internal-auth"}},
@@ -330,10 +329,7 @@ async def test_turn_off_message_logging_omits_all_custom_request_metadata() -> N
     metadata_json: Final = cast(str, log_rows[0]["metadata"])
     metadata: Final = _JSON_OBJECT_ADAPTER.validate_json(metadata_json)
     standard_metadata: Final = cast(Mapping[str, object], payload["metadata"])
-    assert metadata == {
-        **standard_metadata,
-        "litellm_lens_internal": False,
-    }
+    assert metadata == standard_metadata
     assert {"project", "api_key", "auth", "prompt"}.isdisjoint(metadata)
 
 
@@ -471,16 +467,6 @@ async def test_clickhouse_callback_resolves_via_factory(monkeypatch):
     assert isinstance(created, ClickHouseSpendLogger)
     assert litellm_logging._init_custom_logger_compatible_class("clickhouse", None, None) is created
     assert litellm_logging.get_custom_logger_compatible_class("clickhouse") is created
-
-
-def test_a_caller_cannot_mark_its_own_cost_row_lens_internal():
-    payload: Final = _payload(
-        request_tags=["litellm-engine"],
-        metadata={"litellm_lens_internal": True},
-    )
-    external: Final = spend_log_row_from_payload(payload, {})
-    assert json.loads(external["metadata"])["litellm_lens_internal"] is False
-    assert external["request_tags"] == ["litellm-engine"]
 
 
 def _minimal_payload(request_id: str, *, status: str, cost: float) -> dict[str, object]:
