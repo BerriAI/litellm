@@ -34,6 +34,19 @@ class _DirectTrace(BaseModel, frozen=True):
     spans: tuple[_Span, ...]
 
 
+class _ForwardedBlock(BaseModel, frozen=True):
+    type: str = ""
+    tool_use_id: str = ""
+
+
+class _ForwardedMessage(BaseModel, frozen=True):
+    content: tuple[_ForwardedBlock, ...] | str = ""
+
+
+class _ForwardedBody(BaseModel, frozen=True):
+    messages: tuple[_ForwardedMessage, ...]
+
+
 _DIRECT: Final = _DirectTrace.model_validate_json(
     (Path(__file__).parent / "lens_claude_code_direct_trace.json").read_text()
 )
@@ -98,6 +111,16 @@ def _gateway_spans(lens: Wire) -> tuple[tuple[dict[str, str], dict[str, str]], .
     )
 
 
+def _forwarded_tool_results(request: Request) -> tuple[str, ...]:
+    return tuple(
+        block.tool_use_id
+        for message in _ForwardedBody.model_validate_json(request.body).messages
+        if isinstance(message.content, tuple)
+        for block in message.content
+        if block.type == "tool_result" and block.tool_use_id
+    )
+
+
 def _direct_input_tokens(call: _Span) -> int:
     return sum(int(call.attributes[key]) for key in ("input_tokens", "cache_read_tokens", "cache_creation_tokens"))
 
@@ -145,6 +168,10 @@ def test_gateway_trace_of_a_claude_code_run_matches_the_trace_claude_code_upload
             headers=headers,
         )
         assert second.status_code == 200, second.text
+        assert tuple(_forwarded_tool_results(request) for request in rig.provider.drain()) == (
+            (),
+            tuple(step.attributes["gen_ai.tool.call.id"] for step in _DIRECT_TOOL_STEPS),
+        ), "the provider must get the tool results the agent sent"
 
         expected_count: Final = len(_DIRECT_MODEL_CALLS) + len(_DIRECT_TOOL_STEPS)
         collected: Final[list[tuple[dict[str, str], dict[str, str]]]] = []  # mutable-ok: the sink is drained per poll
