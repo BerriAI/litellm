@@ -1,5 +1,5 @@
 import type { components } from "@/lib/http/schema";
-import { mergeBudgetLimits } from "@/lib/forms/budgetWindows";
+import { CALENDAR_BUDGET_DURATIONS, mergeBudgetLimits } from "@/lib/forms/budgetWindows";
 
 export type CustomerCapPolicy = NonNullable<components["schemas"]["BudgetTemplate"]["cap_policy"]>;
 export const defaultCustomerCapPolicy: CustomerCapPolicy = "pause_until_reset";
@@ -110,7 +110,7 @@ export function validateCustomerBudgetGroups(
     fields.groups.some(
       (group) =>
         !existingGroupIds.includes(group.id) &&
-        !mergeBudgetLimits(group.budgetLimits, []).length &&
+        !mergeBudgetLimits(group.budgetLimits, [], CALENDAR_BUDGET_DURATIONS).length &&
         [group.monthlyBudget, group.yearlyBudget, group.tpm, group.rpm].every((value) => !value.trim()),
     )
   ) {
@@ -157,10 +157,11 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
     default_budgets: fields.groups.map((group): components["schemas"]["BudgetTemplate"] => ({
       name: group.name.trim(),
       cap_policy: group.capPolicy,
-      budget_limits: mergeBudgetLimits(group.budgetLimits, [
-        ...limit(group.monthlyBudget, "1mo"),
-        ...limit(group.yearlyBudget, "12mo"),
-      ]),
+      budget_limits: mergeBudgetLimits(
+        group.budgetLimits,
+        [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")],
+        CALENDAR_BUDGET_DURATIONS,
+      ),
       ...(group.tpm.trim() ? { tpm_limit: Number(group.tpm) } : {}),
       ...(group.rpm.trim() ? { rpm_limit: Number(group.rpm) } : {}),
     })),

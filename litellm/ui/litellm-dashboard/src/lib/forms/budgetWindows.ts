@@ -4,6 +4,13 @@ export type BudgetPeriod = "monthly" | "yearly" | "other";
 export const isCalendarBudgetDuration = (duration: string | null | undefined): boolean =>
   CALENDAR_BUDGET_DURATIONS.some((calendar) => calendar === duration);
 
+export function budgetFormWindows<T extends { budget_duration: string }>(
+  windows: readonly T[] | null | undefined,
+): T[] {
+  const calendar = (windows ?? []).filter((window) => isCalendarBudgetDuration(window.budget_duration));
+  return calendar.length ? calendar : (windows ?? []).slice(0, 1);
+}
+
 export function budgetLimitAmount(
   windows: readonly { budget_duration: string; max_budget: number }[],
   scalar: number | null | undefined,
@@ -28,7 +35,7 @@ export function budgetPeriod(duration: string | null): BudgetPeriod {
 export function mergeBudgetLimits<T extends { budget_duration: string }>(
   saved: readonly T[] | null | undefined,
   edited: readonly T[],
-  shownDurations: readonly string[] = CALENDAR_BUDGET_DURATIONS,
+  shownDurations: readonly string[],
 ): T[] {
   return [
     ...edited,

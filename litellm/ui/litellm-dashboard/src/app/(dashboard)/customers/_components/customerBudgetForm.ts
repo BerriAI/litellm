@@ -93,7 +93,7 @@ export const budgetEditorValue = (fields: BudgetEditorFields, original?: Budget 
   const merged = mergeBudgetLimits(
     original?.budget_limits,
     windows,
-    original?.budget_limits?.map((window) => window.budget_duration),
+    original?.budget_limits?.map((window) => window.budget_duration) ?? [],
   );
   return {
     ok: true,

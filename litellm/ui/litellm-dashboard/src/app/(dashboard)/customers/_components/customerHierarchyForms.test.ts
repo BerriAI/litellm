@@ -58,6 +58,35 @@ const buildCustomerHierarchyPatch = (entity: CustomerHierarchyEntity, fields: Cu
   buildPatch(entity, fields, memberOrganization);
 
 describe("customer hierarchy settings payloads", () => {
+  it.each(["team", "member"] as const)("removes or replaces a shown custom window in the %s editor", (kind) => {
+    const custom = { budget_duration: "7d", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
+    const budget = { budget_limits: [custom] };
+    const entities: Record<typeof kind, CustomerHierarchyEntity> = {
+      team: { kind: "team", record: { ...audit, customer_team_id: "team", parent_org_id: "org-1", budget } },
+      member: {
+        kind: "member",
+        record: { ...member, budget_id: "private", budget, budget_override: null, budget_override_expires_at: null },
+      },
+    };
+    const entity = entities[kind];
+    const fields = customerHierarchyFields(entity);
+    expect(buildCustomerHierarchyPatch(entity, { ...fields, budgetWindows: [] })).toMatchObject({
+      patch: { body: { budget: { budget_limits: null } } },
+    });
+    expect(
+      buildCustomerHierarchyPatch(entity, {
+        ...fields,
+        budgetWindows: [{ budget: custom, maxBudget: "" }],
+      }),
+    ).toMatchObject({ patch: { body: { budget: { budget_limits: null } } } });
+    expect(
+      buildCustomerHierarchyPatch(entity, {
+        ...fields,
+        budgetWindows: [{ budget: { budget_duration: "2d", max_budget: 3 }, maxBudget: "3" }],
+      }),
+    ).toMatchObject({ patch: { body: { budget: { budget_limits: [{ budget_duration: "2d", max_budget: 3 }] } } } });
+  });
+
   it.each(["organization", "team", "member"] as const)(
     "preserves custom caps while editing or removing calendar caps in the %s editor",
     (kind) => {

@@ -3,7 +3,7 @@ import type { components } from "@/lib/http/schema";
 import { pickDirty } from "@/lib/forms/pickDirty";
 import type { BudgetFormValues } from "./BudgetFormFields";
 import { applyBudgetPrecision } from "./budgetPrecision";
-import { CALENDAR_BUDGET_DURATIONS, mergeBudgetLimits } from "@/lib/forms/budgetWindows";
+import { budgetFormWindows, CALENDAR_BUDGET_DURATIONS, mergeBudgetLimits } from "@/lib/forms/budgetWindows";
 
 export const COMBINED_BUDGET_DURATION = "monthly-and-annually";
 
@@ -36,14 +36,18 @@ function singlePeriodPayload(
 ): BudgetWriteRequest {
   if (!existingLimits?.length) return scalar;
   if (dirty?.budget_duration) {
-    const remaining = mergeBudgetLimits(existingLimits, []);
+    const shownDurations = budgetFormWindows(existingLimits).map((window) => window.budget_duration);
+    const remaining = mergeBudgetLimits(existingLimits, [], shownDurations);
     if (values.additional_max_budget !== undefined) {
       const { max_budget: _max, budget_duration: _duration, ...other } = scalar;
-      const duration = values.budget_duration === "12mo" ? "12mo" : "1mo";
+      const duration = values.budget_duration === "30d" ? "1mo" : values.budget_duration;
       const existing = existingLimits.find((limit) => limit.budget_duration === duration);
       const limits = mergeBudgetLimits(
         existingLimits,
-        values.max_budget == null ? [] : [{ ...existing, budget_duration: duration, max_budget: values.max_budget }],
+        values.max_budget == null || duration == null
+          ? []
+          : [{ ...existing, budget_duration: duration, max_budget: values.max_budget }],
+        shownDurations,
       );
       return {
         ...other,
@@ -90,10 +94,11 @@ function combinedPeriodPayload(
     ...(dirty?.budget_duration && values.additional_max_budget === undefined
       ? { max_budget: null, budget_duration: null }
       : {}),
-    budget_limits: mergeBudgetLimits(existingLimits, [
-      calendarLimit(monthly, values, dirty, "max_budget"),
-      calendarLimit(annual, values, dirty, "annual_budget"),
-    ]),
+    budget_limits: mergeBudgetLimits(
+      existingLimits,
+      [calendarLimit(monthly, values, dirty, "max_budget"), calendarLimit(annual, values, dirty, "annual_budget")],
+      budgetFormWindows(existingLimits).map((window) => window.budget_duration),
+    ),
   };
 }
 
