@@ -23312,7 +23312,10 @@
         "input_cost_per_token_priority": 2.49998e-06,
         "output_cost_per_token_priority": 1.999998e-05,
         "cache_read_input_token_cost_priority": 2.4997e-07,
-        "cache_creation_input_token_cost_priority": 2.49998e-06
+        "cache_creation_input_token_cost_priority": 2.49998e-06,
+        "deprecation_date": "2026-12-11",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
+        "successor_model": "databricks/databricks-gpt-6-1-sol"
     },
     "databricks/databricks-gpt-5-1": {
         "cache_creation_input_token_cost": 1.24999e-06,
@@ -23693,7 +23696,10 @@
         "input_cost_per_token_priority": 4.5003e-07,
         "output_cost_per_token_priority": 3.60003e-06,
         "cache_read_input_token_cost_priority": 4.501e-08,
-        "cache_creation_input_token_cost_priority": 4.5003e-07
+        "cache_creation_input_token_cost_priority": 4.5003e-07,
+        "deprecation_date": "2026-12-11",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
+        "successor_model": "databricks/databricks-gpt-6-1-terra"
     },
     "databricks/databricks-gpt-5-nano": {
         "cache_creation_input_token_cost": 4.998e-08,
@@ -67452,6 +67458,8 @@
         "input_cost_per_token_above_200k_tokens": 2e-06,
         "output_cost_per_token_above_200k_tokens": 4e-06,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://docs.x.ai/docs/release-notes",
         "input_cost_per_image_token": 1e-06,
         "supports_response_schema": true,
         "supports_vision": true
@@ -123890,5 +123898,39 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "baseten/decision-models/baseten-bison-latest": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 32768,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
+    },
+    "baseten/decision-models/baseten-groundhog-latest": {
+        "input_cost_per_token": 3.5e-08,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 16384,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
+    },
+    "runwayml/seedance2_5_flash": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"Output: 13/20 credits per second at 480p/720p @ $0.01 per credit; input and reference video billed additionally at 7/10 credits per second and the 52 credit minimum per generation are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.2,
+        "output_cost_per_second_480p": 0.13,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }

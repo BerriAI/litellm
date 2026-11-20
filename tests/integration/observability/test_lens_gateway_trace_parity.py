@@ -23,6 +23,7 @@ from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans
 from pydantic import BaseModel, JsonValue
 
 _MODEL: Final = "claude-haiku-4-5"
+LENS_AGENT: Final = "lens-signals"
 _TRACE_PATH: Final = "/v1/traces"
 
 
@@ -219,3 +220,68 @@ def test_gateway_trace_of_a_claude_code_run_matches_the_trace_claude_code_upload
             for step in _DIRECT_TOOL_STEPS
         ),
     }
+
+
+def test_a_model_call_lens_makes_for_its_own_analysis_is_a_trace_under_the_lens_agent(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    def upstream(_request: Request) -> Reply:
+        return Reply(
+            body=cc.message_reply(
+                "msg_reply", _MODEL, ({"type": "text", "text": "ok"},), {"input_tokens": 3, "output_tokens": 1}
+            )
+        )
+
+    with (
+        wire_server(_lens) as lens,
+        _rig(
+            gateway,
+            tmp_path,
+            upstream,
+            callbacks=(),
+            model_name=f"anthropic/{_MODEL}",
+            api_base_suffix="",
+            destination_wire=lens,
+            environment={
+                "LITELLM_LENS_URL": lens.url,
+                "LITELLM_LENS_SERVICE_TOKEN": "integration-lens-service-token-32-chars",
+            },
+            workers=1,
+        ) as rig,
+    ):
+        body: Final[dict[str, JsonValue]] = {
+            **cc.claude_code_request("lens-internal"),
+            "model": rig.model,
+            "stream": False,
+        }
+        analysis: Final = rig.proxy.client.post(
+            "/v1/messages",
+            json=body,
+            headers={
+                **cc.cli_headers(rig.proxy.key),
+                "x-claude-code-session-id": "lens-analysis-session",
+                "user-agent": LENS_AGENT,
+            },
+        )
+        assert analysis.status_code == 200, analysis.text
+        customer: Final = rig.proxy.client.post(
+            "/v1/messages",
+            json=body,
+            headers={**cc.cli_headers(rig.proxy.key), "x-claude-code-session-id": "customer-session"},
+        )
+        assert customer.status_code == 200, customer.text
+
+        collected: Final[list[tuple[dict[str, str], dict[str, str]]]] = []  # mutable-ok: the sink is drained per poll
+        spans: Final = eventually(
+            lambda: collected.extend(_gateway_spans(lens)) or tuple(collected),
+            lambda found: (
+                {"customer-session", "lens-analysis-session"}
+                <= {span.get("gen_ai.conversation.id") for span, _ in found}
+            ),
+            seconds=60,
+        )
+
+    agents: Final = {span.get("gen_ai.conversation.id", ""): span.get("gen_ai.agent.name") for span, _ in spans}
+    assert agents == {"lens-analysis-session": LENS_AGENT, "customer-session": "claude-code"}, (
+        "Lens leaves its own calls out of analysis by this agent name, so the gateway has to export them under it"
+    )

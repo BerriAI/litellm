@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from itertools import chain
-from typing import Final, Literal, NamedTuple, TypedDict
+from typing import Final, Literal, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, call
 from urllib.parse import urlsplit
 
@@ -22,7 +22,7 @@ from httpx import Response
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, Span
 from pydantic import JsonValue, TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import (
     AGENT_TRACING_AGENT_LIST_LIMIT,
@@ -1207,5 +1207,7 @@ async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call
         "gen_ai.tool.call.result": "a.txt",
         "gen_ai.conversation.id": "session-1",
         "gen_ai.agent.name": "claude-code",
+        "langsmith.metadata.ls_integration": "claude-code",
+        "lens.task": "list the files",
     }
     assert tool_step.start_time_unix_nano == tool_step.end_time_unix_nano

@@ -390,7 +390,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyRespons
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.lens.proxy.adapter import router as lens_router
-from litellm.integrations.lens.proxy.internal import LensInternalMiddleware
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -3165,7 +3164,6 @@ app.add_middleware(
 )
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(RedisRequestBatchMiddleware)
-app.add_middleware(LensInternalMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
