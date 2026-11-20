@@ -16,6 +16,7 @@ import {
   customerEntityDailyData,
   type CustomerUsageRow,
 } from "./customerUsageData";
+import { customerUsageTotals, EMPTY_CUSTOMER_USAGE } from "./customerUsageTotals";
 
 type Organization = components["schemas"]["Organization"];
 type Team = components["schemas"]["Team"];
@@ -33,6 +34,7 @@ export interface CustomerUsageEntity {
   budgetResetAt: string | null;
   budgetUsage?: components["schemas"]["CustomerBudgetUsage"][] | null;
   rateLimits?: CustomerRateLimits;
+  budgetGroup?: string | null;
 }
 
 export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerActivityPages> {
@@ -156,7 +158,7 @@ const activityPages = async (
   throw new Error(i18n.t("customerPortal.analytics.incompletePages"));
 };
 
-const organizationActivityTotals = async (
+export const organizationActivityTotals = async (
   organizationId: string,
   request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId">,
 ) => {
@@ -175,6 +177,33 @@ const organizationActivityTotals = async (
   );
   if (!result.metadata) throw new Error(i18n.t("customerPortal.analytics.incompletePages"));
   return { ...result, metadata: result.metadata };
+};
+
+export const customerAppSpendCall = async (request: CustomerUsageRequest & { appId: string }) => {
+  const resource = request.scope.member ? "customer_members" : "customer_organizations";
+  const id = request.scope.member ?? request.scope.org;
+  const periods = [
+    [request.startDate, request.endDate],
+    [request.monthStartDate, request.monthEndDate],
+    [request.yearStartDate, request.yearEndDate],
+  ] as const;
+  const unique = new Map(periods.map(([startDate, endDate]) => [`${startDate}/${endDate}`, { startDate, endDate }]));
+  const activity = new Map(
+    await Promise.all(
+      [...unique].map(
+        async ([key, dates]) =>
+          [key, mergeCustomerActivityPages(await activityPages(resource, [id], { ...request, ...dates }))] as const,
+      ),
+    ),
+  );
+  const selected = activity.get(`${request.startDate}/${request.endDate}`)!;
+  const monthly = activity.get(`${request.monthStartDate}/${request.monthEndDate}`)!;
+  const yearly = activity.get(`${request.yearStartDate}/${request.yearEndDate}`)!;
+  return {
+    monthlySpend: monthly.metadata.total_spend,
+    yearlySpend: yearly.metadata.total_spend,
+    tokenDetails: customerUsageTotals(selected.results).get(id) ?? EMPTY_CUSTOMER_USAGE,
+  };
 };
 
 export const customerChildSpendCall = async ({
@@ -225,7 +254,11 @@ const chunkJobs = (resource: Collection, dimension: ActivityJob["dimension"], id
     ids: ids.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
   }));
 
-export const customerUsageEntity = (id: string, record: Organization | Team | Member): CustomerUsageEntity => {
+export const customerUsageEntity = (
+  id: string,
+  record: Organization | Team | Member,
+  groups?: readonly components["schemas"]["OrganizationBudget"][],
+): CustomerUsageEntity => {
   const budget = "effective_budget" in record ? record.effective_budget : record.budget;
   return {
     id,
@@ -236,6 +269,7 @@ export const customerUsageEntity = (id: string, record: Organization | Team | Me
     budgetLimits: budget?.budget_limits ?? [],
     budgetResetAt: record.budget_reset_at ?? null,
     budgetUsage: record.budget_usage,
+    ...(groups ? { budgetGroup: groups.find((group) => group.budget_id === record.budget_id)?.name ?? null } : {}),
     ...(budget?.tpm_limit != null || budget?.rpm_limit != null
       ? { rateLimits: { tpm_limit: budget.tpm_limit, rpm_limit: budget.rpm_limit } }
       : {}),
@@ -360,7 +394,9 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
     ...primary,
     organization: customerUsageEntity(selected.organization.customer_org_id, selected.organization),
     team: selected.team ? customerUsageEntity(selected.team.customer_team_id, selected.team) : null,
-    member: selected.member ? customerUsageEntity(selected.member.customer_member_id, selected.member) : null,
+    member: selected.member
+      ? customerUsageEntity(selected.member.customer_member_id, selected.member, selected.organization.default_budgets)
+      : null,
     teams: customerEntityRankings(teamDays, teamLabels, primary.metadata, {
       unassignedLabel: i18n.t("customerPortal.analytics.unassignedTeam"),
       onlyEntityId: selected.member ? selected.team?.customer_team_id : undefined,
@@ -376,7 +412,9 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
       selected.member ? selected.team?.customer_team_id : undefined,
     ),
     memberResults: customerEntityDailyData(primary.results, memberDays, memberLabels),
-    memberBudgets: children.members.map((member) => customerUsageEntity(member.customer_member_id, member)),
+    memberBudgets: children.members.map((member) =>
+      customerUsageEntity(member.customer_member_id, member, selected.organization.default_budgets),
+    ),
     monthlyOrganizationSpend: monthlyOrganization.metadata.total_spend,
     monthlyMembers: customerEntityRankings(monthlyMemberDays, memberLabels, monthlyOrganization.metadata, {
       unassignedLabel: i18n.t("customerPortal.analytics.unassignedMember"),

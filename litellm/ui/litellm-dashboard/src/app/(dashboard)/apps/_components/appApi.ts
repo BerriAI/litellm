@@ -1,8 +1,23 @@
 import { fetchClient } from "@/lib/http/api";
+import { ApiError } from "@/lib/http/client";
 import type { App, AppResource, AppResourceType } from "./appForms";
 
 export const appDefinitionKey = ["app-definition"] as const;
 export const appResourcesKey = (type: AppResourceType | null) => ["app-resources", type] as const;
+export const organizationAppKey = (appId: string | null, organizationId: string) =>
+  ["app-organization", appId, organizationId] as const;
+
+export const loadOrganizationApp = async (appId: string, organizationId: string) => {
+  try {
+    const response = await fetchClient.GET("/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}", {
+      params: { path: { app_id: appId, customer_org_id: organizationId } },
+    });
+    return response.data ?? null;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+};
 
 export const loadAppDefinition = async () => {
   const response = await fetchClient.GET("/management/v1/apps/definition");

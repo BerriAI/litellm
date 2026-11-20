@@ -41,9 +41,12 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     validate_budget_duration,
 )
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    BudgetGroupScope,
+    Failure,
     PrismaRecord,
+    budget_group_ids,
     budget_limit_json,
-    organization_budget_group_ids,
+    delete_unattached_customer_budget,
 )
 from litellm.proxy.management_helpers.utils import validate_budget_windows_update
 from litellm.proxy.utils import jsonify_object
@@ -477,10 +480,11 @@ async def delete_budget(
     config: Final = require_attributes(
         attribute_or_none(prisma_client.writer_db, "litellm_config"), TableActions[PrismaRecord], "find_unique"
     )
-    if data.id in await organization_budget_group_ids(config):
-        raise HTTPException(
-            status_code=409, detail={"error": "Remove this group through customer_organization_budget_groups."}
-        )
+    for scope in BudgetGroupScope:
+        if data.id in await budget_group_ids(config, scope):
+            raise HTTPException(
+                status_code=409, detail={"error": f"Remove this group through {scope.value.removesuffix('_ids')}s."}
+            )
     customer_org_count: Final = await CustomerOrganizationRepository(prisma_client).table.count(
         where={"budget_template_ids": {"has": data.id}}
     )
@@ -493,6 +497,11 @@ async def delete_budget(
             },
         )
 
-    response: Final = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
+    response: Final = await delete_unattached_customer_budget(BudgetRepository(prisma_client).table, data.id)
+    if isinstance(response, Failure):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "Budget is attached to a customer or app. Remove it through the owning entity."},
+        )
 
     return response

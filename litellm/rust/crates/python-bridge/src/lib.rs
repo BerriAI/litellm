@@ -57,7 +57,8 @@ mod _native {
         RustAccessGroupRepository, RustBudgetRepository, RustEndUserRepository,
         RustJwtKeyMappingRepository, RustKeyRepository, RustModelAccessGroupRepository,
         RustObjectPermissionRepository, RustOrganizationRepository, RustProjectRepository,
-        RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
+        RustSpendLogRepository, RustTagRepository, RustTeamMembershipRepository,
+        RustTeamRepository, RustUserRepository,
     };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -241,6 +242,7 @@ mod tests {
                 "RustObjectPermissionRepository",
                 "RustProjectRepository",
                 "RustTagRepository",
+                "RustSpendLogRepository",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",

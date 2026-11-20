@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::{ErrorInformation, GuardrailStatus, ModelInformation, Status};
+use crate::{ClaudeSubscriptionUsage, ErrorInformation, GuardrailStatus, ModelInformation, Status};
 
 #[derive(Clone, Copy, Serialize)]
 pub(crate) struct StatusFields {
@@ -57,6 +57,7 @@ pub(crate) struct Metadata {
     pub(crate) team_alias: Option<String>,
     pub(crate) team_id: Option<String>,
     pub(crate) used_client_oauth_token: Option<bool>,
+    pub(crate) claude_subscription_usage: Option<ClaudeSubscriptionUsage>,
 }
 
 #[derive(Serialize)]

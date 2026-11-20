@@ -42,6 +42,7 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUn
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
+    error_status_code,
     process_response_headers,
     provider_reported_usage_cost,
     set_response_cost_in_hidden_params,
@@ -2230,14 +2231,39 @@ async def _admit_frame_turn(
         return _RefusedTurn(e)
 
 
-def turn_refusal_frame(refusal: RateLimitError) -> str:
+def responses_ws_error_frame(
+    status: int, error_type: str, message: str, provider_specific_fields: Mapping[str, object] | None = None
+) -> str:
     return json.dumps(
-        {"type": "error", "status": 429, "error": {"type": "rate_limit_exceeded", "message": str(refusal)}}
+        {
+            "type": "error",
+            "status": status,
+            "error": {
+                "type": error_type,
+                "message": message,
+                **({"provider_specific_fields": dict(provider_specific_fields)} if provider_specific_fields else {}),
+            },
+        },
+        default=str,
     )
 
 
+def responses_ws_error_type(status: int) -> str:
+    match status:
+        case 429:
+            return "rate_limit_exceeded"
+        case _ if 400 <= status < 500:
+            return "invalid_request_error"
+        case _:
+            return "server_error"
+
+
+def turn_refusal_frame(refusal: RateLimitError) -> str:
+    return responses_ws_error_frame(429, "rate_limit_exceeded", str(refusal))
+
+
 def _turn_admission_error_frame(failure: Exception, status: int) -> str:
-    return json.dumps({"type": "error", "status": status, "error": {"type": "server_error", "message": str(failure)}})
+    return responses_ws_error_frame(status, "server_error", str(failure))
 
 
 def _turn_rejection_frame(rejection: Exception) -> str:
@@ -2338,26 +2364,20 @@ ResponsesWsTurnUsageRecorder: TypeAlias = Callable[[Mapping[str, object], int], 
 
 
 class ResponsesWsFrameRejection(ValueError):
-    def __init__(self, message: str, provider_specific_fields: Mapping[str, object] | None = None) -> None:
+    def __init__(
+        self, message: str, provider_specific_fields: Mapping[str, object] | None = None, status_code: int = 400
+    ) -> None:
         super().__init__(message)
         self.provider_specific_fields: Final = provider_specific_fields
+        self.status_code: Final = status_code
 
 
 def _frame_rejection_event(rejection: Exception) -> str:
     provider_fields: Final = (
         rejection.provider_specific_fields if isinstance(rejection, ResponsesWsFrameRejection) else None
     )
-    return json.dumps(
-        {
-            "type": "error",
-            "error": {
-                "type": "invalid_request_error",
-                "message": str(rejection),
-                **({"provider_specific_fields": dict(provider_fields)} if provider_fields else {}),
-            },
-        },
-        default=str,
-    )
+    status: Final = error_status_code(rejection, 400)
+    return responses_ws_error_frame(status, responses_ws_error_type(status), str(rejection), provider_fields)
 
 
 async def _reject_guarded_turn(
@@ -3220,8 +3240,8 @@ class ManagedResponsesWebSocketHandler:
             verbose_logger.debug("ManagedResponsesWS: failed to serialize chunk: %s", exc)
             return None
 
-    async def _send_error(self, message: str, error_type: str = "server_error") -> None:
-        await self._send_frame(json.dumps({"type": "error", "error": {"type": error_type, "message": message}}))
+    async def _send_error(self, status: int, message: str, error_type: str = "server_error") -> None:
+        await self._send_frame(responses_ws_error_frame(status, error_type, message))
 
     async def _send_frame(self, frame: str) -> None:
         with contextlib.suppress(Exception):
@@ -3325,7 +3345,7 @@ class ManagedResponsesWebSocketHandler:
         try:
             msg_obj: Final = _load_json_object(raw_message)
         except json.JSONDecodeError:
-            await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
+            await self._send_error(400, "Invalid JSON in response.create event", "invalid_request_error")
             return None
         if msg_obj.get("type") != "response.create":
             # Silently ignore non-response.create messages (e.g. warmup pings)
@@ -3681,7 +3701,7 @@ class ManagedResponsesWebSocketHandler:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
-            await self._send_error(str(exc))
+            await self._send_error(error_status_code(exc, 500), str(exc))
             return
 
         self._save_turn_history(terminal_event, prior_history, current_messages)
@@ -3710,5 +3730,5 @@ class ManagedResponsesWebSocketHandler:
 
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: unexpected error: %s", exc)
-            await self._send_error(f"Internal server error: {exc}")
+            await self._send_error(500, f"Internal server error: {exc}")
         return self._failure

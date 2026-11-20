@@ -9,13 +9,16 @@ import pytest
 from integration._support.client import Gateway, string_value
 
 
-def _seed_spend_row(request_id: str, key: str, user: str = "") -> None:
+def _seed_spend_row(
+    request_id: str, key: str, user: str = "", organization_id: str | None = None, spend: float = 0.0
+) -> None:
     started: Final = datetime.now(timezone.utc) - timedelta(minutes=5)
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
         connection.execute(
-            'INSERT INTO "LiteLLM_SpendLogs" (request_id, call_type, api_key, "user", "startTime", "endTime", status) '
-            "VALUES (%s, 'acompletion', %s, %s, %s, %s, 'success')",
-            (request_id, sha256(key.encode()).hexdigest(), user, started, started),
+            'INSERT INTO "LiteLLM_SpendLogs" '
+            '(request_id, call_type, api_key, "user", "startTime", "endTime", status, organization_id, spend) '
+            "VALUES (%s, 'acompletion', %s, %s, %s, %s, 'success', %s, %s)",
+            (request_id, sha256(key.encode()).hexdigest(), user, started, started, organization_id, spend),
         )
 
 
@@ -66,6 +69,46 @@ def test_key_without_user_reads_only_its_own_spend_logs(gateway: Gateway, route:
         for foreign_filter in ({"api_key": other_hash}, {"user_id": "someone-else"}):
             foreign = gateway.request("GET", route, params={**dated, **foreign_filter}, key=own_key)
             assert foreign.status_code == 403, f"{foreign_filter}: {foreign.status_code} {foreign.text[:300]}"
+
+
+@pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])
+@pytest.mark.parametrize("administers_org", [True, False])
+def test_org_admin_reads_stored_organization_rows(gateway: Gateway, route: str, administers_org: bool) -> None:
+    own_request: Final = f"own-{uuid.uuid4().hex}"
+    other_request: Final = f"other-{uuid.uuid4().hex}"
+    null_request: Final = f"null-{uuid.uuid4().hex}"
+    window: Final = _window()
+    with gateway.scenario() as scenario:
+        own_org: Final = scenario.organization()
+        other_org: Final = scenario.organization()
+        admin: Final = scenario.user(user_role="internal_user")
+        gateway.post(
+            "/organization/member_add",
+            {
+                "organization_id": own_org,
+                "member": {"role": "org_admin" if administers_org else "internal_user", "user_id": admin},
+            },
+        )
+        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+            connection.execute('UPDATE "LiteLLM_UserTable" SET user_role = %s WHERE user_id = %s', ("org_admin", admin))
+        admin_key: Final = scenario.key(user_id=admin)
+        other_user: Final = scenario.user(user_role="internal_user")
+        other_key: Final = scenario.key(user_id=other_user)
+        scenario.cleanups.callback(_delete_spend_rows, (own_request, other_request, null_request))
+        _seed_spend_row(own_request, other_key, other_user, own_org, 1.0)
+        _seed_spend_row(other_request, other_key, other_user, other_org, 2.0)
+        _seed_spend_row(null_request, admin_key, admin, spend=4.0)
+        for filters in ({}, {"request_id": other_request}, {"user_id": admin}):
+            response = gateway.request("GET", route, params={**window, "summarize": "false", **filters}, key=admin_key)
+            assert response.status_code == 200, response.text
+            expected = (own_request,) if administers_org and not filters else ()
+            assert _request_ids(response.json()) == expected, response.text[:1000]
+            if route != "/spend/logs":
+                assert response.json()["total"] == len(expected), response.text
+        if route == "/spend/logs":
+            summary = gateway.request("GET", route, params=window, key=admin_key)
+            assert summary.status_code == 200, summary.text
+            assert sum(row["spend"] for row in summary.json()) == (1.0 if administers_org else 0.0), summary.text
 
 
 @pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])

@@ -1,11 +1,12 @@
 "use client";
 
 import { SearchSelect } from "@/components/shared/SearchSelect";
+import { ErrorState } from "@/components/shared/ErrorState";
 import { useTranslation } from "react-i18next";
-import { $api } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { uiHref } from "@/utils/uiHref";
 import AppBudgetLimits from "./AppBudgetLimits";
+import { useAppBudgetGroups } from "./useAppBudgetGroups";
 
 export default function AppProfileSelect({
   id,
@@ -19,7 +20,7 @@ export default function AppProfileSelect({
   emptyLabel: string;
 }) {
   const { t } = useTranslation();
-  const groups = $api.useQuery("get", "/management/v1/customer_organization_budget_groups", {});
+  const groups = useAppBudgetGroups([value]);
   const selected = groups.data?.default_budgets.find((group) => group.budget_id === value);
   return (
     <div className="space-y-1.5">
@@ -32,7 +33,7 @@ export default function AppProfileSelect({
         value={value}
         placeholder={emptyLabel}
         onValueChange={(value) => onChange(value ?? "")}
-        disabled={!groups.data}
+        disabled={!groups.isSuccess}
         options={[
           { value: "", label: emptyLabel },
           ...(groups.data?.default_budgets ?? []).map((group) => ({ value: group.budget_id, label: group.name })),
@@ -40,14 +41,12 @@ export default function AppProfileSelect({
       />
       {selected && <AppBudgetLimits budget={selected} />}
       <p className="text-xs text-muted-foreground">
-        <a href={uiHref("customers/settings")} className="text-primary hover:underline">
+        <a href={`${uiHref("customers/settings")}?tab=app`} className="text-primary hover:underline">
           {t("apps.manageProfiles")}
         </a>
       </p>
       {groups.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {extractProxyErrorMessage(groups.error)}
-        </p>
+        <ErrorState message={extractProxyErrorMessage(groups.error)} onRetry={() => void groups.refetch()} />
       )}
     </div>
   );

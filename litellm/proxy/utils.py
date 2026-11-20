@@ -226,6 +226,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    Litellm_EntityType,
     SpecialModelNames,
     UserAPIKeyAuth,
 )
@@ -4220,8 +4221,13 @@ class ProxyLogging:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if self.alerting is not None and (
-            "slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting
+        is_team_percentage_email: Final = (
+            type == "max_budget_alert" and user_info.event_group == Litellm_EntityType.TEAM
+        )
+        if (
+            not is_team_percentage_email
+            and self.alerting is not None
+            and ("slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting)
         ):
             if self.slack_alerting_instance is not None:
                 await self.slack_alerting_instance.budget_alerts(
