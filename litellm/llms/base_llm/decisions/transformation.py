@@ -48,7 +48,9 @@ from litellm.types.decisions import (
     DecisionsUsage,
     NoulAnswer,
     NoulQuestion,
+    OpenAIDecisionContentPart,
     OpenAIDecisionInputImage,
+    OpenAIDecisionInputJSON,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
     ScoreAnswer,
@@ -146,17 +148,25 @@ def image_param(decision_input: DecisionsIRState | DecisionsIRMessages) -> str |
             assert_never(decision_input)
 
 
-def _kept_part(part: OpenAIDecisionInputText | OpenAIDecisionInputImage, keep: Callable[[str], bool]) -> bool:
-    return isinstance(part, OpenAIDecisionInputText) or keep(part.image_url)
-
-
-def _message_with_images_where(
-    message: OpenAIDecisionInputMessage, keep: Callable[[str], bool]
+def _message_with_parts_where(
+    message: OpenAIDecisionInputMessage, keep: Callable[[OpenAIDecisionContentPart], bool]
 ) -> OpenAIDecisionInputMessage | None:
     if isinstance(message.content, str):
         return message
-    kept_parts: Final = tuple(part for part in message.content if _kept_part(part, keep))
+    kept_parts: Final = tuple(filter(keep, message.content))
     return message.model_copy(update={"content": kept_parts}) if kept_parts else None
+
+
+def _messages_with_parts_where(
+    decision_input: DecisionsIRMessages, keep: Callable[[OpenAIDecisionContentPart], bool]
+) -> DecisionsIRMessages:
+    return DecisionsIRMessages(
+        messages=tuple(
+            kept
+            for message in decision_input.messages
+            if (kept := _message_with_parts_where(message, keep)) is not None
+        )
+    )
 
 
 def with_images_where(
@@ -166,15 +176,31 @@ def with_images_where(
         case DecisionsIRState():
             return replace(decision_input, images=tuple(image for image in decision_input.images if keep(image)))
         case DecisionsIRMessages():
-            return DecisionsIRMessages(
-                messages=tuple(
-                    kept
-                    for message in decision_input.messages
-                    if (kept := _message_with_images_where(message, keep)) is not None
-                )
+            return _messages_with_parts_where(
+                decision_input, lambda part: not isinstance(part, OpenAIDecisionInputImage) or keep(part.image_url)
             )
         case _:
             assert_never(decision_input)
+
+
+def _is_json_part(part: OpenAIDecisionContentPart) -> bool:
+    return isinstance(part, OpenAIDecisionInputJSON)
+
+
+def _has_json_part(message: OpenAIDecisionInputMessage) -> bool:
+    return not isinstance(message.content, str) and any(map(_is_json_part, message.content))
+
+
+def has_json_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    return isinstance(decision_input, DecisionsIRMessages) and any(map(_has_json_part, decision_input.messages))
+
+
+def without_json_input(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+) -> DecisionsIRState | DecisionsIRMessages:
+    if isinstance(decision_input, DecisionsIRState):
+        return decision_input
+    return _messages_with_parts_where(decision_input, lambda part: not _is_json_part(part))
 
 
 def remote_image_urls(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[str, ...]:
@@ -191,9 +217,7 @@ def _inlined_image(image: DecisionsImage, data_urls: Mapping[str, str]) -> Decis
     return data_urls.get(image, image) if isinstance(image, str) else image
 
 
-def _inlined_part(
-    part: OpenAIDecisionInputText | OpenAIDecisionInputImage, data_urls: Mapping[str, str]
-) -> OpenAIDecisionInputText | OpenAIDecisionInputImage:
+def _inlined_part(part: OpenAIDecisionContentPart, data_urls: Mapping[str, str]) -> OpenAIDecisionContentPart:
     if isinstance(part, OpenAIDecisionInputImage) and part.image_url in data_urls:
         return part.model_copy(update={"image_url": data_urls[part.image_url]})
     return part
@@ -475,6 +499,7 @@ class BaseDecisionsConfig(ABC):
     api_key_required: bool = True
     supports_safety_identifier: bool = False
     supports_images: bool = False
+    supports_json_input: bool = False
     max_images: int | None = None
     max_image_bytes: int | None = None
     max_total_image_bytes: int | None = None
