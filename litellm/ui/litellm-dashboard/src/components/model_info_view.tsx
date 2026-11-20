@@ -272,15 +272,15 @@ export default function ModelInfoView({
         return;
       }
 
-      const typedModelInfo = parseModelExtraParams(values.model_info);
+      const modelInfoPricing = editedModelInfoPricing(
+        parseModelExtraParams(values.model_info) ?? {},
+        { ...modelData?.model_info },
+        parsedExtraParams,
+        localModelData?.litellm_params ?? {},
+      );
       const updatedLitellmParams: Record<string, unknown> = {
         ...editableModelExtraParams(parsedExtraParams),
-        ...editedModelInfoPricing(
-          typedModelInfo ?? {},
-          modelData?.model_info ?? {},
-          parsedExtraParams,
-          localModelData?.litellm_params ?? {},
-        ),
+        ...modelInfoPricing,
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
@@ -369,7 +369,7 @@ export default function ModelInfoView({
       }
 
       const paramsToRemove = Object.keys(editableModelExtraParams(localModelData?.litellm_params ?? {})).filter(
-        (key) => !Object.prototype.hasOwnProperty.call(parsedExtraParams, key),
+        (key) => !Object.prototype.hasOwnProperty.call(parsedExtraParams, key) && !(key in modelInfoPricing),
       );
       // Final guard: never PATCH a redacted secret. The /model/info snapshot that
       // seeds this form masks secrets;

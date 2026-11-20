@@ -55,4 +55,15 @@ describe("editedModelInfoPricing", () => {
       ),
     ).toEqual({ output_cost_per_token_above_272k_tokens: 30 });
   });
+
+  it("keeps a Model Info edit when the LiteLLM Params box no longer lists a stored override", () => {
+    expect(
+      editedModelInfoPricing(
+        { ...loadedModelInfo, input_cost_per_token_above_272k_tokens: 20 },
+        loadedModelInfo,
+        {},
+        { input_cost_per_token_above_272k_tokens: 6 },
+      ),
+    ).toEqual({ input_cost_per_token_above_272k_tokens: 20 });
+  });
 });

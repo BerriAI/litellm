@@ -58,6 +58,6 @@ export const editedModelInfoPricing = (
       (entry): entry is [string, number] =>
         isRate(entry[0], entry[1]) &&
         entry[1] !== loadedModelInfo[entry[0]] &&
-        editedParams[entry[0]] === loadedParams[entry[0]],
+        !(entry[0] in editedParams && editedParams[entry[0]] !== loadedParams[entry[0]]),
     ),
   );
