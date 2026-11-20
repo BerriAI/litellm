@@ -7,10 +7,17 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm.models.team import BudgetLimitEntry
 
-BudgetLimitsTable: TypeAlias = Literal["LiteLLM_VerificationToken", "LiteLLM_TeamTable", "LiteLLM_UserTable"]
+BudgetLimitsTable: TypeAlias = Literal[
+    "LiteLLM_VerificationToken", "LiteLLM_TeamTable", "LiteLLM_UserTable", "LiteLLM_BudgetTable"
+]
 
 _ID_COLUMNS: Final[Mapping[str, str]] = MappingProxyType(
-    {"LiteLLM_VerificationToken": "token", "LiteLLM_TeamTable": "team_id", "LiteLLM_UserTable": "user_id"}
+    {
+        "LiteLLM_VerificationToken": "token",
+        "LiteLLM_TeamTable": "team_id",
+        "LiteLLM_UserTable": "user_id",
+        "LiteLLM_BudgetTable": "budget_id",
+    }
 )
 _WINDOWS: Final[TypeAdapter[tuple[Mapping[str, object], ...] | None]] = TypeAdapter(
     tuple[Mapping[str, object], ...] | None
