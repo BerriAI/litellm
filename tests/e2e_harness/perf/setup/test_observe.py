@@ -88,9 +88,9 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
     }
 
 
-def test_large_bodies_report_client_percentiles_without_gating_them() -> None:
+def test_large_bodies_gate_client_p50_but_report_client_p95_without_a_limit() -> None:
     observation: Final = Observation(
-        records=tuple(served(seq, total, response_ms=4500.0) for seq, total in enumerate((10.0, 20.0, 30.0))),
+        records=tuple(served(seq, total, response_ms=4500.0) for seq, total in enumerate((0.5, 1.0, 2.0))),
         mock_requests=(),
         guardrail_calls=(),
         rss_before=NO_RSS,
@@ -106,14 +106,15 @@ def test_large_bodies_report_client_percentiles_without_gating_them() -> None:
 
     assert exceeded == []
     assert {name: value for name, value in properties.items() if name.startswith("perf_client_total_seconds")} == {
-        "perf_client_total_seconds_p50": 20.0,
-        "perf_client_total_seconds_p95": 30.0,
-        "perf_client_total_seconds_p50_breakdown": '[{"label": "chat_completions", "value": 20.0, "share": 1.0}]',
-        "perf_client_total_seconds_p95_breakdown": '[{"label": "chat_completions", "value": 30.0, "share": 1.0}]',
+        "perf_client_total_seconds_p50": 1.0,
+        "perf_client_total_seconds_p50_limit": 1.5,
+        "perf_client_total_seconds_p95": 2.0,
+        "perf_client_total_seconds_p50_breakdown": '[{"label": "chat_completions", "value": 1.0, "share": 1.0}]',
+        "perf_client_total_seconds_p95_breakdown": '[{"label": "chat_completions", "value": 2.0, "share": 1.0}]',
     }
     assert [line.split() for line in output.splitlines() if line.strip().startswith("client_total_seconds")] == [
-        ["client_total_seconds", "percentile", "50", "20.0000"],
-        ["client_total_seconds", "percentile", "95", "30.0000"],
+        ["client_total_seconds", "percentile", "50", "1.0000", "1.5000"],
+        ["client_total_seconds", "percentile", "95", "2.0000"],
     ]
     assert properties["perf_litellm_response_seconds_p50"] == 4.5
     assert properties["perf_litellm_response_seconds_p50_limit"] == 5.0
@@ -122,13 +123,15 @@ def test_large_bodies_report_client_percentiles_without_gating_them() -> None:
 
 
 @pytest.mark.parametrize(
-    ("response_ms", "cpu_seconds", "expected"),
+    ("response_ms", "cpu_seconds", "client_seconds", "expected"),
     (
-        (5100.0, 0.06, ["litellm_response_seconds percentile 50: observed 5.1000 > limit 5.0000"]),
-        (4500.0, 0.1, ["cpu_seconds_per_request: observed 0.1000 > limit 0.0900"]),
+        (4500.0, 0.06, 1.6, ["client_total_seconds percentile 50: observed 1.6000 > limit 1.5000"]),
+        (5100.0, 0.06, 1.0, ["litellm_response_seconds percentile 50: observed 5.1000 > limit 5.0000"]),
+        (4500.0, 0.1, 1.0, ["cpu_seconds_per_request: observed 0.1000 > limit 0.0900"]),
         (
             None,
             None,
+            1.0,
             [
                 "litellm_response_seconds percentile 50: limit set but nothing observed",
                 "cpu_seconds_per_request: limit set but nothing observed",
@@ -137,10 +140,10 @@ def test_large_bodies_report_client_percentiles_without_gating_them() -> None:
     ),
 )
 def test_large_bodies_fail_on_a_steady_metric_step_or_missing_reading(
-    response_ms: float | None, cpu_seconds: float | None, expected: list[str]
+    response_ms: float | None, cpu_seconds: float | None, client_seconds: float, expected: list[str]
 ) -> None:
     observation: Final = Observation(
-        records=(served(0, 20.0, response_ms=response_ms),),
+        records=(served(0, client_seconds, response_ms=response_ms),),
         mock_requests=(),
         guardrail_calls=(),
         rss_before=NO_RSS,
@@ -154,7 +157,7 @@ def test_large_bodies_fail_on_a_steady_metric_step_or_missing_reading(
     assert exceeded == expected
 
 
-def test_empty_large_body_pass_fails_the_gates_but_has_no_client_percentile_limits() -> None:
+def test_empty_large_body_pass_fails_the_gates_but_keeps_client_p95_report_only() -> None:
     observation: Final = Observation(
         records=(), mock_requests=(), guardrail_calls=(), rss_before=NO_RSS, rss_after=NO_RSS, wall_seconds=0.0
     )
@@ -162,6 +165,7 @@ def test_empty_large_body_pass_fails_the_gates_but_has_no_client_percentile_limi
     rows, exceeded = evaluate(LARGE_BODY_CASE, observation)
 
     assert exceeded == [
+        "client_total_seconds percentile 50: limit set but nothing observed",
         "litellm_response_seconds percentile 50: limit set but nothing observed",
         "cpu_seconds_per_request: limit set but nothing observed",
     ]
@@ -170,7 +174,7 @@ def test_empty_large_body_pass_fails_the_gates_but_has_no_client_percentile_limi
         for line in render(LARGE_BODY_CASE, observation, rows).splitlines()
         if line.strip().startswith("client_total_seconds")
     ] == [
-        ["client_total_seconds", "percentile", "50", "n/a"],
+        ["client_total_seconds", "percentile", "50", "n/a", "1.5000", "MISSING"],
         ["client_total_seconds", "percentile", "95", "n/a"],
     ]
 
