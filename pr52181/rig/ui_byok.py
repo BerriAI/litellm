@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 
 OUT, USERS = sys.argv[1], json.load(open(sys.argv[2]))
 PORT = {"base": 16292, "head": 16293}
-SHA = {"base": "49b2058c1a7", "head": "7b8bbf183f9"}
+SHA = {"base": "49b2058c1a7", "head": "848a89e51c8"}
 CALLBACK = "http://127.0.0.1:47777/callback"
 ATTEMPTS = 6
 PENDING: dict[str, tuple[str, str]] = {}
