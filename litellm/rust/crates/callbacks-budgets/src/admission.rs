@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use litellm_callbacks::{BudgetPlan, BudgetReservation, ReservationEntry};
 use litellm_redis_store::spend_counters::SpendCounters;
@@ -110,11 +110,12 @@ impl Budgets {
         &self,
         plan: BudgetPlan,
         observed: &[BudgetCounterSpend],
+        ttl: Option<Duration>,
     ) -> Result<Admission, String> {
         let plan = Plan::try_from(plan).map_err(|error| error.to_string())?;
         Ok(
             match self
-                .logged(engine::reserve(&self.store, &plan, observed))
+                .logged(engine::reserve(&self.store, &plan, observed, ttl))
                 .await
             {
                 Ok(None) => Admission::Skipped,

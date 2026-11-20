@@ -1,15 +1,13 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
-from types import MappingProxyType
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # legacy module exports
     ConfigSyncPubSub,
     _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -36,12 +34,14 @@ AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _POLL_TIMEOUT_SECONDS: Final = 1.0
 _MAX_PENDING_PUBLISHES: Final = 1024
 _MAX_IN_FLIGHT_PUBLISHES: Final = 16
+_KEYS_PER_MESSAGE: Final = 500
+_MESSAGE_CACHE_KEYS: Final = TypeAdapter(tuple[str, ...])
+_MESSAGE_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _BULK_EVICTION_WAIT_SECONDS: Final = 2.0
 _pending_publishes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep background publishes alive
 _in_flight_publishes: Final = asyncio.Semaphore(_MAX_IN_FLIGHT_PUBLISHES)
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
-_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
@@ -52,16 +52,21 @@ def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
 
 @dataclass(frozen=True, slots=True)
 class _CacheInvalidationMessage:
-    cache_key: str
+    cache_keys: tuple[str, ...]
     new_value: float | None = None
     ttl: float | None = None
 
 
-def _cache_invalidation_message_json(cache_key: str, new_value: float | None = None, ttl: float | None = None) -> str:
-    message: Final[Mapping[str, object]] = MappingProxyType(
-        asdict(_CacheInvalidationMessage(cache_key=cache_key, new_value=new_value, ttl=ttl))
-    )
-    return json.dumps({field: value for field, value in message.items() if value is not None})
+def _cache_invalidation_message_json(
+    cache_keys: Sequence[str], new_value: float | None = None, ttl: float | None = None
+) -> str:
+    fields: Final = {
+        "cache_key": cache_keys[0] if len(cache_keys) == 1 else None,
+        "cache_keys": list(cache_keys) if len(cache_keys) > 1 else None,
+        "new_value": new_value,
+        "ttl": ttl,
+    }
+    return json.dumps({field: value for field, value in fields.items() if value is not None})
 
 
 def _finite_number_or_none(value: object) -> float | None:
@@ -70,22 +75,29 @@ def _finite_number_or_none(value: object) -> float | None:
     return float(value)
 
 
+def _message_cache_keys(single: object, many: object) -> tuple[str, ...]:
+    if isinstance(single, str):
+        return (single,)
+    try:
+        return _MESSAGE_CACHE_KEYS.validate_python(many)
+    except ValidationError:
+        return ()
+
+
 def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
     if isinstance(data, bytes):
         data = data.decode("utf-8", errors="replace")  # rebind-ok: normalizing the wire payload to str
     if not isinstance(data, str):
         return None
     try:
-        parsed: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(data)))
-    except json.JSONDecodeError:
+        parsed: Final = _MESSAGE_FIELDS.validate_json(data)
+    except ValidationError:
         return None
-    if parsed is None:
-        return None
-    cache_key: Final = parsed.get("cache_key")
-    if not isinstance(cache_key, str):
+    cache_keys: Final = _message_cache_keys(parsed.get("cache_key"), parsed.get("cache_keys"))
+    if len(cache_keys) == 0:
         return None
     return _CacheInvalidationMessage(
-        cache_key=cache_key,
+        cache_keys=cache_keys,
         new_value=_finite_number_or_none(parsed.get("new_value")),
         ttl=_finite_number_or_none(parsed.get("ttl")),
     )
@@ -106,7 +118,7 @@ async def _publish_batch_to_redis(redis_cache: "RedisCache", cache_keys: tuple[s
         channel: Final = auth_cache_invalidation_channel(redis_cache)
         pipeline: Final = client.pipeline(transaction=False)
         for cache_key in cache_keys:
-            _ = pipeline.publish(channel, _cache_invalidation_message_json(cache_key))
+            _ = pipeline.publish(channel, _cache_invalidation_message_json((cache_key,)))
         async with _in_flight_publishes:
             _ = await pipeline.execute()
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
@@ -124,6 +136,19 @@ def _has_room_for_publish(key_count: int) -> bool:
         len(_pending_publishes),
     )
     return False
+
+
+def _queue_publish(
+    redis_cache: "RedisCache", cache_keys: tuple[str, ...], new_value: float | None, ttl: float | None
+) -> None:
+    if not _has_room_for_publish(len(cache_keys)):
+        return
+    task: Final = asyncio.create_task(
+        _publish_to_redis(
+            redis_cache, cache_keys[0], _cache_invalidation_message_json(cache_keys, new_value=new_value, ttl=ttl)
+        )
+    )
+    _pending_publishes.add(task)
 
 
 async def publish_auth_cache_invalidation(
@@ -148,15 +173,17 @@ async def publish_auth_cache_invalidation(
     Redis connection at once; the rest wait in the task set, so a wedge cannot
     drain the shared connection pool.
     """
+    await publish_auth_cache_invalidations(cache_keys=(cache_key,), new_value=new_value, ttl=ttl)
+
+
+async def publish_auth_cache_invalidations(
+    cache_keys: Sequence[str], new_value: float | None = None, ttl: float | None = None
+) -> None:
     redis_cache: Final = coordination_redis_cache()
-    if redis_cache is None or not _has_room_for_publish(1):
+    if redis_cache is None:
         return
-    task: Final = asyncio.create_task(
-        _publish_to_redis(
-            redis_cache, cache_key, _cache_invalidation_message_json(cache_key, new_value=new_value, ttl=ttl)
-        )
-    )
-    _pending_publishes.add(task)
+    for start in range(0, len(cache_keys), _KEYS_PER_MESSAGE):
+        _queue_publish(redis_cache, tuple(cache_keys[start : start + _KEYS_PER_MESSAGE]), new_value, ttl)
     await asyncio.sleep(0)
 
 
@@ -239,18 +266,31 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_spend_counters", "_task", "_user_api_key_cache")
+    """``counter_cache`` is the one cache a value-carrying message (a spend reset) is written into;
+    a delete reaches every additional cache. Writing a reset's thousands of counters into every
+    additional cache would evict what the others hold, the BYOK credentials among them."""
+
+    __slots__ = (
+        "_additional_in_memory_caches",
+        "_counter_cache",
+        "_redis_cache",
+        "_spend_counters",
+        "_task",
+        "_user_api_key_cache",
+    )
 
     def __init__(
         self,
         redis_cache: "RedisCache",
         user_api_key_cache: "UserApiKeyCache",
         additional_in_memory_caches: Sequence["InMemoryCache"] = (),
+        counter_cache: "InMemoryCache | None" = None,
         spend_counters: SpendCounterCopies | None = None,
     ) -> None:
         self._redis_cache = redis_cache
         self._user_api_key_cache = user_api_key_cache
         self._additional_in_memory_caches = tuple(additional_in_memory_caches)
+        self._counter_cache = counter_cache
         self._spend_counters: Final = spend_counters
         self._task: asyncio.Task[None] | None = None
 
@@ -307,14 +347,18 @@ class AuthCacheInvalidationSubscriber:
         if parsed is None:
             return
         if self._spend_counters is not None:
-            self._spend_counters.apply_broadcast(parsed.cache_key, parsed.new_value, parsed.ttl)
+            for cache_key in parsed.cache_keys:
+                self._spend_counters.apply_broadcast(cache_key, parsed.new_value, parsed.ttl)
         if parsed.new_value is not None:
-            for additional_cache in self._additional_in_memory_caches:
-                additional_cache.set_cache(parsed.cache_key, parsed.new_value, ttl=parsed.ttl)
+            if self._counter_cache is None:
+                return
+            for cache_key in parsed.cache_keys:
+                self._counter_cache.set_cache(cache_key, parsed.new_value, ttl=parsed.ttl)
             return
-        _drop_from_memory(parsed.cache_key, self._user_api_key_cache)
-        for additional_cache in self._additional_in_memory_caches:
-            additional_cache.delete_cache(parsed.cache_key)
+        for cache_key in parsed.cache_keys:
+            _drop_from_memory(cache_key, self._user_api_key_cache)
+            for additional_cache in self._additional_in_memory_caches:
+                additional_cache.delete_cache(cache_key)
 
     @staticmethod
     async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:

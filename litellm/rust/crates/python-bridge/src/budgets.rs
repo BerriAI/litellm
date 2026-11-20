@@ -11,7 +11,7 @@ use pyo3::{
 };
 use serde::de::DeserializeOwned;
 
-use crate::redis::store::spend_counters::NativeSpendCounters;
+use crate::redis::store::{spend_counters::NativeSpendCounters, ttl};
 
 fn from_model<T: DeserializeOwned>(model: &Bound<'_, PyAny>) -> PyResult<T> {
     from_py_argument(&model.call_method0("model_dump")?)
@@ -44,22 +44,30 @@ impl NativeBudgets {
         ))
     }
 
+    #[pyo3(signature = (plan, observed, ttl_seconds = None))]
     fn reserve<'py>(
         &self,
         py: Python<'py>,
         #[pyo3(from_py_with = from_record)] plan: BudgetPlan,
         #[pyo3(from_py_with = from_py_argument)] observed: Vec<BudgetCounterSpend>,
+        ttl_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let budgets = Arc::clone(&self.0);
+        let ttl = ttl(ttl_seconds)?;
         run_async_value(py, async move {
             budgets
-                .admit(plan, &observed)
+                .admit(plan, &observed, ttl)
                 .await
                 .map(Pythonized)
                 .map_err(PyRuntimeError::new_err)
         })
     }
 
+    #[pyo3(signature = (reservation, window_resets, observed, actual, apply_consistent, ttl_seconds = None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "keeps the Python settle call's positional inputs and the spend counter write TTL"
+    )]
     fn settle<'py>(
         &self,
         py: Python<'py>,
@@ -68,8 +76,10 @@ impl NativeBudgets {
         observed: Vec<Option<f64>>,
         actual: f64,
         apply_consistent: bool,
+        ttl_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let budgets = Arc::clone(&self.0);
+        let ttl = ttl(ttl_seconds)?;
         run_async_value(py, async move {
             budgets
                 .settle(&Settle {
@@ -78,6 +88,7 @@ impl NativeBudgets {
                     observed: &observed,
                     actual,
                     apply_consistent,
+                    ttl,
                 })
                 .await
                 .map(Pythonized)

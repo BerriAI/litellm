@@ -1,6 +1,6 @@
 import asyncio
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
@@ -37,6 +37,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_cache_key,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
+    _lease_renewals,
     estimate_request_max_cost,
     invalidate_budget_reservation_counters,
     release_budget_reservation,
@@ -1706,10 +1707,12 @@ async def test_release_budget_reservation_on_cancel_noop_when_finalized(
 
 
 @contextmanager
-def _install(redis: RespRedis, ttl: float = 60.0) -> Iterator[SpendCounterStore]:
+def _install(
+    redis: RespRedis, ttl: float = 60.0, counter_ttl: Callable[[], float] | None = None
+) -> Iterator[SpendCounterStore]:
     import litellm.proxy.proxy_server as ps
 
-    with resp_store(redis, default_ttl=ttl) as store:
+    with resp_store(redis, default_ttl=ttl, counter_ttl=counter_ttl) as store:
         ps.spend_counter_store = store
         install_native_owner(store)
         yield store
@@ -1797,6 +1800,47 @@ async def test_reservation_survives_redis_counter_ttl_while_request_in_flight(
         await asyncio.sleep(0.35)
         assert redis_cache.refresh_count == refreshes_after_release
         assert redis_cache.get(counter_key) is None
+
+
+@pytest.mark.asyncio
+async def test_reservation_lease_renewal_stops_promptly_with_long_spend_counter_ttl(
+    spend_counter_state,
+):
+    """A long spend-counter TTL must not stretch how often renewal checks for completion, or finished
+    requests keep their renewal tasks alive for half that TTL"""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-lease-long-ttl", spend=0.0, max_budget=1.0)
+
+    with _install(RespRedis(values={}, ttl=0.2), ttl=0.2, counter_ttl=lambda: 3600):
+        reservation = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+        assert reservation is not None
+        assert len(_lease_renewals) == 1
+
+        await release_budget_reservation(reservation)
+        await asyncio.sleep(0.3)
+        assert len(_lease_renewals) == 0
+
+
+@pytest.mark.asyncio
+async def test_native_hold_and_release_write_counters_with_the_store_counter_ttl(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    redis = RespRedis(values={})
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-counter-ttl", spend=0.0, max_budget=1.0)
+    counter_key = "spend:key:key-counter-ttl"
+
+    with _install(redis, ttl=60.0, counter_ttl=lambda: 3600):
+        reservation = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+        assert reservation is not None
+        await release_budget_reservation(reservation)
+
+    assert redis.count("INCRBYFLOAT") == 2
+    assert {command for command in redis.commands if command[:2] == ("EXPIRE", counter_key)} == {
+        ("EXPIRE", counter_key, "3600")
+    }
 
 
 @pytest.mark.asyncio

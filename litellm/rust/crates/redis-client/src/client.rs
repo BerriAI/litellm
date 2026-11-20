@@ -159,7 +159,7 @@ impl RedisClient {
         Pipeline::new(self.0.namespace.clone())
     }
 
-    pub(crate) fn namespace(&self) -> &Namespace {
+    pub fn namespace(&self) -> &Namespace {
         &self.0.namespace
     }
 

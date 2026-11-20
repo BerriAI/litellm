@@ -125,6 +125,67 @@ async def test_without_redis_the_native_store_counts_and_answers_from_memory() -
     assert not store.increment_many_post_call((("spend:key:k", 1.0),))
 
 
+@pytest.mark.asyncio
+async def test_every_redis_write_takes_the_counter_ttl_as_it_stands_when_it_is_written() -> None:
+    """The settings the TTL depends on load after the store is built, so a TTL read once would go stale."""
+    spend: Final = FakeSpendCounters(redis={"spend:key:refreshed": 1.0})
+    store: Final = spend.store()
+
+    spend.counter_ttl = 101
+    await store.increment("spend:key:incremented", 1.0)
+    spend.counter_ttl = 102
+    await store.increment_many((("spend:key:piped", 1.0),))
+    spend.counter_ttl = 103
+    await store.set_max("spend:key:repaired", 1.0)
+    spend.counter_ttl = 104
+    await store.seed("spend:key:seeded", 1.0, increment_if_lost=False)
+    spend.counter_ttl = 105
+    await store.set("spend:key:reset", 1.0, memory_ttl=60)
+    spend.counter_ttl = 106
+    await store.refresh_ttl("spend:key:refreshed")
+    spend.counter_ttl = 107
+    natives: Final = FakeNatives()
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        store.increment_many_post_call((("spend:key:post_call", 1.0),))
+
+    assert spend.ttls == {
+        "spend:key:incremented": 101,
+        "spend:key:piped": 102,
+        "spend:key:repaired": 103,
+        "spend:key:seeded": 104,
+        "spend:key:reset": 105,
+        "spend:key:refreshed": 106,
+        "spend:key:post_call": 107,
+    }
+    assert spend.memory_ttls == {"spend:key:reset": 60}
+
+
+@pytest.mark.asyncio
+async def test_a_store_without_a_counter_ttl_leaves_each_write_on_the_redis_clients_default() -> None:
+    spend: Final = FakeSpendCounters()
+
+    await SpendCounterStore(spend).increment("spend:key:k", 1.0)
+
+    assert spend.ttls == {"spend:key:k": None}
+
+
+@pytest.mark.parametrize(
+    ("namespace", "fence", "sent"),
+    [
+        (None, "{spend:team:t}:reset_fence", "{spend:team:t}:reset_fence"),
+        ("litellm", "{litellm:spend:team:t}:reset_fence", "litellm:{litellm:spend:team:t}:reset_fence"),
+    ],
+)
+def test_redis_cache_writes_the_reset_fence_the_native_store_checks(namespace: str | None, fence: str, sent: str) -> None:
+    """Mirrors ``reset_fence_key`` in the crate's ``keys.rs``, and ``a_reset_fence_holds_a_repair_until_it_is_gone``
+    checks the same bytes against real Redis."""
+    cache: Final = RedisCache.__new__(RedisCache)
+    cache.namespace = namespace
+
+    assert cache.reset_fence_key("spend:team:t") == fence
+    assert cache.check_and_fix_namespace(key=fence) == sent
+
+
 def test_a_broadcast_writes_and_drops_only_spend_counter_copies() -> None:
     store: Final = SpendCounterStore(connect(None).spend_counters())
     store.set_local("spend:key:k", 5.0)
@@ -175,9 +236,11 @@ async def test_post_call_increments_go_on_the_requests_native_post_call_batch_un
     targets: Final[list[str | None]] = []
 
     class Recording(FakeSpendCounters):
-        def increment_many_post_call(self, request: object, increments: object) -> FakeSettlement | None:
+        def increment_many_post_call(
+            self, request: object, increments: object, ttl_seconds: float | None = None
+        ) -> FakeSettlement | None:
             targets.append(current_service_target())
-            return super().increment_many_post_call(request, increments)  # pyright: ignore[reportArgumentType]  # recorded as given
+            return super().increment_many_post_call(request, increments, ttl_seconds)  # pyright: ignore[reportArgumentType]  # recorded as given
 
     spend: Final = Recording()
     store: Final = spend.store()

@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 
 use litellm_callbacks::{BudgetReservation, ReservationEntry};
 use litellm_python_compat::repr::float_repr;
@@ -162,11 +165,12 @@ async fn can_apply(
 async fn increment_or_invalidate(
     store: &SpendCounters,
     applicable: Vec<(SpendCounter, Number)>,
+    ttl: Option<Duration>,
 ) -> Result<(), EngineError> {
     if applicable.is_empty() {
         return Ok(());
     }
-    if let Err(error) = store.increment_many(&applicable).await {
+    if let Err(error) = store.increment_many(&applicable, ttl).await {
         let counters: Vec<SpendCounter> = applicable.into_iter().map(|(c, _)| c).collect();
         store.invalidate(&counters).await;
         return Err(error.into());
@@ -192,6 +196,7 @@ async fn apply(
     store: &SpendCounters,
     adjustments: &[Adjustment],
     inconsistent: Inconsistent,
+    ttl: Option<Duration>,
 ) -> Result<Vec<bool>, EngineError> {
     let mut consistent = Vec::with_capacity(adjustments.len());
     for adjustment in adjustments {
@@ -219,7 +224,7 @@ async fn apply(
             )
         })
         .collect();
-    increment_or_invalidate(store, applicable).await?;
+    increment_or_invalidate(store, applicable, ttl).await?;
     if inconsistent == Inconsistent::Drop {
         for (adjustment, _) in adjustments
             .iter()
@@ -239,6 +244,7 @@ pub(crate) async fn apply_actual(
     entries: &mut [Entry],
     actual: f64,
     inconsistent: Inconsistent,
+    ttl: Option<Duration>,
 ) -> Result<(), EngineError> {
     let adjustments: Vec<Adjustment> = entries
         .iter()
@@ -255,18 +261,28 @@ pub(crate) async fn apply_actual(
             })
         })
         .collect();
-    apply(store, &adjustments, inconsistent).await?;
+    apply(store, &adjustments, inconsistent, ttl).await?;
     for adjustment in adjustments {
         entries[adjustment.index].applied_adjustment = adjustment.target;
     }
     Ok(())
 }
 
-pub(crate) async fn release_best_effort(store: &SpendCounters, entries: &mut [Entry]) {
+pub(crate) async fn release_best_effort(
+    store: &SpendCounters,
+    entries: &mut [Entry],
+    ttl: Option<Duration>,
+) {
     for entry in entries {
-        if apply_actual(store, std::slice::from_mut(entry), 0.0, Inconsistent::Drop)
-            .await
-            .is_err()
+        if apply_actual(
+            store,
+            std::slice::from_mut(entry),
+            0.0,
+            Inconsistent::Drop,
+            ttl,
+        )
+        .await
+        .is_err()
         {
             tracing::error!(
                 counter = entry.counter_key,
@@ -279,6 +295,7 @@ pub(crate) async fn release_best_effort(store: &SpendCounters, entries: &mut [En
 
 struct Admission<'a> {
     store: &'a SpendCounters,
+    ttl: Option<Duration>,
     observed: &'a [BudgetCounterSpend],
     plan: &'a Plan,
     applied: Vec<Entry>,
@@ -310,7 +327,7 @@ impl Admission<'_> {
             .iter()
             .map(|counter| (counter.counter.clone(), Number::Float(charged)))
             .collect();
-        let totals = match self.store.increment_many(&increments).await {
+        let totals = match self.store.increment_many(&increments, self.ttl).await {
             Ok(totals) => totals,
             Err(error) => {
                 tracing::warn!(%error, "Skipping budget reservation because spend counter reservation failed");
@@ -344,7 +361,7 @@ impl Admission<'_> {
         if self.plan.throttle_counter.as_deref() == Some(counter.key()) {
             if let Some(position) = self.applied.iter().position(|entry| entry.id == id) {
                 let mut entry = self.applied.remove(position);
-                release_best_effort(self.store, std::slice::from_mut(&mut entry)).await;
+                release_best_effort(self.store, std::slice::from_mut(&mut entry), self.ttl).await;
             }
             return Ok(());
         }
@@ -360,6 +377,7 @@ impl Admission<'_> {
             &mut self.applied,
             remaining,
             Inconsistent::Refuse,
+            self.ttl,
         )
         .await?;
         for entry in &mut self.applied {
@@ -375,17 +393,19 @@ pub async fn reserve(
     store: &SpendCounters,
     plan: &Plan,
     observed: &[BudgetCounterSpend],
+    ttl: Option<Duration>,
 ) -> Result<Option<Reservation>, EngineError> {
     let counters = plan.counters().map_err(EngineError::Plan)?;
     let mut admission = Admission {
         store,
+        ttl,
         observed,
         plan,
         applied: Vec::new(),
         cost: plan.reservation_cost,
     };
     if let Err(error) = admission.charge(&counters).await {
-        release_best_effort(store, &mut admission.applied).await;
+        release_best_effort(store, &mut admission.applied, ttl).await;
         return Err(error);
     }
     if admission.applied.is_empty() {
@@ -424,6 +444,7 @@ pub struct Settle<'a> {
     pub observed: &'a [Option<f64>],
     pub actual: f64,
     pub apply_consistent: bool,
+    pub ttl: Option<Duration>,
 }
 
 fn rejected(rejected: Option<&[String]>, member: &str) -> bool {
@@ -529,7 +550,7 @@ pub async fn settle(
                 )
             })
             .collect();
-        increment_or_invalidate(store, applicable).await?;
+        increment_or_invalidate(store, applicable, request.ttl).await?;
     }
     let mut settlement = Settlement {
         adjustments: vec![None; entries.len()],
@@ -631,7 +652,7 @@ mod tests {
             ],
             3.0,
         );
-        let reservation = reserve(&store, &plan, &[]).await.unwrap().unwrap();
+        let reservation = reserve(&store, &plan, &[], None).await.unwrap().unwrap();
         assert_eq!(reservation.reserved_cost, 3.0);
         assert_eq!(reservation.input_cost, 0.75);
         assert_eq!(value(&store, KEY), Some(4.0));
@@ -653,7 +674,7 @@ mod tests {
             ],
             3.0,
         );
-        let reservation = reserve(&store, &plan, &[]).await.unwrap().unwrap();
+        let reservation = reserve(&store, &plan, &[], None).await.unwrap().unwrap();
         assert_eq!(reservation.reserved_cost, 1.0);
         assert_eq!(value(&store, KEY), Some(2.0));
         assert_eq!(value(&store, TEAM), Some(10.0));
@@ -691,7 +712,7 @@ mod tests {
                 1.0,
             )
         };
-        let Err(EngineError::Exceeded(exceeded)) = reserve(&store, &plan, &[]).await else {
+        let Err(EngineError::Exceeded(exceeded)) = reserve(&store, &plan, &[], None).await else {
             panic!("expected a refusal");
         };
         assert_eq!(exceeded.message, message);
@@ -715,7 +736,7 @@ mod tests {
                 1.0,
             )
         };
-        let reservation = reserve(&store, &plan, &[]).await.unwrap().unwrap();
+        let reservation = reserve(&store, &plan, &[], None).await.unwrap().unwrap();
         assert_eq!(reservation.entries.len(), 1);
         assert_eq!(reservation.entries[0].counter_key, TEAM);
         assert_eq!(value(&store, KEY), Some(10.0));
@@ -775,6 +796,7 @@ mod tests {
                 observed: &observed,
                 actual,
                 apply_consistent,
+                ttl: None,
             },
             &Moment::from_unix_micros(NOW),
         )
@@ -801,7 +823,7 @@ mod tests {
             ],
             2.0,
         );
-        let record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
+        let record = record(&reserve(&store, &plan, &[], None).await.unwrap().unwrap());
         store
             .invalidate(&[SpendCounter::parse(TEAM).unwrap()])
             .await;
@@ -829,7 +851,7 @@ mod tests {
     async fn a_counter_the_caller_saw_missing_is_reseeded_whatever_the_store_holds_now() {
         let store = store(&[(KEY, 1.0)]);
         let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 2.0);
-        let record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
+        let record = record(&reserve(&store, &plan, &[], None).await.unwrap().unwrap());
         let settlement = settle(
             &store,
             &Settle {
@@ -838,6 +860,7 @@ mod tests {
                 observed: &[None],
                 actual: 0.5,
                 apply_consistent: true,
+                ttl: None,
             },
             &Moment::from_unix_micros(NOW),
         )
@@ -865,7 +888,7 @@ mod tests {
     ) {
         let store = store(&[(KEY, 1.0)]);
         let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 2.0);
-        let mut record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
+        let mut record = record(&reserve(&store, &plan, &[], None).await.unwrap().unwrap());
         let settlement = settle_now(&store, &record, &[], actual).await.unwrap();
         assert_eq!(settlement.adjustments, vec![Some(actual - 2.0)]);
         stamp(&mut record, &settlement);
@@ -891,7 +914,7 @@ mod tests {
             ],
             2.0,
         );
-        let record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
+        let record = record(&reserve(&store, &plan, &[], None).await.unwrap().unwrap());
         let key = SpendCounter::parse(KEY).unwrap();
         match before_settle {
             Some(spend) => store.set_local(&key, Number::Float(spend), None).unwrap(),
@@ -928,7 +951,7 @@ mod tests {
             ],
             2.0,
         );
-        let record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
+        let record = record(&reserve(&store, &plan, &[], None).await.unwrap().unwrap());
         store
             .invalidate(&[SpendCounter::parse(TEAM).unwrap()])
             .await;

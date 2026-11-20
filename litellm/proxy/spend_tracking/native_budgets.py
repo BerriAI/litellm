@@ -176,8 +176,12 @@ async def reserve_native(
     budgets: Final = native_budgets()
     if budgets is None:
         return None
+    from litellm.proxy.proxy_server import spend_counter_store
+
     record: Final = coerce_record(BudgetPlan, plan)
-    admission: Final = _ADMISSION.validate_python(await budgets.reserve(record, await observed_counter_spend(record)))
+    admission: Final = _ADMISSION.validate_python(
+        await budgets.reserve(record, await observed_counter_spend(record), spend_counter_store.write_ttl())
+    )
     if isinstance(admission, _Refused):
         raise _refusal(admission)
     if isinstance(admission, _Skipped):
@@ -268,7 +272,14 @@ async def settle_native_reservation(
     ):
         observed: Final = tuple([await _observed_spend(counter_key) for counter_key in counter_keys])
         settled: Final = _SETTLEMENT.validate_python(
-            await budgets.settle(record, tuple(map(_window_reset, entries)), observed, actual_cost, apply_consistent)
+            await budgets.settle(
+                record,
+                tuple(map(_window_reset, entries)),
+                observed,
+                actual_cost,
+                apply_consistent,
+                spend_counter_store.write_ttl(),
+            )
         )
         for reseed in settled.reseed:
             await reseed_reserved_counter(reseed.counter_key, reseed.actual_cost)

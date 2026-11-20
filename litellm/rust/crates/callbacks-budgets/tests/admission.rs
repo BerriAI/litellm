@@ -69,7 +69,7 @@ fn observed(spends: &[(&str, f64)]) -> Vec<BudgetCounterSpend> {
 
 async fn admit(budgets: &Budgets, plan: &BudgetPlan, spends: &[(&str, f64)]) -> Admission {
     budgets
-        .admit(plan.clone(), &observed(spends))
+        .admit(plan.clone(), &observed(spends), None)
         .await
         .unwrap()
 }
@@ -114,6 +114,7 @@ async fn settle(
             observed: &observed,
             actual,
             apply_consistent: true,
+            ttl: None,
         })
         .await
         .unwrap()
@@ -148,7 +149,7 @@ async fn an_admission_holds_and_returns_the_hold_as_the_reservation() {
 async fn a_plan_missing_a_required_member_fails_without_holding(#[case] plan: BudgetPlan) {
     let store = store(&[(KEY, 1.0)]);
     let budgets = Budgets::new(Arc::clone(&store));
-    assert!(budgets.admit(plan, &[]).await.is_err());
+    assert!(budgets.admit(plan, &[], None).await.is_err());
     assert_eq!(value(&store, KEY), Some(1.0));
 }
 

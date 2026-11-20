@@ -99,8 +99,11 @@ class RespRedis:
         self._store(key, float(value))
         return b"+OK\r\n"
 
-    def _set_max(self, key: str, spend: str) -> bytes:
+    def _set_max(self, keys: Sequence[str], spend: str) -> bytes:
+        key, *fences = keys
         current: Final = self.values.get(key)
+        if any(fence in self.values for fence in fences):
+            return _bulk(current)
         if current is None or current < float(spend):
             self._store(key, float(spend))
             return _bulk(float(spend))
@@ -150,7 +153,8 @@ class RespRedis:
             case "SET":
                 return self._set(args[0], args[1], args[2:])
             case "EVAL" if SET_MAX_SCRIPT_MARKER in args[0]:
-                return self._set_max(args[2], args[3])
+                key_count: Final = int(args[1])
+                return self._set_max(args[2 : 2 + key_count], args[2 + key_count])
             case "EVAL":
                 return b"-ERR script not emulated by the test\r\n"
             case _:
@@ -184,7 +188,9 @@ async def _stop_serving(server: asyncio.Server) -> None:
 
 
 @contextmanager
-def resp_store(redis: RespRedis, default_ttl: float = 60) -> Iterator[SpendCounterStore]:
+def resp_store(
+    redis: RespRedis, default_ttl: float = 60, counter_ttl: Callable[[], float] | None = None
+) -> Iterator[SpendCounterStore]:
     loop: Final = asyncio.new_event_loop()
     thread: Final = threading.Thread(target=loop.run_forever, daemon=True)
     thread.start()
@@ -202,7 +208,7 @@ def resp_store(redis: RespRedis, default_ttl: float = 60) -> Iterator[SpendCount
             )
         )
         assert client is not None
-        yield SpendCounterStore(NativeSpendCounters(client))
+        yield SpendCounterStore(NativeSpendCounters(client), counter_ttl)
     finally:
         asyncio.run_coroutine_threadsafe(_stop_serving(server), loop).result(timeout=5)
         loop.call_soon_threadsafe(loop.stop)
