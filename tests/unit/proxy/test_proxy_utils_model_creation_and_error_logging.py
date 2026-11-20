@@ -2825,9 +2825,9 @@ def test_a_forwarded_credential_clone_does_not_bill_its_final_timed_out_attempt_
     pricing reads the configured deployment's id. The clone's final attempt is still the failure row's."""
     from litellm.proxy.utils import _billed_earlier_attempts
 
-    usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+    usage: Final = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
 
-    attempts = _billed_earlier_attempts(
+    attempts: Final = _billed_earlier_attempts(
         model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
         litellm_params={
             "metadata": {
