@@ -11,8 +11,10 @@ config:
         timeout: 30
       model_info:
         id: claude-a
+        max_input_tokens: 200000
   router_settings:
     routing_strategy: simple-shuffle
+    enable_pre_call_checks: true
     num_retries: 1
     enable_cross_model_group_collision_check: true
     redis_host: localhost
