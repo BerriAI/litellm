@@ -237,12 +237,12 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
 
 class _DenyingFileAccessGuard:
     def __init__(self) -> None:
-        self.checked: list[str] = []
+        self.checked: tuple[str, ...] = ()
 
     async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: object) -> None:
         from fastapi import HTTPException
 
-        self.checked.append(file_id)
+        self.checked = (*self.checked, file_id)
         raise HTTPException(status_code=403, detail="not the owner")
 
 
@@ -310,7 +310,7 @@ async def test_gemini_pass_through_refuses_a_file_the_caller_does_not_own(
         await _call_gemini_pass_through(method, endpoint)
 
     assert refused.value.status_code == 403
-    assert guard.checked == ["abc123"]
+    assert guard.checked == ("abc123",)
     assert upstream.call_count == 0
 
 
@@ -346,7 +346,7 @@ async def test_gemini_pass_through_checks_file_ownership_only_on_single_file_get
     response: Final = await _call_gemini_pass_through(method, endpoint)
 
     assert response.status_code == 200
-    assert guard.checked == []
+    assert guard.checked == ()
     assert upstream.call_count == 1
 
 
