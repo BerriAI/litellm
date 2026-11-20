@@ -24,9 +24,10 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     serialize_tool_call_arguments,
 )
 from litellm.responses.litellm_completion_transformation.mcp_calls import (
-    MCP_CALL_ITEM_ID_PREFIX,
     McpToolResult,
     McpToolUse,
+    anthropic_mcp_call_id,
+    build_deferred_mcp_call,
     build_mcp_call,
     mcp_tool_results_by_call_id,
     mcp_tool_uses,
@@ -415,9 +416,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._queue_held_annotations()
         output_index: Final = self._get_or_assign_tool_output_index(call.id)
         self._queue_output_item_added(
-            output_index, BaseLiteLLMOpenAIResponseObject(**build_mcp_call(call, None).model_dump())
+            output_index, BaseLiteLLMOpenAIResponseObject(**build_deferred_mcp_call(call, None).model_dump())
         )
-        self._queue_mcp_call_done(call, result)
+        self._queue_mcp_call_done(call.id, build_deferred_mcp_call(call, result))
 
     def _queue_new_mcp_calls(self, holder: object) -> None:
         for call in mcp_tool_uses(holder):
@@ -465,12 +466,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         for call in open_calls:
             result = results.get(call.id)
             if closing or result is not None:
-                self._queue_mcp_call_done(call, result)
+                self._queue_mcp_call_done(call.id, build_mcp_call(call, result))
 
-    def _queue_mcp_call_done(self, call: McpToolUse, result: McpToolResult | None) -> None:
-        self._done_mcp_call_ids = self._done_mcp_call_ids | {call.id}
-        output_index: Final = self._get_or_assign_tool_output_index(call.id)
-        item: Final = build_mcp_call(call, result)
+    def _queue_mcp_call_done(self, call_id: str, item: McpCall) -> None:
+        self._done_mcp_call_ids = self._done_mcp_call_ids | {call_id}
+        output_index: Final = self._get_or_assign_tool_output_index(call_id)
         self._pending_tool_events.extend(
             (
                 *_mcp_call_status_events(item, output_index),
@@ -516,9 +516,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             case "tool_search_output":
                 return self._tool_search_output_index_by_call_id.get(str(getattr(item, "call_id", None)))
             case "mcp_call":
-                return self._tool_output_index_by_call_id.get(
-                    str(getattr(item, "id", "")).removeprefix(MCP_CALL_ITEM_ID_PREFIX)
-                )
+                return self._tool_output_index_by_call_id.get(anthropic_mcp_call_id(str(getattr(item, "id", ""))))
             case _:
                 call_id: Final = getattr(item, "call_id", None) or str(getattr(item, "id", "")).removeprefix("ws_")
                 return self._tool_output_index_by_call_id.get(str(call_id))

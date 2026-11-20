@@ -2910,7 +2910,12 @@ _PENDING_MCP_CALL_ITEM: Final = {
     "server_label": "deepwiki",
     "status": "in_progress",
 }
-_ANSWERED_MCP_CALL_ITEM: Final = {**_PENDING_MCP_CALL_ITEM, "status": "completed", "output": WIKI_PAGES}
+_ANSWERED_MCP_CALL_ITEM: Final = {
+    **_PENDING_MCP_CALL_ITEM,
+    "id": f"mcp_{DEFERRED_MCP_CALL_ID}_result",
+    "status": "completed",
+    "output": WIKI_PAGES,
+}
 _LOCAL_TIME_CALL_ITEM: Final = {
     "type": "function_call",
     "id": f"fc_{CLIENT_TOOL_CALL_ID}",
@@ -2956,8 +2961,13 @@ def _assistant_turns(body: bytes | str) -> list[object]:
     return [message["content"] for message in json.loads(body)["messages"] if message["role"] == "assistant"]
 
 
+def _first_item_of_each_id(items: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
+    ids: Final = [item.get("id") for item in items]
+    return [item for index, item in enumerate(items) if ids[index] is None or ids[index] not in ids[:index]]
+
+
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
-def test_responses_over_anthropic_return_a_deferred_mcp_result_on_its_call_and_send_it_back_with_that_turn(
+def test_responses_over_anthropic_return_a_deferred_mcp_result_as_its_own_item_and_send_it_back_with_that_turn(
     respx_mock: respx.MockRouter, stream: bool
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
@@ -2971,7 +2981,10 @@ def test_responses_over_anthropic_return_a_deferred_mcp_result_on_its_call_and_s
     turn_one, _ = _deferred_mcp_turn([_DEFERRED_MCP_PROMPT_ITEM], stream)
     turn_two_input: Final = [_DEFERRED_MCP_PROMPT_ITEM, *turn_one, _LOCAL_TIME_OUTPUT_ITEM]
     turn_two, _ = _deferred_mcp_turn(turn_two_input, stream)
-    _deferred_mcp_turn([*turn_two_input, *turn_two, {"role": "user", "content": DEFERRED_MCP_FOLLOW_UP}], False)
+    history_of_a_client_that_drops_repeated_ids: Final = _first_item_of_each_id([*turn_two_input, *turn_two])
+    _deferred_mcp_turn(
+        [*history_of_a_client_that_drops_repeated_ids, {"role": "user", "content": DEFERRED_MCP_FOLLOW_UP}], False
+    )
 
     assert [item["type"] for item in turn_one] == ["mcp_call", "function_call"]
     assert turn_one[0] == _PENDING_MCP_CALL_ITEM
@@ -3005,15 +3018,14 @@ def test_streamed_responses_over_anthropic_emit_the_deferred_mcp_call_pending_th
     turn_one, turn_one_events = _deferred_mcp_turn([_DEFERRED_MCP_PROMPT_ITEM], True)
     _, turn_two_events = _deferred_mcp_turn([_DEFERRED_MCP_PROMPT_ITEM, *turn_one, _LOCAL_TIME_OUTPUT_ITEM], True)
 
-    item_id: Final = _PENDING_MCP_CALL_ITEM["id"]
-    assert _item_events(turn_one_events, item_id) == [
+    assert _item_events(turn_one_events, _PENDING_MCP_CALL_ITEM["id"]) == [
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0),
         (ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS, 0),
         (ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA, 0),
         (ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE, 0),
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 0),
     ]
-    assert _item_events(turn_two_events, item_id) == [
+    assert _item_events(turn_two_events, _ANSWERED_MCP_CALL_ITEM["id"]) == [
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0),
         (ResponsesAPIStreamEvents.MCP_CALL_COMPLETED, 0),
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 0),
@@ -3023,7 +3035,7 @@ def test_streamed_responses_over_anthropic_emit_the_deferred_mcp_call_pending_th
         for event in turn_two_events
         if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     ]
-    assert added_items[0] == (0, _PENDING_MCP_CALL_ITEM)
+    assert added_items[0] == (0, {**_PENDING_MCP_CALL_ITEM, "id": _ANSWERED_MCP_CALL_ITEM["id"]})
     assert [(index, item["type"]) for index, item in added_items[1:]] == [(1, "message")]
     done_mcp_items: Final = [
         _dumped(event.item)
