@@ -1571,6 +1571,25 @@ def _gemini_inline_url(source: str, format: str | None) -> str:
     )
 
 
+def _gemini_url_media_source(url: str, fields: Mapping[str, object]) -> GeminiMediaSource:
+    detail: Final = fields.get("detail")
+    media_format: Final = _gemini_media_format(fields)
+    return GeminiMediaSource(
+        url=_gemini_inline_url(url, media_format),
+        format=media_format,
+        detail=detail if isinstance(detail, str) else None,
+        video_metadata=as_str_mapping(fields.get("video_metadata")),
+        inline_in_tool_result=True,
+    )
+
+
+def _gemini_video_url_source(content: Mapping[str, object]) -> GeminiMediaSource | None:
+    video_url: Final = content.get("video_url")
+    video_fields: Final = {**content, **(as_str_mapping(video_url) or {})}
+    url: Final = video_url if isinstance(video_url, str) else video_fields.get("url")
+    return _gemini_url_media_source(url, video_fields) if isinstance(url, str) and url else None
+
+
 def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool = False) -> GeminiMediaSource | None:
     content_type: Final = content.get("type")
     if content_type in ("image", "input_image", "image_url"):
@@ -1578,16 +1597,12 @@ def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool =
         if image is None:
             return None
         image_url: Final = image["image_url"]
-        image_fields: Final = {**content, **(as_str_mapping(content.get("image_url")) or {})}
-        detail: Final = image_fields.get("detail")
-        image_format: Final = _gemini_media_format(image_fields)
-        return GeminiMediaSource(
-            url=_gemini_inline_url(image_url if isinstance(image_url, str) else image_url["url"], image_format),
-            format=image_format,
-            detail=detail if isinstance(detail, str) else None,
-            video_metadata=as_str_mapping(image_fields.get("video_metadata")),
-            inline_in_tool_result=True,
+        return _gemini_url_media_source(
+            image_url if isinstance(image_url, str) else image_url["url"],
+            {**content, **(as_str_mapping(content.get("image_url")) or {})},
         )
+    if content_type == "video_url":
+        return _gemini_video_url_source(content)
     if content_type == "input_audio":
         audio: Final = as_str_mapping(content.get("input_audio"))
         if audio is None:

@@ -474,6 +474,107 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
 
 
+async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video(async_only_image_fetch):
+    video_url: Final = f"https://videos.example/{uuid.uuid4()}.mp4"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "A rabbit"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe the clip"},
+                    {"type": "video_url", "video_url": {"url": video_url}},
+                ],
+            }
+        ],
+        api_key="fake-gemini-key",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "A rabbit"
+    assert captured["body"]["contents"][0]["parts"] == [
+        {"text": "Describe the clip"},
+        {"file_data": {"mime_type": "video/mp4", "file_uri": video_url}},
+    ]
+    assert async_only_image_fetch.fetched == []
+
+
+@pytest.mark.parametrize(
+    "video_part, expected_part",
+    [
+        pytest.param(
+            {"type": "video_url", "video_url": "https://videos.example/clip.mov"},
+            {"file_data": {"mime_type": "video/mov", "file_uri": "https://videos.example/clip.mov"}},
+            id="bare-url-string",
+        ),
+        pytest.param(
+            {"type": "video_url", "video_url": {"url": "gs://qa-bucket/clip.mp4"}},
+            {"file_data": {"mime_type": "video/mp4", "file_uri": "gs://qa-bucket/clip.mp4"}},
+            id="gcs-uri",
+        ),
+        pytest.param(
+            {"type": "video_url", "video_url": {"url": "data:video/webm;base64,GkXfow=="}},
+            {"inline_data": {"mime_type": "video/webm", "data": "GkXfow=="}},
+            id="data-url",
+        ),
+        pytest.param(
+            {
+                "type": "video_url",
+                "video_url": {
+                    "url": "https://cdn.example/v/abc",
+                    "format": "video/mp4",
+                    "detail": "low",
+                    "video_metadata": {"fps": 2},
+                },
+            },
+            {
+                "file_data": {"mime_type": "video/mp4", "file_uri": "https://cdn.example/v/abc"},
+                "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"},
+                "video_metadata": {"fps": 2},
+            },
+            id="format-detail-and-metadata",
+        ),
+    ],
+)
+def test_a_video_url_part_reaches_gemini_as_video(video_part: dict, expected_part: dict) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [{"role": "user", "content": [{"type": "text", "text": "Describe the clip"}, video_part]}],
+        model="gemini-3.8-flash",
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert contents[0]["parts"] == [{"text": "Describe the clip"}, expected_part]
+
+
+def test_gemini_completion_rejects_a_video_url_part_without_a_url_instead_of_dropping_it() -> None:
+    with pytest.raises(litellm.BadRequestError, match="'video_url' but it has no 'url'"):
+        litellm.completion(
+            model="gemini/gemini-flash-latest",
+            api_key="fake-gemini-key",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Describe the clip"}, {"type": "video_url", "video_url": {}}],
+                }
+            ],
+        )
+
+
 def test_image_only_user_content_logs_the_blank_text_fixup_at_debug(caplog: pytest.LogCaptureFixture) -> None:
     messages: Final = [
         {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}]}

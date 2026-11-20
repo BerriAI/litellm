@@ -748,6 +748,12 @@ def _gemini_history_media_part(
                     llm_provider="vertex_ai",
                 )
             raise ValueError(f"Invalid image received - {raw_url}")
+        if message_index is not None and content.get("type") == "video_url":
+            raise litellm.BadRequestError(
+                message="Invalid message content: element type is 'video_url' but it has no 'url'",
+                model=model,
+                llm_provider="vertex_ai",
+            )
         if message_index is not None and content.get("type") == "file":
             if content.get("file") is None:
                 raise litellm.BadRequestError(
