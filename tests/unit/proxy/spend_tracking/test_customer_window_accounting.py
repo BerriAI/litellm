@@ -39,6 +39,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.redis.stores.spend_counters.types import parse_customer_window_counter
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.proxy.auth.customer_hierarchy import (
+    AppDurationLimit,
     CustomerHierarchyAuth,
     CustomerHierarchyIds,
     CustomerRequestIdentity,
@@ -94,6 +95,23 @@ def test_shared_template_reset_is_not_advanced_by_a_member():
     assert first[0].window_start == second[0].window_start == datetime(2026, 11, 1, tzinfo=timezone.utc)
     assert expired.reset_at == datetime(2026, 2, 1, tzinfo=timezone.utc)
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duration", ("daily", "weekly", "1w", "01h", "1mo", "12mo", "2d"))
+async def test_accounting_snapshot_keeps_the_admitted_window_key(duration: str) -> None:
+    now: Final = datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc)
+    scope: Final = CustomerScopeAuth(key="app", entity_id="app", budget_limits=(
+        AppDurationLimit(budget_duration=duration, max_budget=10),
+        BudgetLimit(budget_duration="15m", max_budget=1, reset_at=now),
+    ))
+    restored: Final = CustomerScopeAuth.model_validate_json(scope.model_dump_json())
+    assert restored.model_dump() == scope.model_dump()
+    assert customer_window_counters("app", "app", restored.budget_limits, now=now) == customer_window_counters(
+        "app", "app", scope.budget_limits, now=now
+    )
+    assert await ps.customer_accounting_counters(
+        CustomerHierarchyIds(app_id="app"), (restored,), started_at=datetime.fromtimestamp(now.timestamp())
+    ) == customer_window_counters("app", "app", scope.budget_limits, now=now)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ("customer_org", "customer_team", "customer_member"))
@@ -313,7 +331,8 @@ async def test_accounting_retains_stamped_parent_ids(accounting_state, moved_mem
         cache,
     )
     assert {scope.entity_id for scope in scopes} == ({"org", "team", "member"} if moved_member else {"org"})
-    assert all(scope.budget_limits == LIMITS for scope in scopes)
+    expected: Final = tuple(limit.model_dump() for limit in LIMITS)
+    assert all(tuple(limit.model_dump() for limit in scope.budget_limits) == expected for scope in scopes)
     prisma.db.litellm_customerorganizationtable.find_unique.assert_awaited_once_with(
         where={"customer_org_id": "org"},
         include={"budget": True},

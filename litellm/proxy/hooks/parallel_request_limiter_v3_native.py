@@ -212,7 +212,7 @@ def pre_call_request() -> "NativeRequestRedis | None":
 
 def post_call_request() -> "NativeRequestRedis | None":
     batches: Final = active_request_redis_batches()
-    return None if batches is None else batches.native_post_call()
+    return None if batches is None else batches.native()
 
 
 def _auth(data: Mapping[str, object]) -> UserAPIKeyAuth | None:

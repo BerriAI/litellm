@@ -1,6 +1,17 @@
 {
   "apps": {
+    "editSettings": "Edit {{alias}}",
     "title": "Applications",
+    "navigation": "Application navigation",
+    "loadFailed": "The application could not be loaded.",
+    "usage": {
+      "totals": "Application usage totals",
+      "hint": "Usage for this application across all customer organizations in the selected period.",
+      "customers": "Spend by customer organization",
+      "spendShare": "Share of app spend",
+      "budgetHint": "Budgets apply to each customer within this app. Monthly spend uses the current budget period, or calendar month if no limit is set. Share and tokens use the selected dates.",
+      "unassigned": "Unassigned customer"
+    },
     "list": {
       "title": "All applications",
       "searchPlaceholder": "Search applications",
@@ -37,7 +48,7 @@
       "saveFailed": "Access was not saved. Try again."
     },
     "grantedHint": "The applications you have been given access to, with their spend and budget.",
-    "settingsHint": "Every application in your Gateway, with its spend, budget, customer surcharge and whether it may create new customers. Open one to change its settings.",
+    "settingsHint": "View app budgets and monthly usage. Select an app to see its customer spend, or Edit to change its budget, surcharge, and new-customer access.",
     "alias": "App",
     "edit": "Edit",
     "cancel": "Cancel",
@@ -54,7 +65,17 @@
     "retry": "Retry",
     "spend": "Tracked spend (USD)",
     "appBudget": "Overall app budget",
+    "customerAppBudget": "{{customer}}'s app budget",
+    "customerAppBudgetDescription": "Choose an app and set this customer's total budget. The organization-wide budget also applies.",
+    "appBudgetHint": "Optional. Caps total usage across all customer organizations and members in this app.",
+    "organizationDefault": "Default for app × customer organizations",
     "memberDefault": "Default per-member budget",
+    "memberDefaultHint": "Optional. Applies separately to each member unless they have a more specific app budget.",
+    "memberDefaultsHint": "Set an independent allowance for every member in each app. Each member has their own usage counters, so this is not a shared pool. A more specific member budget takes precedence.",
+    "memberDefaultFor": "Per-member default for {{alias}}",
+    "editMemberDefault": "Edit custom allowance",
+    "applyDefault": "Apply",
+    "noAdditionalLimits": "No additional limits at this level",
     "actions": "Actions",
     "none": "None",
     "unlimited": "No spend limit",
@@ -62,6 +83,8 @@
     "selectApp": "Select an app",
     "profile": "Budget group",
     "manageProfiles": "Manage app × customer organization budget groups",
+    "manageOverallProfiles": "Manage overall app budget groups",
+    "manageMemberProfiles": "Manage per-member defaults and budget groups",
     "chooseProfile": "Select a budget group",
     "noDefaultProfile": "No default budget group",
     "defaultProfileHint": "Customers without their own app budget or selected budget group inherit this group.",
@@ -101,6 +124,11 @@
     "windowBudget": "{{period}} spend limit (USD)",
     "windowBudgetHint": "Leave an amount blank to remove that spend limit. Other spend limits and TPM/RPM limits stay unchanged.",
     "removeWindow": "Remove limit",
+    "addLimit": "Add limit",
+    "addAnotherSpendLimit": "Add another spend limit",
+    "addAppDefault": "Add app default",
+    "legacyOrganizationGroup": "{{name}} (overall organization group)",
+    "legacyOrganizationGroupHint": "Existing assignment. Select an app × organization group to replace it.",
     "source": "Budget source",
     "customBudget": "Custom budget",
     "appDefault": "App default",
@@ -119,7 +147,6 @@
     "enableMemberLimits": "Set per-member limits",
     "optionalMemberLimitsHint": "Set a separate limit for each member of this customer in this app. Otherwise, the app's default member limits apply.",
     "organizationMemberDefault": "Per-member default for this customer",
-    "memberDefaultHint": "When disabled, members inherit this app’s default allowance. Existing member overrides keep their own budgets.",
     "onlyThisPair": "Applies only to {{customer}} in {{alias}}. The organization-wide budget also applies.",
     "saveBudget": "Save app budget",
     "memberTitle": "Member app budgets",
@@ -16338,7 +16365,9 @@
         "failed": "Failed to export data",
         "cancel": "Cancel",
         "exporting": "Exporting...",
-        "exportFormat": "Export {{format}}"
+        "exportFormat": "Export {{format}}",
+        "includeMetadata": "Include key and user metadata",
+        "includeMetadataNote": "Metadata is exported as stored and may contain credentials or other sensitive values. Known credential patterns are redacted, but not every secret can be caught."
       },
       "format": {
         "label": "Format",
@@ -16827,6 +16856,8 @@
       },
       "validation": {
         "teamNameRequired": "Please input a team name",
+        "teamAlertBudgetRequired": "Enter a budget greater than zero to enable team percentage alerts",
+        "teamAlertRecipientsRequired": "Enter at least one recipient for this team alert",
         "thresholdRange": "Enter a whole number from 1 to 100",
         "duplicateThreshold": "Duplicate threshold",
         "missingModel": "Missing model",
@@ -16890,6 +16921,17 @@
         "softBudget": "Soft Budget (USD)",
         "softBudgetAlertingEmails": "Soft Budget Alerting Emails",
         "softBudgetAlertingEmailsHint": "Comma-separated email addresses to receive alerts when the soft budget is reached",
+        "legacySoftBudgetTitle": "Legacy dollar alerts (deprecated)",
+        "legacySoftBudgetNote": "These dollar-based settings send one fixed alert and remain supported for existing configurations. Use Team Budget Alerts for percentage-based emails.",
+        "teamBudgetAlerts": {
+          "label": "Team Budget Alerts",
+          "hint": "Email the recipients below when the whole team's spend, across all of its keys, reaches a percentage of the team's Max Budget. Add one or more thresholds, each with its own recipients. Recipients are required because a team has no owner. Requires a Max Budget and email alerting to be configured on the proxy.",
+          "thresholdPlaceholder": "% of budget",
+          "recipientsPlaceholder": "Recipients, e.g. finance@example.com",
+          "removeThreshold": "Remove team budget alert threshold",
+          "addThreshold": "Add Team Budget Alert Threshold",
+          "bothConfigured": "Both percentage alerts and the legacy Soft Budget alerts are configured. Each sends its own emails, so recipients can be notified twice."
+        },
         "teamMemberSettings": {
           "title": "Team Member Settings",
           "description": "Optional defaults applied when members join this team. All fields can be overridden per member.",
@@ -16998,6 +17040,7 @@
           "lineWithSpent": "Per-Model Budget ({{model}}): ${{limit}} per {{period}}, spent ${{spent}}"
         },
         "softBudgetAlertingEmails": "Soft Budget Alerting Emails: ",
+        "teamBudgetAlerts": "Team Budget Alerts: ",
         "teamMemberSettings": {
           "title": "Team Member Settings",
           "tooltip": "These are limits on individual team members",
@@ -20984,9 +21027,17 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "overallAppGroups": {
+      "title": "Overall app budget groups",
+      "help": "Presets for an app's total usage across all customer organizations and members. Blank means no limit."
+    },
     "appOrganizationGroups": {
       "title": "App × customer organization budget groups",
       "help": "Each customer organization gets these limits separately within an app. Blank means no limit."
+    },
+    "appMemberGroups": {
+      "title": "Per App Member Budget Groups",
+      "help": "These templates are shared across apps. Editing a template updates every member using it, with usage tracked separately for each member within each app. Set the app default below."
     },
     "tokenUsage": {
       "tokenBreakdown": "Token breakdown",
@@ -21011,9 +21062,11 @@
     "budgetGroups": {
       "organizationDefault": "Use organization default",
       "organizationDefaultHelp": "Apply the configured default when this organization is created.",
-      "settingsHint": "Manage separate presets for organization-wide limits and for each customer's usage within an app.",
+      "settingsHint": "Manage separate presets for overall app limits, organization-wide limits, and each customer's usage within an app.",
+      "overallAppTab": "Overall App Budget Groups",
       "overallTab": "Overall Organization Budget Groups",
       "appTab": "Per-App Organization Budget Groups",
+      "appMemberTab": "App × member",
       "newOrganizationsJoin": "New organizations join",
       "newOrganizationsHelp": "Use this budget group for new organizations unless you choose another. No limit adds no organization-level cap.",
       "atCap": "At the cap",
@@ -21079,7 +21132,7 @@
       "tpm": "Tokens per minute",
       "rpm": "Requests per minute",
       "allowedModels": "Allowed models",
-      "allowedModelsHint": "Selected models must also be allowed by the gateway key and parent customer.",
+      "allowedModelsHint": "Optional. Leave empty for no additional model restrictions. App, key, and parent customer restrictions still apply.",
       "template": "Budget template",
       "noTemplate": "No template",
       "noTemplateHelp": "Use custom limits without inheriting a member budget group.",
@@ -21120,7 +21173,8 @@
       "customIdentifier": "Custom identifier (optional)",
       "identifierAutoGenerated": "Leave blank to generate an identifier.",
       "searchModels": "Search gateway models",
-      "unavailableModel": "Unavailable gateway model",
+      "searchAppModels": "Search app models",
+      "unavailableModel": "Model unavailable for this scope",
       "modelsLoadError": "Gateway models could not be loaded.",
       "retryModels": "Retry",
       "invalidTemplate": "Choose a budget template from this customer organization.",
@@ -21278,6 +21332,8 @@
       "spendLimitLabel": "Spend limit (USD)",
       "perMonth": "/ month",
       "perYear": "/ year",
+      "perMonthShort": "/ mo",
+      "perYearShort": "/ yr",
       "tpmShort": "Tokens per minute",
       "rpmShort": "Requests per minute",
       "profilePlaceholder": "Select a profile",
@@ -21314,6 +21370,9 @@
       "memberAction": "Edit budget for {{name}}",
       "group": "Budget group",
       "customPeriod": "Custom period",
+      "customPeriodPlaceholder": "7d",
+      "invalidPeriod": "Use 6d, 2w, 1mo, or 12mo",
+      "duplicatePeriod": "A spend limit already uses this period.",
       "noReset": "No reset"
     },
     "editDialog": {

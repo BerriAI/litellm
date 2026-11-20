@@ -11,7 +11,7 @@ from io import BytesIO
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from urllib.parse import unquote, urlparse
 
 import pytest
@@ -4698,6 +4698,41 @@ def test_sign_s3_request_without_body_uses_the_s3_pair_when_it_differs_from_the_
 
     assert _authorization(signed_headers).startswith("AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/"), (
         f"the S3 {method} must be signed by s3_access_key_id, not the Bedrock aws_access_key_id"
+    )
+
+
+def test_file_download_identity_survives_the_typed_s3_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.bedrock.files.transformation import S3_SIGNED_REQUEST_HEADERS_PARAM
+
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_alias"])
+    monkeypatch.setattr(litellm, "bedrock_session_name_fields", ["user_api_key_alias"])
+    sts: Final = MagicMock()
+    sts.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "ASIAFILEIDENTITY",
+            "SecretAccessKey": "secret",
+            "SessionToken": "token",
+            "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+        }
+    }
+    params: Final[dict[str, object]] = {
+        "aws_access_key_id": "AKIACALLER",
+        "aws_secret_access_key": "caller-secret",
+        "aws_region_name": "us-east-1",
+        "aws_role_name": "arn:aws:iam::123456789012:role/file-identity",
+        "s3_bucket_name": "safe-bucket",
+        "litellm_metadata": {"user_api_key_alias": "file-caller"},
+    }
+    with patch.dict(os.environ, {}, clear=True), patch("boto3.client", return_value=sts):
+        BedrockFilesConfig().transform_file_content_request(
+            file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
+            optional_params={},
+            litellm_params=params,
+        )
+    assert sts.assume_role.call_args.kwargs["Tags"] == ({"Key": "user_api_key_alias", "Value": "file-caller"},)
+    assert sts.assume_role.call_args.kwargs["RoleSessionName"] == "file-caller"
+    assert _authorization(params[S3_SIGNED_REQUEST_HEADERS_PARAM]).startswith(
+        "AWS4-HMAC-SHA256 Credential=ASIAFILEIDENTITY/"
     )
 
 

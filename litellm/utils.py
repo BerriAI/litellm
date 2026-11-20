@@ -3366,6 +3366,15 @@ def _return_huggingface_tokenizer(
             return outcome
 
 
+def huggingface_tokenizer_may_download(
+    model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
+) -> bool:
+    kind: Final = huggingface_tokenizer_kind(model)
+    if kind is None or kind in _BUNDLED_TOKENIZER_LOAD_LOCKS:
+        return False
+    return (kind, _huggingface_tokenizer_backend()) not in outcomes.by_tokenizer
+
+
 def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
     match kind:
         case "cohere":
@@ -7648,6 +7657,9 @@ def get_model_info_helper(
                 ),
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
+                cache_read_input_image_token_cost_priority=_model_info.get(
+                    "cache_read_input_image_token_cost_priority", None
+                ),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
@@ -7759,6 +7771,7 @@ def get_model_info_helper(
                 ),
                 input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
+                input_cost_per_image_token_priority=_model_info.get("input_cost_per_image_token_priority", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
                 input_cost_per_image_token_batches=_model_info.get("input_cost_per_image_token_batches", None),

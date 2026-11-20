@@ -2954,7 +2954,7 @@ async def ui_view_spend_logs(
         # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
         sql_conditions: Final[list[str]] = ["organization_id = ANY($1::text[])"] if organization_ids is not None else []
         sql_params: Final[list[object]] = [organization_ids] if organization_ids is not None else []
-        p = len(sql_params) + 1  # parameter index counter
+        p = len(sql_params) + 1
 
         # Date range. Wrap the param side with `AT TIME ZONE 'UTC'` so comparison
         # against the plain `timestamp` column does not depend on the DB session
@@ -3626,6 +3626,7 @@ async def view_spend_logs(
             prisma_client, user_api_key_dict, route="/spend/logs"
         )
         organization_filter: Final[Mapping[str, object]] = MappingProxyType(
+            # bounded-ok: the organizations one caller administers, one membership row per organization
             {"organization_id": {"in": list(organization_ids)}} if organization_ids is not None else {}
         )
         if (
