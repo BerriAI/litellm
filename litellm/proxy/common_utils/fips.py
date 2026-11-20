@@ -2,9 +2,12 @@ import os
 import threading
 from collections.abc import Mapping
 from typing import Final
+from urllib.parse import urlsplit
 
+from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import exclude_rsa_key_exchange_and_chacha20
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
+from litellm.proxy.db.token_auth import AZURE_POSTGRESQL_AUTH_ENV_VAR, IAM_TOKEN_DB_AUTH_ENV_VAR
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
@@ -112,6 +115,25 @@ def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
     return None
 
 
+def database_password_login_warning(environ: Mapping[str, str]) -> str | None:
+    """A warning when DATABASE_URL logs in to Postgres with a password and neither RDS IAM nor Azure Entra token login
+    is on. None otherwise."""
+    if any(str_to_bool(environ.get(name)) for name in (IAM_TOKEN_DB_AUTH_ENV_VAR, AZURE_POSTGRESQL_AUTH_ENV_VAR)):
+        return None
+    try:
+        password: Final = urlsplit(environ.get("DATABASE_URL", "")).password
+    except ValueError:
+        return None
+    if not password:
+        return None
+    return (
+        f"{_SETTING} is on but DATABASE_URL logs in to Postgres with a password. The password login (SCRAM) is "
+        "computed outside the FIPS module. Use client-certificate login instead: cert in pg_hba.conf, sslidentity "
+        "and sslpassword in DATABASE_URL with no password, and PGSSLCERT and PGSSLKEY set to the same certificate "
+        "and key. RDS IAM (IAM_TOKEN_DB_AUTH) and Azure Entra (AZURE_POSTGRESQL_AUTH) token login also avoid it."
+    )
+
+
 def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
     refusal: Final = fips_mode_refusal(general_settings)
     if refusal is not None:
@@ -120,6 +142,9 @@ def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
     exclude_rsa_key_exchange_and_chacha20(active)
     if active:
         _FIPS_MODE_ACTIVE.set()
+        password_login: Final = database_password_login_warning(os.environ)
+        if password_login is not None:
+            verbose_proxy_logger.warning(password_login)
     else:
         _FIPS_MODE_ACTIVE.clear()
 

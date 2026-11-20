@@ -1,4 +1,5 @@
 import _hashlib
+import logging
 from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
 from traceback import walk_tb
@@ -10,9 +11,11 @@ from cryptography.exceptions import InternalError
 from cryptography.hazmat.bindings._rust import openssl as rust_openssl
 from cryptography.hazmat.primitives import hashes
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.fips import (
     FipsModeError,
     cryptography_enforces_fips,
+    database_password_login_warning,
     enforce_fips_mode,
     fips_mode_active,
     key_derivation_key,
@@ -286,3 +289,61 @@ def test_standard_mode_starts_whatever_the_salt_key_looks_like(
         monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     enforce_fips_mode(general_settings)
     assert fips_mode_active() is False
+
+
+_PASSWORD_DATABASE_URL: Final = "postgresql://litellm:hunter2-pw@db:5432/litellm?sslmode=verify-full"
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [
+        {"DATABASE_URL": "postgresql://litellm@db:5432/litellm?sslidentity=/certs/client.p12&sslpassword=p12-pass"},
+        {},
+        {"DATABASE_URL": _PASSWORD_DATABASE_URL, "IAM_TOKEN_DB_AUTH": "True"},
+        {"DATABASE_URL": _PASSWORD_DATABASE_URL, "AZURE_POSTGRESQL_AUTH": "true"},
+        {"DATABASE_URL": "postgresql://litellm:pw@[::1/litellm"},
+    ],
+    ids=["client-certificate", "no-database", "rds-iam-token", "azure-entra-token", "unparseable-url"],
+)
+def test_no_password_login_warning_without_a_database_password(environ: Mapping[str, str]) -> None:
+    assert database_password_login_warning(environ) is None
+
+
+def test_the_password_login_warning_names_database_url_but_not_the_password() -> None:
+    warning: Final = database_password_login_warning({"DATABASE_URL": _PASSWORD_DATABASE_URL})
+    assert warning is not None
+    assert "DATABASE_URL" in warning
+    assert "hunter2-pw" not in warning
+
+
+class _Records(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+@pytest.fixture
+def proxy_warnings() -> Iterator[list[str]]:
+    records: Final = _Records()
+    level: Final = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.WARNING)
+    verbose_proxy_logger.addHandler(records)
+    yield records.messages
+    verbose_proxy_logger.removeHandler(records)
+    verbose_proxy_logger.setLevel(level)
+
+
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+@pytest.mark.parametrize("fips_mode, warned", [(True, True), (False, False)], ids=["fips-mode-on", "fips-mode-off"])
+def test_only_fips_mode_warns_about_a_database_password_login(
+    monkeypatch: pytest.MonkeyPatch, proxy_warnings: list[str], fips_mode: bool, warned: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _HEX_SALT_KEY)
+    monkeypatch.setenv("DATABASE_URL", _PASSWORD_DATABASE_URL)
+    monkeypatch.delenv("IAM_TOKEN_DB_AUTH", raising=False)
+    monkeypatch.delenv("AZURE_POSTGRESQL_AUTH", raising=False)
+    enforce_fips_mode({"fips_mode": fips_mode})
+    assert any("logs in to Postgres with a password" in message for message in proxy_warnings) is warned
