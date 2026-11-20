@@ -226,7 +226,13 @@ def get_key_models(
                 if include_model_access_groups:
                     all_models.extend(model_access_groups.keys())
         if SpecialModelNames.all_proxy_models.value in all_models:
+            # the sentinel stands for the proxy models, it does not replace the
+            # models listed next to it (e.g. a team's own models)
+            explicit_models: Final = [
+                model for model in all_models if model != SpecialModelNames.all_proxy_models.value
+            ]
             all_models = list(proxy_model_list)  # copy to avoid mutating caller's list
+            all_models.extend(explicit_models)
             if include_model_access_groups:
                 all_models.extend(model_access_groups.keys())
 

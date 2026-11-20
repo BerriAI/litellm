@@ -990,6 +990,65 @@ def test_get_key_models_all_team_models_keeps_mixed_team_entries():
     assert set(result) == {"model-a", "model-b", "restricted-model"}
 
 
+def test_get_key_models_all_team_models_keeps_team_models_when_team_has_all_proxy_models():
+    """GH#52910: an all-team-models key must still list the team's own models when
+    the team's list also holds all-proxy-models - that is what the UI stores for
+    "All Team Models" on a team that has all access, i.e. almost every team key."""
+    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+
+    user_api_key_dict = UserAPIKeyAuth(
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[SpecialModelNames.all_proxy_models.value, "team-model-x"],
+        api_key="sk-test",
+    )
+
+    result = get_key_models(user_api_key_dict, ["model-a", "model-b"], {})
+
+    assert SpecialModelNames.all_proxy_models.value not in result
+    assert set(result) == {"model-a", "model-b", "team-model-x"}
+
+
+def test_get_key_models_all_proxy_models_keeps_models_listed_next_to_it():
+    """A key naming all-proxy-models plus a model of its own keeps both. Replacing
+    the list with proxy_model_list drops the explicit model from /v1/models even
+    though the key can call it."""
+    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+
+    user_api_key_dict = UserAPIKeyAuth(
+        models=[SpecialModelNames.all_proxy_models.value, "team-model-y"],
+        team_models=[],
+        api_key="sk-test",
+    )
+
+    result = get_key_models(user_api_key_dict, ["model-a"], {})
+
+    assert SpecialModelNames.all_proxy_models.value not in result
+    assert set(result) == {"model-a", "team-model-y"}
+
+
+def test_get_key_models_all_proxy_models_expansion_still_includes_access_groups():
+    """Expanding all-proxy-models keeps the access-group names and the team models."""
+    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+
+    user_api_key_dict = UserAPIKeyAuth(
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[SpecialModelNames.all_proxy_models.value, "team-model-x"],
+        api_key="sk-test",
+    )
+
+    result = get_key_models(
+        user_api_key_dict,
+        ["model-a"],
+        {"group-a": ["model-a"]},
+        include_model_access_groups=True,
+    )
+
+    assert set(result) == {"model-a", "group-a", "team-model-x"}
+
+
 def test_get_team_models_all_team_models_expands():
     """GH#30619: all-team-models in team_models should expand."""
     from litellm.proxy.auth.model_checks import get_team_models
