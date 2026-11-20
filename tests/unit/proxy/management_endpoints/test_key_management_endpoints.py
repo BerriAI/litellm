@@ -2670,13 +2670,21 @@ async def test_prepare_key_update_data_restarts_a_resubmitted_window_whose_perio
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("writer", ["ordinary", "project", "soft_budget", "regeneration"])
-@pytest.mark.parametrize("current_cap,expected_reset", [
-    (10.0, "2030-01-03T00:00:00+00:00"),
-    (30.0, "2030-01-02T00:00:00+00:00"),
-    (None, "2030-01-02T00:00:00+00:00"),
-])
+@pytest.mark.parametrize("sibling", [
+    None,
+    {"max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00"},
+    {"budget_duration": "1mo", "max_budget": None, "reset_at": "2030-02-01T00:00:00+00:00"},
+    {"budget_duration": "1mo", "max_budget": 200.0, "reset_at": "invalid"},
+], ids=["no_sibling", "missing_duration", "invalid_cap", "invalid_reset"])
+@pytest.mark.parametrize("current_cap,current_reset,expected_reset", [
+    (10.0, "2030-01-03T00:00:00+00:00", "2030-01-03T00:00:00+00:00"),
+    (30.0, "2030-01-03T00:00:00+00:00", "2030-01-02T00:00:00+00:00"),
+    (None, "2030-01-03T00:00:00+00:00", "2030-01-02T00:00:00+00:00"),
+    (10.0, "2030-01-02T00:00:00+00:00", "2030-01-02T00:00:00+00:00"),
+], ids=["reset", "admin_edit", "malformed_current", "no_conflict"])
 async def test_key_window_writers_keep_committed_resets_without_merging_admin_edits(
-    writer: str, current_cap: float | None, expected_reset: str,
+    writer: str, sibling: dict[str, object] | None, current_cap: float | None,
+    current_reset: str, expected_reset: str,
 ) -> None:
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _update_key_row, _update_key_row_with_soft_budget, _write_key_update,
@@ -2684,7 +2692,8 @@ async def test_key_window_writers_keep_committed_resets_without_merging_admin_ed
     from litellm.proxy.utils import PrismaClient
 
     original: Final = {"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2030-01-02T00:00:00+00:00"}
-    existing: Final = LiteLLM_VerificationToken(token="window-key", budget_limits=[original])
+    siblings: Final = [sibling] if sibling is not None else []
+    existing: Final = LiteLLM_VerificationToken(token="window-key", budget_limits=[original, *siblings])
     proposed: Final = [{**original, "max_budget": 50.0}, {
         "budget_duration": "1mo", "max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00",
     }]
@@ -2692,8 +2701,8 @@ async def test_key_window_writers_keep_committed_resets_without_merging_admin_ed
     database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
     tx: Final = database.tx.return_value.__aenter__.return_value
     tx.query_raw = AsyncMock(return_value=[{"budget_limits": [{
-        **original, "max_budget": current_cap, "reset_at": "2030-01-03T00:00:00+00:00",
-    }]}])
+        **original, "max_budget": current_cap, "reset_at": current_reset,
+    }, *siblings]}])
     tx.litellm_verificationtoken.update = AsyncMock(return_value=existing)
     tx.litellm_verificationtoken.update_many = AsyncMock(return_value=1)
     tx.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)

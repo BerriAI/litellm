@@ -52,15 +52,16 @@ async def lock_budget_limits(
 
 def _rebase_window(
     window: Mapping[str, object],
-    original: Mapping[str, BudgetLimitEntry],
+    original: Mapping[str, BudgetLimitEntry | Mapping[str, object]],
     current: Mapping[str, Mapping[str, object]],
 ) -> Mapping[str, object]:
     duration: Final = str(window["budget_duration"])
-    before: Final = original.get(duration)
+    original_window: Final = original.get(duration)
     current_window: Final = current.get(duration)
-    if before is None or current_window is None:
+    if original_window is None or current_window is None:
         return window
     try:
+        before: Final = BudgetLimitEntry.model_validate(original_window)
         after: Final = BudgetLimitEntry.model_validate(current_window)
     except ValidationError:
         return window
@@ -75,7 +76,7 @@ async def rebase_budget_limits_update(
     transaction: BudgetLimitsTransaction,
     table: BudgetLimitsTable,
     row_id: str,
-    original: Sequence[BudgetLimitEntry] | None,
+    original: Sequence[BudgetLimitEntry | Mapping[str, object]] | None,
     data: Mapping[str, object],
 ) -> Mapping[str, object]:
     """Lock and rebase the payload before the caller writes it in this same transaction."""
@@ -86,7 +87,18 @@ async def rebase_budget_limits_update(
     requested: Final = _WINDOWS.validate_json(raw) if isinstance(raw, str) else _WINDOWS.validate_python(raw)
     if not requested or current is None:
         return data
-    before: Final = MappingProxyType({window.budget_duration: window for window in original or ()})
+    before: Final = MappingProxyType(
+        {
+            original_duration: window
+            for window in original or ()
+            if isinstance(
+                original_duration := window.budget_duration
+                if isinstance(window, BudgetLimitEntry)
+                else window.get("budget_duration"),
+                str,
+            )
+        }
+    )
     after: Final = MappingProxyType(
         {duration: window for window in current if isinstance(duration := window.get("budget_duration"), str)}
     )

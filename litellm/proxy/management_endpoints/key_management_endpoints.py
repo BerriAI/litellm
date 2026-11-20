@@ -3030,7 +3030,7 @@ async def _update_key_row_assigning_project(
                 tx,
                 "LiteLLM_VerificationToken",
                 hashed_token,
-                stored_budget_windows(existing_key_row),
+                existing_key_row.budget_limits,
                 with_settings_updated_at(
                     prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
                 ),
@@ -3080,7 +3080,7 @@ async def _update_key_row_with_soft_budget(
             tx,
             "LiteLLM_VerificationToken",
             hashed_token,
-            stored_budget_windows(existing_key_row),
+            existing_key_row.budget_limits,
             with_settings_updated_at(
                 prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
             ),
@@ -3120,7 +3120,7 @@ async def _write_key_update(
     async with prisma_client.tx() as tx_ctx:
         tx: Final = cast("_KeyUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
         rebased: Final = await rebase_budget_limits_update(
-            tx, "LiteLLM_VerificationToken", hashed_token, stored_budget_windows(existing_key_row), data
+            tx, "LiteLLM_VerificationToken", hashed_token, existing_key_row.budget_limits, data
         )
         return await tx.litellm_verificationtoken.update(where={"token": hashed_token}, data=rebased, include=include)
 
