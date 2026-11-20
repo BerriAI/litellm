@@ -56,12 +56,12 @@ class SimpleProviderConfig:
         self.model_supported_endpoints: Mapping[str, tuple[str, ...]] = _MODEL_ENDPOINTS_ADAPTER.validate_python(
             data.get("model_supported_endpoints", {})
         )
-        self.model_base_urls: Mapping[str, str] = (
+        self.model_base_urls: Final[Mapping[str, str]] = (
             _MODEL_BASE_URLS_ADAPTER.validate_python(data["model_base_urls"])
             if "model_base_urls" in data
             else MappingProxyType({})
         )
-        self.model_special_handling: Mapping[str, Mapping[str, bool]] = (
+        self.model_special_handling: Final[Mapping[str, Mapping[str, bool]]] = (
             _MODEL_SPECIAL_HANDLING_ADAPTER.validate_python(data["model_special_handling"])
             if "model_special_handling" in data
             else MappingProxyType({})

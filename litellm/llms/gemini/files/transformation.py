@@ -9,7 +9,6 @@ import time
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Final, Literal, Protocol, SupportsIndex, SupportsInt, runtime_checkable
-from urllib.parse import urlparse
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -26,6 +25,7 @@ from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
+from litellm.llms.gemini.files.utils import gemini_file_id
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -80,9 +80,7 @@ def gemini_file_name(file_id: str) -> str:
     - `files/abc123`
     - `https://generativelanguage.googleapis.com/v1beta/files/abc123`
     """
-    path: Final = urlparse(file_id).path.lstrip("/") if file_id.startswith(("http://", "https://")) else file_id
-    files_index: Final = path.find("files/")
-    bare_id: Final = (path[files_index:] if files_index != -1 else path).strip("/").removeprefix("files/")
+    bare_id: Final = gemini_file_id(file_id)
     return f"files/{encode_url_path_segment(bare_id, field_name='file_id')}"
 
 

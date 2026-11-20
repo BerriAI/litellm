@@ -24,7 +24,7 @@ export default function ApplicationsTable({
   rows: readonly ApplicationRow[];
   loading: boolean;
   searching: boolean;
-  onOpen: (resourceId: string) => void;
+  onOpen?: (resourceId: string) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -68,14 +68,20 @@ export default function ApplicationsTable({
                     {applicationInitials(resource.alias)}
                   </span>
                   <div className="min-w-0">
-                    <button
-                      type="button"
-                      className="block max-w-52 truncate text-left font-medium hover:text-primary hover:underline"
-                      title={resource.alias}
-                      onClick={() => onOpen(resource.resource_id)}
-                    >
-                      {resource.alias}
-                    </button>
+                    {onOpen ? (
+                      <button
+                        type="button"
+                        className="block max-w-52 truncate text-left font-medium hover:text-primary hover:underline"
+                        title={resource.alias}
+                        onClick={() => onOpen(resource.resource_id)}
+                      >
+                        {resource.alias}
+                      </button>
+                    ) : (
+                      <p className="max-w-52 truncate font-medium" title={resource.alias}>
+                        {resource.alias}
+                      </p>
+                    )}
                     <p
                       className="max-w-52 truncate font-mono text-[11px] text-muted-foreground"
                       title={resource.resource_id}

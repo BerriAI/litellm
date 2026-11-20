@@ -625,6 +625,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def supports_structured_messages(self) -> bool:
         return False
 
+    def scans_each_text_separately(self) -> bool:
+        return self.experimental_use_latest_role_message_only is not True
+
     def _prepare_guardrail_messages_for_role(
         self,
         messages: list[AllMessageValues] | None,

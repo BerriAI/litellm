@@ -25,6 +25,7 @@ from integration._support.mcp import (
     ENTRY_POINTS,
     INITIALIZE,
     EntryPoint,
+    JsonRpcFailure,
     McpCaller,
     McpPeer,
     Outcome,
@@ -697,6 +698,50 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
             )
             == []
         )
+
+
+URL_ELICITATION: Final = {
+    "code": -32042,
+    "message": "This request requires more information.",
+    "data": {"elicitations": [{"mode": "url", "elicitationId": "el-1", "url": "https://consent.example.invalid/a"}]},
+}
+
+
+def test_per_user_authorization_code_server_relays_url_elicitation_required_with_the_vaulted_token(
+    gateway: Gateway,
+) -> None:
+    consent: Final = ScriptedTool("consent", lambda _: JsonRpcFailure(URL_ELICITATION))
+    with scripted_peer(consent) as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "ac" + uuid.uuid4().hex[:8]
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "ac-client", "client_secret": "ac-secret", "scopes": ["tools.call"]},
+        )
+        owner: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
+        registered: Final = gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        code, _ = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
+        redeemed: Final = _redeem(gateway, alias, owner, client_id, code, pkce)
+        assert redeemed.status_code == 200, redeemed.text
+        vaulted: Final = f"Bearer {_issued_token(redeemed.json())}"
+        peer.drain()
+        relayed: Final = McpCaller(gateway, owner, "server_mcp", alias).call(f"{alias}-consent", {})
+        assert relayed.status == 200 and relayed.error, relayed.raw
+        assert json.loads(relayed.error) == URL_ELICITATION, relayed.raw
+        assert [call["headers"]["authorization"] for call in tool_calls(peer.drain())] == [vaulted]
+        flattened: Final = McpCaller(gateway, owner, "rest", alias).call(f"{alias}-consent", {}, identity)
+        assert flattened.status == 200, flattened.raw
+        assert flattened.error == "MCPError: This request requires more information.", flattened.raw
+        assert [call["headers"]["authorization"] for call in tool_calls(peer.drain())] == [vaulted]
 
 
 @pytest.mark.timeout(600)

@@ -1831,12 +1831,6 @@ async def _cached_team_fields_for_key(
         return None
 
 
-def _refused_by_team_limit(rejection: HTTPException) -> bool:
-    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-
-    return isinstance(rejection, ProxyRateLimitError) and rejection.descriptor_key == "team"
-
-
 async def _reject_from_headers_before_reading_body(
     request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
 ) -> None:
@@ -1903,9 +1897,10 @@ async def _reject_from_headers_before_reading_body(
     if not isinstance(limiter, ParallelRequestLimiterHook):
         return
     team_fields: Final = await _cached_team_fields_for_key(cached_key, user_api_key_cache, parent_otel_span)
+    team_limits: Final = {"team_rpm_limit": None, "team_tpm_limit": None} if team_fields is None else team_fields
     rate_limited: Final = cached_key.model_copy(
         update={
-            **(team_fields or {}),
+            **team_limits,
             "api_key": cached_key.api_key or hashed_token,
             "parent_otel_span": parent_otel_span,
             "request_route": normalize_request_route(route),
@@ -1914,8 +1909,6 @@ async def _reject_from_headers_before_reading_body(
     try:
         await raise_if_over_limit_before_body(limiter, rate_limited)
     except HTTPException as rejection:
-        if team_fields is None and _refused_by_team_limit(rejection):
-            return
         failure_data: Final = dict(await _preflight_failure_request_data(request, route, rate_limited))
         transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
             request_data=failure_data,
@@ -3091,6 +3084,7 @@ async def _reserve_budget_after_common_checks(
             ),
             raw_body=await read_raw_json_body(request=request),
             path_params=reservation_path_params,
+            request=request,
         )
     if request is not None:
         reservation: Final = user_api_key_auth_obj.budget_reservation
@@ -3412,6 +3406,7 @@ async def prefetch_referenced_auth_objects(
     end_user_id: str | None,
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient | None,
+    requested_model: str | None = None,
 ) -> None:
     """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold)."""
     bind_admission_counter_keys(valid_token, end_user_id=end_user_id or None)
@@ -3420,18 +3415,19 @@ async def prefetch_referenced_auth_objects(
         refs=AuthObjectRefs.from_token(valid_token),
         user_api_key_cache=user_api_key_cache,
         prisma_client=prisma_client,
-        before_read=arm_routing_cooldowns,
+        before_read=partial(arm_routing_cooldowns, requested_model),
     )
 
 
-def arm_routing_cooldowns() -> None:
+def arm_routing_cooldowns(requested_model: str | None = None) -> None:
     """Declares the cooldown read routing takes later into the auth prefetch's native round trip, so a request whose
     auth objects come from Redis pays one round trip for both. Armed only when a prefetch reads Redis, so a request
-    served from memory, or denied, reads no cooldowns early."""
+    served from memory, or denied, reads no cooldowns early. Scoped to the deployments ``requested_model`` may route
+    to when the request names one."""
     from litellm.proxy.proxy_server import llm_router  # noqa: PLC0415  # runtime global
 
     if llm_router is not None:
-        RoutingContext(llm_router).arm_cooldown_prefetch()
+        RoutingContext(llm_router).arm_cooldown_prefetch(requested_model)
 
 
 def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> None:

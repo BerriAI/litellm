@@ -292,6 +292,7 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "fallback_rate_limit_check",
     "auto_router_capability_limit",
     "session_affinity_repin_on_failover",
+    "enable_cross_model_group_collision_check",
 )
 
 
@@ -1942,10 +1943,14 @@ class RoutingContext:
     ) -> None:
         return self._router._update_kwargs_before_fallbacks(model, kwargs, metadata_variable_name)
 
-    def arm_cooldown_prefetch(self) -> None:
+    def arm_cooldown_prefetch(self, model: str | None = None) -> None:
+        """Every deployment's cooldowns, or only those a request for ``model`` may route to without a team (auth
+        arms this before it knows the caller's team)."""
         from litellm.router_utils.routing_read_batch import RoutingPrefetch
 
-        RoutingPrefetch.arm_cooldowns(self)
+        RoutingPrefetch.arm_cooldowns(
+            self, None if model is None else self.registry().names(model, kind="route_candidates")
+        )
 
     def arm_read_prefetch(
         self,

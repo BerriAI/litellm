@@ -2185,6 +2185,7 @@ class DBSpendUpdateWriter:
                         await DBSpendUpdateWriter._commit_window_spend_updates(
                             prisma_client=prisma_client,
                             window_spend_transactions=window_spend_update_transactions,
+                            proxy_logging_obj=proxy_logging_obj,
                         )
                     except Exception as e:
                         if not db_write_failure_is_requeue_safe(e):
@@ -2358,6 +2359,7 @@ class DBSpendUpdateWriter:
             await DBSpendUpdateWriter._commit_window_spend_updates(
                 prisma_client=prisma_client,
                 window_spend_transactions=window_spend_update_transactions,
+                proxy_logging_obj=proxy_logging_obj,
             )
         except Exception as e:  # noqa: BLE001  # the increments go back on the queue; the rest of the flush must run
             if db_write_failure_is_requeue_safe(e):
@@ -2443,6 +2445,7 @@ class DBSpendUpdateWriter:
     async def _commit_window_spend_updates(
         prisma_client: PrismaClient,
         window_spend_transactions: Sequence[WindowSpendTransaction],
+        proxy_logging_obj: ProxyLogging | None = None,
     ) -> None:
         """
         Commit per-budget-window spend increments to LiteLLM_BudgetWindowSpend.
@@ -2456,10 +2459,15 @@ class DBSpendUpdateWriter:
             commit_window_spend_updates,
         )
 
-        await commit_window_spend_updates(
+        committed: Final = await commit_window_spend_updates(
             prisma_client=prisma_client,
             transactions=window_spend_transactions,
+            capture_spend=proxy_logging_obj is not None and bool(CustomerBudgetAlerting.callbacks()),
         )
+        if proxy_logging_obj is not None:
+            await CustomerBudgetAlerting.detect_committed_windows(
+                committed, prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
+            )
 
     async def _drain_and_commit_daily_tag_spend_from_redis(
         self,

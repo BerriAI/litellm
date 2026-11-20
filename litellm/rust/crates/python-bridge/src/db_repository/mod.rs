@@ -1,4 +1,4 @@
-//! Python handles on the Rust auth repositories. Each wraps one repository built over a `NativeDatabase`'s pools and
+//! Python handles on the Rust repositories. Each wraps one repository built over a `NativeDatabase`'s pools and
 //! hands its answers to Python as plain values or JSON text for `model_validate_json`.
 
 mod access_group;
@@ -10,6 +10,7 @@ mod model_access_group;
 mod object_permission;
 mod organization;
 mod project;
+mod spend_log;
 mod tag;
 mod team;
 mod team_membership;
@@ -24,6 +25,7 @@ pub(crate) use model_access_group::RustModelAccessGroupRepository;
 pub(crate) use object_permission::RustObjectPermissionRepository;
 pub(crate) use organization::RustOrganizationRepository;
 pub(crate) use project::RustProjectRepository;
+pub(crate) use spend_log::RustSpendLogRepository;
 pub(crate) use tag::RustTagRepository;
 pub(crate) use team::RustTeamRepository;
 pub(crate) use team_membership::RustTeamMembershipRepository;
