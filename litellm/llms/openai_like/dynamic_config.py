@@ -18,12 +18,13 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
-from .json_loader import SimpleProviderConfig
+from .json_loader import JSONProviderRegistry, SimpleProviderConfig
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
@@ -75,6 +76,25 @@ def _with_declared_reasoning_effort(
     if drop_params and accepted not in declared:
         return MappingProxyType({key: value for key, value in params.items() if key != "reasoning_effort"})
     return MappingProxyType({**params, "reasoning_effort": accepted})
+
+
+def _constraint_number(constraints: Mapping[str, object], key: str) -> float | None:
+    value: Final = constraints.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _clamped_temperature(temperature: float, constraints: Mapping[str, object], n_value: object) -> float:
+    temperature_max: Final = _constraint_number(constraints, "temperature_max")
+    temperature_min: Final = _constraint_number(constraints, "temperature_min")
+    temperature_floor: Final = _constraint_number(constraints, "temperature_min_with_n_gt_1")
+    capped: Final = min(temperature, temperature_max) if temperature_max is not None else temperature
+    floored: Final = max(capped, temperature_min) if temperature_min is not None else capped
+    n: Final = n_value if isinstance(n_value, int) and not isinstance(n_value, bool) else 1
+    if temperature_floor is not None and n > 1 and floored < temperature_floor:
+        return temperature_floor
+    return floored
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -142,7 +162,7 @@ def create_config_class(provider: SimpleProviderConfig):
                 or (get_secret_str(provider.api_base_env) if provider.api_base_env else None)
                 or provider.default_base_url(model)
             )
-            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
+            resolved_key: Final = provider.resolve_api_key(api_key)
             return resolved_base, resolved_key
 
         def get_complete_url(
@@ -213,32 +233,17 @@ def create_config_class(provider: SimpleProviderConfig):
 
             # Apply supported params
             for param, value in requested_params.items():
-                # Check parameter mappings first
-                if param in provider.param_mappings:
-                    optional_params[provider.param_mappings[param]] = value
+                mapped_name: Final = provider.param_mappings.get(param)
+                if isinstance(mapped_name, str):
+                    optional_params[mapped_name] = value
                 elif param in supported_params:
                     optional_params[param] = value
 
-            # Apply temperature constraints if present
-            if "temperature" in optional_params:
-                temp = optional_params["temperature"]
-                constraints: Final = provider.constraints
-
-                # Clamp to max
-                if "temperature_max" in constraints:
-                    temp = min(temp, constraints["temperature_max"])
-
-                # Clamp to min
-                if "temperature_min" in constraints:
-                    temp = max(temp, constraints["temperature_min"])
-
-                # Special case: temperature_min_with_n_gt_1
-                if "temperature_min_with_n_gt_1" in constraints:
-                    n: Final = optional_params.get("n", 1)
-                    if n > 1 and temp < constraints["temperature_min_with_n_gt_1"]:
-                        temp = constraints["temperature_min_with_n_gt_1"]
-
-                optional_params["temperature"] = temp
+            raw_temperature: Final = optional_params.get("temperature")
+            if isinstance(raw_temperature, int | float) and not isinstance(raw_temperature, bool):
+                optional_params["temperature"] = _clamped_temperature(
+                    raw_temperature, provider.constraints, optional_params.get("n", 1)
+                )
 
             return optional_params
 
@@ -266,6 +271,28 @@ def create_config_class(provider: SimpleProviderConfig):
             return provider.slug
 
     return JSONProviderConfig
+
+
+def provider_chat_config(
+    *, model: str, custom_llm_provider: str | None, base_model: str | None = None
+) -> BaseConfig | None:
+    """Chat config for an enum provider, or for a JSON provider that is not in the enum."""
+    if custom_llm_provider is None:
+        return None
+    from litellm.types.utils import LlmProviders, LlmProvidersSet
+
+    if custom_llm_provider in LlmProvidersSet:
+        from litellm.utils import ProviderConfigManager
+
+        return ProviderConfigManager.get_provider_chat_config(
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+            base_model=base_model,
+        )
+    loaded: Final = JSONProviderRegistry.get(custom_llm_provider)
+    if loaded is None:
+        return None
+    return create_config_class(loaded)()
 
 
 _responses_config_cache: Final[dict[str, "type[OpenAILikeResponsesConfig]"]] = {}
@@ -298,7 +325,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key: Final = litellm_params.api_key or get_secret_str(provider.api_key_env)
+            api_key: Final = provider.resolve_api_key(litellm_params.api_key)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers

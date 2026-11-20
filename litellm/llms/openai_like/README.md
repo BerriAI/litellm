@@ -31,6 +31,18 @@ Edit `providers.json` and add your provider:
 
 That's it! The provider will be automatically loaded and available.
 
+### From a file at startup
+
+Pass the same JSON at startup instead of editing the bundled file and rebuilding an image.
+
+```
+litellm --providers my-providers.json
+```
+
+The file uses the shape above. Entries are added to the bundled providers, and a slug that already exists uses the entry from this file. A missing path stops startup the same way a missing `--config` does. `PROVIDERS_FILE_PATH` names the same file when the flag is not passed, the way `CONFIG_FILE_PATH` does for `--config`.
+
+An external entry requires an explicit `api_key` on the call or a value for its configured `api_key_env`. If both are missing, the call fails before contacting the provider. External entries do not fall back to OpenAI credentials. Bundled providers keep their existing credential behavior.
+
 ### Optional Configuration Fields
 
 ```json
