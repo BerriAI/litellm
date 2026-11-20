@@ -112,7 +112,7 @@ export default function CustomerOrganizationApps({
       >
         <div className="grid shrink-0 gap-4 px-6 pt-6 last:pb-6 sm:grid-cols-2">
           <div className="space-y-2">
-            <label htmlFor="app-budget-customer" className="text-sm text-muted-foreground">
+            <label htmlFor="app-budget-customer" className="block text-sm text-muted-foreground">
               {t("apps.customer")}
             </label>
             <Input id="app-budget-customer" value={organizationAlias || organizationId} readOnly />
@@ -121,7 +121,7 @@ export default function CustomerOrganizationApps({
             <OrganizationAppPicker resources={resources} selected={editing} pending={pending} onChange={setEditing} />
           ) : (
             <div className="space-y-2">
-              <label htmlFor="app-budget-resource" className="text-sm text-muted-foreground">
+              <label htmlFor="app-budget-resource" className="block text-sm text-muted-foreground">
                 {t("apps.alias")}
               </label>
               <Input id="app-budget-resource" value={editing?.alias ?? ""} readOnly />
@@ -163,7 +163,7 @@ function OrganizationAppPicker({
       </label>
       <SearchSelect
         id="organization-app"
-        className="w-full"
+        className="h-9 w-full"
         placeholder={t("apps.selectApp")}
         value={selected?.resource_id}
         onValueChange={(value) => onChange(resources.data?.find((resource) => resource.resource_id === value) ?? null)}
