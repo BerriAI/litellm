@@ -1254,6 +1254,7 @@ openai_compatible_providers: Final[list[str]] = [
     "reka",
     "streamlake",
     "wally",
+    "turing",
     "huawei_maas",
 ]
 
@@ -1284,6 +1285,7 @@ openai_text_completion_compatible_providers: Final[list[str]] = [  # providers t
     "lambda_ai",
     "hyperbolic",
     "wandb",
+    "turing",
 ]
 _openai_like_providers: Final[list[str]] = [
     "predibase",
