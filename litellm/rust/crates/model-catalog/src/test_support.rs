@@ -1,4 +1,5 @@
-//! A live table for snapshot tests: the bundled document as Python serves it, plus rows a test registers
+//! A table shaped like Python's `litellm.model_cost` for resolve tests: the bundled document as Python serves it, plus
+//! rows a test registers
 
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
@@ -6,8 +7,8 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::snapshot::{Generation, KnownNames, Snapshot, SnapshotInputs, TableRow};
 use crate::store::{Rows, Store};
+use crate::view::{CatalogView, KnownNames, PricingContext};
 use crate::wire::Fields;
 use crate::{CapabilityRules, CostMap};
 
@@ -19,21 +20,9 @@ impl TestRow {
     pub(crate) fn new(fields: Fields, registered_fields: BTreeSet<String>) -> Self {
         Self(Arc::new((fields, registered_fields)))
     }
-}
 
-impl TableRow for TestRow {
-    type Identity = usize;
-
-    fn identity(&self) -> usize {
-        Arc::as_ptr(&self.0) as usize
-    }
-
-    fn fields(&self) -> Fields {
+    pub(crate) fn fields(&self) -> Fields {
         self.0.0.clone()
-    }
-
-    fn registered_fields(&self) -> BTreeSet<String> {
-        self.0.1.clone()
     }
 }
 
@@ -93,23 +82,29 @@ pub(crate) fn bundled_rows() -> TestRows {
     )
 }
 
-pub(crate) const GENERATION: Generation = Generation {
-    table: 1,
-    size: 1,
-    writes: 0,
-    discount: 0,
-    margin: 0,
-};
+impl CatalogView for Store<TestRows> {
+    fn contains(&self, key: &str) -> bool {
+        self.rows().contains(key)
+    }
 
-pub(crate) fn snapshot(rows: TestRows, names: KnownNames) -> Snapshot<Store<TestRows>> {
-    Snapshot::new(
-        GENERATION,
-        SnapshotInputs {
-            table: Store::new(rows),
-            rules: Arc::new(bundled_rules()),
-            names: Arc::new(names),
-        },
-    )
+    fn find_key(&self, name: &str) -> Option<String> {
+        Store::find_key(self, name)
+    }
+
+    fn fields(&self, key: &str) -> Option<Arc<Fields>> {
+        Some(Arc::new(self.get(key)?.fields()))
+    }
+
+    fn registered_fields(&self, key: &str) -> BTreeSet<String> {
+        self.get(key).map(|row| row.0.1.clone()).unwrap_or_default()
+    }
+}
+
+pub(crate) fn context(names: KnownNames) -> PricingContext {
+    PricingContext {
+        rules: bundled_rules(),
+        names,
+    }
 }
 
 pub(crate) fn bundled_rules() -> CapabilityRules {

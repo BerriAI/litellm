@@ -62,13 +62,15 @@ Catalog errors use one opaque `Error` with typed causes and JSON Pointer accesso
 
 - `names.rs` builds the seven names `get_model_info` tries for a known provider (`Candidates::potential`)
 - `bedrock.rs` reads Bedrock model id spellings. `litellm-llms` re-exports it, so the routes and the lookups share one copy
-- `cost.rs` is `Snapshot::candidates`, the `/v1/messages` Claude providers only (`CostProvider`). Any call main would price by another path is `AfterRows::Deferred` with its `Deferral`, so Python keeps pricing it. Rows before a deferral are still tried first, because main tries them first
+- `cost.rs` is `CostLookup::candidates`, the `/v1/messages` Claude providers only (`CostProvider`). Any call main would price by another path is `AfterRows::Deferred` with its `Deferral`, so Python keeps pricing it. Rows before a deferral are still tried first, because main tries them first
 - `cost_candidates.json` is main's answer for each test case, captured once from `completion_cost` with `NativePrices` spied. Recapture it when main's selection changes on purpose, never to make a Rust change pass
 
-`snapshot.rs` is one call's view of a host's live table, keyed on `Generation` (main's `ModelCostVersion` plus the identity of `cost_discount_config` and `cost_margin_config`). `Snapshots` hands out one snapshot per generation and shares a row cache across generations, keyed by row object identity, so a row no write replaced is lowered once. A host that edits a row object in place calls `Snapshots::forget_rows`. The snapshot reads rows live from the host table, it never copies the table
+`view.rs` is everything resolving and pricing read from a host. `CostLookup` is the table and the context of one call, and `resolve/` is methods on it
 
-- `TableRow` and `LiveTable` are the whole host interface: exact key, folded key through the store, and a row object with its fields and `registered_fields`
-- `KnownNames` is the two lists only Python has, every provider name and the model names `get_model_info` renames
+- `CatalogView` is the whole table interface: exact key, folded key, a row's fields, its `registered_fields`, and `lowered`, whose default lowers the row each time it is asked. A host that keeps lowerings overrides it
+- `PricingContext` is the immutable rest: the capability rules and `KnownNames`, the two lists only Python has, every provider name and the model names `get_model_info` renames
+- Nothing here versions, caches or swaps a table. A host whose table can change under it (python-bridge over `litellm.model_cost`) does that itself and hands in one view per call
+- `Catalog` is a `CatalogView` with no registrations, which is how the Rust host prices through the same path
 - A row is lowered with `litellm_provider` replaced by the billed provider, as `NativePrices` does
 
 ## Copied from main, fix later
@@ -80,7 +82,6 @@ Each line is main's behavior kept on purpose. Fixing one is a separate behavior 
 - A model only a capability rule knows bills from the rule, which prices nothing, so main charges 0 (`get_model_info_helper` generalization). Here it is `Deferral::Generalization`
 - A Bedrock Mantle row without token or tier prices bills 0 instead of trying the next candidate (the `else` branch of `cost_per_token`)
 - `stripped_model_name` keeps a Mantle region path, `us-gov-west-1/anthropic.claude-x` (`get_potential_model_names`)
-- An edit of a row object in place is never seen until the host forgets rows. Main sees it after the next version move, and only where its own caches reread (`VersionCached`)
 - A region path is any `<letters-digits-dashes>/` segment (`is_bedrock_region`), where Python checks a fixed region list (`get_all_bedrock_regions`)
 - A geo or speed multiplier below 1 is dropped, since `Multiplier` refuses it, where Python applies any number
 

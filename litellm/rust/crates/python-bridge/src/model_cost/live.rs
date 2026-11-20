@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use litellm_host_python::json_from_py;
+use litellm_model_catalog::Rows;
 use litellm_model_catalog::wire::Fields;
-use litellm_model_catalog::{Rows, TableRow};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyMapping, PyString};
@@ -20,16 +20,16 @@ impl Clone for LiveRow {
     }
 }
 
-/// The row object's address is its identity. A snapshot's cache holds the row, so the address is not reused
-impl TableRow for LiveRow {
-    type Identity = usize;
-
-    fn identity(&self) -> usize {
-        self.0.as_ptr() as usize
-    }
-
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the cost bridge stacked on this change prices through it"
+    )
+)]
+impl LiveRow {
     /// A row that is not a mapping reads as empty
-    fn fields(&self) -> Fields {
+    pub(crate) fn fields(&self) -> Fields {
         Python::attach(|py| {
             self.0
                 .bind(py)
@@ -41,7 +41,7 @@ impl TableRow for LiveRow {
     }
 
     /// `AliasedCostEntry.registered_fields`
-    fn registered_fields(&self) -> BTreeSet<String> {
+    pub(crate) fn registered_fields(&self) -> BTreeSet<String> {
         Python::attach(|py| {
             self.0
                 .bind(py)
@@ -242,19 +242,6 @@ mod tests {
                 expected.iter().map(|field| (*field).to_owned()).collect()
             );
             assert_eq!(row.fields()["mode"], "chat");
-        });
-    }
-
-    #[rstest]
-    fn a_row_object_is_one_identity_across_reads() {
-        Python::initialize();
-        Python::attach(|py| {
-            let rows = dict(py, c_str!("{'a': {'mode': 'chat'}, 'b': {'mode': 'chat'}}"));
-            let store = Store::new(LiveDict::new(&rows));
-            let read = |key| store.get(key).unwrap().into_owned().identity();
-
-            assert_eq!(read("a"), read("a"));
-            assert_ne!(read("a"), read("b"));
         });
     }
 }
