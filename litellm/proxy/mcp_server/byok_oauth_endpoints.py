@@ -67,7 +67,6 @@ class _PendingAuthCode(TypedDict):
 _PENDING_AUTH_CODE: Final = TypeAdapter(_PendingAuthCode)
 _byok_auth_codes: Final[dict[str, _PendingAuthCode]] = {}
 _AUTH_CODE_CACHE_PREFIX: Final = "mcp_byok_auth_code:"
-_AUTH_CODE_CLAIM_PREFIX: Final = "mcp_byok_auth_code_claim:"
 _AUTH_CODE_USER_WINDOW_PREFIX: Final = "mcp_byok_auth_code_window:"
 _AUTH_CODES_TARGET: Final = "mcp_byok_auth_codes"
 
@@ -109,7 +108,7 @@ def _purge_expired_codes() -> None:
 
 
 def _shared_code_store() -> "RedisCache | None":
-    """The cross-worker store for authorization codes, or None on a single-process proxy."""
+    """The cross-worker store for authorization codes, or None when no Redis is configured."""
     from litellm.proxy.proxy_server import redis_usage_cache
 
     return redis_usage_cache
@@ -175,8 +174,12 @@ async def _discard_auth_code(code: str) -> None:
         verbose_proxy_logger.warning("byok token: pending code not deleted: %s", e)
 
 
+def _auth_code_window(at: float) -> int:
+    return int(at // _AUTH_CODE_TTL_SECONDS)
+
+
 def _auth_code_window_key(user_id: str, issued_at: float) -> str:
-    return f"{_AUTH_CODE_USER_WINDOW_PREFIX}{user_id}:{int(issued_at // _AUTH_CODE_TTL_SECONDS)}"
+    return f"{_AUTH_CODE_USER_WINDOW_PREFIX}{user_id}:{_auth_code_window(issued_at)}"
 
 
 @with_service_target(_AUTH_CODES_TARGET)
@@ -204,24 +207,33 @@ async def _reserve_auth_code_slot(
 
 @with_service_target(_AUTH_CODES_TARGET)
 async def _release_auth_code_slot(user_id: str, issued_at: float) -> None:
-    """Give one slot back to the window ``issued_at`` falls in, while that window still exists."""
+    """Give one slot back to the window ``issued_at`` falls in, while that window is still the current one. Its
+    counter's TTL starts at the window's first code, so the counter outlives the window and a decrement never
+    creates it."""
     shared: Final = _shared_code_store()
-    if shared is None:
+    if shared is None or _auth_code_window(issued_at) != _auth_code_window(time.time()):
         return
     try:
-        await shared.async_increment_if_present(_auth_code_window_key(user_id, issued_at), -1)
+        await shared.async_increment(_auth_code_window_key(user_id, issued_at), -1, ttl=_AUTH_CODE_TTL_SECONDS)
     except Exception as e:  # noqa: BLE001  # the window expires with its TTL, so a missed release only delays one slot
         verbose_proxy_logger.warning("byok: pending-code slot not released: %s", e)
 
 
-async def _claim_auth_code(code: str) -> "ClaimOutcome":
-    """Atomic one-time use across workers (RFC 6749 section 4.1.2)."""
-    from litellm.proxy.mcp_server.gateway_dcr_flow import (
-        _SingleUseGuard,  # pyright: ignore[reportPrivateUsage]  # the gateway's cross-worker one-time claim, shared with BYOK codes
-    )
-    from litellm.proxy.proxy_server import user_api_key_cache
-
-    return await _SingleUseGuard(user_api_key_cache).claim(_AUTH_CODE_CLAIM_PREFIX + code, _AUTH_CODE_TTL_SECONDS)
+@with_service_target(_AUTH_CODES_TARGET)
+async def _consume_auth_code(code: str) -> "ClaimOutcome":
+    """One-time use across workers (RFC 6749 section 4.1.2): only the request whose delete removes the pending
+    record redeems it."""
+    if _byok_auth_codes.pop(code, None) is not None:
+        return "first"
+    shared: Final = _shared_code_store()
+    if shared is None:
+        return "replayed"
+    try:
+        deleted: Final = await shared.async_delete_cache(_AUTH_CODE_CACHE_PREFIX + code)
+    except Exception as e:  # noqa: BLE001  # a delete that failed left the record in place, so the client can retry
+        verbose_proxy_logger.warning("byok token: pending code store unavailable: %s", e)
+        return "unavailable"
+    return "first" if deleted == 1 else "replayed"
 
 
 def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
@@ -1114,8 +1126,7 @@ async def byok_token(
     if master_key is None:
         return _oauth_token_error("server_error", status=500)
 
-    # Consume the code (one-time use, atomic across workers)
-    claim: Final = await _claim_auth_code(code)
+    claim: Final = await _consume_auth_code(code)
     match claim:
         case "first":
             pass
@@ -1125,7 +1136,6 @@ async def byok_token(
             return _oauth_token_error("temporarily_unavailable", status=503)
         case _:
             assert_never(claim)
-    await _discard_auth_code(code)
     await _release_auth_code_slot(record["user_id"], record["expires_at"] - _AUTH_CODE_TTL_SECONDS)
 
     # Persist the BYOK credential

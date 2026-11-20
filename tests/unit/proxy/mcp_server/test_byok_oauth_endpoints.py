@@ -11,6 +11,7 @@ Covers:
 - 401 challenge in execute_mcp_tool (_check_byok_credential)
 """
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -1990,12 +1991,16 @@ async def test_authenticated_browser_identity_checks_embedded_session(
 
 class _SharedStore:
     """Stands in for redis_usage_cache: one store every worker sees. ``down`` holds the
-    (operation, key prefix) pairs that fault, each the way the real cache faults for that call."""
+    (operation, key prefix) pairs that fault, each the way the real cache faults for that call.
+    ``scripting=False`` is a Redis whose ACL refuses Lua scripts. ``expire_refused`` is one that refuses EXPIRE,
+    which the real increment sends as a second command after creating a counter."""
 
-    def __init__(self, down: set[tuple[str, str]] | None = None) -> None:
+    def __init__(self, down: set[tuple[str, str]] | None = None, scripting: bool = True) -> None:
         self.values: dict[str, str] = {}
         self.counts: dict[str, int] = {}
         self.down: set[tuple[str, str]] = down or set()
+        self.scripting = scripting
+        self.expire_refused = False
 
     def _fails(self, operation: str, key: str) -> bool:
         return any(operation == op and key.startswith(prefix) for op, prefix in self.down)
@@ -2011,22 +2016,31 @@ class _SharedStore:
     async def async_get_cache(self, key: str, raise_on_error: bool = False) -> str | None:
         if self._fails("get", key) and raise_on_error:
             raise ConnectionError("redis down")
-        return self.values.get(key)
+        value: Final = self.values.get(key)
+        await asyncio.sleep(0)
+        return value
 
-    async def async_delete_cache(self, key: str) -> None:
+    async def async_delete_cache(self, key: str) -> int:
         if self._fails("delete", key):
             raise ConnectionError("redis down")
-        self.values.pop(key, None)
+        return 0 if self.values.pop(key, None) is None else 1
 
     async def async_increment(self, key: str, value: int, ttl: int) -> int:
+        from redis.exceptions import NoPermissionError
+
         if self._fails("increment", key):
             raise ConnectionError("redis down")
+        created: Final = key not in self.counts
         self.counts[key] = self.counts.get(key, 0) + value
+        if created and self.expire_refused:
+            raise NoPermissionError("this user has no permissions to run the 'expire' command")
         return self.counts[key]
 
     async def async_increment_if_present(self, key: str, value: int) -> int | None:
-        if self._fails("increment_if_present", key):
-            raise ConnectionError("redis down")
+        from redis.exceptions import NoPermissionError
+
+        if not self.scripting:
+            raise NoPermissionError("this user has no permissions to run the 'eval' command")
         if key not in self.counts:
             return None
         self.counts[key] += value
@@ -2044,7 +2058,6 @@ class _CredentialTable:
 
 _VERIFIER: Final = "a_code_verifier_that_is_long_enough_for_pkce_43"
 _SHARED_CODE: Final = "mcp_byok_auth_code:"
-_SHARED_CLAIM: Final = "mcp_byok_auth_code_claim:"
 _SHARED_WINDOW: Final = "mcp_byok_auth_code_window:"
 
 
@@ -2137,9 +2150,7 @@ async def test_a_shared_code_is_redeemed_only_once(client: TestClient, salted: N
     shared: Final = _SharedStore()
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
         code: Final = _issued_code()
-        sealed: Final = dict(shared.values)
         first: Final = await _redeem(code, _CredentialTable())
-        shared.values.update(sealed)
         late_credentials: Final = _CredentialTable()
         second: Final = await _redeem(code, late_credentials)
     assert first.status_code == 200
@@ -2148,8 +2159,20 @@ async def test_a_shared_code_is_redeemed_only_once(client: TestClient, salted: N
     assert late_credentials.rows == {}
 
 
+@pytest.mark.asyncio
+async def test_concurrent_redemptions_of_one_shared_code_issue_one_token(client: TestClient, salted: None) -> None:
+    shared: Final = _SharedStore()
+    tables: Final = tuple(_CredentialTable() for _ in range(8))
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code: Final = _issued_code()
+        results: Final = await asyncio.gather(*(_redeem(code, table) for table in tables))
+    statuses: Final = sorted(result.status_code for result in results)
+    assert statuses == [200] + [400] * 7, statuses
+    assert sum(len(table.rows) for table in tables) == 1
+
+
 @pytest.mark.parametrize(
-    "fault", [("get", _SHARED_CODE), ("increment", _SHARED_CLAIM)], ids=["record read", "single-use claim"]
+    "fault", [("get", _SHARED_CODE), ("delete", _SHARED_CODE)], ids=["record read", "single-use claim"]
 )
 @pytest.mark.asyncio
 async def test_a_store_fault_during_redemption_is_retryable_and_keeps_the_code(
@@ -2169,19 +2192,27 @@ async def test_a_store_fault_during_redemption_is_retryable_and_keeps_the_code(
     assert _stored_credential(credentials) == "sk-supersecretkey"
 
 
-@pytest.mark.parametrize(
-    "fault",
-    [("delete", _SHARED_CODE), ("increment_if_present", _SHARED_WINDOW)],
-    ids=["record delete", "slot release"],
-)
 @pytest.mark.asyncio
-async def test_a_failed_cleanup_after_the_claim_still_stores_the_key_and_issues_a_token(
-    client: TestClient, salted: None, fault: tuple[str, str]
-) -> None:
-    shared: Final = _SharedStore(down={fault})
+async def test_redemption_completes_when_redis_refuses_expire(client: TestClient, salted: None) -> None:
+    shared: Final = _SharedStore()
     credentials: Final = _CredentialTable()
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
         code: Final = _issued_code()
+        shared.expire_refused = True
+        result: Final = await _redeem(code, credentials)
+    assert result.status_code == 200, result.body
+    assert _stored_credential(credentials) == "sk-supersecretkey"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_slot_release_after_the_claim_still_stores_the_key_and_issues_a_token(
+    client: TestClient, salted: None
+) -> None:
+    shared: Final = _SharedStore()
+    credentials: Final = _CredentialTable()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code: Final = _issued_code()
+        shared.down.add(("increment", _SHARED_WINDOW))
         result: Final = await _redeem(code, credentials)
     assert result.status_code == 200
     assert json.loads(result.body)["access_token"]
@@ -2215,13 +2246,14 @@ def test_one_user_at_the_shared_pending_code_cap_does_not_block_other_users(
     assert other.status_code == 302
 
 
+@pytest.mark.parametrize("scripting", [True, False], ids=["Redis runs scripts", "Redis refuses scripts"])
 @pytest.mark.asyncio
 async def test_finished_connects_do_not_count_toward_the_pending_code_cap(
-    client: TestClient, salted: None, window_clock: MagicMock
+    client: TestClient, salted: None, window_clock: MagicMock, scripting: bool
 ) -> None:
     from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
 
-    shared: Final = _SharedStore()
+    shared: Final = _SharedStore(scripting=scripting)
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
         finished: Final = [
             (await _redeem(_issued_code("busy-user"), _CredentialTable())).status_code
@@ -2235,21 +2267,24 @@ async def test_finished_connects_do_not_count_toward_the_pending_code_cap(
 
 
 @pytest.mark.asyncio
-async def test_redeeming_a_code_after_its_window_expired_does_not_lend_the_user_an_extra_slot(
+async def test_redeeming_a_code_after_its_window_ended_leaves_no_counter_behind(
     client: TestClient, salted: None, window_clock: MagicMock
 ) -> None:
-    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODE_TTL_SECONDS
 
     shared: Final = _SharedStore()
+    window_start: Final = window_clock.time.return_value // _AUTH_CODE_TTL_SECONDS * _AUTH_CODE_TTL_SECONDS
+    counter_expiry: Final = window_start + 10 + _AUTH_CODE_TTL_SECONDS
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
-        code: Final = _issued_code("busy-user")
-        shared.counts.pop(next(key for key in shared.counts if key.startswith(_SHARED_WINDOW + "busy-user")))
-        redeemed: Final = await _redeem(code, _CredentialTable())
-        pending: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
-        refused: Final = _authorize_as("busy-user")
+        window_clock.time.return_value = window_start + 10
+        _issued_code("busy-user")
+        window_clock.time.return_value = window_start + 290
+        late_code: Final = _issued_code("busy-user")
+        window_clock.time.return_value = counter_expiry + 10
+        shared.counts.clear()
+        redeemed: Final = await _redeem(late_code, _CredentialTable())
     assert redeemed.status_code == 200
-    assert pending == [302] * _AUTH_CODES_PER_USER_MAX
-    assert refused.status_code == 429
+    assert shared.counts == {}, "the ended window's counter, expired with its first code, came back"
 
 
 @pytest.mark.asyncio
