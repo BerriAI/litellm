@@ -3,7 +3,6 @@ import json
 import os
 import queue
 import sys
-import threading
 import time
 from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
@@ -25,7 +24,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import UrlElicitationRequiredError
 from mcp.types import ElicitRequestURLParams, SamplingMessage, TextContent
 from integration._support.mcp_e2e_upstream_server import add, multiply
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
@@ -156,7 +155,12 @@ def _cancel_on_disconnect(app: ASGIApp) -> ASGIApp:
     return connected
 
 
-def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Queue[dict[str, object]]):
+def _capturing(
+    app: Callable[[Scope, Receive, Send], object],
+    observed: queue.Queue[dict[str, object]],
+    *,
+    include_delete: bool = False,
+):
     async def capture(scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await app(scope, receive, send)
@@ -166,14 +170,10 @@ def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Qu
             return
         body: Final = await StarletteRequest(scope, receive).body()
         assert len(body) <= 65536
-        observed.put(
-            {
-                "body": json.loads(body) if body else None,
-                "headers": dict(scope["headers"]),
-                "method": scope["method"],
-                "path": scope["path"],
-            }
-        )
+        if body:
+            observed.put({"body": json.loads(body), "headers": dict(scope["headers"]), "path": scope["path"]})
+        elif scope["method"] == "DELETE" and include_delete:
+            observed.put({"method": "DELETE", "headers": dict(scope["headers"]), "path": scope["path"]})
         message: Final = {"type": "http.request", "body": body, "more_body": False}
         pending: Final = iter((message,))
 
@@ -834,17 +834,13 @@ def tool_calls(observed: tuple[dict[str, object], ...]) -> tuple[dict[str, objec
 def paginated_mcp_peer(
     *,
     page_size: int = 1,
-    tool_page_size: int | None = None,
-    tool_count: int = 3,
+    total_tools: int = 3,
     ttl_ms: int = 0,
     repeat_cursor: bool = False,
     fail_listing: bool = False,
     fail_continuation: bool = False,
     session_bound: bool = False,
     metadata: dict[str, JsonValue] | None = None,
-    block_tool_continuation: threading.Event | None = None,
-    tool_continuation_blocked: threading.Event | None = None,
-    release_tool_continuation: threading.Event | None = None,
 ) -> Iterator[McpPeer]:
     from contextlib import asynccontextmanager
 
@@ -864,64 +860,33 @@ def paginated_mcp_peer(
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    def window(params, session_id: str | None = None, item_count: int = 3, item_page_size: int | None = None):
+    def window(context, params):
         if fail_listing or (fail_continuation and params is not None and params.cursor):
             from mcp import MCPError
             from mcp.types import INTERNAL_ERROR
 
             raise MCPError(code=INTERNAL_ERROR, message="untrusted upstream message")
-        if session_id is not None and params is not None and params.cursor:
+        cursor = params.cursor if params is not None else None
+        session_id = context.request.headers.get("mcp-session-id") if session_bound and context.request else None
+        if session_bound and not session_id:
             from mcp import MCPError
             from mcp.types import INVALID_PARAMS
 
-            cursor_session, separator, offset = params.cursor.rpartition(":")
-            if not separator or cursor_session != session_id or not offset.isdecimal():
-                raise MCPError(code=INVALID_PARAMS, message="Cursor belongs to another upstream session")
-            start: Final = int(offset)
-        else:
-            start: Final = int(params.cursor) if params is not None and params.cursor else 0
-        end: Final = min(start + (item_page_size or page_size), item_count)
-        cursor: Final = (
-            "1"
-            if repeat_cursor
-            else f"{session_id}:{end}"
-            if session_id is not None and end < item_count
-            else str(end)
-            if end < item_count
-            else None
-        )
-        return range(start, end), cursor
+            raise MCPError(code=INVALID_PARAMS, message="request has no Mcp-Session-Id")
+        start = int(cursor.partition(":")[2]) if cursor and session_bound else int(cursor or "0")
+        if cursor and session_bound and cursor.partition(":")[0] != session_id:
+            from mcp import MCPError
+            from mcp.types import INVALID_PARAMS
 
-    session_by_request: dict[int | str, str | None] = {}  # mutable-ok: bind ASGI headers to low-level request IDs
-    session_header_by_request: dict[int | str, bytes | None] = {}
-    payload_adapter: Final = TypeAdapter(dict[str, JsonValue])
-    tool_list_lock: Final = asyncio.Lock()
+            raise MCPError(code=INVALID_PARAMS, message="Stale pagination cursor for this session")
+        end = min(start + page_size, total_tools)
+        following = "1" if repeat_cursor else str(end) if end < total_tools else None
+        if session_bound and following is not None:
+            following = f"{session_id}:{following}"
+        return range(start, end), following
 
     async def tools(context, params):
-        if (
-            params is not None
-            and params.cursor is not None
-            and block_tool_continuation is not None
-            and block_tool_continuation.is_set()
-            and tool_continuation_blocked is not None
-            and not tool_continuation_blocked.is_set()
-            and release_tool_continuation is not None
-        ):
-            tool_continuation_blocked.set()
-            await asyncio.to_thread(release_tool_continuation.wait)
-        request_id: Final = context.request_id
-        session_id: Final = (
-            session_by_request.pop(request_id, None)
-            if session_bound and request_id is not None
-            else None
-        )
-        if session_bound:
-            assert session_id is not None, (
-                request_id,
-                session_by_request,
-                session_header_by_request.get(request_id) if request_id is not None else None,
-            )
-        indexes, cursor = window(params, session_id, tool_count, tool_page_size)
+        indexes, cursor = window(context, params)
         return ListToolsResult(
             ttl_ms=ttl_ms,
             cache_scope="public",
@@ -941,7 +906,7 @@ def paginated_mcp_peer(
         )
 
     async def prompts(context, params):
-        indexes, cursor = window(params)
+        indexes, cursor = window(context, params)
         return ListPromptsResult(
             ttl_ms=ttl_ms,
             cache_scope="public",
@@ -951,7 +916,7 @@ def paginated_mcp_peer(
         )
 
     async def resources(context, params):
-        indexes, cursor = window(params)
+        indexes, cursor = window(context, params)
         return ListResourcesResult(
             ttl_ms=ttl_ms,
             cache_scope="public",
@@ -961,7 +926,7 @@ def paginated_mcp_peer(
         )
 
     async def templates(context, params):
-        indexes, cursor = window(params)
+        indexes, cursor = window(context, params)
         return ListResourceTemplatesResult(
             ttl_ms=ttl_ms,
             cache_scope="public",
@@ -998,48 +963,12 @@ def paginated_mcp_peer(
         AppStatus.should_exit = False
         async with manager.run():
             yield
-        if session_bound:
-            _drain_sse_streams()
-            watchers: Final = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
-            await asyncio.wait_for(asyncio.gather(*watchers), 2)
+        watchers: Final = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
+        for watcher in watchers:
+            watcher.cancel()
+        await asyncio.gather(*watchers, return_exceptions=True)
 
     app = Starlette(routes=[Mount("/mcp", app=manager.handle_request)], lifespan=lifespan)
     observed = queue.Queue()
-
-    async def request_session(scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not session_bound:
-            await app(scope, receive, send)
-            return
-        if scope["method"] != "POST":
-            await app(scope, receive, send)
-            return
-        body: Final = await StarletteRequest(scope, receive).body()
-        payload: Final = payload_adapter.validate_json(body) if body else {}
-        raw_session_id: Final = next(
-            (value for name, value in scope["headers"] if name.lower() == b"mcp-session-id"),
-            None,
-        )
-        request_id: Final = payload.get("id")
-        pending: Final = iter(({"type": "http.request", "body": body, "more_body": False},))
-
-        async def replay() -> Message:
-            buffered: Final = next(pending, None)
-            if buffered is not None:
-                return buffered
-            return await receive()
-
-        if payload.get("method") == "tools/list" and isinstance(request_id, (int, str)):
-            async with tool_list_lock:
-                session_by_request[request_id] = raw_session_id.decode() if raw_session_id is not None else None
-                session_header_by_request[request_id] = raw_session_id
-                try:
-                    await app(scope, replay, send)
-                finally:
-                    session_by_request.pop(request_id, None)
-                    session_header_by_request.pop(request_id, None)
-            return
-
-        await app(scope, replay, send)
-
-    with asgi_server(_capturing(request_session, observed)) as url:
+    with asgi_server(_capturing(app, observed, include_delete=session_bound)) as url:
         yield McpPeer(url + "/mcp/", observed)

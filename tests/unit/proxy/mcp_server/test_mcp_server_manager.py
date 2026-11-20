@@ -40,7 +40,7 @@ from mcp.types import (
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, JsonValue, TypeAdapter
+from pydantic import AnyUrl, TypeAdapter
 from respx import MockRouter
 
 import litellm
@@ -260,19 +260,6 @@ def _reload_mcp_manager_module():
         if name.startswith("litellm.proxy.mcp_server.") and hasattr(module, "global_mcp_server_manager"):
             module.global_mcp_server_manager = reloaded.global_mcp_server_manager
     return reloaded
-
-
-class _MemoryToolPageStore:
-    available = True
-
-    def __init__(self) -> None:
-        self.values: dict[str, JsonValue] = {}
-
-    async def get(self, key: str) -> JsonValue | None:
-        return self.values.get(key)
-
-    async def set(self, key: str, value: JsonValue, _ttl: float) -> None:
-        self.values[key] = value
 
 
 @pytest.fixture(autouse=True)
@@ -16760,7 +16747,7 @@ _JSONRPC_ADAPTER = TypeAdapter(JSONRPCMessage)
 @contextlib.contextmanager
 def _mcp_upstream(respond):
     """Drive the SDK's streamable-HTTP transport off an httpx2 MockTransport; respx only sees httpx."""
-    from litellm.mcp_client.client import MCPClient
+    from litellm.mcp_client.client import MCPClient, ToolListingSession
 
     def make_client(self, *args, **kwargs):
         return httpx2.AsyncClient(
@@ -16769,9 +16756,17 @@ def _mcp_upstream(respond):
             auth=kwargs.get("auth") or self._resolved_auth or self._aws_auth,
         )
 
+    def client_factory(
+        self: MCPClient,
+        *,
+        transport: httpx2.AsyncBaseTransport | None = None,
+        listing_session: ToolListingSession | None = None,
+    ) -> Callable[..., httpx2.AsyncClient]:
+        return functools.partial(make_client, self)
+
     with (
         patch.object(  # test-quality-ok: respx cannot intercept httpx2; inject MockTransport through the client factory
-            MCPClient, "_create_httpx_client_factory", lambda self: functools.partial(make_client, self)
+            MCPClient, "_create_httpx_client_factory", client_factory
         )
     ):
         yield
@@ -17047,7 +17042,6 @@ async def _list_discovery_tools(
     extra_headers: Mapping[str, str] | None = None,
     user_api_key_auth: UserAPIKeyAuth | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
-    on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
 ) -> ListToolsResult:
     from mcp.types import PaginatedRequestParams
 
@@ -17059,7 +17053,6 @@ async def _list_discovery_tools(
         extra_headers=None if extra_headers is None else dict(extra_headers),
         user_api_key_auth=user_api_key_auth,
         proxy_logging_obj=proxy_logging_obj,
-        on_page=on_page,
     )
 
 
@@ -17175,20 +17168,12 @@ async def test_tools_list_is_kept_for_the_server_ttl_whatever_the_upstream_decla
     upstream: Final = _DiscoveryUpstream()
     upstream.ttl_ms = upstream_ttl_ms
     server: Final = _server_with_tools_list_ttl(admin_seconds)
-    observed_ttls: list[int | None] = []
-
-    async def observe(page: ListToolsResult) -> None:
-        observed_ttls.append(page.ttl_ms)
-
     with _mcp_upstream(upstream.respond):
-        first: Final = await _list_discovery_tools(manager, cursor, server, on_page=observe)
+        first: Final = await _list_discovery_tools(manager, cursor, server)
         assert first.ttl_ms == admin_seconds * 1000
-        assert observed_ttls == [admin_seconds * 1000]
         clock.now = admin_seconds - 0.125
-        observed_ttls.clear()
-        cached: Final = await _list_discovery_tools(manager, cursor, server, on_page=observe)
+        cached: Final = await _list_discovery_tools(manager, cursor, server)
         assert cached.ttl_ms == 125
-        assert observed_ttls == [125]
         assert upstream.initializes == 1
         clock.now = admin_seconds + 0.001
         assert len((await _list_discovery_tools(manager, cursor, server)).tools) == 1
@@ -17217,16 +17202,9 @@ async def test_tools_list_is_never_cached_for_a_server_whose_ttl_is_zero(monkeyp
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
     upstream: Final = _DiscoveryUpstream()
     server: Final = _server_with_tools_list_ttl(0)
-    observed_ttls: list[int | None] = []
-
-    async def observe(page: ListToolsResult) -> None:
-        observed_ttls.append(page.ttl_ms)
-
     with _mcp_upstream(upstream.respond):
         for _ in range(2):
-            observed_ttls.clear()
-            assert (await _list_discovery_tools(manager, server=server, on_page=observe)).ttl_ms == 0
-            assert observed_ttls == [0]
+            assert (await _list_discovery_tools(manager, server=server)).ttl_ms == 0
         assert upstream.initializes == 2
 
 
@@ -22428,8 +22406,6 @@ async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolatio
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "listed-tools-test")
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "redis_usage_cache", object())
-    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", _MemoryToolPageStore())
     first = MCPTool(name="first", description="First page", input_schema={"type": "object"})
     second = MCPTool(name="second", description="Second page", input_schema={"type": "object"})
     server = MCPServer(server_id="pages", name="pages", transport=MCPTransport.http)
@@ -22437,22 +22413,11 @@ async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolatio
     manager.registry = {server.server_id: server}
     client: Final = _listing_client()
     client._last_initialize_instructions = None
-
-    listing_runs: Final = iter(
-        (
-            (ListToolsResult(tools=[first], next_cursor="upstream-next"), ListToolsResult(tools=[second])),
-            (ListToolsResult(tools=[second]),),
-        )
-    )
-
-    async def list_tools_result(*, on_page=None, **_kwargs):
-        pages: Final = next(listing_runs)
-        if on_page is not None:
-            for page in pages:
-                await on_page(page)
-        return ListToolsResult(tools=[tool for page in pages for tool in page.tools])
-
-    client.list_tools_result = AsyncMock(side_effect=list_tools_result)
+    client.list_tools_page.side_effect = [
+        ListToolsResult(tools=[first], next_cursor="next"),
+        ListToolsResult(tools=[second]),
+        ListToolsResult(tools=[second]),
+    ]
     manager.create_mcp_client = AsyncMock(return_value=client)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     caller = UserAPIKeyAuth(api_key="owned-caller", user_id="alice")
@@ -22461,7 +22426,6 @@ async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolatio
         context, PaginatedRequestParams(), [server], {}, record_listing=True
     )
     assert first_page.next_cursor
-    await asyncio.gather(*tuple(catalog._TOOL_PRODUCERS.values()))
     await catalog.aggregate_gateway_tools(
         context, PaginatedRequestParams(cursor=first_page.next_cursor), [server], {}, record_listing=True
     )
@@ -22470,11 +22434,7 @@ async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolatio
     assert manager.get_listed_tool(server, "second", identity) == second
     other = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(api_key="other-caller", user_id="bob"))
     assert manager.get_listed_tool(server, "first", other) is None
-    fresh_listing = await catalog.aggregate_gateway_tools(
-        context, PaginatedRequestParams(), [server], {}, record_listing=True
-    )
-    await asyncio.gather(*tuple(catalog._TOOL_PRODUCERS.values()))
-    assert fresh_listing.next_cursor is None
+    await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), [server], {}, record_listing=True)
     assert manager.get_listed_tool(server, "first", identity) is None
     assert manager.get_listed_tool(server, "second", identity) == second
 
@@ -22597,15 +22557,13 @@ async def test_aggregate_bounds_each_paginated_server_by_its_own_listing_deadlin
 @pytest.mark.asyncio
 async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metadata(monkeypatch):
     from mcp.shared.exceptions import MCPError
-    from mcp.types import INVALID_PARAMS, ListToolsResult, PaginatedRequestParams
+    from mcp.types import ListToolsResult, PaginatedRequestParams
 
     from litellm.proxy import proxy_server
     from litellm.proxy.mcp_server import catalog, operations
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "failed-listing-test")
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "redis_usage_cache", object())
-    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", _MemoryToolPageStore())
     first = MCPTool(name="first", description="Delivered", input_schema={"type": "object"})
     unseen = MCPTool(name="unseen", description="Never delivered", input_schema={"type": "object"})
     servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
@@ -22614,14 +22572,10 @@ async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metad
     clients: Final = {server.server_id: _listing_client() for server in servers}
     for client in clients.values():
         client._last_initialize_instructions = None
-
-        async def fail_after_delivered_page(*, on_page=None, **_kwargs):
-            if on_page is not None:
-                await on_page(ListToolsResult(tools=[first], next_cursor="upstream-next"))
-                await on_page(ListToolsResult(tools=[unseen]))
-            raise MCPError(code=INVALID_PARAMS, message="upstream repeated a pagination cursor")
-
-        client.list_tools_result = AsyncMock(side_effect=fail_after_delivered_page)
+        client.list_tools_page.side_effect = [
+            ListToolsResult(tools=[first], next_cursor="next"),
+            ListToolsResult(tools=[unseen], next_cursor="next" if client is clients["beta"] else None),
+        ]
 
     async def create_client(server, **kwargs):
         return clients[server.server_id]
@@ -22632,8 +22586,7 @@ async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metad
     context = operations.prepare_context(caller)
     initial = await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), servers, {}, record_listing=True)
     assert initial.next_cursor
-    await asyncio.gather(*tuple(catalog._TOOL_PRODUCERS.values()))
-    with pytest.raises(MCPError, match="Tool listing page is unavailable"):
+    with pytest.raises(MCPError, match="repeated a pagination cursor"):
         await catalog.aggregate_gateway_tools(
             context, PaginatedRequestParams(cursor=initial.next_cursor), servers, {}, record_listing=True
         )
@@ -22656,32 +22609,16 @@ async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_
     if can_seal:
         monkeypatch.setenv("LITELLM_SALT_KEY", "delivered-page-test")
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "redis_usage_cache", object() if can_seal else None)
-    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", _MemoryToolPageStore())
     tool = MCPTool(name="first", input_schema={"type": "object"})
     servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
     manager = MCPServerManager()
     manager.registry = {server.server_id: server for server in servers}
     clients: Final = {server.server_id: _listing_client() for server in servers}
-    beta_release: Final = asyncio.Event()
     for name, client in clients.items():
         client._last_initialize_instructions = None
-
-        async def list_tools_result(*, on_page=None, _name=name, **_kwargs):
-            pages: Final = (
-                (ListToolsResult(tools=[tool], next_cursor="upstream-next"), ListToolsResult(tools=[]))
-                if _name == "beta"
-                else (ListToolsResult(tools=[tool]),)
-            )
-            if on_page is not None:
-                await on_page(pages[0])
-                if _name == "beta" and can_seal:
-                    await beta_release.wait()
-                for page in pages[1:]:
-                    await on_page(page)
-            return ListToolsResult(tools=[tool])
-
-        client.list_tools_result = AsyncMock(side_effect=list_tools_result)
+        client.list_tools_page.return_value = ListToolsResult(
+            tools=[tool], next_cursor="next" if name == "beta" else None
+        )
 
     async def create_client(server, **kwargs):
         return clients[server.server_id]
@@ -22690,18 +22627,13 @@ async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     context = operations.prepare_context(UserAPIKeyAuth(api_key="owned-caller", user_id="alice"))
     listing = catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), servers, {}, record_listing=True)
-    try:
-        result: Final = await listing
-        if can_seal:
-            assert result.next_cursor
-            assert manager._get_mcp_server_from_tool_name("first").server_id == "alpha"
-        else:
-            assert result.next_cursor is None
-            assert len(result.tools) == 2
-            assert manager._get_mcp_server_from_tool_name("first").server_id == "alpha"
-    finally:
-        beta_release.set()
-        await asyncio.gather(*tuple(catalog._TOOL_PRODUCERS.values()))
+    if can_seal:
+        assert (await listing).next_cursor
+        assert manager._get_mcp_server_from_tool_name("first").server_id == "alpha"
+    else:
+        with pytest.raises(MCPError, match="LITELLM_SALT_KEY"):
+            await listing
+        assert manager._get_mcp_server_from_tool_name("first") is None
 
 
 @pytest.mark.asyncio

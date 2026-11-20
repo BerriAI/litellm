@@ -9,9 +9,9 @@ import inspect
 import json
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, nullcontext
-from contextvars import ContextVar
 from functools import partial
 from importlib.metadata import version
 from types import MappingProxyType
@@ -40,9 +40,6 @@ _SessionCallbackName: TypeAlias = Literal["sampling_callback", "elicitation_call
 
 
 SESSION_CLEANUP_TIMEOUT_MESSAGE: Final = "MCP session cleanup timed out"
-_MCP_OBSERVED_TOOLS_LIST_DEADLINE: Final[ContextVar[float | None]] = ContextVar(
-    "mcp_observed_tools_list_deadline", default=None
-)
 
 
 class _SessionCallbackMap(TypedDict):
@@ -105,10 +102,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
-from litellm.mcp_client.tools import (
-    list_tools_result_with_pagination,
-    list_tools_with_pagination,
-)
+from litellm.mcp_client.tools import list_tools_result_with_pagination, list_tools_with_pagination
 from litellm.proxy.mcp_server.mcp_context import get_active_mcp_request_ctx
 from litellm.proxy.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.proxy.mcp_server.result_conversion import (
@@ -298,6 +292,34 @@ class _MCPResponseStream(httpx2.AsyncByteStream):
             raise
 
 
+class ToolListingSession:
+    def __init__(self, session_id: str | None = None, protocol_version: str | None = None) -> None:
+        self.session_id = session_id
+        self.protocol_version = protocol_version
+        self.initialized = False
+        self.keep_alive = False
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        if self.session_id is None:
+            return {}
+        return {
+            "Mcp-Session-Id": self.session_id,
+            **({"MCP-Protocol-Version": self.protocol_version} if self.protocol_version is not None else {}),
+        }
+
+    def mark_initialized(self, protocol_version: str | None) -> None:
+        self.protocol_version = protocol_version
+        self.initialized = True
+
+    def stop_retaining(self) -> None:
+        self.keep_alive = False
+
+    async def observe_response(self, response: httpx2.Response) -> None:
+        if self.session_id is None:
+            self.session_id = response.headers.get("mcp-session-id")
+
+
 class _MCPHTTPClient(httpx2.AsyncClient):
     cleanup_scope: anyio.CancelScope | None = None
     cleanup_errors: tuple[Exception, ...] = ()
@@ -325,49 +347,21 @@ class _MCPHTTPClient(httpx2.AsyncClient):
                 return termination
 
             return await _run_bounded_cleanup(terminate, self.cleanup_scope.deadline)
-
-        deadline_at: Final = _MCP_OBSERVED_TOOLS_LIST_DEADLINE.get()
-
-        def is_observed_discovery_post() -> bool:
-            if deadline_at is None or request.method != "POST":
-                return False
-            try:
-                payload: Final = TypeAdapter(dict[str, object]).validate_json(request.content)
-            except (TypeError, ValueError, RuntimeError):
-                return False
-            return payload.get("method") in {"initialize", "tools/list"}
-
-        retry_observed_discovery: Final = is_observed_discovery_post()
-
-        async def send_once() -> httpx2.Response:
-            response: Final = await super(_MCPHTTPClient, self).send(
-                request, stream=stream, auth=auth, follow_redirects=follow_redirects
-            )
+        try:
+            response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
             if request.method == "POST" and response.is_error and response.status_code != 404:
                 await response.aclose()
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx2.HTTPStatusError as error:
+                    if self.post_failure is not None and not self.post_failure.done():
+                        self.post_failure.set_result(error)
+                    raise
             if stream:
                 response.stream = _MCPResponseStream(
                     cast(httpx2.AsyncByteStream, response.stream), self._record_cleanup_error
                 )
             return response
-
-        try:
-            if retry_observed_discovery:
-                from litellm.litellm_core_utils.core_helpers import redact_url_origin
-                from litellm.proxy.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
-
-                return await retry_upstream_rate_limit(
-                    send_once,
-                    redact_url_origin(str(request.url)) or "MCP server",
-                    deadline_seconds=max(0.0, deadline_at - time.monotonic()) if deadline_at is not None else 0.0,
-                )
-            return await send_once()
-        except httpx2.HTTPStatusError as error:
-            if request.method == "POST" and self.post_failure is not None and not self.post_failure.done():
-                self.post_failure.set_result(error)
-            self._record_cleanup_error(error)
-            raise
         except Exception as error:
             self._record_cleanup_error(error)
             raise
@@ -647,6 +641,7 @@ class MCPClient:
 
     def _create_transport_context(
         self,
+        listing_session: ToolListingSession | None = None,
     ) -> tuple[_TransportContext, httpx2.AsyncClient | None]:
         """
         Create the appropriate transport context based on transport type.
@@ -682,19 +677,19 @@ class MCPClient:
             )
         # HTTP transport (default)
         headers = self._get_auth_headers()
-        httpx_client_factory = (
-            self._create_httpx_client_factory()
-            if self._upstream_transport is None
-            else self._create_httpx_client_factory(transport=self._upstream_transport)
+        streamable_http_client_factory: Final = self._create_httpx_client_factory(
+            transport=self._upstream_transport,
+            listing_session=listing_session,
         )
         verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
-        http_client = httpx_client_factory(
-            headers=headers,
+        http_client = streamable_http_client_factory(
+            headers=headers | dict(listing_session.headers if listing_session is not None else {}),
             timeout=httpx2.Timeout(self.timeout),
         )
         transport_ctx: Final = streamable_http_client(
             url=self.server_url,
             http_client=http_client,
+            terminate_on_close=listing_session is None,
             max_sse_event_size=MCP_MAX_SSE_EVENT_SIZE_BYTES,
         )
         return transport_ctx, http_client
@@ -794,6 +789,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        listing_session: ToolListingSession | None = None,
     ) -> TSessionResult:
         """
         Execute an operation within a transport and session context.
@@ -839,11 +835,14 @@ class MCPClient:
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
-                        init_result: Final = await self._prepare_session(session)
-                        instructions: Final = getattr(init_result, "instructions", None)
-                        self._last_initialize_instructions = (
-                            instructions.strip() or None if isinstance(instructions, str) else None
-                        )
+                        if listing_session is None or listing_session.session_id is None:
+                            init_result: Final = await self._prepare_session(session)
+                            instructions: Final = getattr(init_result, "instructions", None)
+                            self._last_initialize_instructions = (
+                                instructions.strip() or None if isinstance(instructions, str) else None
+                            )
+                            if listing_session is not None:
+                                listing_session.mark_initialized(session.protocol_version)
                         result: Final = await operation(session)
                     except BaseException as operation_error:
                         in_flight_error = operation_error
@@ -901,6 +900,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        listing_session: ToolListingSession | None = None,
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up.
 
@@ -911,7 +911,11 @@ class MCPClient:
         close_cancellation: asyncio.CancelledError | None = None
         try:
             self._last_initialize_instructions = None
-            transport_ctx, http_client = self._create_transport_context()
+            transport_ctx, http_client = (  # rebind-ok: retain the created client for bounded cleanup
+                self._create_transport_context(listing_session)
+                if listing_session is not None
+                else self._create_transport_context()
+            )
             execution: Final = (
                 self._execute_session_operation(
                     transport_ctx,
@@ -920,12 +924,20 @@ class MCPClient:
                     on_stream_error=on_stream_error,
                     on_cleanup=on_cleanup,
                     on_notification=on_notification,
+                    listing_session=listing_session,
                 )
-                if on_stream_error is not None or on_cleanup is not None or on_notification is not None
+                if (
+                    on_stream_error is not None
+                    or on_cleanup is not None
+                    or on_notification is not None
+                    or listing_session is not None
+                )
                 else self._execute_session_operation(transport_ctx, operation, http_client=http_client)
             )
             result: Final = await execution
         except Exception as e:
+            if listing_session is not None:
+                listing_session.stop_retaining()
             read_timeout: Final = as_mcp_read_timeout(e)
             if read_timeout is not None:
                 verbose_logger.warning(
@@ -937,8 +949,24 @@ class MCPClient:
             _log: Final = verbose_logger.debug if quiet_on_error else verbose_logger.warning
             _log("MCP client run_with_session failed for %s", self.server_url or "stdio")
             raise
+        except asyncio.CancelledError:
+            if listing_session is not None:
+                listing_session.stop_retaining()
+            raise
         finally:
             if http_client is not None:
+                try:
+                    if (
+                        listing_session is not None
+                        and listing_session.session_id is not None
+                        and not listing_session.keep_alive
+                    ):
+                        await _run_bounded_cleanup(
+                            partial(http_client.delete, self.server_url, headers=listing_session.headers),
+                            anyio.current_time() + 1,
+                        )
+                except (Exception, asyncio.CancelledError):  # noqa: BLE001  # Termination is best effort
+                    verbose_logger.debug("MCP tool listing session termination failed")
                 try:
                     await _run_bounded_cleanup(http_client.aclose, anyio.current_time() + 1)
                 except (Exception, asyncio.CancelledError) as e:
@@ -1013,7 +1041,10 @@ class MCPClient:
         return _strip_header_whitespace(headers)
 
     def _create_httpx_client_factory(
-        self, *, transport: httpx2.AsyncBaseTransport | None = None
+        self,
+        *,
+        transport: httpx2.AsyncBaseTransport | None = None,
+        listing_session: ToolListingSession | None = None,
     ) -> Callable[..., httpx2.AsyncClient]:
         """
         Create a custom httpx2 client factory that uses LiteLLM's SSL configuration.
@@ -1053,7 +1084,8 @@ class MCPClient:
                             self._session_callbacks_override["response_hooks"]
                             if self._session_callbacks_override is not None
                             else _mcp_response_hooks()
-                        ),
+                        )
+                        + ([listing_session.observe_response] if listing_session is not None else []),
                         "request": [guard] if guard else [],
                     }
                 ),
@@ -1102,19 +1134,42 @@ class MCPClient:
         with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
             return await self.run_with_session(fetch, quiet_on_error=True)
 
-    async def list_tools_page(self, params: PaginatedRequestParams) -> ListToolsResult:
+    async def list_tools_page(
+        self, params: PaginatedRequestParams, *, listing_session: ToolListingSession | None = None
+    ) -> ListToolsResult:
+        retained: Final = listing_session if self.transport_type == MCPTransport.http else None
+        if retained is not None and params.cursor is None:
+            retained.session_id = None
+            retained.protocol_version = None
+            retained.initialized = False
+            retained.keep_alive = False
+
+        async def fetch(session: ClientSession) -> ListToolsResult:
+            # Reattached SDK sessions restart their request counter; IDs must remain unique upstream.
+            result: Final = (
+                ListToolsResult.model_validate(
+                    await session._dispatcher.send_raw_request(  # pyright: ignore[reportPrivateUsage]  # SDK lacks request ID override
+                        "tools/list",
+                        {"cursor": params.cursor},
+                        {"request_id": uuid.uuid4().hex, "timeout": self.timeout},
+                    )
+                )
+                if retained is not None and retained.session_id is not None and not retained.initialized
+                else await session.list_tools(params=params)
+            )
+            if retained is not None:
+                retained.keep_alive = bool(result.next_cursor)
+            return result
+
         with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
-            return await self.run_with_session(lambda session: session.list_tools(params=params), quiet_on_error=True)
+            if retained is None:
+                return await self.run_with_session(fetch, quiet_on_error=True)
+            return await self.run_with_session(fetch, quiet_on_error=True, listing_session=retained)
 
     async def list_tools(self, raise_on_error: bool = False) -> list[MCPTool]:
         return (await self.list_tools_result(raise_on_error=raise_on_error)).tools
 
-    async def list_tools_result(
-        self,
-        raise_on_error: bool = False,
-        *,
-        on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
-    ) -> ListToolsResult:
+    async def list_tools_result(self, raise_on_error: bool = False) -> ListToolsResult:
         """List available tools from the server.
 
         Args:
@@ -1123,32 +1178,20 @@ class MCPClient:
                 can surface upstream HTTP 401 responses as a proper 401 to the
                 MCP client (triggering the upstream OAuth flow) rather than
                 masking them as "connected, no tools".
-            on_page: Callback invoked for each upstream page during the complete walk.
         """
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
         try:
-            from litellm.litellm_core_utils.core_helpers import redact_url_origin
-
-            server_name: Final = redact_url_origin(self.server_url) or ("MCP server" if self.server_url else "stdio")
             # A per-server timeout above the global default extends the whole-walk deadline
             listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
-            token: Final = _MCP_OBSERVED_TOOLS_LIST_DEADLINE.set(
-                time.monotonic() + listing_deadline if on_page is not None else None
+            listing: Final = await self.run_with_session(
+                partial(
+                    list_tools_result_with_pagination,
+                    listing_deadline=listing_deadline,
+                    require_complete=raise_on_error,
+                ),
+                quiet_on_error=raise_on_error,
             )
-            try:
-                listing: Final = await self.run_with_session(
-                    partial(
-                        list_tools_result_with_pagination,
-                        listing_deadline=listing_deadline,
-                        require_complete=raise_on_error,
-                        on_page=on_page,
-                        server_name=server_name,
-                    ),
-                    quiet_on_error=raise_on_error,
-                )
-            finally:
-                _MCP_OBSERVED_TOOLS_LIST_DEADLINE.reset(token)
             tool_count: Final = len(listing.tools)
             tool_names: Final = tuple(tool.name for tool in listing.tools)
             verbose_logger.info(
@@ -1363,7 +1406,7 @@ class MCPClient:
                 pages.append((page, time.monotonic()))
                 items.extend(items_of(page))
                 if not page.next_cursor:
-                    now = time.monotonic()
+                    now: Final = time.monotonic()
                     return items, aggregate_freshness(
                         tuple(age_freshness(value, now - received) for value, received in pages)
                     )

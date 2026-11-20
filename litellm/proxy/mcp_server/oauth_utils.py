@@ -8,13 +8,12 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NoReturn
-from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import redact_url_origin as redact_mcp_resource_url
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointClientAuth,
@@ -93,6 +92,29 @@ def _oauth_invalid_request(
 def _origin_label(scheme: str, netloc: str) -> str:
     """Human-readable origin for error messages (scheme + host[:port])."""
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
+
+
+def redact_mcp_resource_url(url: str | None) -> str | None:
+    """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
+
+    Everything else is dropped: userinfo (``user:pass@``), the query string, the
+    fragment, and the path, because hosted MCP servers routinely embed the
+    credential in the path (e.g. ``/mcp/s/<token>``) and this value is persisted
+    in spend-log metadata that a caller who can invoke the tool can read back.
+    Returns None when the URL has no host to identify (nothing safe to log).
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        parts: Final = urlsplit(url)
+        hostname: Final = parts.hostname
+        port: Final = parts.port
+    except ValueError:
+        return None
+    if not hostname:
+        return None
+    netloc: Final = f"{hostname}:{port}" if port else hostname
+    return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
 _redact_mcp_resource_url: Final = redact_mcp_resource_url

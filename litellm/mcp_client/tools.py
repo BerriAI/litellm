@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from typing import Final, Literal
 
 import anyio
@@ -117,12 +117,7 @@ async def list_tools_with_pagination(
 
 
 async def list_tools_result_with_pagination(
-    session: ClientSession,
-    listing_deadline: float | None = None,
-    *,
-    require_complete: bool = False,
-    on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
-    server_name: str = "MCP session",
+    session: ClientSession, listing_deadline: float | None = None, *, require_complete: bool = False
 ) -> ListToolsResult:
     """Collect tools from every tools/list page by following nextCursor.
 
@@ -144,34 +139,16 @@ async def list_tools_result_with_pagination(
     effective_deadline: Final = (
         listing_deadline if listing_deadline is not None else max(MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT)
     )
-    walk_deadline: Final = time.monotonic() + effective_deadline
-
-    async def fetch_page(page_cursor: str | None) -> ListToolsResult:
-        async def request_page() -> ListToolsResult:
-            return (
-                await session.list_tools()
-                if page_cursor is None
-                else await session.list_tools(params=PaginatedRequestParams(cursor=page_cursor))
-            )
-
-        if on_page is None:
-            return await request_page()
-
-        from litellm.proxy.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
-
-        return await retry_upstream_rate_limit(
-            request_page,
-            server_name,
-            deadline_seconds=max(0.0, walk_deadline - time.monotonic()),
-        )
 
     with anyio.move_on_after(effective_deadline):
         for _ in range(MCP_TOOL_LISTING_MAX_PAGES):
-            result = await fetch_page(cursor)
-            pages.append((result, time.monotonic()))
-            if on_page is not None:
-                await on_page(result)
+            result = (
+                await session.list_tools()
+                if cursor is None
+                else await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
+            )
             tools.extend(result.tools)
+            pages.append((result, time.monotonic()))
 
             next_cursor = result.next_cursor
             if not isinstance(next_cursor, str) or not next_cursor:

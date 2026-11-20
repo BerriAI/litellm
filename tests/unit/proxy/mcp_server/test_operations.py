@@ -883,14 +883,12 @@ async def test_tools_call_warmup_does_not_consume_mcp_server_rpm() -> None:
     )
     caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-catalog-warmup"))
     proxy_logging: Final = _mcp_rate_limited_proxy_logging()
-    upstream: Final = AsyncMock(
-        return_value=types.ListToolsResult(tools=[types.Tool(name="echo", inputSchema={"type": "object"})])
-    )
+    upstream: Final = AsyncMock(return_value=[types.Tool(name="echo", inputSchema={"type": "object"})])
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
         patch.object(operations.global_mcp_server_manager, "server_exposes_tool", return_value=False),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
-        patch.object(operations.global_mcp_server_manager, "get_tools_page", upstream),
+        patch.object(operations.global_mcp_server_manager, "get_tools_from_server", upstream),
     ):
         await operations._list_tools_before_first_call(
             server=server,

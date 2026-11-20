@@ -80,6 +80,7 @@ from litellm.mcp_client.client import (
     SESSION_CLEANUP_TIMEOUT_MESSAGE,
     MCPClient,
     PersistentMCPSession,
+    ToolListingSession,
     UpstreamSessionClosedError,
     strip_auth_scheme,
     to_basic_credentials,
@@ -1991,6 +1992,23 @@ class _UpstreamToolListing(BaseModel):
 
 def _tool_page_cursor(params: PaginatedRequestParams | None) -> tuple[str | None] | None:
     return None if params is None else (params.cursor,)
+
+
+def _needs_initial_page_refetch(
+    listing_session: ToolListingSession | None,
+    transport_type: MCPTransport,
+    params: PaginatedRequestParams | None,
+    page: ListToolsResult,
+) -> bool:
+    if listing_session is None:
+        return False
+    if transport_type != MCPTransport.http:
+        return False
+    if params is None or params.cursor is not None:
+        return False
+    if not page.next_cursor:
+        return False
+    return not listing_session.initialized
 
 
 def _mcp_tools_list_cache_ttl() -> int | None:
@@ -4599,65 +4617,6 @@ class MCPServerManager:
 
     _get_tools_from_server = get_tools_from_server
 
-    @staticmethod
-    def _merge_tool_listing_headers(
-        extra_headers: dict[str, str] | None,  # mutable-ok: preserve the existing in-place header merge
-        resolved_static_headers: dict[str, str] | None,  # mutable-ok: matches the resolver's return type
-    ) -> dict[str, str] | None:  # mutable-ok: passed to the upstream client
-        if not resolved_static_headers:
-            return extra_headers
-        if extra_headers is None:
-            return dict(resolved_static_headers)
-        extra_headers.update(resolved_static_headers)
-        return extra_headers
-
-    def _blocked_tool_listing_page(
-        self, server: MCPServer, params: PaginatedRequestParams | None
-    ) -> ListToolsResult | None:
-        if not self._skip_blocked_stdio_listing(server, "tool"):
-            return None
-        if params is not None and params.cursor is not None:
-            raise RuntimeError("Upstream catalog is unavailable")
-        return ListToolsResult(tools=[])
-
-    async def _resolve_tool_listing_jwt_headers(
-        self,
-        server: MCPServer,
-        user_api_key_auth: UserAPIKeyAuth | None,
-        mcp_auth_header: str | dict[str, str] | None,  # mutable-ok: read-only catalog credential input
-        extra_headers: dict[str, str] | None,  # mutable-ok: matches the upstream header helper API
-        raw_headers: dict[str, str] | None,  # mutable-ok: matches the upstream header helper API
-    ) -> dict[str, str] | None:  # mutable-ok: upstream header helper API returns a mutable mapping
-        if user_api_key_auth is None or server.spec_path:
-            return extra_headers
-
-        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
-            get_mcp_jwt_signer,
-            inject_mcp_jwt_headers_for_upstream,
-        )
-
-        static_headers: Final = server.static_headers or {}
-        has_static_authorization: Final = any(
-            isinstance(key, str) and key.lower() == "authorization" for key in static_headers
-        )
-        has_extra_authorization: Final = bool(extra_headers) and any(
-            isinstance(key, str) and key.lower() == "authorization" for key in (extra_headers or {})
-        )
-        if (
-            get_mcp_jwt_signer() is not None
-            and not has_static_authorization
-            and not mcp_auth_header
-            and not has_extra_authorization
-            and not _server_key_occupies_authorization(server)
-        ):
-            return await inject_mcp_jwt_headers_for_upstream(
-                user_api_key_dict=user_api_key_auth,
-                extra_headers=extra_headers,
-                raw_headers=raw_headers,
-                for_list_tools=True,
-            )
-        return extra_headers
-
     async def get_tools_page(
         self,
         server: MCPServer,
@@ -4671,19 +4630,20 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging | None = None,
         *,
         params: PaginatedRequestParams | None = None,
-        on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
         record_listing: bool = False,
         listing_updates: ExitStack | None = None,
         use_tool_list_cache: bool = True,
+        listing_session: ToolListingSession | None = None,
     ) -> ListToolsResult:
         from litellm.proxy.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
 
-        blocked_page: Final = self._blocked_tool_listing_page(server, params)
-        if blocked_page is not None:
-            return blocked_page
+        if self._skip_blocked_stdio_listing(server, "tool"):
+            if params is not None and params.cursor is not None:
+                raise RuntimeError("Upstream catalog is unavailable")
+            return ListToolsResult(tools=[])
 
         verbose_logger.debug("Connecting to url: %s", server.url)
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
@@ -4698,7 +4658,6 @@ class MCPServerManager:
         listed_generation: Final = self._listed_tools_generations.get(server.server_id, 0)
 
         try:
-            observed_tools: Final[list[MCPTool]] = []  # mutable-ok: accumulates each guarded upstream page
             # Tool *listing* must not be blocked by missing per-user env vars —
             # the server's tools should still appear so the client connects. The
             # friendly "missing vars" error is raised only on the tool-*call*
@@ -4706,7 +4665,10 @@ class MCPServerManager:
             resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
                 server, user_api_key_auth, raise_on_missing=False
             )
-            extra_headers_with_static: Final = self._merge_tool_listing_headers(extra_headers, resolved_static_headers)
+            if resolved_static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(resolved_static_headers)
 
             # MCPJWTSigner: inject signed JWT for tools/list (the catalog scan's pre_call_hook
             # carries no extra_headers bag, which the signer treats as not its call).
@@ -4720,14 +4682,34 @@ class MCPServerManager:
             # upstream API key or a user's OAuth token (MCPClient._get_auth_headers
             # applies extra_headers after writing Authorization from auth_value, so
             # an injected JWT would otherwise clobber the per-user token).
-            headers_before_signing: Final = extra_headers_with_static
-            signed_extra_headers: Final = await self._resolve_tool_listing_jwt_headers(
-                server,
-                user_api_key_auth,
-                mcp_auth_header,
-                extra_headers_with_static,
-                raw_headers,
-            )
+            headers_before_signing: Final = extra_headers
+            if user_api_key_auth is not None and not server.spec_path:
+                from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+                    get_mcp_jwt_signer,
+                    inject_mcp_jwt_headers_for_upstream,
+                )
+
+                static_headers: Final = server.static_headers or {}
+                has_static_authorization: Final = any(
+                    isinstance(k, str) and k.lower() == "authorization" for k in static_headers
+                )
+                has_extra_authorization: Final = bool(extra_headers) and any(
+                    isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
+                )
+
+                if (
+                    get_mcp_jwt_signer() is not None
+                    and not has_static_authorization
+                    and not mcp_auth_header
+                    and not has_extra_authorization
+                    and not _server_key_occupies_authorization(server)
+                ):
+                    extra_headers = await inject_mcp_jwt_headers_for_upstream(
+                        user_api_key_dict=user_api_key_auth,
+                        extra_headers=extra_headers,
+                        raw_headers=raw_headers,
+                        for_list_tools=True,
+                    )
 
             stdio_env: Final = self.build_stdio_env(server, raw_headers)
 
@@ -4736,7 +4718,7 @@ class MCPServerManager:
             client = await self.create_mcp_client(  # rebind-ok: pre-existing rebinding on a rename-only line
                 server=server,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=signed_extra_headers,
+                extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
@@ -4745,7 +4727,8 @@ class MCPServerManager:
                 for_tool_listing=True,
             )
 
-            async def openapi_tools_page() -> ListToolsResult:
+            ## HANDLE OPENAPI TOOLS
+            if server.spec_path:
                 # OpenAPI tools were stored in the registry under the prefix
                 # active at registration time — fetch by that same prefix.
                 registry_prefix: Final = normalize_server_name(get_server_prefix(server)) + MCP_TOOL_PREFIX_SEPARATOR
@@ -4769,64 +4752,32 @@ class MCPServerManager:
                 self.record_listed_tools(
                     server, guarded_openapi, listed_caller, listed_generation, record_listing=record_listing
                 )
-                openapi_page: Final = (
-                    ListToolsResult(tools=list(guarded_openapi))
-                    if not add_prefix
-                    else ListToolsResult(
-                        tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
-                    )
+                if not add_prefix:
+                    return ListToolsResult(tools=list(guarded_openapi))
+                return ListToolsResult(
+                    tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
                 )
-                if on_page is not None:
-                    await on_page(openapi_page)
-                return openapi_page
-
-            ## HANDLE OPENAPI TOOLS
-            if server.spec_path:
-                return await openapi_tools_page()
-
-            async def observe_page(upstream_page: ListToolsResult) -> None:
-                guarded_page_tools: Final = await self._guard_tool_catalog(
-                    server=server,
-                    tools=upstream_page.tools,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_api_key_auth=user_api_key_auth,
-                    raw_headers=raw_headers,
-                )
-                prefixed_page_tools: Final = self._create_prefixed_tools(
-                    guarded_page_tools,
+            else:
+                page: Final = await self._list_upstream_tools(
                     server,
-                    add_prefix=add_prefix,
-                    register_bare_names=False,
-                    register_routes=False,
-                    listing_updates=None,
+                    client,
+                    params,
+                    partial(
+                        self._discovery_key,
+                        server,
+                        user_api_key_auth,
+                        mcp_auth_header,
+                        extra_headers,
+                        stdio_env,
+                        subject_token,
+                        raw_headers=raw_headers,
+                        page_cursor=_tool_page_cursor(params),
+                    ),
+                    use_cache=use_tool_list_cache and extra_headers is headers_before_signing,
+                    listing_session=listing_session,
                 )
-                if on_page is not None:
-                    observed_tools.extend(prefixed_page_tools)
-                    await on_page(upstream_page.model_copy(update={"tools": prefixed_page_tools}))
-
-            page: Final = await self._list_upstream_tools(
-                server,
-                client,
-                params,
-                partial(
-                    self._discovery_key,
-                    server,
-                    user_api_key_auth,
-                    mcp_auth_header,
-                    signed_extra_headers,
-                    stdio_env,
-                    subject_token,
-                    raw_headers=raw_headers,
-                    page_cursor=_tool_page_cursor(params),
-                ),
-                use_cache=use_tool_list_cache and signed_extra_headers is headers_before_signing,
-                on_page=observe_page if on_page is not None else None,
-            )
-            tools = page.tools
-            self._remember_upstream_initialize_instructions(server, client)
-
-            if on_page is not None:
-                return page.model_copy(update={"tools": observed_tools})
+                tools = page.tools
+                self._remember_upstream_initialize_instructions(server, client)
 
             guarded_tools: Final = await self._guard_tool_catalog(
                 server=server,
@@ -4897,32 +4848,13 @@ class MCPServerManager:
         client: MCPClient,
         server: MCPServer,
         params: PaginatedRequestParams | None,
-        on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
+        listing_session: ToolListingSession | None = None,
     ) -> Callable[[], Awaitable[ListToolsResult]]:
         if params is None:
-            if on_page is None and server.timeout is None:
-                return partial(self._fetch_tools_with_timeout, client, server.name)
-            deadline: Final = (
-                MCP_TOOL_LISTING_TIMEOUT if server.timeout is None else max(server.timeout, MCP_TOOL_LISTING_TIMEOUT)
-            )
-            return partial(
-                self._fetch_tools_with_timeout,
-                client,
-                server.name,
-                on_page=on_page,
-                listing_deadline=deadline,
-            )
-        if on_page is not None:
-
-            async def fetch_observed_page() -> ListToolsResult:
-                page: Final = await self._fetch_tools_page_with_timeout(client, server, params)
-                await on_page(page)
-                return page
-
-            return fetch_observed_page
+            return partial(self._fetch_tools_with_timeout, client, server.name)
         return partial(
             retry_upstream_rate_limit,
-            partial(self._fetch_tools_page_with_timeout, client, server, params),
+            partial(self._fetch_tools_page_with_timeout, client, server, params, listing_session=listing_session),
             server.name,
             deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
         )
@@ -4935,26 +4867,9 @@ class MCPServerManager:
         key_for_credential: Callable[[str], _DiscoveryKey],
         *,
         use_cache: bool,
-        on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
+        listing_session: ToolListingSession | None = None,
     ) -> ListToolsResult:
-        observed: Final = asyncio.Event()
-        admin_ttl: Final = (
-            self._admin_tools_list_ttl(server)
-            if on_page is not None and use_cache and (params is None or params.cursor is None)
-            else None
-        )
-
-        async def observe_page(page: ListToolsResult) -> None:
-            observed.set()
-            if on_page is not None:
-                observed_page: Final = (
-                    page.model_copy(update={"ttl_ms": admin_ttl * 1000}) if admin_ttl is not None else page
-                )
-                await on_page(observed_page)
-
-        fetch_page: Final = self._tools_fetch(
-            client, server, params, on_page=observe_page if on_page is not None else None
-        )
+        fetch_page: Final = self._tools_fetch(client, server, params, listing_session)
 
         async def fetch() -> _UpstreamToolListing:
             return _UpstreamToolListing.fetched_by(client, await fetch_page())
@@ -4962,11 +4877,10 @@ class MCPServerManager:
         listing: Final = await self._cached_or_upstream_tools(
             server, client, params, key_for_credential, fetch, use_cache
         )
+        if _needs_initial_page_refetch(listing_session, client.transport_type, params, listing.page):
+            return (await fetch()).page_to_serve()
         self._remember_instructions_if_missing(server, listing.upstream_instructions)
-        served: Final = listing.page_to_serve()
-        if on_page is not None and not observed.is_set():
-            await on_page(served)
-        return served
+        return listing.page_to_serve()
 
     def _remember_instructions_if_missing(self, server: MCPServer, seen_by_this_caller: str | None) -> None:
         if seen_by_this_caller and not self._upstream_initialize_instructions_by_server_id.get(server.server_id):
@@ -6024,9 +5938,6 @@ class MCPServerManager:
         self,
         client: MCPClient,
         server_name: str,
-        on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
-        *,
-        listing_deadline: float | None = None,
     ) -> ListToolsResult:
         """
         Fetch tools from MCP client with timeout and error handling.
@@ -6049,23 +5960,16 @@ class MCPServerManager:
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
-            on_page: Callback invoked for each upstream page during the complete walk.
-            listing_deadline: Deadline for the complete upstream listing.
 
         Returns:
             The tools from the server with the upstream freshness of the complete walk
         """
-        deadline: Final = MCP_TOOL_LISTING_TIMEOUT if listing_deadline is None else listing_deadline
         try:
-            with anyio.fail_after(deadline):
-                listing: Final = (
-                    await client.list_tools_result(raise_on_error=True, on_page=on_page)
-                    if on_page is not None
-                    else await retry_upstream_rate_limit(
-                        lambda: client.list_tools_result(raise_on_error=True),
-                        server_name,
-                        deadline_seconds=deadline,
-                    )
+            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
+                listing: Final = await retry_upstream_rate_limit(
+                    lambda: client.list_tools_result(raise_on_error=True),
+                    server_name,
+                    deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
                 )
                 verbose_logger.debug("Tools from %s: %s", server_name, listing.tools)
                 return listing
@@ -6088,13 +5992,20 @@ class MCPServerManager:
             raise_classified_list_failure(e, server_name)
 
     async def _fetch_tools_page_with_timeout(
-        self, client: MCPClient, server: MCPServer, params: PaginatedRequestParams
+        self,
+        client: MCPClient,
+        server: MCPServer,
+        params: PaginatedRequestParams,
+        *,
+        listing_session: ToolListingSession | None = None,
     ) -> ListToolsResult:
         deadline: Final = (
             MCP_TOOL_LISTING_TIMEOUT if server.timeout is None else max(server.timeout, MCP_TOOL_LISTING_TIMEOUT)
         )
         try:
             with anyio.fail_after(deadline):
+                if listing_session is not None:
+                    return await client.list_tools_page(params, listing_session=listing_session)
                 return await client.list_tools_page(params)
         except TimeoutError as e:
             verbose_logger.warning("Timeout while listing tools from %s", server.name)
@@ -6177,19 +6088,7 @@ class MCPServerManager:
         await self._report_catalog_alert(
             server, proxy_logging_obj, AlertType.mcp_pinned_tools_changed, drift.alert(server) if drift else None
         )
-        return await self.scan_tool_catalog(server, described, proxy_logging_obj, user_api_key_auth, raw_headers)
-
-    async def scan_tool_catalog(
-        self,
-        server: MCPServer,
-        tools: Sequence[MCPTool],
-        proxy_logging_obj: ProxyLogging | None,
-        user_api_key_auth: UserAPIKeyAuth | None,
-        raw_headers: Mapping[str, str] | None,
-    ) -> tuple[MCPTool, ...]:
-        if proxy_logging_obj is None:
-            return tuple(tools)
-        scan: Final = await scan_tool_descriptions(tools, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+        scan: Final = await scan_tool_descriptions(described, server, proxy_logging_obj, user_api_key_auth, raw_headers)
         await self._report_catalog_alert(
             server, proxy_logging_obj, AlertType.mcp_tool_description_blocked, scan.alert(server)
         )
@@ -6236,7 +6135,6 @@ class MCPServerManager:
         add_prefix: bool = True,
         *,
         register_bare_names: bool = True,
-        register_routes: bool = True,
         listing_updates: ExitStack | None = None,
     ) -> list[MCPTool]:
         """
@@ -6266,34 +6164,17 @@ class MCPServerManager:
             # Register every known prefix form (alias, server_name, server_id,
             # short ID) so call_tool can resolve regardless of which form a
             # caller / cached client is using.
-            if register_routes:
-                for spelling in iter_known_tool_name_spellings(original_name, server):
-                    namespace_owner = self.server_owning_tool_name_prefix(spelling)
-                    if namespace_owner is not None and namespace_owner.server_id != server.server_id:
-                        continue
-                    if namespace_owner is None and global_mcp_tool_registry.get_tool(spelling) is not None:
-                        continue
-                    if register_bare_names or spelling != original_name:
-                        self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
+            for spelling in iter_known_tool_name_spellings(original_name, server):
+                namespace_owner = self.server_owning_tool_name_prefix(spelling)
+                if namespace_owner is not None and namespace_owner.server_id != server.server_id:
+                    continue
+                if namespace_owner is None and global_mcp_tool_registry.get_tool(spelling) is not None:
+                    continue
+                if register_bare_names or spelling != original_name:
+                    self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
         return prefixed_tools
-
-    def register_prefixed_tool_routes(
-        self,
-        tools: Sequence[MCPTool],
-        server: MCPServer,
-        *,
-        register_bare_names: bool,
-        listing_updates: ExitStack | None = None,
-    ) -> None:
-        self._create_prefixed_tools(
-            tools,
-            server,
-            add_prefix=True,
-            register_bare_names=register_bare_names,
-            listing_updates=listing_updates,
-        )
 
     def get_listed_tool(self, server: MCPServer, name: str, caller: ListedToolsCaller | None = None) -> MCPTool | None:
         identity: Final = self._listed_tools_identity(server, caller)

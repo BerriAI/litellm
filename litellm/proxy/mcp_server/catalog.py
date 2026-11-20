@@ -6,53 +6,41 @@ import asyncio
 import base64
 import hashlib
 import json
-import math
+import os
 import time
-import uuid
 from collections import UserDict
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, MutableMapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
-from contextvars import Context, ContextVar, copy_context
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import partial, wraps
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Generic, Literal, ParamSpec, Protocol, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Generic, ParamSpec, Protocol, TypeAlias, TypeVar, cast
 
-import anyio
 from mcp.shared.exceptions import MCPError
-from mcp.types import CacheableResult, ListToolsResult, Tool
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from mcp.types import CacheableResult
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from typing_extensions import Self
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.mcp_client.client import ToolListingSession
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
 
 if TYPE_CHECKING:
-    from mcp.types import PaginatedRequestParams, PaginatedResult
+    from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
 
-    from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
     from litellm.proxy.mcp_server.db import OAuthCredentialPayload
     from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing, ServerOutcome
     from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
-    from litellm.rust_bridge._native import NativeAuthCache
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.mcp_server.tool_registry import MCPTool
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _Page = TypeVar("_Page", bound="PaginatedResult")
-_PREPARED_TOOL_HEADERS: TypeAlias = tuple[
-    str | Mapping[str, str] | None,
-    Mapping[str, str] | None,
-    str | Mapping[str, str] | None,
-]
-_TOOL_LISTING_CURSOR_TTL: Final = 600
-_TOOL_PAGE_PRODUCER_MAX: Final = 64
-_TOOL_PAGE_WRITE_TIMEOUT: Final = 1.0
-_TOOL_PAGE_POLL_INTERVAL: Final = 0.05
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _OUTCOME_VALUES: Final[TypeAdapter[dict[str, JsonValue]]] = TypeAdapter(dict[str, JsonValue])
 
@@ -146,17 +134,6 @@ class CatalogSnapshots:
     def current(self) -> CatalogSnapshot | None:
         scoped: Final = self._operation.get()
         return scoped[0] if scoped is not None and not scoped[1].is_set() else None
-
-    def detached_context(self) -> Context:
-        context: Final = copy_context()
-        context.run(self._operation.set, None)
-        context.run(self._staged_routing.set, None)
-        from litellm.caching.redis_batch import (
-            _active_request_batches,  # pyright: ignore[reportPrivateUsage]  # clear inherited producer batching
-        )
-
-        context.run(_active_request_batches.set, None)
-        return context
 
     def routing(self) -> MutableMapping[str, str]:
         staged: Final = self._staged_routing.get()
@@ -628,13 +605,13 @@ async def paginate_catalog(
     server_ids: tuple[str, ...],
     fetch: Callable[[str, str | None], Awaitable[_Page]],
     now: int,
+    session_fetch: Callable[[str, str | None, ToolListingSession], Awaitable[_Page]] | None = None,
 ) -> tuple[tuple[_Page, ...], str | None, Mapping[str, JsonValue]]:
     from mcp.shared.exceptions import MCPError
     from mcp.types import INVALID_PARAMS
     from pydantic import ValidationError
 
     from litellm.constants import MCP_TOOL_LISTING_MAX_PAGES
-    from litellm.proxy.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY, ServerOutcome
     from litellm.proxy.mcp_server.outbound_credentials.result import Error
     from litellm.proxy.mcp_server.state_tokens import open_state, seal_state
 
@@ -644,7 +621,7 @@ async def paginate_catalog(
         state = _ListingState(
             caller_scope=caller_scope,
             snapshot=snapshot,
-            expires_at=now + _TOOL_LISTING_CURSOR_TTL,
+            expires_at=now + 600,
             positions=tuple(_UpstreamPosition(server_id=server_id) for server_id in ordered),
         )
     else:
@@ -666,22 +643,12 @@ async def paginate_catalog(
     async def advance(position: _UpstreamPosition) -> tuple[_UpstreamPosition, _Page | None]:
         if position.complete:
             return position, None
-        result: Final = await fetch(position.server_id, position.cursor)
-        if method == "tools/list" and result.next_cursor is None:
-            page_outcomes: Final = TypeAdapter(dict[str, ServerOutcome]).validate_python(
-                (result.meta or {}).get(SERVER_OUTCOMES_META_KEY, {})
-            )
-            if any(outcome.tag != "ok" for outcome in page_outcomes.values()):
-                return (
-                    _UpstreamPosition(
-                        server_id=position.server_id,
-                        cursor=None,
-                        complete=True,
-                        revision=position.revision,
-                        seen=position.seen,
-                    ),
-                    result,
-                )
+        listing_session: Final = ToolListingSession(position.session_id, position.protocol_version)
+        result: Final = (
+            await session_fetch(position.server_id, position.cursor, listing_session)
+            if session_fetch is not None
+            else await fetch(position.server_id, position.cursor)
+        )
         revision: Final = (result.meta or {}).get("revision")
         available_revision: Final = revision if isinstance(revision, (str, int)) else None
         if position.revision is not None and position.revision != available_revision:
@@ -703,6 +670,8 @@ async def paginate_catalog(
                 complete=following is None,
                 revision=available_revision,
                 seen=position.seen + ((fingerprint,) if fingerprint is not None else ()),
+                session_id=listing_session.session_id,
+                protocol_version=listing_session.protocol_version if listing_session.session_id is not None else None,
             ),
             result,
         )
@@ -715,6 +684,8 @@ async def paginate_catalog(
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+    from litellm.proxy.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+
     elapsed: Final = time.monotonic() - started
     pages: Final = tuple(
         age_freshness(result, elapsed) if isinstance(result, CacheableResult) else result
@@ -756,6 +727,7 @@ async def list_tools_page(
     server_ids: tuple[str, ...],
     fetch: Callable[[str, str | None], Awaitable[ListToolsResult]],
     now: int,
+    session_fetch: Callable[[str, str | None, ToolListingSession], Awaitable[ListToolsResult]] | None = None,
 ) -> ListToolsResult:
     from mcp.types import ListToolsResult
 
@@ -769,6 +741,7 @@ async def list_tools_page(
         server_ids=server_ids,
         fetch=fetch,
         now=now,
+        session_fetch=session_fetch,
     )
     return ListToolsResult(
         tools=list(chain.from_iterable(page.tools for page in pages)),
@@ -789,6 +762,8 @@ class _UpstreamPosition(BaseModel):
     complete: bool = False
     revision: str | int | None = None
     seen: tuple[str, ...] = ()
+    session_id: str | None = Field(default=None, repr=False)
+    protocol_version: str | None = None
 
 
 class _ListingState(BaseModel):
@@ -799,510 +774,6 @@ class _ListingState(BaseModel):
     expires_at: int
     positions: tuple[_UpstreamPosition, ...]
     failures: Mapping[str, JsonValue] = {}
-
-
-class _CachedToolPage(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    server_id: str
-    snapshot_id: str
-    page_index: int
-    captured_at: float
-    expires_at: float
-    result: ListToolsResult
-
-
-class _ToolProducerStatus(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    state: Literal["pending", "complete", "failed"]
-    deadline_at: float
-    expires_at: float
-    next_page_index: int
-    failure: JsonValue | None = None
-    meta: Mapping[str, JsonValue] | None = None
-
-
-class _ToolPageStore(Protocol):
-    @property
-    def available(self) -> bool: ...
-    async def get(self, key: str) -> JsonValue | None: ...
-    async def set(self, key: str, value: JsonValue, ttl: float) -> None: ...
-
-
-class _RedisToolPageStore:
-    def __init__(self) -> None:
-        self._cache: RedisCache | None = None
-        self._store: NativeAuthCache | None = None
-        self._lock = asyncio.Lock()
-
-    @property
-    def available(self) -> bool:
-        from litellm.proxy.proxy_server import redis_usage_cache
-
-        return redis_usage_cache is not None
-
-    async def _native_store(self) -> NativeAuthCache:
-        from litellm.proxy import proxy_server
-        from litellm.redis.stores.auth_cache import AuthCacheSettings
-        from litellm.redis.stores.connection import connect
-
-        redis_cache: Final = proxy_server.redis_usage_cache
-        if redis_cache is None:
-            raise RuntimeError("Redis is unavailable")
-        if self._cache is redis_cache and self._store is not None:
-            return self._store
-        async with self._lock:
-            if self._cache is not redis_cache or self._store is None:
-                store: Final = connect(redis_cache).auth_cache(AuthCacheSettings(memory_entries=0, memory_ttl=0))
-                if not store.has_redis:
-                    raise RuntimeError("Redis is unavailable")
-                self._store = store
-                self._cache = redis_cache
-            return self._store
-
-    async def get(self, key: str) -> JsonValue | None:
-        from litellm.rust_bridge._native import NativeSend
-
-        store: Final = await self._native_store()
-        pending: Final = store.get_many([key], NativeSend.Now())
-        if pending is None:
-            raise RuntimeError("Redis is unavailable")
-        values: Final = await pending.resolve()
-        if len(values) != 1:
-            raise RuntimeError("Redis returned an unexpected tool page count")
-        value: Final = values[0]
-        return _JSON_VALUE.validate_python(value) if value is not None else None
-
-    async def set(self, key: str, value: JsonValue, ttl: float) -> None:
-        from litellm.rust_bridge._native import NativeSend
-
-        store: Final = await self._native_store()
-        await store.declare_set(key, value, ttl, NativeSend.Now()).resolve()
-
-
-_TOOL_PAGE_STORE: Final[_ToolPageStore] = _RedisToolPageStore()
-_TOOL_PRODUCERS: Final[dict[tuple[str, str, str], asyncio.Task[None]]] = {}  # mutable-ok: retain producers for shutdown
-_TOOL_PRODUCER_LOCK: Final = asyncio.Lock()
-
-
-_CACHED_TOOL_PAGE: Final[TypeAdapter[_CachedToolPage]] = TypeAdapter(_CachedToolPage)
-
-
-def _tool_page_cursor(snapshot_id: str, page_index: int) -> str:
-    return f"mcp-tools-page-v2:{snapshot_id}:{page_index}"
-
-
-def _parse_tool_page_cursor(cursor: str) -> tuple[str, int] | None:
-    prefix: Final = "mcp-tools-page-v2:"
-    if not cursor.startswith(prefix):
-        return None
-    snapshot_id, separator, raw_index = cursor.removeprefix(prefix).partition(":")
-    valid_snapshot_id: Final = len(snapshot_id) == 32 and all(
-        character in "0123456789abcdef" for character in snapshot_id
-    )
-    valid_page_index: Final = raw_index.isascii() and raw_index.isdecimal() and len(raw_index) <= 8
-    if not separator or not valid_snapshot_id or not valid_page_index:
-        return None
-    page_index: Final = int(raw_index)
-    if page_index < 1:
-        return None
-    return snapshot_id, page_index
-
-
-def _tool_page_cache_key(caller_scope: str, server_id: str, snapshot_id: str, page_index: int) -> str:
-    server_hash: Final = hashlib.sha256(server_id.encode()).hexdigest()
-    return f"mcp:tools:list-page:v2:{caller_scope}:{server_hash}:{snapshot_id}:{page_index}"
-
-
-def _tool_page_status_key(caller_scope: str, server_id: str, snapshot_id: str) -> str:
-    server_hash: Final = hashlib.sha256(server_id.encode()).hexdigest()
-    return f"mcp:tools:list-status:v2:{caller_scope}:{server_hash}:{snapshot_id}"
-
-
-class _StreamingToolPagePublisher:
-    def __init__(
-        self,
-        store: _ToolPageStore,
-        caller_scope: str,
-        server_id: str,
-        snapshot_id: str,
-        server_key: str,
-        expires_at: float,
-        first_page: asyncio.Future[ListToolsResult],
-    ) -> None:
-        self.store: Final = store
-        self.caller_scope: Final = caller_scope
-        self.server_id: Final = server_id
-        self.snapshot_id: Final = snapshot_id
-        self.server_key: Final = server_key
-        self.expires_at: Final = expires_at
-        self.first_page: Final = first_page
-        self.next_index = 0
-        self.streaming = True
-        self.pending_final: ListToolsResult | None = None
-        self.last_meta: Mapping[str, JsonValue] | None = None
-
-    def _ttl(self) -> float:
-        remaining: Final = self.expires_at - time.time()
-        if remaining <= 0:
-            raise RuntimeError("Tool listing expired")
-        return remaining
-
-    async def start(self, deadline_at: float) -> None:
-        status: Final = _ToolProducerStatus(
-            state="pending",
-            deadline_at=deadline_at,
-            expires_at=self.expires_at,
-            next_page_index=0,
-        )
-        try:
-            await self._set(
-                _tool_page_status_key(self.caller_scope, self.server_id, self.snapshot_id),
-                _JSON_VALUE.validate_json(status.model_dump_json()),
-            )
-        except Exception:  # noqa: BLE001  # storage failures switch to full-response fallback
-            self.streaming = False
-
-    async def _get(self, key: str) -> JsonValue | None:
-        if self.first_page.done():
-            return await self.store.get(key)
-        with anyio.fail_after(_TOOL_PAGE_WRITE_TIMEOUT):
-            return await self.store.get(key)
-
-    async def _set(self, key: str, value: JsonValue) -> None:
-        if self.first_page.done():
-            await self.store.set(key, value, self._ttl())
-            return
-        with anyio.fail_after(_TOOL_PAGE_WRITE_TIMEOUT):
-            await self.store.set(key, value, self._ttl())
-
-    def _envelope(self, result: ListToolsResult, page_index: int) -> _CachedToolPage:
-        return _CachedToolPage(
-            server_id=self.server_id,
-            snapshot_id=self.snapshot_id,
-            page_index=page_index,
-            captured_at=time.time(),
-            expires_at=self.expires_at,
-            result=result,
-        )
-
-    async def _write(self, result: ListToolsResult) -> None:
-        page_index: Final = self.next_index
-        envelope: Final = self._envelope(result, page_index)
-        key: Final = _tool_page_cache_key(self.caller_scope, self.server_id, self.snapshot_id, page_index)
-        existing: Final = await self._get(key)
-        existing_page: Final = _CACHED_TOOL_PAGE.validate_python(existing) if existing is not None else None
-        if existing_page is not None:
-            if (
-                existing_page.server_id,
-                existing_page.snapshot_id,
-                existing_page.page_index,
-                existing_page.expires_at,
-                existing_page.result,
-            ) != (
-                self.server_id,
-                self.snapshot_id,
-                page_index,
-                self.expires_at,
-                result,
-            ):
-                raise RuntimeError("Tool listing page index was already published")
-        else:
-            await self._set(key, _JSON_VALUE.validate_json(envelope.model_dump_json()))
-        self.next_index += 1
-        if page_index == 0 and not self.first_page.done():
-            self.first_page.set_result(result)
-
-    async def publish(self, result: ListToolsResult) -> tuple[bool, int]:
-        if not self.streaming:
-            return False, 0
-        try:
-            return await self._publish(result)
-        except Exception:
-            if self.first_page.done():
-                raise
-            self.streaming = False
-            return False, 0
-
-    async def _publish(self, result: ListToolsResult) -> tuple[bool, int]:
-        from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
-
-        self.last_meta = result.meta
-        if not result.next_cursor:
-            self.pending_final = result
-            return False, 0
-        page_with_outcome: Final = self._with_outcome(result, ServerListOk(tool_count=len(result.tools)))
-        page: Final = page_with_outcome.model_copy(
-            update={"next_cursor": _tool_page_cursor(self.snapshot_id, self.next_index + 1)}
-        )
-        await self._write(page)
-        return True, len(page.tools)
-
-    def _with_outcome(self, page: ListToolsResult, outcome: ServerOutcome) -> ListToolsResult:
-        from litellm.proxy.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
-
-        meta: Final = {
-            **(page.meta or {}),
-            SERVER_OUTCOMES_META_KEY: {self.server_key: outcome.model_dump(mode="json")},
-        }
-        return page.model_copy(update={"meta": meta, "next_cursor": None})
-
-    async def finish(
-        self,
-        outcome: ServerOutcome,
-        *,
-        failed: bool,
-        complete_result: ListToolsResult | None = None,
-    ) -> None:
-        if self.streaming:
-            try:
-                await self._finish(outcome, failed=failed)
-            except Exception:
-                if self.first_page.done():
-                    raise
-                self.streaming = False
-            else:
-                return
-        if not self.first_page.done():
-            self.first_page.set_result(self._with_outcome(complete_result or ListToolsResult(tools=[]), outcome))
-
-    async def _finish(self, outcome: ServerOutcome, *, failed: bool) -> None:
-        page: Final = (
-            self.pending_final
-            if self.pending_final is not None
-            else ListToolsResult(
-                tools=[],
-                _meta=dict(self.last_meta) if self.last_meta is not None else None,
-            )
-        )
-        terminal_page: Final = self._with_outcome(page, outcome)
-        return_terminal_page_without_storage: Final = (
-            not failed and self.pending_final is not None and self.next_index == 0 and not self.first_page.done()
-        )
-        if return_terminal_page_without_storage:
-            self.first_page.set_result(terminal_page)
-            return
-        status: Final = _ToolProducerStatus(
-            state="failed" if failed else "complete",
-            deadline_at=time.time(),
-            expires_at=self.expires_at,
-            next_page_index=self.next_index,
-            failure=outcome.model_dump(mode="json") if failed else None,
-            meta=self.last_meta,
-        )
-        status_key: Final = _tool_page_status_key(self.caller_scope, self.server_id, self.snapshot_id)
-        status_value: Final = _JSON_VALUE.validate_json(status.model_dump_json())
-        if failed and self.first_page.done():
-            await self._set(status_key, status_value)
-            return
-        await self._write(terminal_page)
-        self.pending_final = None
-        await self._set(status_key, status_value)
-
-
-def _remove_tool_producer(key: tuple[str, str, str], task: asyncio.Task[None]) -> None:
-    _TOOL_PRODUCERS.pop(key, None)
-    if not task.cancelled():
-        task.exception()
-
-
-async def _produce_tool_pages(
-    *,
-    publisher: _StreamingToolPagePublisher,
-    server: MCPServer,
-    context: OperationContext,
-    allowed: Sequence[MCPServer],
-    prefetched: Mapping[str, OAuthCredentialPayload],
-    prepared_headers: _PREPARED_TOOL_HEADERS | None,
-    record_listing: bool,
-    use_tool_list_cache: bool,
-    snapshot_identity: str,
-    deadline_at: float,
-) -> None:
-    from mcp.types import INTERNAL_ERROR
-
-    from litellm.proxy.mcp_server.faults.list_outcomes import ServerListFault, classify_list_exception
-    from litellm.proxy.mcp_server.operations import global_mcp_server_manager
-
-    updates = ExitStack()
-    try:
-        with anyio.fail_after(max(0.0, deadline_at - time.time())):
-            await publisher.start(deadline_at)
-            async with global_mcp_server_manager.catalog.operation() as snapshot:
-                if snapshot.identity != snapshot_identity:
-                    raise MCPError(code=INTERNAL_ERROR, message="MCP server catalog changed; retry the listing")
-                result, outcome = await get_filtered_server_tools(
-                    server,
-                    context=context,
-                    allowed_mcp_servers=allowed,
-                    prefetched_oauth_creds=prefetched,
-                    on_page=publisher.publish,
-                    record_listing=record_listing,
-                    listing_updates=updates,
-                    use_tool_list_cache=use_tool_list_cache,
-                    prepared_headers=prepared_headers,
-                )
-                if outcome.tag == "ok":
-                    global_mcp_server_manager.catalog.assert_current(server)
-                    updates.close()
-                    await publisher.finish(outcome, failed=False, complete_result=result)
-                else:
-                    updates.pop_all()
-                    if not publisher.first_page.done():
-                        challenge_rejected_credential(server, outcome, allowed)
-                    await publisher.finish(outcome, failed=True, complete_result=result)
-    except asyncio.CancelledError:
-        updates.pop_all()
-        with anyio.move_on_after(1, shield=True):
-            await publisher.finish(ServerListFault(tag="internal"), failed=True)
-        raise
-    except Exception as error:  # noqa: BLE001  # publish a terminal outcome for arbitrary producer failures
-        updates.pop_all()
-        with anyio.move_on_after(1, shield=True):
-            await publisher.finish(classify_list_exception(error), failed=True)
-        verbose_logger.warning("MCP tool page producer failed for server %s", server.name)
-    finally:
-        if not publisher.first_page.done():
-            publisher.first_page.set_exception(
-                MCPError(code=INTERNAL_ERROR, message="Tool listing producer stopped before its first page")
-            )
-
-
-async def _start_tool_page_producer(
-    *,
-    publisher: _StreamingToolPagePublisher,
-    server: MCPServer,
-    context: OperationContext,
-    allowed: Sequence[MCPServer],
-    prefetched: Mapping[str, OAuthCredentialPayload],
-    prepared_headers: _PREPARED_TOOL_HEADERS | None,
-    record_listing: bool,
-    use_tool_list_cache: bool,
-    snapshot_identity: str,
-    deadline_at: float,
-) -> asyncio.Task[None] | None:
-    from litellm.proxy.mcp_server.operations import global_mcp_server_manager
-
-    key: Final = (publisher.caller_scope, server.server_id, publisher.snapshot_id)
-    async with _TOOL_PRODUCER_LOCK:
-        if len(_TOOL_PRODUCERS) >= _TOOL_PAGE_PRODUCER_MAX:
-            return None
-        producer: Final = _produce_tool_pages(
-            publisher=publisher,
-            server=server,
-            context=context,
-            allowed=allowed,
-            prefetched=prefetched,
-            prepared_headers=prepared_headers,
-            record_listing=record_listing,
-            use_tool_list_cache=use_tool_list_cache,
-            snapshot_identity=snapshot_identity,
-            deadline_at=deadline_at,
-        )
-        task: Final[asyncio.Task[None]] = global_mcp_server_manager.catalog.detached_context().run(
-            asyncio.create_task, producer
-        )
-        _TOOL_PRODUCERS[key] = task
-        task.add_done_callback(partial(_remove_tool_producer, key))
-        return task
-
-
-async def shutdown_tool_page_producers() -> None:
-    async with _TOOL_PRODUCER_LOCK:
-        tasks: Final = tuple(_TOOL_PRODUCERS.values())
-        _TOOL_PRODUCERS.clear()
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-
-def _failed_tool_page(status: _ToolProducerStatus, server_key: str) -> ListToolsResult:
-    from mcp.types import INVALID_PARAMS
-
-    from litellm.proxy.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY, ServerOutcome
-
-    if status.failure is None:
-        raise MCPError(code=INVALID_PARAMS, message="Tool listing page is unavailable; start a fresh listing")
-    outcome: Final[ServerOutcome] = TypeAdapter[ServerOutcome](ServerOutcome).validate_python(status.failure)
-    return ListToolsResult(
-        tools=[],
-        _meta={
-            **(status.meta or {}),
-            SERVER_OUTCOMES_META_KEY: {server_key: outcome.model_dump(mode="json")},
-        },
-    )
-
-
-async def _read_tool_page(
-    cursor: str,
-    *,
-    server_id: str,
-    server_key: str,
-    caller_scope: str,
-    store: _ToolPageStore,
-    initial_read_timeout: float,
-) -> ListToolsResult:
-    from mcp.types import INTERNAL_ERROR, INVALID_PARAMS
-
-    def restart() -> MCPError:
-        return MCPError(code=INVALID_PARAMS, message="Tool listing page is unavailable; start a fresh listing")
-
-    parsed: Final = _parse_tool_page_cursor(cursor)
-    if parsed is None:
-        raise restart()
-    snapshot_id, page_index = parsed
-    key: Final = _tool_page_cache_key(caller_scope, server_id, snapshot_id, page_index)
-    status_key: Final = _tool_page_status_key(caller_scope, server_id, snapshot_id)
-    poll_deadline: float = time.monotonic() + max(0.0, initial_read_timeout)
-    while (remaining := poll_deadline - time.monotonic()) > 0:
-        try:
-            with anyio.fail_after(remaining):
-                value = await store.get(key)
-                if value is None:
-                    raw_status = await store.get(status_key)
-                    if raw_status is None:
-                        raise restart()
-                    status = _ToolProducerStatus.model_validate(raw_status)
-                    if status.expires_at <= time.time():
-                        raise restart()
-                    if status.state == "failed":
-                        return _failed_tool_page(status, server_key)
-                    if status.state == "pending":
-                        status_deadline = min(status.deadline_at, status.expires_at)
-                        status_remaining = max(0.0, status_deadline - time.time())
-                        poll_deadline = min(poll_deadline, time.monotonic() + status_remaining)
-                    else:
-                        final_read_timeout = min(remaining, max(0.0, status.expires_at - time.time()))
-                        with anyio.fail_after(final_read_timeout):
-                            value = await store.get(key)
-                        if value is None:
-                            raise restart()
-            if value is None:
-                await asyncio.sleep(min(_TOOL_PAGE_POLL_INTERVAL, max(0.0, poll_deadline - time.monotonic())))
-                continue
-            page = _CACHED_TOOL_PAGE.validate_python(value)
-            now = time.time()
-            valid = (
-                page.server_id == server_id
-                and page.snapshot_id == snapshot_id
-                and page.page_index == page_index
-                and math.isfinite(page.captured_at)
-                and math.isfinite(page.expires_at)
-                and page.expires_at > now
-                and page.result.next_cursor in (None, _tool_page_cursor(snapshot_id, page_index + 1))
-            )
-            if not valid:
-                raise restart()
-            elapsed_ms = max(0, int((now - page.captured_at) * 1000))
-            return page.result.model_copy(update={"ttl_ms": max(0, int(page.result.ttl_ms or 0) - elapsed_ms)})
-        except MCPError:
-            raise
-        except TimeoutError as error:
-            raise restart() from error
-        except Exception as error:
-            raise MCPError(code=INTERNAL_ERROR, message="Unable to read tool listing continuation") from error
-    raise restart()
 
 
 async def prepare_tool_listing_headers(
@@ -1391,12 +862,13 @@ async def get_filtered_server_tools(
     allowed_mcp_servers: Sequence[MCPServer],
     prefetched_oauth_creds: Mapping[str, OAuthCredentialPayload],
     params: PaginatedRequestParams | None = None,
-    on_page: Callable[[ListToolsResult], Awaitable[tuple[bool, int] | None]] | None = None,
     record_listing: bool = False,
     listing_updates: ExitStack | None = None,
     use_tool_list_cache: bool = True,
-    prepared_headers: _PREPARED_TOOL_HEADERS | None = None,
+    listing_session: ToolListingSession | None = None,
 ) -> tuple[ListToolsResult, ServerOutcome]:
+    from mcp.types import ListToolsResult
+
     from litellm.proxy.mcp_server.exceptions import MCPUpstreamAuthError
     from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk, classify_list_exception
     from litellm.proxy.mcp_server.operations import (
@@ -1411,82 +883,21 @@ async def get_filtered_server_tools(
     if server is None:
         return ListToolsResult(tools=[]), ServerListOk(tool_count=0)
 
-    first_page_observed: Final = asyncio.Event()
-    try:
-        resolved_headers: Final = prepared_headers or await prepare_tool_listing_headers(
-            server, context, allowed_mcp_servers, prefetched_oauth_creds
-        )
-        prepared_auth, prepared_extra_headers, prepared_catalog_auth = resolved_headers
-        server_auth_header: Final = dict(prepared_auth) if isinstance(prepared_auth, Mapping) else prepared_auth
-        extra_headers: Final = dict(prepared_extra_headers) if prepared_extra_headers is not None else None
-        catalog_auth_header: Final = (
-            dict(prepared_catalog_auth) if isinstance(prepared_catalog_auth, Mapping) else prepared_catalog_auth
-        )
+    prepared_auth, prepared_headers, prepared_catalog_auth = await prepare_tool_listing_headers(
+        server, context, allowed_mcp_servers, prefetched_oauth_creds
+    )
+    server_auth_header: Final = dict(prepared_auth) if isinstance(prepared_auth, Mapping) else prepared_auth
+    extra_headers: Final = dict(prepared_headers) if prepared_headers is not None else None
+    catalog_auth_header: Final = (
+        dict(prepared_catalog_auth) if isinstance(prepared_catalog_auth, Mapping) else prepared_catalog_auth
+    )
 
+    try:
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
-        from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller
-        from litellm.proxy.mcp_server.utils import strip_known_server_prefix
-
-        observe_pages: Final = on_page is not None or (params is None and listing_updates is not None)
-
-        async def filter_page(tools: Sequence[Tool]) -> tuple[Tool, ...]:
-            allowed_tools: Final = filter_tools_by_allowed_tools(list(tools), server)
-            filtered_tools: Final = await filter_tools_by_key_team_permissions(
-                tools=allowed_tools,
-                server_id=server.server_id,
-                user_api_key_auth=user_api_key_auth,
-            )
-            return tuple(filtered_tools)
-
-        def decorate_tools(tools: Sequence[Tool]) -> tuple[Tool, ...]:
-            copied_tools: Final = [tool.model_copy(deep=True) for tool in tools]
-            if mcp_proxy_mode:
-                from litellm.proxy.mcp_server.tool_search import with_mcp_proxy_identity
-
-                return tuple(with_mcp_proxy_identity(tool, server.server_id) for tool in copied_tools)
-            return tuple(apply_display_name_overrides(copied_tools, server))
-
-        async def publish_filtered_page(page: ListToolsResult) -> None:
-            filtered: Final = await filter_page(page.tools)
-            if observe_pages and listing_updates is not None:
-                underlying_tools: Final = tuple(
-                    tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)}) for tool in filtered
-                )
-                global_mcp_server_manager.register_prefixed_tool_routes(
-                    underlying_tools,
-                    server,
-                    register_bare_names=False,
-                )
-            if on_page is not None:
-                delivery: Final = await on_page(page.model_copy(update={"tools": list(decorate_tools(filtered))}))
-                if delivery is None:
-                    return
-                delivered, delivered_tool_count = delivery
-                if delivered:
-                    global_mcp_server_manager.record_listed_tools(
-                        server,
-                        tuple(
-                            tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)})
-                            for tool in filtered[:delivered_tool_count]
-                        ),
-                        ListedToolsCaller(
-                            user_api_key_auth=user_api_key_auth,
-                            mcp_auth_header=catalog_auth_header,
-                            raw_headers=raw_headers,
-                            oauth2_headers=oauth2_headers,
-                        ),
-                        listed_generation,
-                        record_listing=record_listing,
-                        continuation=first_page_observed.is_set(),
-                    )
-                    first_page_observed.set()
-                return
-            return
-
-        page: Final = (
-            ListToolsResult(
+        if params is None:
+            page = ListToolsResult(
                 tools=await global_mcp_server_manager.get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
@@ -1502,8 +913,8 @@ async def get_filtered_server_tools(
                     use_tool_list_cache=use_tool_list_cache,
                 )
             )
-            if params is None and not observe_pages
-            else await global_mcp_server_manager.get_tools_page(
+        else:
+            page = await global_mcp_server_manager.get_tools_page(
                 server=server,
                 mcp_auth_header=server_auth_header,
                 extra_headers=extra_headers,
@@ -1514,35 +925,28 @@ async def get_filtered_server_tools(
                 oauth2_headers=oauth2_headers,
                 proxy_logging_obj=proxy_logging_obj,
                 params=params,
-                on_page=publish_filtered_page if observe_pages else None,
+                listing_session=listing_session,
                 catalog_auth_header=catalog_auth_header,
                 record_listing=False,
                 listing_updates=listing_updates,
                 use_tool_list_cache=use_tool_list_cache,
             )
-        )
-        authorized_tools: Final = await filter_page(page.tools)
-        filtered_tools: Final = decorate_tools(authorized_tools)
+        tools: Final = page.tools
+        filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
-        if observe_pages and listing_updates is not None:
-            underlying_tools: Final = tuple(
-                tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)})
-                for tool in authorized_tools
-            )
-            global_mcp_server_manager.register_prefixed_tool_routes(
-                underlying_tools,
-                server,
-                register_bare_names=True,
-                listing_updates=listing_updates,
-            )
+        filtered_tools = await filter_tools_by_key_team_permissions(
+            tools=filtered_tools,
+            server_id=server.server_id,
+            user_api_key_auth=user_api_key_auth,
+        )
+
+        from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller
+        from litellm.proxy.mcp_server.utils import strip_known_server_prefix
 
         record: Final = partial(
             global_mcp_server_manager.record_listed_tools,
             server,
-            [
-                tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)})
-                for tool in authorized_tools
-            ],
+            [tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)}) for tool in filtered_tools],
             ListedToolsCaller(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=catalog_auth_header,
@@ -1558,79 +962,29 @@ async def get_filtered_server_tools(
         else:
             listing_updates.callback(record)
 
+        if mcp_proxy_mode:
+            from litellm.proxy.mcp_server.tool_search import with_mcp_proxy_identity
+
+            filtered_tools = [with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools]
+        else:
+            filtered_tools = apply_display_name_overrides(filtered_tools, server)
+
         verbose_logger.debug(
             "Successfully fetched %s tools from server %s, %s after filtering",
-            len(page.tools),
+            len(tools),
             server.name,
             len(filtered_tools),
         )
-        return page.model_copy(update={"tools": list(filtered_tools)}), ServerListOk(tool_count=len(filtered_tools))
+        return page.model_copy(update={"tools": filtered_tools}), ServerListOk(tool_count=len(filtered_tools))
     except MCPUpstreamAuthError as e:
         # Absorbed so peers keep their tools; a raise here would reach the client as a JSON-RPC error, not a 401
         verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
         outcome: Final = classify_list_exception(e)
-        if on_page is None or not first_page_observed.is_set():
-            challenge_rejected_credential(server, outcome, allowed_mcp_servers)
+        challenge_rejected_credential(server, outcome, allowed_mcp_servers)
         return ListToolsResult(tools=[]), outcome
     except Exception as e:
         verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
         return ListToolsResult(tools=[]), classify_list_exception(e)
-
-
-async def _tool_listing_scope(
-    context: OperationContext,
-    servers: Sequence[MCPServer],
-    prefetched_oauth_creds: Mapping[str, OAuthCredentialPayload],
-) -> tuple[str, Mapping[str, _PREPARED_TOOL_HEADERS]]:
-    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
-
-    async def resolve_permissions(server: MCPServer) -> JsonValue:
-        try:
-            permissions: Final = await MCPRequestHandler.get_allowed_tools_for_server(
-                server.server_id, context.user_api_key_auth
-            )
-        except Exception:  # noqa: BLE001  # isolate permission resolution failures by server
-            return {"resolution": "failed"}
-        if permissions is None:
-            return {"resolution": "unrestricted"}
-        return {"resolution": "resolved", "tools": list(sorted(permissions))}
-
-    async def resolve_prepared_headers(
-        server: MCPServer,
-    ) -> tuple[_PREPARED_TOOL_HEADERS | None, JsonValue]:
-        try:
-            prepared: Final = await prepare_tool_listing_headers(server, context, servers, prefetched_oauth_creds)
-        except Exception:  # noqa: BLE001  # isolate credential preparation failures by server
-            return None, {"resolution": "failed"}
-        prepared_binding: Final = _OUTCOME_VALUES.validate_python(
-            {
-                "resolution": "resolved",
-                "headers": [dict(value) if isinstance(value, Mapping) else value for value in prepared],
-            }
-        )
-        return prepared, prepared_binding
-
-    async def binding(server: MCPServer) -> tuple[str, JsonValue, _PREPARED_TOOL_HEADERS | None]:
-        permission_binding: Final = await resolve_permissions(server)
-        prepared_result: Final = await resolve_prepared_headers(server)
-        credential: Final = prefetched_oauth_creds.get(server.server_id)
-        material: Final = _OUTCOME_VALUES.validate_python(
-            {
-                "server_id": server.server_id,
-                "permissions": permission_binding,
-                "prepared_headers": prepared_result[1],
-                "prefetched_oauth": dict(credential) if credential is not None else None,
-            }
-        )
-        return server.server_id, material, prepared_result[0]
-
-    bindings: Final = await asyncio.gather(*(binding(server) for server in servers))
-    material: Final = (_caller_scope(context, servers), tuple(sorted((item[0], item[1]) for item in bindings)))
-    scope: Final = hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    prepared: Final = MappingProxyType(
-        {server_id: headers for server_id, _binding, headers in bindings if headers is not None}
-    )
-    return scope, prepared
 
 
 def _caller_scope(context: OperationContext, servers: Sequence[MCPServer]) -> str:
@@ -1659,110 +1013,6 @@ def _caller_scope(context: OperationContext, servers: Sequence[MCPServer]) -> st
     return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-async def _fetch_cached_tool_page(
-    cursor: str,
-    *,
-    server: MCPServer,
-    server_id: str,
-    server_key: str,
-    caller_scope: str,
-    effective_timeout: float,
-    context: OperationContext,
-    prepared_headers: Mapping[str, _PREPARED_TOOL_HEADERS],
-    manager: MCPServerManager,
-    listing_updates: ExitStack,
-    record_listing: bool,
-) -> ListToolsResult:
-    from mcp.types import ListToolsResult
-
-    from litellm.proxy import proxy_server
-    from litellm.proxy.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY, classify_list_exception
-    from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller
-    from litellm.proxy.mcp_server.operations import resolve_native_tool_name_for_server
-    from litellm.proxy.mcp_server.utils import strip_known_server_prefix
-
-    try:
-        page: Final = await _read_tool_page(
-            cursor,
-            server_id=server_id,
-            server_key=server_key,
-            caller_scope=caller_scope,
-            store=_TOOL_PAGE_STORE,
-            initial_read_timeout=effective_timeout,
-        )
-    except MCPError as page_error:
-        outcome: Final = classify_list_exception(page_error)
-        return ListToolsResult(
-            tools=[],
-            _meta={SERVER_OUTCOMES_META_KEY: {server_key: outcome.model_dump(mode="json")}},
-        )
-
-    if not page.tools:
-        return page
-
-    def cached_tool_definition(tool: Tool) -> Tool:
-        meta = tool.meta
-        if context.mcp_proxy_mode and meta is not None:
-            meta = {key: value for key, value in meta.items() if key != "litellm.ai/proxy_tool_identity"}
-        name: Final = (
-            strip_known_server_prefix(tool.name, server)
-            if context.mcp_proxy_mode
-            else resolve_native_tool_name_for_server(tool.name, server, (server,))
-        )
-        return tool.model_copy(update={"name": name, "meta": meta})
-
-    underlying_tools: Final = tuple(cached_tool_definition(tool) for tool in page.tools)
-    served_tools: Final = await manager.scan_tool_catalog(
-        server,
-        underlying_tools,
-        proxy_server.proxy_logging_obj,
-        context.user_api_key_auth,
-        context.raw_headers,
-    )
-    wire_tools_by_native_name: Final = {
-        native_tool.name: wire_tool for wire_tool, native_tool in zip(page.tools, underlying_tools)
-    }
-    served_wire_tools: Final = tuple(
-        native_tool.model_copy(
-            update={
-                "name": wire_tools_by_native_name[native_tool.name].name,
-                "meta": wire_tools_by_native_name[native_tool.name].meta,
-            }
-        )
-        for native_tool in served_tools
-        if native_tool.name in wire_tools_by_native_name
-    )
-    server_headers: Final = prepared_headers.get(server_id)
-    catalog_auth_header: Final = server_headers[2] if server_headers is not None else None
-    listed_caller: Final = ListedToolsCaller(
-        user_api_key_auth=context.user_api_key_auth,
-        mcp_auth_header=(
-            catalog_auth_header
-            if catalog_auth_header is None or isinstance(catalog_auth_header, str)
-            else dict(catalog_auth_header)
-        ),
-        raw_headers=context.raw_headers,
-        oauth2_headers=context.oauth2_headers,
-    )
-    listed_generation: Final = manager.listed_tools_generation(server_id)
-    listing_updates.callback(
-        manager.record_listed_tools,
-        server,
-        served_tools,
-        listed_caller,
-        listed_generation,
-        record_listing=record_listing,
-        continuation=True,
-    )
-    listing_updates.callback(
-        manager.register_prefixed_tool_routes,
-        served_tools,
-        server,
-        register_bare_names=False,
-    )
-    return page.model_copy(update={"tools": list(served_wire_tools)})
-
-
 async def aggregate_gateway_tools(
     context: OperationContext,
     params: PaginatedRequestParams,
@@ -1775,10 +1025,9 @@ async def aggregate_gateway_tools(
 ) -> AggregateToolListing:
     import time
 
-    from mcp.types import INVALID_PARAMS, ListToolsResult
+    from mcp.types import ListToolsResult, PaginatedRequestParams
     from pydantic import TypeAdapter
 
-    from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
     from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
     from litellm.proxy.mcp_server.faults.list_outcomes import (
         SERVER_OUTCOMES_META_KEY,
@@ -1788,140 +1037,72 @@ async def aggregate_gateway_tools(
     )
     from litellm.proxy.mcp_server.operations import (
         _aggregate_server_key,
-        _mcp_server_rate_limit_rejection,  # pyright: ignore[reportPrivateUsage]  # reuse request-scoped admission
+        _mcp_server_rate_limit_rejection,
         global_mcp_server_manager,
     )
-    from litellm.proxy.mcp_server.outbound_credentials.result import Error
-    from litellm.proxy.mcp_server.state_tokens import seal_state
 
     async with global_mcp_server_manager.catalog.operation() as snapshot:
         servers: Final = {server.server_id: server for server in allowed}
         listing_updates: Final = ExitStack()
-        rejections: Final[list[ProxyRateLimitError]] = []  # mutable-ok: retain per-server admission errors
-        listing_now: Final = int(time.time())
-        expires_at: Final = float(listing_now + _TOOL_LISTING_CURSOR_TTL)
-        caller_scope, prepared_headers = await _tool_listing_scope(context, allowed, prefetched)
-        can_seal_cursor: Final = not isinstance(
-            seal_state(
-                _JSON_VALUE.validate_python({}),
-                purpose="mcp.catalog.list.v1:tools/list",
-                expires_at=listing_now + 1,
-                now=listing_now,
-            ),
-            Error,
-        )
-        stream_pages: Final = _TOOL_PAGE_STORE.available and can_seal_cursor
-        started_producers: Final[list[asyncio.Task[None]]] = []  # mutable-ok: cancel abandoned producers
+        rejections: Final[list[ProxyRateLimitError]] = []  # mutable-ok: concurrent fetches share first-page errors
 
-        async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
-            server: Final = servers[server_id]
-            server_key: Final = _aggregate_server_key(server)
-            effective_timeout: Final = (
-                MCP_TOOL_LISTING_TIMEOUT if server.timeout is None else max(server.timeout, MCP_TOOL_LISTING_TIMEOUT)
-            )
+        async def fetch(
+            server_id: str, cursor: str | None, listing_session: ToolListingSession | None = None
+        ) -> ListToolsResult:
             if enforce_rate_limits:
-                rate_limit_error: Final = await _mcp_server_rate_limit_rejection(server, context.user_api_key_auth)
-                if rate_limit_error is not None:
-                    rejections.append(rate_limit_error)
+                error: Final = await _mcp_server_rate_limit_rejection(servers[server_id], context.user_api_key_auth)
+                if error is not None:
                     if cursor is not None:
-                        raise rate_limit_error
+                        raise error
+                    rejections.append(error)
                     return ListToolsResult(
                         tools=[],
                         _meta={
                             SERVER_OUTCOMES_META_KEY: {
-                                server_key: classify_list_exception(rate_limit_error).model_dump(mode="json")
+                                _aggregate_server_key(servers[server_id]): classify_list_exception(error).model_dump(
+                                    mode="json"
+                                )
                             }
                         },
                     )
-            if cursor is not None:
-                return await _fetch_cached_tool_page(
-                    cursor,
-                    server=server,
-                    server_id=server_id,
-                    server_key=server_key,
-                    caller_scope=caller_scope,
-                    effective_timeout=effective_timeout,
-                    context=context,
-                    prepared_headers=prepared_headers,
-                    manager=global_mcp_server_manager,
-                    listing_updates=listing_updates,
-                    record_listing=record_listing,
-                )
-
-            if stream_pages:
-                snapshot_id: Final = uuid.uuid4().hex
-                first_page: Final[asyncio.Future[ListToolsResult]] = asyncio.get_running_loop().create_future()
-                publisher: Final = _StreamingToolPagePublisher(
-                    _TOOL_PAGE_STORE,
-                    caller_scope,
-                    server_id,
-                    snapshot_id,
-                    server_key,
-                    expires_at,
-                    first_page,
-                )
-                task: Final = await _start_tool_page_producer(
-                    publisher=publisher,
-                    server=server,
-                    context=context,
-                    allowed=allowed,
-                    prefetched=prefetched,
-                    prepared_headers=prepared_headers.get(server_id),
-                    record_listing=record_listing,
-                    use_tool_list_cache=use_tool_list_cache,
-                    snapshot_identity=snapshot.identity,
-                    deadline_at=min(expires_at, time.time() + effective_timeout),
-                )
-                if task is not None:
-                    started_producers.append(task)
-                    return await first_page
-
-            server_updates: Final = ExitStack()
             result, outcome = await get_filtered_server_tools(
-                server,
+                servers[server_id],
                 context=context,
                 allowed_mcp_servers=allowed,
                 prefetched_oauth_creds=prefetched,
-                params=None,
+                params=PaginatedRequestParams(cursor=cursor),
+                listing_session=listing_session,
                 record_listing=record_listing,
-                listing_updates=server_updates,
+                listing_updates=listing_updates,
                 use_tool_list_cache=use_tool_list_cache,
-                prepared_headers=prepared_headers.get(server_id),
             )
-            outcome_meta: Final = {
-                **(result.meta or {}),
-                SERVER_OUTCOMES_META_KEY: {server_key: outcome.model_dump(mode="json")},
-            }
-            if outcome.tag != "ok":
-                server_updates.pop_all()
-                return result.model_copy(update={"meta": outcome_meta})
-            listing_updates.callback(server_updates.close)
-            return result.model_copy(update={"meta": outcome_meta, "next_cursor": None})
+            if cursor is not None and outcome.tag != "ok":
+                from mcp.shared.exceptions import MCPError
+                from mcp.types import INVALID_PARAMS
 
-        try:
-            result: Final = await list_tools_page(
-                cursor=params.cursor,
-                caller_scope=caller_scope,
-                snapshot=snapshot.identity,
-                server_ids=tuple(servers),
-                fetch=fetch,
-                now=listing_now,
+                raise MCPError(code=INVALID_PARAMS, message="Upstream continuation failed; start a fresh listing")
+            return result.model_copy(
+                update={
+                    "meta": {
+                        **(result.meta or {}),
+                        SERVER_OUTCOMES_META_KEY: {
+                            _aggregate_server_key(servers[server_id]): outcome.model_dump(mode="json")
+                        },
+                    }
+                }
             )
-        except BaseException:
-            for task in started_producers:
-                task.cancel()
-            await asyncio.gather(*started_producers, return_exceptions=True)
-            raise
+
+        result: Final = await list_tools_page(
+            cursor=params.cursor,
+            caller_scope=_caller_scope(context, allowed),
+            snapshot=snapshot.identity,
+            server_ids=tuple(servers),
+            fetch=fetch,
+            session_fetch=fetch if os.getenv("LITELLM_SALT_KEY") else None,
+            now=int(time.time()),
+        )
         if params.cursor is None and servers and len(rejections) == len(servers):
             raise rejections[0]
-        if params.cursor is not None and servers:
-            outcomes: Final = _OUTCOME_VALUES.validate_python((result.meta or {}).get(SERVER_OUTCOMES_META_KEY, {}))
-            failed: Final = tuple(
-                value for value in outcomes.values() if isinstance(value, dict) and value.get("tag") != "ok"
-            )
-            if len(failed) == len(servers):
-                listing_updates.close()
-                raise MCPError(code=INVALID_PARAMS, message="Tool listing page is unavailable; start a fresh listing")
         listing_updates.close()
         return AggregateToolListing(
             tools=result.tools,
@@ -2032,20 +1213,18 @@ async def list_gateway_catalog(
                 _mcp_server_rate_limit_rejection,
             )
 
-            rate_limit_error: Final = await _mcp_server_rate_limit_rejection(server, caller)
-            if rate_limit_error is not None:
+            error: Final = await _mcp_server_rate_limit_rejection(server, caller)
+            if error is not None:
                 if cursor is not None:
-                    raise rate_limit_error
-                rejections.append(rate_limit_error)
+                    raise error
+                rejections.append(error)
                 return combine_optional_catalog(
                     request,
                     (),
                     None,
                     {
                         SERVER_OUTCOMES_META_KEY: {
-                            _aggregate_server_key(server): classify_list_exception(rate_limit_error).model_dump(
-                                mode="json"
-                            )
+                            _aggregate_server_key(server): classify_list_exception(error).model_dump(mode="json")
                         }
                     },
                 )
@@ -2220,10 +1399,9 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
 
     def _entry_keys(self, server_id: str) -> tuple[str, ...]:
         prefix: Final = f"[{json.dumps(server_id)},"
-        entries: Final = cast(  # cast-ok: private cache keys are JSON strings
-            "Mapping[str, object]", self._entries.cache_dict
+        keys: Final = cast(  # cast-ok: private cache contains only JSON string keys
+            "tuple[str, ...]", tuple(self._entries.cache_dict)
         )
-        keys: Final = tuple(entries)
         return tuple(entry_key for entry_key in keys if entry_key.startswith(prefix))
 
     def holds(self, server_id: str) -> bool:

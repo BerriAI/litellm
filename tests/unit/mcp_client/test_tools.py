@@ -102,34 +102,6 @@ async def test_load_mcp_tools_mcp_format(mock_session, mock_list_tools_result):
 
 
 @pytest.mark.asyncio()
-async def test_list_tools_result_with_pagination_observes_each_page(mock_session, monkeypatch):
-    from types import SimpleNamespace
-
-    clock = SimpleNamespace(now=100.0)
-    monkeypatch.setattr("litellm.mcp_client.tools.time", SimpleNamespace(monotonic=lambda: clock.now))
-    first_page = ListToolsResult(
-        tools=[MCPTool(name="first_tool", inputSchema={"type": "object"})],
-        next_cursor="upstream-cursor",
-        ttl_ms=10000,
-    )
-    second_page = ListToolsResult(
-        tools=[MCPTool(name="second_tool", inputSchema={"type": "object"})], ttl_ms=10000
-    )
-    mock_session.list_tools.side_effect = [first_page, second_page]
-    observed: list[tuple[str, ...]] = []
-
-    async def observe(page: ListToolsResult) -> None:
-        observed.append(tuple(tool.name for tool in page.tools))
-        clock.now += 2.0
-
-    result = await list_tools_result_with_pagination(mock_session, on_page=observe)
-
-    assert [tool.name for tool in result.tools] == ["first_tool", "second_tool"]
-    assert observed == [("first_tool",), ("second_tool",)]
-    assert result.ttl_ms == 6000
-
-
-@pytest.mark.asyncio()
 async def test_load_mcp_tools_openai_format(mock_session, mock_list_tools_result):
     mock_session.list_tools.return_value = mock_list_tools_result
     result = await load_mcp_tools(mock_session, format="openai")
