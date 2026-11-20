@@ -1964,26 +1964,29 @@ async def test_window_reset_does_not_restore_concurrently_removed_limits(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("commit_fails", (False, True), ids=("commit", "commit-failure"))
 async def test_window_counter_changes_only_after_successful_commit(
-    frozen_reset_clock: datetime, commit_fails: bool
+    frozen_reset_clock: datetime, commit_fails: bool, rollover_enabled: None
 ) -> None:
     client: Final = _window_prisma_client()
     source: Final = _WINDOW_SOURCES[1]
     assert source.counters is not None
     counter: Final = source.counters[1]("ordered", "1h")
-    counters: Final = FakeSpendCounters(redis={counter: 12.0}, memory={counter: 12.0})
+    counters: Final = FakeSpendCounters(redis={counter: 150.0}, memory={counter: 150.0})
+    windows: Final = (
+        {"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z", "max_budget": 100.0},
+        {"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z", "max_budget": 30.0},
+    )
     job: Final = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=client)
 
     @asynccontextmanager
     async def transaction() -> AsyncIterator[MagicMock]:
         yield client.db
-        assert counters.redis == counters.memory == {counter: 12.0}
+        assert counters.redis == counters.memory == {counter: 150.0}
         if commit_fails:
             raise RuntimeError("commit failed")
 
     client.tx.side_effect = transaction
     operation: Final = job._reset_window_row(
-        source, "ordered", ({"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z"},),
-        frozen_reset_clock, counters.store(),
+        source, "ordered", windows, frozen_reset_clock, counters.store(),
     )
     if commit_fails:
         with pytest.raises(RuntimeError, match="commit failed"):
@@ -1992,7 +1995,117 @@ async def test_window_counter_changes_only_after_successful_commit(
         await operation
 
     assert len(_window_cas_writes(client)) == len(_window_spend_rolls(client)) == 1
-    assert counters.redis == counters.memory == {counter: 12.0 if commit_fails else 0.0}
+    assert counters.redis == counters.memory == {counter: 150.0 if commit_fails else 20.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", _WINDOW_SOURCES[:3], ids=("user", "key", "team"))
+@pytest.mark.parametrize(
+    "caps,carried_spend",
+    (((100.0, 30.0), 20.0), ((30.0, 100.0), 20.0), ((200.0, 30.0), 0.0)),
+    ids=("100-then-30", "30-then-100", "200-then-30"),
+)
+@pytest.mark.parametrize("rollover", (True, False), ids=("rollover", "no-rollover"))
+async def test_duplicate_due_windows_apply_each_cap_to_the_shared_counter(
+    source: _WindowSource,
+    caps: tuple[float, float],
+    carried_spend: float,
+    rollover: bool,
+    frozen_reset_clock: datetime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reset_budget_job_module.litellm, "budget_rollover", rollover)
+    client: Final = _window_prisma_client()
+    assert source.counters is not None
+    counter: Final = source.counters[1]("duplicate", "1h")
+    counters: Final = FakeSpendCounters(redis={counter: 150.0}, memory={counter: 150.0})
+    windows: Final = tuple(
+        {"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z", "max_budget": cap} for cap in caps
+    )
+    job: Final = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=client)
+
+    await job._reset_window_row(source, "duplicate", windows, frozen_reset_clock, counters.store())
+
+    assert counters.redis == counters.memory == {counter: carried_spend if rollover else 0.0}
+    saved: Final = json.loads(_window_cas_writes(client)[0][3])
+    assert datetime.fromisoformat(saved[0]["reset_at"]) > frozen_reset_clock
+    assert saved == [{**window, "reset_at": saved[0]["reset_at"]} for window in windows]
+    assert [roll[3] for roll in _window_spend_rolls(client)] == [("1h",)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", _WINDOW_SOURCES[:3], ids=("user", "key", "team"))
+@pytest.mark.parametrize("expired_first", (True, False), ids=("expired-first", "expired-last"))
+async def test_duplicate_unexpired_window_does_not_reduce_the_shared_rollover(
+    source: _WindowSource,
+    expired_first: bool,
+    frozen_reset_clock: datetime,
+    rollover_enabled: None,
+) -> None:
+    client: Final = _window_prisma_client()
+    assert source.counters is not None
+    counter: Final = source.counters[1]("duplicate", "1h")
+    counters: Final = FakeSpendCounters(redis={counter: 150.0}, memory={counter: 150.0})
+    expired: Final = {"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z", "max_budget": 100.0}
+    upcoming: Final = {"budget_duration": "1h", "reset_at": "2024-06-15T12:00:00Z", "max_budget": 30.0}
+    windows: Final = (expired, upcoming) if expired_first else (upcoming, expired)
+    job: Final = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=client)
+
+    await job._reset_window_row(source, "duplicate", windows, frozen_reset_clock, counters.store())
+
+    assert counters.redis == counters.memory == {counter: 50.0}
+    saved: Final = json.loads(_window_cas_writes(client)[0][3])
+    expired_index: Final = 0 if expired_first else 1
+    advanced: Final = {**expired, "reset_at": saved[expired_index]["reset_at"]}
+    assert datetime.fromisoformat(advanced["reset_at"]) > frozen_reset_clock
+    assert saved == ([advanced, upcoming] if expired_first else [upcoming, advanced])
+    assert [roll[3] for roll in _window_spend_rolls(client)] == [("1h",)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", _WINDOW_SOURCES[:3], ids=("user", "key", "team"))
+@pytest.mark.parametrize("reverse", (False, True), ids=("original-order", "reversed-order"))
+async def test_duplicate_window_cas_retry_recalculates_from_fresh_limits_and_spend(
+    source: _WindowSource,
+    reverse: bool,
+    frozen_reset_clock: datetime,
+    rollover_enabled: None,
+) -> None:
+    client: Final = _window_prisma_client()
+    assert source.counters is not None
+    counter: Final = source.counters[1]("duplicate-race", "1h")
+    counters: Final = FakeSpendCounters(redis={counter: 150.0}, memory={counter: 150.0})
+    windows: Final = tuple(
+        {"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z", "max_budget": cap}
+        for cap in ((30.0, 100.0) if reverse else (100.0, 30.0))
+    )
+    fresh: Final = tuple(
+        {**window, "max_budget": cap}
+        for window, cap in zip(windows, (40.0, 80.0) if reverse else (80.0, 40.0), strict=True)
+    )
+
+    async def reload_limits(query: str, *args: object) -> list[dict[str, str]]:
+        assert counters.redis == counters.memory == {counter: 150.0}
+        assert _window_spend_rolls(client) == []
+        assert counters.redis is not None
+        counters.redis[counter] = 200.0
+        counters.memory[counter] = 200.0
+        return [{"budget_limits": json.dumps(fresh)}]
+
+    client.db.execute_raw.side_effect = (0, 1, 1)
+    client.db.query_raw = AsyncMock(side_effect=reload_limits)
+    job: Final = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=client)
+
+    await job._reset_window_row(source, "duplicate-race", windows, frozen_reset_clock, counters.store())
+
+    assert counters.redis == counters.memory == {counter: 80.0}
+    original_write, retry = _window_cas_writes(client)
+    assert json.loads(original_write[2]) == list(windows)
+    assert json.loads(retry[2]) == list(fresh)
+    saved: Final = json.loads(retry[3])
+    assert datetime.fromisoformat(saved[0]["reset_at"]) > frozen_reset_clock
+    assert saved == [{**window, "reset_at": saved[0]["reset_at"]} for window in fresh]
+    assert [roll[3] for roll in _window_spend_rolls(client)] == [("1h",)]
 
 
 @pytest.mark.asyncio

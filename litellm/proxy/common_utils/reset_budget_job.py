@@ -1885,13 +1885,21 @@ class ResetBudgetJob:
         spend_counter_store: SpendCounterStore,
         now: datetime,
         reset_settings: BudgetResetSettings,
+        planned_counters: dict[str, float] | None = None,  # mutable-ok: ordered per-attempt keyed fold
     ) -> _WindowReset | None:
         next_reset_at: Final = ResetBudgetJob._next_window_reset(window, now, reset_settings)
         if next_reset_at is None:
             return None
         if counter_key is None:
             return _WindowReset(next_reset_at, str(window["budget_duration"]))
-        new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_store)
+        new_value: Final = await ResetBudgetJob._window_carried_spend(
+            window,
+            counter_key,
+            spend_counter_store,
+            planned_counters.get(counter_key) if planned_counters is not None else None,
+        )
+        if planned_counters is not None:
+            planned_counters[counter_key] = new_value  # rebind-ok: stage each duplicate's carry for the next window
         return _WindowReset(next_reset_at, str(window["budget_duration"]), (counter_key, new_value))
 
     @staticmethod
@@ -1950,16 +1958,20 @@ class ResetBudgetJob:
     @staticmethod
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def _window_carried_spend(
-        window: Mapping[str, object], counter_key: str, spend_counter_store: SpendCounterStore
+        window: Mapping[str, object],
+        counter_key: str,
+        spend_counter_store: SpendCounterStore,
+        previous_spend: float | None = None,
     ) -> float:
-        """Per-window spend lives only in the counter, so the carried overage is
-        read from it before the reset overwrites it."""
+        """Carry overage from an earlier duplicate's staged balance or the current counter."""
         if not _rollover_enabled():
             return 0.0
         window_max: Final = window.get("max_budget")
         cap: Final = _rollover_cap(window_max) if isinstance(window_max, (int, float)) else None
         if cap is None:
             return 0.0
+        if previous_spend is not None:
+            return _carried_spend(previous_spend, cap)
         try:
             current, _ = await spend_counter_store.read(counter_key)
         except Exception as e:  # noqa: BLE001  # an unreadable counter falls back to a plain zero reset
@@ -2096,6 +2108,7 @@ class ResetBudgetJob:
         spend_counter_store: SpendCounterStore,
         attempt: int = 0,
     ) -> None:
+        planned_counters: Final[dict[str, float]] = {}  # mutable-ok: linear ordered fold without copying per window
         resets: Final = tuple(
             [
                 await self._prepare_window_reset(
@@ -2106,6 +2119,7 @@ class ResetBudgetJob:
                     spend_counter_store,
                     now,
                     self.reset_settings,
+                    planned_counters,
                 )
                 for window in windows
             ]
