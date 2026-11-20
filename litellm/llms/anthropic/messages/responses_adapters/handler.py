@@ -219,9 +219,17 @@ _PREVIOUS_RESPONSE_ID_UNSUPPORTED: Final = (
 )
 
 
-def previous_response_id_error(request_params: Mapping[str, object]) -> str | None:
-    sent: Final = _sent_responses_fields(request_params, ("previous_response_id",))
-    return _PREVIOUS_RESPONSE_ID_UNSUPPORTED if sent["previous_response_id"] is not None else None
+_INSTRUCTIONS_UNSUPPORTED: Final = (
+    "`instructions` is not supported on the Messages API. Send the text in `system` instead, or call the "
+    "Responses API (`/v1/responses`)."
+)
+
+
+def unsupported_responses_field_error(request_params: Mapping[str, object]) -> str | None:
+    sent: Final = _sent_responses_fields(request_params, ("previous_response_id", "instructions"))
+    if sent["previous_response_id"] is not None:
+        return _PREVIOUS_RESPONSE_ID_UNSUPPORTED
+    return _INSTRUCTIONS_UNSUPPORTED if sent["instructions"] is not None else None
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -333,7 +341,7 @@ def _build_responses_kwargs(
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    unsupported_param_error: Final = previous_response_id_error(forwarded_kwargs)
+    unsupported_param_error: Final = unsupported_responses_field_error(forwarded_kwargs)
     if unsupported_param_error is not None:
         raise litellm.UnsupportedParamsError(
             message=unsupported_param_error,
@@ -400,16 +408,6 @@ def _build_responses_kwargs(
         preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
     )
 
-    caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
-    caller_instructions: Final = caller_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
-    system_instructions: Final = responses_kwargs.get("instructions")
-    if isinstance(system_instructions, str) and isinstance(caller_instructions, str):
-        combined_instructions: Final = (
-            f"{system_instructions}\n{caller_instructions}" if caller_instructions else system_instructions
-        )
-        responses_kwargs["instructions"] = combined_instructions
-        if "instructions" in caller_extra_body:
-            responses_kwargs["extra_body"] = {**caller_extra_body, "instructions": combined_instructions}
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)

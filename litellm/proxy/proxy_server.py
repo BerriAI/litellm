@@ -16438,9 +16438,9 @@ def _rejected_view(status_code: int, message: str) -> ProxyException:
 
 
 def _reject_unsupported_messages_params(route: Target | None, litellm_params: Mapping[str, object]) -> None:
-    from litellm.llms.anthropic.messages.responses_adapters.handler import previous_response_id_error
+    from litellm.llms.anthropic.messages.responses_adapters.handler import unsupported_responses_field_error
 
-    error: Final = previous_response_id_error(litellm_params) if route in _GATEWAY_EDIT_ROUTES else None
+    error: Final = unsupported_responses_field_error(litellm_params) if route in _GATEWAY_EDIT_ROUTES else None
     if error is not None:
         raise _rejected_view(400, error)
 

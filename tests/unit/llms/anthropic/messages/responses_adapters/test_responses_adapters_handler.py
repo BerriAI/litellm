@@ -92,28 +92,21 @@ def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> No
     [{}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
 )
 @pytest.mark.parametrize("nested", [False, True])
-def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
+def test_caller_instructions_are_rejected_with_the_messages_equivalent(
     request_params: dict[str, str], nested: bool
 ) -> None:
     caller: Final = {"instructions": "Caller instructions"}
     forwarded: Final = {"extra_body": caller} if nested else caller
-    kwargs: Final = _build_responses_kwargs(
-        max_tokens=1024,
-        messages=MESSAGES,
-        model="openai/gpt-6.2-sol",
-        system="Be brief.",
-        extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded, **request_params},
-    )
-    instructions: Final = kwargs["extra_body"]["instructions"] if nested else kwargs["instructions"]
-    assert instructions == ("Be brief.\nCaller instructions" if request_params else "Caller instructions")
-    assert kwargs["input"] == [
-        *(
-            []
-            if request_params
-            else [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]}]
-        ),
-        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
-    ]
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _build_responses_kwargs(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-6.2-sol",
+            system="Be brief.",
+            extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded, **request_params},
+        )
+    assert "`instructions` is not supported on the Messages API" in str(rejected.value)
+    assert "`system`" in str(rejected.value)
 
 
 @pytest.mark.asyncio
