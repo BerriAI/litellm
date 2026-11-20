@@ -744,6 +744,54 @@ def test_completion_cost_keeps_the_served_bedrock_row_unless_it_is_the_region_st
     assert cost == pytest.approx(_bedrock_global_cost(served_shape) * _BEDROCK_PROFILE_RATE_MULTIPLIERS[served_model])
 
 
+_FIREWORKS_SERVED_MODEL: Final = "accounts/fireworks/models/router-pricing-test"
+_FIREWORKS_SERVED_RATES: Final = MappingProxyType({"input_cost_per_token": 3e-7, "output_cost_per_token": 1.2e-6})
+
+
+def _fireworks_router_cost(monkeypatch: pytest.MonkeyPatch, router: str, router_row: Mapping[str, float]) -> float:
+    row_base: Final = {"litellm_provider": "fireworks_ai", "mode": "chat"}
+    monkeypatch.setitem(
+        litellm.model_cost, f"fireworks_ai/{_FIREWORKS_SERVED_MODEL}", {**row_base, **_FIREWORKS_SERVED_RATES}
+    )
+    monkeypatch.setitem(litellm.model_cost, f"fireworks_ai/{router}", {**row_base, **router_row})
+    response: Final = ModelResponse(
+        model=f"fireworks_ai/{_FIREWORKS_SERVED_MODEL}",
+        usage=Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+    )
+    return completion_cost(completion_response=response, model=f"fireworks_ai/{router}")
+
+
+def test_completion_cost_bills_the_fireworks_router_row_when_fireworks_serves_the_base_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cost: Final = _fireworks_router_cost(
+        monkeypatch,
+        "accounts/fireworks/routers/router-pricing-test-spot",
+        {"input_cost_per_token": 1.5e-7, "output_cost_per_token": 6e-7},
+    )
+
+    assert cost == pytest.approx(1000 * 1.5e-7 + 100 * 6e-7)
+
+
+@pytest.mark.parametrize(
+    ("requested", "requested_row"),
+    [
+        pytest.param("accounts/fireworks/routers/router-pricing-test-unpriced", {}, id="unpriced-router"),
+        pytest.param(
+            "accounts/fireworks/models/router-pricing-test-alias",
+            {"input_cost_per_token": 1.5e-7, "output_cost_per_token": 6e-7},
+            id="priced-non-router",
+        ),
+    ],
+)
+def test_completion_cost_keeps_the_served_fireworks_row_unless_a_priced_router_was_requested(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, requested: str, requested_row: Mapping[str, float]
+) -> None:
+    cost: Final = _fireworks_router_cost(monkeypatch, requested, requested_row)
+
+    assert cost == pytest.approx(1000 * 3e-7 + 100 * 1.2e-6)
+
+
 @pytest.mark.parametrize(
     ("base_model", "custom_pricing", "router_model_id", "priced_row"),
     [
@@ -8186,22 +8234,59 @@ def test_transcription_cost_without_provider_seconds_bills_the_measured_length(
     assert cost == pytest.approx(0.01 * expected_seconds)
 
 
-def test_custom_priced_transcription_deployment_bills_provider_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("model", "duration", "billed_seconds"),
+    [
+        ("whisper-large-v3-turbo", 2.4, 10.0),
+        ("whisper-large-v3-turbo", 10.0, 10.0),
+        ("whisper-large-v3-turbo", 12.4, 12.4),
+        ("whisper-large-v3", 2.4, 10.0),
+        ("whisper-large-v3", None, 0.0),
+    ],
+)
+def test_groq_transcription_cost_applies_billed_duration_minimum(
+    monkeypatch: pytest.MonkeyPatch, model: str, duration: float | None, billed_seconds: float
+) -> None:
+    """Groq documents a 10-second minimum at https://console.groq.com/docs/speech-to-text (2026-11-18)."""
+    qualified_model: Final = f"groq/{model}"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        qualified_model,
+        {"input_cost_per_second": 0.01, "litellm_provider": "groq", "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={"text": "Hello", **({"duration": duration} if duration is not None else {})},
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": model, "custom_llm_provider": "groq"},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(completion_response=transcription, model=qualified_model, call_type="atranscription")
+
+    assert cost == pytest.approx(0.01 * billed_seconds)
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"), [("openai", "gpt-fake-transcribe"), ("groq", "whisper-large-v3-turbo")]
+)
+def test_custom_priced_transcription_deployment_bills_provider_seconds(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str
+) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "priced-deployment",
-        {"input_cost_per_second": 0.000075, "litellm_provider": "openai", "mode": "audio_transcription"},
+        {"input_cost_per_second": 0.000075, "litellm_provider": provider, "mode": "audio_transcription"},
     )
     transcription: Final = convert_to_model_response_object(
         response_object={"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 2}},
         model_response_object=TranscriptionResponse(),
-        hidden_params={"model": "gpt-fake-transcribe", "custom_llm_provider": "openai"},
+        hidden_params={"model": model, "custom_llm_provider": provider},
         response_type="audio_transcription",
     )
 
     cost: Final = completion_cost(
         completion_response=transcription,
-        model="openai/gpt-fake-transcribe",
+        model=f"{provider}/{model}",
         call_type="atranscription",
         custom_pricing=True,
         router_model_id="priced-deployment",

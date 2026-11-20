@@ -408,6 +408,8 @@ class OCRPricing(TypedDict, total=False):
 
 
 _WALL_CLOCK_PRICED_MODES: Final = frozenset({"audio_transcription", "chat", "completion", "embedding", "responses"})
+_GROQ_WHISPER_TRANSCRIPTION_MODELS: Final = frozenset({"whisper-large-v3", "whisper-large-v3-turbo"})
+_GROQ_MINIMUM_TRANSCRIPTION_SECONDS: Final = 10.0
 
 
 def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
@@ -785,10 +787,19 @@ def cost_per_token(
                 data_residency=data_residency,
             )
 
+        billed_duration: Final = (
+            max(audio_transcription_file_duration, _GROQ_MINIMUM_TRANSCRIPTION_SECONDS)
+            if (
+                custom_llm_provider == "groq"
+                and model_without_prefix in _GROQ_WHISPER_TRANSCRIPTION_MODELS
+                and audio_transcription_file_duration > 0
+            )
+            else audio_transcription_file_duration
+        )
         return openai_cost_per_second(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
-            duration=audio_transcription_file_duration,
+            duration=billed_duration,
         )
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
@@ -799,6 +810,7 @@ def cost_per_token(
             custom_llm_provider=custom_llm_provider,
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
+            search_response=response if isinstance(response, SearchResponse) else None,
         )
     elif (
         per_second_cost := _per_second_pricing_cost(
@@ -1163,12 +1175,18 @@ def _served_or_priced_requested_model(
     if served in (requested, requested.partition("/")[2]):
         return served
     pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
-    profile_of_served: Final = _is_bedrock_cross_region_profile_of(requested_model, served_model, pricing_provider)
-    if profile_of_served and _resolves_to_rates(requested, pricing_provider):
+    requested_sets_the_price: Final = _is_bedrock_cross_region_profile_of(
+        requested_model, served_model, pricing_provider
+    ) or _is_fireworks_router(requested_model, pricing_provider)
+    if requested_sets_the_price and _resolves_to_rates(requested, pricing_provider):
         return requested
     if _resolves_to_rates(served, pricing_provider):
         return served
     return requested if _resolves_to_rates(requested, pricing_provider) else served
+
+
+def _is_fireworks_router(requested_model: str, custom_llm_provider: str | None) -> bool:
+    return custom_llm_provider == "fireworks_ai" and "/routers/" in f"/{requested_model}"
 
 
 def _is_bedrock_cross_region_profile_of(profile: str, served_model: str, custom_llm_provider: str | None) -> bool:
@@ -2223,6 +2241,9 @@ def completion_cost(
                             custom_llm_provider=custom_llm_provider,
                             number_of_queries=number_of_queries,
                             optional_params=optional_params,
+                            search_response=completion_response
+                            if isinstance(completion_response, SearchResponse)
+                            else None,
                         )
                     )
 

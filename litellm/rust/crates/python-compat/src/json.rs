@@ -515,8 +515,23 @@ pub fn write_string(out: &mut impl Sink, text: &str) {
 mod tests {
     use rstest::rstest;
 
-    use super::{dumps, loads};
+    use super::{dumps, loads, type_name};
     use crate::{Error, Value, repr::repr};
+
+    #[rstest]
+    #[case::null(serde_json::json!(null), "NoneType")]
+    #[case::boolean(serde_json::json!(true), "bool")]
+    #[case::int(serde_json::json!(1), "int")]
+    #[case::float(serde_json::json!(1.5), "float")]
+    #[case::text(serde_json::json!("a"), "str")]
+    #[case::list(serde_json::json!([1]), "list")]
+    #[case::object(serde_json::json!({"a": 1}), "dict")]
+    fn a_json_value_is_named_by_its_python_type(
+        #[case] value: serde_json::Value,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(type_name(&value), expected);
+    }
 
     // Expected values are the repr of CPython 3.14 json.loads(text)
     #[rstest]

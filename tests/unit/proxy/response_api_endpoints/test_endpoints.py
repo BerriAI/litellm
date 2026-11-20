@@ -2776,14 +2776,14 @@ class TestResponsesWSFirstFrameModelAuth:
                 "Rate limit exceeded",
                 False,
             ),
-            (ValueError("bad metadata"), (None, "invalid_request_error"), "Pre-call error", True),
+            (ValueError("bad metadata"), (500, "server_error"), "Pre-call error", True),
         ],
         ids=["rate-limited", "other-failure"],
     )
     async def test_endpoint_refuses_a_rate_limited_open_with_the_turn_refusal_frame(
         self,
         open_failure: Exception,
-        refusal: tuple[int | None, str],
+        refusal: tuple[int, str],
         close_reason: str,
         logged_traceback: bool,
     ):
@@ -4023,6 +4023,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         assert json.loads(websocket.send_text.await_args.args[0]) == {
             "type": "error",
+            "status": 400,
             "error": {
                 "type": "invalid_request_error",
                 "message": "Content blocked by frame-pick",
@@ -4500,9 +4501,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 proxy_logging_obj,
             ),
         ):
-            await asyncio.wait_for(
-                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock()), timeout=1
-            )
+            await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
 
         proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
         assert [json.loads(frame)["error"]["message"] for frame in sent] == ["relay crashed"]

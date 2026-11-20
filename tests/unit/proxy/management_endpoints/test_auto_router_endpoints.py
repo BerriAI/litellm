@@ -40,6 +40,7 @@ from litellm.router_strategy.complexity_router.request_models import AutoRouterR
 from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterBenchmarksResponse
 from litellm.types.router import Deployment
 from litellm.types.utils import Choices, Message, ModelResponse
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
 ROUTING_HTTP_REQUEST: Final = Request(
     {"type": "http", "method": "POST", "path": "/auto_router/test_routing", "headers": []}
@@ -3365,6 +3366,7 @@ async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypa
         team_row.dict.return_value = row_data
         prisma = MagicMock()
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows={team_id: row_data})))
         return prisma
 
     def _request(team_id: str) -> AutoRouterRoutingTestRequest:
@@ -3426,6 +3428,9 @@ async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: py
     }
     prisma: Final = MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    install_rust_auth_stores(
+        monkeypatch, RustAuthStores(team=FakeTeamStore(rows={"team-1": team_row.model_dump.return_value}))
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "premium_user", True)
 
@@ -3456,6 +3461,7 @@ def _configure_team_admin_preview(monkeypatch: pytest.MonkeyPatch) -> UserAPIKey
     )
     database: Final = MagicMock()
     database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows={team.team_id: team})))
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "premium_user", True)
     return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="preview-admin", api_key="sk-preview")
@@ -3507,6 +3513,7 @@ def _configure_member_preview(monkeypatch: pytest.MonkeyPatch, *, allowed: bool 
     prisma: Final = MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows={team.team_id: team})))
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "premium_user", True)
     return UserAPIKeyAuth(

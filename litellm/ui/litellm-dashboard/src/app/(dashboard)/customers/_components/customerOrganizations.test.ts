@@ -4,6 +4,7 @@ import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActiv
 import type { DailyActivityAggregatedResponse } from "@/components/UsagePage/dailyActivityApi";
 import {
   customerOrganizationRows,
+  customerOrganizationBudgetSource,
   customerOrganizationsCall,
   customerOrganizationsUsageCall,
   sortCustomerOrganizations,
@@ -45,6 +46,7 @@ const activity = (id: string, spend: number): DailyActivityAggregatedResponse =>
     flat_cost: 0,
     gateway_injected_caching_savings_spend: 0,
     guardrail_spend: 0,
+    customer_margin_spend: 0,
     prompt_caching_savings_spend: 0,
     ptu_hours: 0,
   };
@@ -212,5 +214,40 @@ describe("customer organization sorting and budgets", () => {
     expect(sortCustomerOrganizations(rows, "", [{ id: "status", desc: true }])[0].status).toBe(
       "customerPortal.analytics.reachedLimit",
     );
+  });
+});
+
+describe("customer organization budget assignments", () => {
+  const groups = [{ budget_id: "group-1", name: "Growth" }];
+
+  it("resolves the organization budget ID against the shared catalog, not its member groups", () => {
+    const organization = org("org", {
+      budget_id: "group-1",
+      default_budgets: [{ budget_id: "group-1", name: "Member group" }],
+    });
+    expect(customerOrganizationBudgetSource(organization, groups)).toEqual({
+      kind: "group",
+      name: "Growth",
+    });
+    expect(customerOrganizationBudgetSource({ ...organization, budget_id: "private" }, groups)).toEqual({
+      kind: "custom",
+    });
+    expect(customerOrganizationBudgetSource(org("unlimited"), groups)).toBeNull();
+  });
+
+  it("does not mislabel shared or unresolved assignments as custom when the catalog is unavailable", () => {
+    const organization = org("org", { budget_id: "group-1" });
+    expect(customerOrganizationBudgetSource(organization)).toBeNull();
+    expect(customerOrganizationBudgetSource({ ...organization, budget_is_shared: true })).toEqual({
+      kind: "group",
+      name: null,
+    });
+    expect(customerOrganizationBudgetSource({ ...organization, budget_is_shared: true }, [])).toEqual({
+      kind: "group",
+      name: null,
+    });
+    expect(customerOrganizationBudgetSource({ ...organization, budget_is_shared: false })).toEqual({
+      kind: "custom",
+    });
   });
 });

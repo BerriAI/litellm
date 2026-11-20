@@ -4,6 +4,7 @@ import re
 from collections.abc import AsyncIterator, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast
+from urllib.parse import quote
 
 import httpx
 from httpx import Response
@@ -12,7 +13,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import WarningLogger, verbose_logger
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     declared_prompt_cache_breakpoint,
@@ -39,10 +40,13 @@ from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reaso
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     CHAT_COMPLETIONS_PATH,
+    OPENAI_V1_PATH,
+    AzureFoundryModelInfo,
     api_key_header_for_base,
     foundry_project_root,
     foundry_v1_root,
     is_foundry_model_inference_base,
+    is_openai_v1_resource_base,
     with_foundry_project_scope,
     without_api_version,
 )
@@ -63,6 +67,10 @@ if TYPE_CHECKING:
 
 
 _REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _is_plain_path_segment(segment: str) -> bool:
+    return quote(segment, safe="") == segment and segment.strip(".") != ""
 
 
 def _request_model(request: Mapping[str, object]) -> str | None:
@@ -333,7 +341,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         supported_params = (
             azureAIGPT5Config.get_supported_openai_params(model)
             if azureAIGPT5Config.is_model_gpt_5_model(model)
-            else _with_reasoning_effort(super().get_supported_openai_params(model), model)
+            else _with_reasoning_effort(
+                cast(  # cast-ok: OpenAIConfig returns parameter names but leaves the list elements untyped
+                    Sequence[str], super().get_supported_openai_params(model)
+                ),
+                model,
+            )
         )
         if not model_supports_tool_choice:
             filtered_supported_params: Final = []
@@ -376,7 +389,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             level_check_waived=bool(declared_reasoning_efforts) or _REASONING_EFFORT in allowed_openai_params,
             drop_params=drop_params or litellm.drop_params is True,
         )
-        return {
+        mapped_params: Final[dict[str, object]] = {  # mutable-ok: returned as required by OpenAIConfig
             **super().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -384,6 +397,12 @@ class AzureAIStudioConfig(OpenAIConfig):
                 drop_params=drop_params,
             ),
             **foundry_effort,
+        }
+        if "gpt-5-chat" not in model.rsplit("/", 1)[-1] or "max_tokens" not in mapped_params:
+            return mapped_params
+        return {
+            **{param: value for param, value in mapped_params.items() if param != "max_tokens"},
+            "max_completion_tokens": mapped_params.get("max_completion_tokens", mapped_params["max_tokens"]),
         }
 
     def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
@@ -475,7 +494,24 @@ class AzureAIStudioConfig(OpenAIConfig):
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
 
-        v1_root: Final = foundry_v1_root(original_url)
+        requested_api_version: Final = query_params.get("api-version")
+        resource_base: Final = is_openai_v1_resource_base(original_url)
+        if (
+            resource_base
+            and requested_api_version is not None
+            and not BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
+        ):
+            deployment: Final = AzureFoundryModelInfo.get_base_model(model)
+            if not _is_plain_path_segment(deployment):
+                raise BadRequestError(
+                    message=f"azure_ai deployment name {deployment!r} must be one URL path segment made of letters, "
+                    "digits, '-', '_', '.', or '~'",
+                    model=model,
+                    llm_provider="azure_ai",
+                )
+            deployment_chat_path: Final = "/" + "/".join(("openai", "deployments", deployment, *CHAT_COMPLETIONS_PATH))
+            return str(original_url.copy_with(path=deployment_chat_path, params=query_params))
+        v1_root: Final = foundry_v1_root(original_url) or (OPENAI_V1_PATH if resource_base else None)
         if v1_root is not None:
             v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
             if foundry_project_root(original_url):

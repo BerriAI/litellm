@@ -3,7 +3,7 @@ import json
 import sqlite3
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
@@ -18,17 +18,20 @@ from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
 from litellm.proxy._types import BudgetWriteRequest
 from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchy,
+    CustomerHierarchyStore,
     ErrorCode,
     Failure,
     budget_row_values,
     effective_member_budget,
     related_budget,
 )
+from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     CustomerMember,
     MemberCreate,
     OrganizationCreate,
+    OrganizationPatch,
     Team,
     TeamCreate,
 )
@@ -309,12 +312,22 @@ class Database:
             else source.litellm_customerorganizationtable
         )
         self.litellm_customerteamtable = (
-            Table("customer_team_id", self, create_error=team_create_error, hydration_limit=hydration_limit)
+            Table(
+                "customer_team_id",
+                self,
+                create_error=team_create_error,
+                hydration_limit=hydration_limit,
+            )
             if source is None
             else source.litellm_customerteamtable
         )
         self.litellm_customermembertable = (
-            Table("customer_member_id", self, hydration_limit=hydration_limit, read_limit=member_read_limit)
+            Table(
+                "customer_member_id",
+                self,
+                hydration_limit=hydration_limit,
+                read_limit=member_read_limit,
+            )
             if source is None
             else source.litellm_customermembertable
         )
@@ -334,7 +347,7 @@ class Database:
 
     def has_budget_reference(self, budget_id: str, relation: str) -> bool:
         references: Final = {
-            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_id"),
+            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_template_id"),
             "customer_organizations": (self.litellm_customerorganizationtable, "budget_id"),
             "customer_teams": (self.litellm_customerteamtable, "budget_id"),
             "customer_members": (self.litellm_customermembertable, "budget_id"),
@@ -635,23 +648,68 @@ def test_budget_windows_reject_invalid_caps(request_type: type[BaseModel], maxim
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
-def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel]) -> None:
+@pytest.mark.parametrize("first,second", (("1mo", "1mo"), ("2d", "2d")))
+def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel], first: str, second: str) -> None:
     with pytest.raises(ValidationError):
         request_type.model_validate(
             {
                 "budget_limits": [
-                    {"budget_duration": "1mo", "max_budget": 0},
-                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": first, "max_budget": 0},
+                    {"budget_duration": second, "max_budget": 10},
                 ]
             }
         )
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
-@pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1y", "1h"))
+@pytest.mark.parametrize("duration", ("", "0s", "-1d", "1y", "1.5h",
+                                    "999999999999999999999d", "999999999999999999999h", "999999999999999999999s"))
 def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseModel], duration: str) -> None:
-    with pytest.raises(ValidationError, match="literal_error"):
+    with pytest.raises(ValidationError):
         request_type.model_validate({"budget_limits": [{"budget_duration": duration, "max_budget": 0}]})
+
+
+@pytest.mark.parametrize("duration", ("30s", "15m", "2h", "6d", "2w", "30d", "daily"))
+def test_additional_budget_windows_keep_the_submitted_duration_without_changing_the_scalar(duration: str) -> None:
+    budget: Final = Budget(max_budget=50, budget_duration="daily",
+                          budget_limits=(BudgetLimit(budget_duration=duration, max_budget=0),))
+    assert (budget.max_budget, budget.budget_duration) == (50, "daily")
+    assert tuple(limit.budget_duration for limit in budget.budget_limits or ()) == (duration,)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("elapsed", (1, 3))
+@pytest.mark.parametrize("shared", (False, True))
+async def test_editing_a_custom_cap_retains_its_original_reset_anchor(elapsed: int, shared: bool) -> None:
+    database: Final = Database()
+    store: Final = CustomerHierarchyStore(cast("Prisma", database), NOW, premium_user=True)
+    policy: Final = Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=10),))
+    budget_id: Final = await store.create_budget(policy, "admin")
+    original: Final = database.litellm_budgettable.rows[budget_id].model_dump()["budget_limits"]
+    later: Final = CustomerHierarchyStore(cast("Prisma", database), NOW + timedelta(days=elapsed), premium_user=True)
+    patch: Final = Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=20),))
+    updated_id: Final = await later.private_budget_patch(
+        budget_id, OrganizationPatch(budget=patch), "admin", shared_ids=(budget_id,) if shared else ()
+    )
+    assert updated_id is not None and (updated_id != budget_id) is shared
+    assert database.litellm_budgettable.rows[updated_id].model_dump()["budget_limits"] == [
+        {**limit, "max_budget": 20} for limit in original
+    ]
+    current: Final = NOW + timedelta(days=elapsed)
+    before: Final = customer_window_counters(
+        "customer_member", "member", tuple(BudgetLimit.model_validate(limit) for limit in original), now=current
+    )[0]
+    after: Final = customer_window_counters(
+        "customer_member",
+        "member",
+        tuple(
+            BudgetLimit.model_validate(limit)
+            for limit in database.litellm_budgettable.rows[updated_id].model_dump()["budget_limits"]
+        ),
+        now=current,
+    )[0]
+    assert after.counter_key == before.counter_key
+    assert after.window_start == before.window_start
+    assert after.reset_at == before.reset_at
 
 
 def test_window_override_preserves_other_period_and_scalar_fields() -> None:
@@ -700,9 +758,10 @@ def test_member_temporary_increase_is_added_to_its_inherited_maximum(expiry: dat
     assert resolved == Budget(max_budget=expected)
 
 
-def test_a_budget_row_without_windows_writes_budget_limits_as_prisma_json_null() -> None:
-    values: Final = budget_row_values({"max_budget": 1.0, "budget_limits": None, "model_tpm_limit": None})
+@pytest.mark.parametrize("column", ("budget_limits", "model_tpm_limit", "model_rpm_limit"))
+def test_null_budget_json_fields_are_encoded_as_prisma_json_null(column: str) -> None:
+    values: Final = budget_row_values({"max_budget": 1.0, column: None})
     assert values["max_budget"] == 1.0
-    assert isinstance(values["budget_limits"], Json)
-    assert values["budget_limits"].data is None
-    assert "model_tpm_limit" not in values
+    encoded: Final = values[column]
+    assert isinstance(encoded, Json)
+    assert encoded.data is None

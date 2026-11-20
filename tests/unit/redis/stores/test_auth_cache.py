@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.caching.redis_batch import Batch, request_redis_batch_scope
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.common_utils.user_api_key_cache import is_user_key_cache_key
-from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore
+from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore, AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.rust_bridge._native import LocalSizes, NativeAuthCache
 from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
@@ -67,6 +67,56 @@ def test_the_native_partition_rule_is_is_user_key_cache_key(key: str, key_object
     assert is_user_key_cache_key(key) is key_object
 
 
+@pytest.mark.parametrize(
+    ("auth_object", "key"),
+    [
+        (AuthObject.virtual_key(_KEY_OBJECT), _KEY_OBJECT),
+        (AuthObject.user("user-1"), "user-1"),
+        (AuthObject.team("team-1"), "team_id:team-1"),
+        (AuthObject.team_alias("alpha"), "team_alias:alpha"),
+        (AuthObject.team_membership(team_id="team_1", user_id="user_1"), "team_1_user_1"),
+        (AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1"), "team_membership:user-1:team-1"),
+        (AuthObject.org("org-1"), "org_id:org-1"),
+        (AuthObject.org_with_budget("org-1"), "org_id:org-1:with_budget"),
+        (AuthObject.org_with_budget_last_known("org-1"), "org_id:org-1:with_budget:last_known"),
+        (AuthObject.org_alias("acme"), "org_alias:acme"),
+        (AuthObject.project("p-1"), "project_id:p-1"),
+        (AuthObject.end_user("eu-1"), "end_user_id:eu-1"),
+        (AuthObject.end_user_restricted_registry(), "end_user_restricted_registry"),
+        (AuthObject.end_user_validation("eu 1"), "end_user_validation:eu 1"),
+        (AuthObject.customer_member("m-1"), "customer_member_id:m-1"),
+        (AuthObject.customer_org_alias("acme"), "customer_org_alias:acme"),
+        (AuthObject.customer_app_definition(), "customer_app_definition:global"),
+        (AuthObject.default_end_user_budget("b-1"), "default_end_user_budget:b-1"),
+        (AuthObject.team_member_default_budget("b-1"), "team_member_default_budget:b-1"),
+        (AuthObject.tag("prod"), "tag:prod"),
+        (AuthObject.tag_registry(), "tag_registry"),
+        (AuthObject.model_access_group("beta"), "model_access_group:beta"),
+        (AuthObject.model_access_group_registry(), "model_access_group_registry"),
+        (AuthObject.access_group("ag-1"), "access_group_id:ag-1"),
+        (AuthObject.access_group_rule_name("rule"), "access_group_rule_name:rule"),
+        (AuthObject.object_permission("op-1"), "object_permission_id:op-1"),
+        (AuthObject.user_object_permission("user-1"), "user_object_permission_id:user-1"),
+        (AuthObject.agent_object_permission("agent-1"), "agent_object_permission_id:agent-1"),
+        (AuthObject.managed_vector_store("vs-1"), "managed_vector_store_id:vs-1"),
+        (AuthObject.jwt_key_mapping("sub", "a:b"), "jwt_key_mapping:sub:a:b"),
+        (AuthObject.jwt_key_mapping("sub", "a", issuer=""), "jwt_key_mapping:sub:a"),
+        (AuthObject.jwt_key_mapping("sub", "a", issuer="https://idp"), "jwt_key_mapping:https://idp:sub:a"),
+        (AuthObject.agent_identity("t\u00e9", 'c"1'), 'agent_identity:["t\\u00e9", "c\\"1"]'),
+        (AuthObject.global_proxy_spend(), "default_user_id:spend"),
+    ],
+    ids=lambda case: case.key if isinstance(case, AuthObject) else None,
+)
+def test_each_object_is_cached_under_mains_key(auth_object: AuthObject, key: str) -> None:
+    assert auth_object.key == key
+
+
+def test_mains_agent_identity_key_is_json_dumps_of_the_pair() -> None:
+    pair: Final = ("t\u00e9", 'c"1')
+
+    assert AuthObject.agent_identity(*pair).key == "agent_identity:" + json.dumps(pair)
+
+
 @pytest.mark.parametrize(("value", "encoded", "printed"), _WRITTEN, ids=[encoded for _, encoded, _ in _WRITTEN])
 def test_writes_are_what_redis_cache_writes(value: object, encoded: str, printed: str) -> None:
     assert json.dumps(value) == encoded
@@ -122,25 +172,28 @@ def test_user_key_objects_live_in_their_own_memory_partition() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_key_the_request_read_found_absent_is_answered_without_another_read_until_written() -> None:
-    fake: Final = FakeAuthCache(redis={"team_id:hit": {"team_id": "hit"}})
+async def test_reads_and_writes_hand_the_native_store_the_requests_batches_once_built() -> None:
+    fake: Final = FakeAuthCache()
     store: Final = AuthCacheStore(fake)
+    natives: Final = FakeNatives()
 
-    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        found = await store.read_missing(["team_id:absent", "team_id:hit"], batch=Batch.PRE_CALL)
-        absent = await store.get("team_id:absent")
-        await store.set("team_id:absent", {"team_id": "now"}, None)
-        store.delete_local("team_id:absent")
-        refilled = await store.get("team_id:absent")
-        store.declare_delete("team_id:hit")
-        deleted = await store.get("team_id:hit")
-        await request.flush_pre_call()
+    await store.get("team_id:t1")
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+        await store.get("team_id:t1")
+        built: Final = request.native()
+        await store.get("team_id:t1")
+        await store.set("team_id:t1", {"team_id": "t1"}, None)
+        store.set_sync("team_id:t1", {"team_id": "t1"}, None)
+        await store.set_many([("team_id:t1", {"team_id": "t1"})], None)
 
-    assert found == {"team_id:absent": None, "team_id:hit": {"team_id": "hit"}}
-    assert absent is None
-    assert refilled == {"team_id": "now"}
-    assert deleted is None
-    assert [command[:2] for command in fake.commands] == [("SET", "team_id:absent"), ("GET", "team_id:absent")]
+    assert fake.requests == [
+        ("get", None),
+        ("get", None),
+        ("get", built),
+        ("set", built),
+        ("set_sync", built),
+        ("set_many", built),
+    ]
 
 
 @pytest.mark.asyncio
@@ -148,7 +201,7 @@ async def test_outside_a_request_a_read_is_a_round_trip_of_its_own() -> None:
     fake: Final = FakeAuthCache(redis={"team_id:t1": {"team_id": "t1"}})
     store: Final = AuthCacheStore(fake)
 
-    assert await store.read_missing(["team_id:t1", "team_id:t2"], batch=Batch.PRE_CALL) == {
+    assert await store.read_missing(["team_id:t1", "team_id:t2"]) == {
         "team_id:t1": {"team_id": "t1"},
         "team_id:t2": None,
     }
