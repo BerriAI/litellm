@@ -323,7 +323,7 @@ class IPAddressUtils:
             _warned_xff_present_but_disabled = False
         elif "x-forwarded-for" in request.headers:
             if not _warned_xff_present_but_disabled:
-                verbose_proxy_logger.error(
+                verbose_proxy_logger.warning(
                     "Received a request with an X-Forwarded-For header but "
                     "use_x_forwarded_for is not enabled. The real client IP is "
                     "being ignored and the direct peer's IP (typically your load "
