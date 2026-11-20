@@ -30,8 +30,17 @@ def _sum(contributions: tuple[Contribution, ...]) -> Contribution:
         for column, value in chain.from_iterable(item.values for item in contributions)
         if column == "started_at" and value
     )
+    reset: Final = next(
+        (
+            value
+            for column, value in chain.from_iterable(item.values for item in contributions)
+            if column == "reset_at" and value
+        ),
+        None,
+    )
     values: Final = tuple(
-        (column, min(starts) if column == "started_at" and starts else value) for column, value in first.values
+        (column, min(starts) if column == "started_at" and starts else reset if column == "reset_at" else value)
+        for column, value in first.values
     )
     return Contribution(first.table, first.key, increments, values)
 

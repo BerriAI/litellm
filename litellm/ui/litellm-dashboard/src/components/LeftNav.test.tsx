@@ -213,8 +213,8 @@ describe("Sidebar (leftnav)", () => {
     );
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("href", "/ui/customers");
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active");
-    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/ui/customers/settings");
-    expect(getBreadcrumb("/ui/customers/settings")).toEqual({ section: "Customer Management", title: "Settings" });
+    expect(screen.getByRole("link", { name: "Budget groups" })).toHaveAttribute("href", "/ui/customers/settings");
+    expect(getBreadcrumb("/ui/customers/settings")).toEqual({ section: "Customer Management", title: "Budget groups" });
     expect(screen.queryByRole("link", { name: "End users" })).not.toBeInTheDocument();
   });
 
@@ -392,6 +392,19 @@ describe("Sidebar (leftnav)", () => {
       disabledPersonalKeyCreation: false,
       showSSOBanner: false,
     };
+
+    it("hides the admin-only Customer Management pages from an Admin Viewer with no app grant", () => {
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
+      localStorage.setItem("litellm_plugin_mode", "customer-portal");
+      renderWithProviders(
+        <PluginModeProvider>
+          <Sidebar {...defaultProps} />
+        </PluginModeProvider>,
+      );
+      expect(screen.queryByRole("link", { name: "Customer organizations" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Apps" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Settings" })).not.toBeInTheDocument();
+    });
 
     it("hides Playground from Admin Viewer (cost-incurring action)", () => {
       mockUseAuthorized.mockReturnValue(adminViewerAuth);

@@ -105,6 +105,7 @@ from litellm.types.utils import (
     OTEL_DESTINATION_VARS,
     AzureSpillover,
     CallTypes,
+    ClaudeSubscriptionUsage,
     CostBreakdown,
     EmbeddingResponse,
     GenericBudgetConfigType,
@@ -909,6 +910,15 @@ class LiteLLMRoutes(enum.Enum):
 
     self_managed_routes = [
         "/management/v1/customer_budget_increase_requests",
+        "/management/v1/apps",
+        "/management/v1/apps/definition",
+        "/management/v1/apps/{app_id}",
+        "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}",
+        "/management/v1/apps/{app_id}/customer_members/{customer_member_id}",
+        "/management/v1/customer_organizations/daily/activity/aggregated",
+        "/management/v1/customer_organizations/daily/activity",
+        "/management/v1/customer_teams/daily/activity",
+        "/management/v1/customer_members/daily/activity",
         *own_spend_log_routes,
         "/lens",
         "/lens/{path:path}",
@@ -4011,6 +4021,7 @@ class SpendLogsMetadata(TypedDict):
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
     used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
+    claude_subscription_usage: NotRequired[ReadOnly[ClaudeSubscriptionUsage | None]]
 
 
 class SpendLogsPayload(TypedDict):
