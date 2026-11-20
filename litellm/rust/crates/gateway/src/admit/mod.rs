@@ -20,7 +20,10 @@ use litellm_model_catalog::CostMap;
 use litellm_router_core::registry::DeploymentFilter;
 use serde_json::{Map, Value};
 
-use crate::{AppState, Gateway, callbacks::parallel_request_limiter};
+use crate::{
+    AppState, Gateway,
+    callbacks::parallel_request_limiter::{self, KeyLimiter},
+};
 pub use checks::Reason;
 use checks::{Authenticated, Fields};
 use groups::Groups;
@@ -64,6 +67,8 @@ pub struct Admit {
     config: Config,
     /// The variables only the environment holds, as `main` read them.
     environment: Environment,
+    /// Whether the proxy has a database, where it looks up the end user a request names.
+    database: bool,
     /// The variable that has the proxy serve models and settings from its database on top of the
     /// config. `general_settings.store_model_in_db` is a setting of the config itself.
     stored_models: Option<Box<str>>,
@@ -79,27 +84,24 @@ pub struct Admit {
     /// The native app's inference, which tells whether a caller may call the model it asks for.
     /// `None` leaves every caller with a model list to Python.
     inference: Option<Arc<Gateway>>,
+    /// The native app's limiter, which tells whether a caller's call to a model counts tokens.
+    /// `None` only knows the limits of the caller's key.
+    key_limiter: Option<Arc<KeyLimiter>>,
 }
+
+/// The variables the proxy builds a database from when `database_url` names none.
+const DATABASE_VARIABLES: [&str; 4] = [
+    "DATABASE_URL",
+    "DATABASE_HOST",
+    "IAM_TOKEN_DB_AUTH",
+    "AZURE_POSTGRESQL_AUTH",
+];
 
 const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
     tracing::debug!(why = %reason.why, over = %reason.over, "admit refused a request over this");
     (Box::new(Request::from_parts(request, body)), reason)
-}
-
-/// A key that counts tokens reserves what the body asks for before the call, and only Python's
-/// estimator reads a body that carries media, so that call goes to Python.
-fn token_estimate(
-    authenticated: &Authenticated,
-    path: &str,
-    fields: &mut Fields,
-) -> Option<Reason> {
-    let counts_tokens = authenticated
-        .as_ref()
-        .is_ok_and(|identity| identity.caller().authentication().limits.counts_tokens());
-    (counts_tokens && parallel_request_limiter::python_estimates(fields, path))
-        .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
 }
 
 impl Admit {
@@ -137,6 +139,10 @@ impl Admit {
             .collect();
         Self {
             environment: environment.clone(),
+            database: config.general_settings.database_url.is_some()
+                || DATABASE_VARIABLES
+                    .into_iter()
+                    .any(|variable| state.environment.get(variable).is_some()),
             stored_models: state
                 .environment
                 .get(STORE_MODEL_IN_DB)
@@ -144,6 +150,7 @@ impl Admit {
             auth: state.auth(config),
             aliased,
             inference: Some(state.inference.clone()),
+            key_limiter: Some(state.key_limiter.clone()),
             ..Self::over(config, deployed)
         }
     }
@@ -160,10 +167,12 @@ impl Admit {
             auth: Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey)),
             config: config.clone(),
             environment: Environment::default(),
+            database: false,
             stored_models: None,
             deployed,
             aliased: Vec::new(),
             inference: None,
+            key_limiter: None,
         }
     }
 
@@ -180,6 +189,25 @@ impl Admit {
             None => false,
         };
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
+    }
+
+    /// A caller under a token limit, its key's or the default one of the model's deployments,
+    /// reserves what the body asks for before the call, and only Python's estimator reads a body
+    /// that carries media, so that call goes to Python.
+    fn token_estimate(
+        &self,
+        authenticated: &Authenticated,
+        path: &str,
+        fields: &mut Fields,
+    ) -> Option<Reason> {
+        let identity = authenticated.as_ref().ok()?;
+        let model = fields.get("model").and_then(Value::as_str);
+        let counts_tokens = match &self.key_limiter {
+            Some(limiter) => limiter.counts_tokens(identity, model),
+            None => identity.caller().authentication().limits.counts_tokens(),
+        };
+        (counts_tokens && parallel_request_limiter::python_estimates(fields, path))
+            .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an
@@ -216,7 +244,7 @@ impl Admit {
         if let Some(reason) = self.model_access(&authenticated, &fields).await {
             return Err(refused(parts, body, reason));
         }
-        if let Some(reason) = token_estimate(&authenticated, parts.uri.path(), &mut fields) {
+        if let Some(reason) = self.token_estimate(&authenticated, parts.uri.path(), &mut fields) {
             return Err(refused(parts, body, reason));
         }
         parts.extensions.insert(JsonObject(fields));

@@ -1,0 +1,76 @@
+# A deployment's default_api_key_rpm_limit and default_api_key_tpm_limit are the limit of a key
+# that holds none of its own for the model, which the native limiter counts for the group asked
+# for. The proxy also checks them before it falls back to such a group, which the native router
+# does not ask the limiter yet, so a group that can fall back to one goes to Python.
+config:
+  model_list:
+    - model_name: by-requests
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        default_api_key_rpm_limit: 5
+    - model_name: by-tokens
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        default_api_key_tpm_limit: 100
+    - model_name: falling-back
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: plain
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    fallbacks:
+      - falling-back: [by-requests]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: a group with a default request limit
+    headers: {authorization: Bearer gateway-key}
+    body: {model: by-requests, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: rust
+
+  - name: a group with a default token limit
+    headers: {authorization: Bearer gateway-key}
+    body: {model: by-tokens, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: rust
+
+  - name: an image for a group with a default token limit
+    headers: {authorization: Bearer gateway-key}
+    body:
+      model: by-tokens
+      max_tokens: 16
+      messages:
+        - role: user
+          content:
+            - {type: image, source: {type: base64, media_type: image/png, data: AA==}}
+    expect: python
+    reason: body
+    over: media_under_a_token_limit
+
+  - name: an image for a group with a default request limit
+    headers: {authorization: Bearer gateway-key}
+    body:
+      model: by-requests
+      max_tokens: 16
+      messages:
+        - role: user
+          content:
+            - {type: image, source: {type: base64, media_type: image/png, data: AA==}}
+    expect: rust
+
+  - name: a group that can fall back to one with a default limit
+    headers: {authorization: Bearer gateway-key}
+    body: {model: falling-back, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.default_api_key_rpm_limit of a fallback
+
+  - name: a group with no default limit
+    headers: {authorization: Bearer gateway-key}
+    body: {model: plain, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: rust

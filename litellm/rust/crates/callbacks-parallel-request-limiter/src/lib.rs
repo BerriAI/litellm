@@ -23,8 +23,8 @@ pub use arithmetic::{
 };
 pub use batch::{BatchFacts, TPD_SUFFIX, TPD_WINDOW_SECONDS};
 pub use builder::{
-    AuthMetadata, Lookups, McpScope, Request as DescriptorRequest, RequestFacts, Selection,
-    TpdLimit,
+    AuthMetadata, DeploymentLimits, Lookups, McpScope, Request as DescriptorRequest, RequestFacts,
+    Selection, TpdLimit,
 };
 pub use descriptor::{Declared, Descriptor, Limits, PROJECT_ITPM, PROJECT_OTPM, PTU_TEAM};
 pub use engine::{

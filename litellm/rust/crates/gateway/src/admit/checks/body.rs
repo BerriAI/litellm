@@ -10,8 +10,9 @@ const HOSTED_TOOLS: [&str; 2] = ["mcp", "advisor_20260301"];
 
 /// A key the Messages request type does not name is sent on to the provider by the native route,
 /// and the proxy reads its own (`user`, `tags`, `timeout`, `fallbacks`). The rest are Messages
-/// params the proxy acts on before the provider sees them.
-pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
+/// params the proxy acts on before the provider sees them. With a database it also looks up the
+/// end user `metadata.user_id` names, whose block, budget and limits the native app does not read.
+pub(super) fn fields(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let sent = |key: &str| fields.get(key).filter(|value| !value.is_null());
     let is_read = |key: &str| {
         REQUIRED.contains(&key) || MessagesOptionalParams::fields().any(|name| name == key)
@@ -34,6 +35,10 @@ pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
             sent("metadata").is_some_and(|metadata| !is_a_user_id(metadata)),
         ),
         ("hosted_tool", names_a_hosted_tool(fields)),
+        (
+            "end_user",
+            admit.database && sent("metadata").is_some_and(names_an_end_user),
+        ),
     ]
     .into_iter()
     .find(|(_, found)| *found)
@@ -49,6 +54,13 @@ fn names_a_hosted_tool(fields: &Map<String, Value>) -> bool {
         .flatten()
         .filter_map(|tool| tool.get("type")?.as_str())
         .any(|kind| HOSTED_TOOLS.contains(&kind))
+}
+
+fn names_an_end_user(metadata: &Value) -> bool {
+    metadata
+        .get("user_id")
+        .and_then(Value::as_str)
+        .is_some_and(|user_id| !user_id.is_empty())
 }
 
 /// Any other `metadata` is in a shape the proxy rewrites before the provider sees it.

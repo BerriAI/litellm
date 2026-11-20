@@ -1,5 +1,8 @@
 use litellm_env::Lookup;
-use litellm_python_compat::{lenient::UintOrUnset, unicode::isspace};
+use litellm_python_compat::{
+    lenient::{FloatOrUnset, UintOrUnset},
+    unicode::isspace,
+};
 use serde::{Deserialize, Deserializer};
 use serde_with::serde_as;
 use struct_field_names_as_array::FieldNamesAsSlice;
@@ -37,6 +40,8 @@ pub struct Environment {
     pub default_cooldown_time_seconds: Option<String>,
     pub litellm_rate_limit_window_size: Option<i64>,
     pub litellm_tpm_token_reservation_enabled: Option<Flag>,
+    #[serde_as(as = "FloatOrUnset")]
+    pub no_max_tokens_tpm_reservation_fraction: Option<f64>,
 }
 
 impl Environment {
@@ -164,6 +169,21 @@ mod tests {
         let environment = from_variables(&[("NON_LLM_CONNECTION_TIMEOUT", raw)]).unwrap();
 
         assert_eq!(environment.non_llm_connection_timeout, expected);
+    }
+
+    #[rstest]
+    #[case::blank("", None)]
+    #[case::words("half", None)]
+    #[case::padded(" 0.5 ", Some(0.5))]
+    #[case::a_whole_number("1", Some(1.0))]
+    fn a_fraction_is_read_the_way_python_reads_a_float(
+        #[case] raw: &str,
+        #[case] expected: Option<f64>,
+    ) {
+        let environment =
+            from_variables(&[("NO_MAX_TOKENS_TPM_RESERVATION_FRACTION", raw)]).unwrap();
+
+        assert_eq!(environment.no_max_tokens_tpm_reservation_fraction, expected);
     }
 
     #[rstest]

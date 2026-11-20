@@ -1,13 +1,20 @@
 //! The proxy's `parallel_request_limiter_v3` for a key's own `rpm_limit`, `tpm_limit`,
-//! `max_parallel_requests` and per-model limits, as a callback of the stage: the pre-call hook
+//! `max_parallel_requests` and per-model limits, and the default per-model limit a deployment
+//! gives a key that holds none, as a callback of the stage: the pre-call hook
 //! counts the request, reserves the tokens its body asks for and takes a parallel slot, or refuses
 //! the call. A complete answer gives the slot back before it goes out and carries the
 //! `x-ratelimit-*` headers, and the success log charges the tokens the call used to the caller's
 //! counters, for every caller, the master key included. The limit check Python's authentication
 //! runs before the body asks the same limiter through [`KeyLimiter::before_body`].
 //!
-//! Accepted difference: a route that tells no usage, every one but `/v1/messages`, charges no
-//! tokens.
+//! A served call is charged what its route tells it used, which every route tells as Python's
+//! litellm `Usage`: the proxy's success log rewrites a Responses answer's usage into one before
+//! its limiter reads it, so chat completions, Responses and Messages are all charged the tokens
+//! the configured type counts, less the prompt tokens read from cache.
+//!
+//! Accepted differences: transcription tells no usage yet, so it charges no tokens. A call that
+//! fails is told without usage, so a stream that breaks gives its reservation back where the
+//! proxy charges what the stream had used.
 
 use std::{
     sync::Arc,
@@ -20,23 +27,27 @@ use litellm_callbacks::{
     Patch, Scalar, Selection, Subscription, UsageRecord, Verdict, typed,
 };
 use litellm_callbacks_parallel_request_limiter::{
-    AuthMetadata, CapSettings, Descriptor, DescriptorRequest, Engine, EstimateRequest,
-    LimiterState, Lookups, OutputCapFacts, ParallelRequestLimiter, PolicyFacts,
-    PostCallFailureFacts, PostCallSuccessFacts, PreCallFacts, PythonServed, RATE_LIMITED,
-    RateLimitedModel, RequestFacts, Settings as EngineSettings, SuccessFacts, TargetFacts,
-    TokenRateLimitType, UsageObject, aggregate_only, charged_tokens, explicit_output_cap,
-    header_map, output_cap, tokens_for_request, write_output_cap,
+    AuthMetadata, Candidate, CapSettings, DeploymentLimits, Descriptor, DescriptorRequest, Engine,
+    EstimateRequest, LimiterState, Lookups, ModelFacts, OutputCapFacts, ParallelRequestLimiter,
+    PolicyFacts, PostCallFailureFacts, PostCallSuccessFacts, PreCallFacts, PythonServed,
+    RATE_LIMITED, RateLimitedModel, RequestFacts, Settings as EngineSettings, SuccessFacts,
+    TargetFacts, TokenRateLimitType, UsageObject, aggregate_only, charged_tokens,
+    explicit_output_cap, header_map, output_cap, tokens_for_request, write_output_cap,
 };
 use litellm_config::{Config, Environment};
 use litellm_gateway_auth::{AuthenticatedRequest, AuthenticationMethod, keys::KeyLimits};
 use litellm_gateway_inference::{CallType, RateLimited, call_type};
 use litellm_redis_client::RedisClient;
 use litellm_redis_store::{Remote, rate_limits::RateLimits};
-use litellm_router_core::Router;
+use litellm_router_core::{
+    Router,
+    registry::{Deployment, DeploymentFilter},
+};
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 
 use super::Registered;
+use crate::latest_aliases::LatestAliases;
 
 /// The name Python registers the hook under.
 pub(crate) const NAME: &str = "parallel_request_limiter";
@@ -49,11 +60,14 @@ const MEMORY_TTL: Duration = Duration::from_secs(1);
 const MASTER_KEY_ALIAS: &str = "litellm_proxy_master_key";
 const PROXY_ADMIN_NAME: &str = "default_user_id";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
     window_size: i64,
     tpm_reservation_enabled: bool,
     token_type: TokenRateLimitType,
+    /// `NO_MAX_TOKENS_TPM_RESERVATION_FRACTION`: the share of the smallest token limit a body
+    /// that sets no output cap is capped at.
+    output_cap_fraction: f64,
 }
 
 impl Default for Settings {
@@ -62,6 +76,7 @@ impl Default for Settings {
             window_size: 60,
             tpm_reservation_enabled: true,
             token_type: TokenRateLimitType::Total,
+            output_cap_fraction: CapSettings::default().fraction,
         }
     }
 }
@@ -75,6 +90,10 @@ pub fn counters(redis: Option<RedisClient>) -> Arc<RateLimits> {
     });
     Arc::new(RateLimits::new(remote, Some(MEMORY_TTL)))
 }
+
+/// The fractions the proxy takes `NO_MAX_TOKENS_TPM_RESERVATION_FRACTION` from. Any other value
+/// leaves its default.
+const OUTPUT_CAP_FRACTIONS: std::ops::RangeInclusive<f64> = 0.01..=1.0;
 
 impl Settings {
     /// The limiter's engine over `counters`, which each limiter builds its own of, as the proxy
@@ -90,8 +109,8 @@ impl Settings {
         )
     }
 
-    /// The window and the reservation as the environment sets them, and
-    /// `general_settings.token_rate_limit_type`.
+    /// The window, the reservation and the output cap's fraction as the environment sets them,
+    /// and `general_settings.token_rate_limit_type`.
     pub fn read(config: &Config, environment: &Environment) -> Self {
         let defaults = Self::default();
         Self {
@@ -104,6 +123,10 @@ impl Settings {
             token_type: TokenRateLimitType::from_setting(&json!(
                 config.general_settings.token_rate_limit_type
             )),
+            output_cap_fraction: environment
+                .no_max_tokens_tpm_reservation_fraction
+                .filter(|fraction| OUTPUT_CAP_FRACTIONS.contains(fraction))
+                .unwrap_or(defaults.output_cap_fraction),
         }
     }
 }
@@ -259,6 +282,7 @@ pub struct KeyLimiter {
     token_type: TokenRateLimitType,
     /// Tells the model group `model_group_alias` gives the model a body names.
     router: Router,
+    aliases: LatestAliases,
 }
 
 fn manifest() -> Manifest {
@@ -304,12 +328,23 @@ fn written(sent: &Map<String, Value>, capped: Map<String, Value>) -> Map<String,
 }
 
 impl KeyLimiter {
-    pub fn new(settings: Settings, counters: Arc<RateLimits>, router: Router) -> Arc<Self> {
+    pub fn new(
+        settings: Settings,
+        counters: Arc<RateLimits>,
+        router: Router,
+        aliases: LatestAliases,
+    ) -> Arc<Self> {
         Arc::new(Self {
             manifest: manifest(),
-            limiter: ParallelRequestLimiter::new(settings.engine(counters)),
+            limiter: ParallelRequestLimiter::new(settings.engine(counters)).with_cap_settings(
+                CapSettings {
+                    fraction: settings.output_cap_fraction,
+                    ..CapSettings::default()
+                },
+            ),
             token_type: settings.token_type,
             router,
+            aliases,
         })
     }
 
@@ -336,6 +371,54 @@ impl KeyLimiter {
         RateLimitedModel { requested, group }
     }
 
+    /// `_rate_limited_models`: `model`, and the model it stands for when the cost map serves its
+    /// name as an alias, each with its group, so a limit keyed by any of them is found.
+    fn candidates(&self, model: &RateLimitedModel) -> Vec<RateLimitedModel> {
+        self.aliases
+            .expand(&model.requested)
+            .into_iter()
+            .map(|name| self.asked(name))
+            .collect()
+    }
+
+    /// What a served call's tokens are settled against for `model`: each candidate's group.
+    /// `key_owns` only keeps a team's share of a model from being charged, and a key of a team
+    /// is not authenticated here.
+    fn settled_as(&self, model: &RateLimitedModel) -> ModelFacts {
+        ModelFacts {
+            candidates: self
+                .candidates(model)
+                .into_iter()
+                .map(|candidate| Candidate {
+                    group: candidate.group,
+                    key_owns: false,
+                })
+                .collect(),
+            ptu: None,
+        }
+    }
+
+    /// `_get_deployment_default_limit`: the least `default_api_key_rpm_limit` and
+    /// `default_api_key_tpm_limit` a deployment of `group` sets, the limit of a key that holds
+    /// none of its own for a model.
+    fn deployment_defaults(&self, group: &str) -> DeploymentLimits {
+        let deployments = self.router.registry().deployments(&DeploymentFilter {
+            model_name: Some(group),
+            ..DeploymentFilter::default()
+        });
+        let least = |limit: fn(&Deployment) -> Option<u64>| {
+            deployments
+                .iter()
+                .filter_map(|deployment| limit(deployment))
+                .min()
+                .map(|limit| i64::try_from(limit).unwrap_or(i64::MAX))
+        };
+        DeploymentLimits {
+            rpm: least(|deployment| deployment.params.default_api_key_rpm_limit),
+            tpm: least(|deployment| deployment.params.default_api_key_tpm_limit),
+        }
+    }
+
     /// The limits the caller's key holds, as the proxy describes them: its `api_key`, and its
     /// `model_per_key` for the model asked for.
     fn descriptors(&self, caller: &Caller, model: Option<&RateLimitedModel>) -> Vec<Descriptor> {
@@ -360,14 +443,24 @@ impl KeyLimiter {
             key_model_tpm_limit: json!(**model_tpm),
             ..AuthMetadata::default()
         };
+        let candidates = model.map_or_else(Vec::new, |model| self.candidates(model));
         let lookups = Lookups {
-            candidates: model
-                .map(|model| model.requested.clone())
-                .into_iter()
+            candidates: candidates
+                .iter()
+                .map(|candidate| candidate.requested.clone())
                 .collect(),
-            groups: model
-                .map(|model| (model.requested.clone(), Some(model.group.clone())))
+            deployment_limits: candidates
+                .iter()
+                .map(|candidate| {
+                    (
+                        candidate.group.clone(),
+                        self.deployment_defaults(&candidate.group),
+                    )
+                })
+                .collect(),
+            groups: candidates
                 .into_iter()
+                .map(|candidate| (candidate.requested, Some(candidate.group)))
                 .collect(),
             ..Lookups::default()
         };
@@ -389,35 +482,62 @@ impl KeyLimiter {
         .collect()
     }
 
+    /// Whether a limit of `identity`'s caller counts the tokens of a call to `model`: one of its
+    /// key, or the default one a deployment of the model's group gives it.
+    pub(crate) fn counts_tokens(
+        &self,
+        identity: &AuthenticatedRequest,
+        model: Option<&str>,
+    ) -> bool {
+        let model = model
+            .filter(|model| !model.is_empty())
+            .map(|model| self.asked(model.to_owned()));
+        self.descriptors(&Caller::of(identity), model.as_ref())
+            .iter()
+            .any(|descriptor| descriptor.limits().tokens_per_unit.is_some())
+    }
+
     /// What the pre-call hook is told of a call: the caller's limits and, when one counts tokens,
-    /// what `body` asks for, after the output cap the proxy writes into a body that sets none. A
-    /// body nobody here estimates reserves the least.
+    /// what `sent` asks for, after the output cap the proxy writes into a body that sets none,
+    /// which is handed back beside it. A body nobody here estimates reserves the least.
     fn pre_call_facts(
         &self,
         caller: &Caller,
         call_type: &str,
         model: Option<RateLimitedModel>,
-        body: Option<&mut Value>,
-    ) -> PreCallFacts {
+        sent: Option<&Map<String, Value>>,
+    ) -> (PreCallFacts, Map<String, Value>) {
         let descriptors = self.descriptors(caller, model.as_ref());
         let min_tpm_limit = descriptors
             .iter()
             .filter_map(|descriptor| descriptor.limits().tokens_per_unit)
             .min();
         let reserves = self.limiter.engine().settings().tpm_reservation_enabled;
-        let estimated_tokens = match (min_tpm_limit, body) {
-            (Some(min_tpm_limit), Some(body)) if reserves => {
-                reserved(body, call_type, min_tpm_limit, &self.limiter.cap_settings()).ok()
+        let (estimated_tokens, cap) = match (min_tpm_limit, sent) {
+            (Some(min_tpm_limit), Some(sent)) if reserves => {
+                let mut capped = Value::Object(sent.clone());
+                let estimated = reserved(
+                    &mut capped,
+                    call_type,
+                    min_tpm_limit,
+                    &self.limiter.cap_settings(),
+                );
+                let cap = match capped {
+                    Value::Object(capped) => written(sent, capped),
+                    _ => Map::new(),
+                };
+                (estimated.ok(), cap)
             }
-            _ => None,
+            _ => (None, Map::new()),
         };
-        PreCallFacts {
+        let facts = PreCallFacts {
             descriptors,
             requested_model: model.as_ref().map(|model| model.requested.clone()),
             estimated_tokens,
             reserved_model: model,
             ..PreCallFacts::default()
-        }
+        };
+        (facts, cap)
     }
 
     /// `raise_if_over_limit_before_body`: the refusal of a caller already over a limit that needs
@@ -443,19 +563,14 @@ impl KeyLimiter {
             .as_ref()
             .map_or("", |call| call.kind.call_type.as_str());
         let sent = match input.fields.raw(Field::RequestBody)? {
-            Some(Value::Object(sent)) if admission.caller.limits.counts_tokens() => Some(sent),
+            Some(Value::Object(sent)) => Some(sent),
             _ => None,
         };
-        let mut capped = sent.cloned().map(Value::Object);
-        let facts = self.pre_call_facts(&admission.caller, call_type, model, capped.as_mut());
+        let (facts, cap) = self.pre_call_facts(&admission.caller, call_type, model, sent);
         if let Some(abort) = self.limiter.pre_call(&admission.state, facts, None).await {
             return Ok(Some(Verdict::Abort(abort)));
         }
         *admission.phase.lock() = Phase::Admitted;
-        let cap = match (sent, capped) {
-            (Some(sent), Some(Value::Object(capped))) => written(sent, capped),
-            _ => Map::new(),
-        };
         Ok((!cap.is_empty())
             .then(|| Verdict::Patch(Patch::default().merge(Field::OptionalParams, cap))))
     }
@@ -484,9 +599,15 @@ impl KeyLimiter {
             .get::<typed::Model>()?
             .zip(group)
             .map(|(requested, group)| RateLimitedModel { requested, group });
+        let reserved_model = admission.state.stash().reserved_model.clone();
         let facts = SuccessFacts {
             total_tokens: charged(&used, self.token_type),
             targets: admission.caller.targets(),
+            models: [&served_model, &reserved_model]
+                .into_iter()
+                .flatten()
+                .map(|model| (model.requested.clone(), self.settled_as(model)))
+                .collect(),
             served_model,
             ..SuccessFacts::default()
         };
@@ -636,7 +757,7 @@ mod tests {
                 Settings {
                     window_size: 30,
                     tpm_reservation_enabled: false,
-                    token_type: TokenRateLimitType::Total,
+                    ..Settings::default()
                 },
                 Settings::default()
             )

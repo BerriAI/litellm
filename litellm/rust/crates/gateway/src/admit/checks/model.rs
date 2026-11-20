@@ -42,7 +42,8 @@ pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason
             (false, _) => Some(format!("router_settings fallback to {reached}").into()),
             (true, true) => unserved(admit, reached),
             (true, false) => unserved(admit, reached)
-                .map(|over| format!("router_settings fallback to {reached}: {over}").into()),
+                .map(|over| format!("router_settings fallback to {reached}: {over}").into())
+                .or_else(|| default_key_limit(admit, reached)),
         })
         .map(|over| Reason::new(Refused::Model, over))
 }
@@ -93,6 +94,27 @@ pub(in crate::admit) fn alias(catalog: &Catalog, provider: &str, model: &str) ->
         .map(String::into_boxed_str)
 }
 
+/// The default key limit a deployment of `group` sets. The limiter counts it for the group a
+/// request asks for. The proxy also checks it before the router falls back to `group`, which
+/// the native router does not ask the limiter yet.
+fn default_key_limit(admit: &Admit, group: &str) -> Option<Box<str>> {
+    admit
+        .config
+        .model_list
+        .iter()
+        .filter(|model| model.model_name == group)
+        .find_map(|model| {
+            let default_api_key_tpm_limit = &model.litellm_params.default_api_key_tpm_limit;
+            let default_api_key_rpm_limit = &model.litellm_params.default_api_key_rpm_limit;
+            set!(
+                "model_list.litellm_params.",
+                [default_api_key_tpm_limit, default_api_key_rpm_limit]
+            )
+            .next()
+        })
+        .map(|limit| format!("{limit} of a fallback").into())
+}
+
 fn of_provider(provider: &str) -> Box<str> {
     format!("model_list.litellm_params.model of provider {provider}").into()
 }
@@ -115,7 +137,9 @@ fn is_not_positive(timeout: &Option<Spelled<f64>>) -> bool {
     matches!(timeout, Some(Spelled::Value(seconds)) if *seconds <= 0.0)
 }
 
-/// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` gets its
+/// `rpm` and `tpm` are honored as the shuffle's weights, and the default key limits by the
+/// limiter, which [`default_key_limit`] names for a fallback. A deployment with no `api_key` gets
+/// its
 /// credential from a flow the proxy can host and the gateway may not, as Entra and workload
 /// identity are.
 fn params(params: &LitellmParams) -> Vec<Box<str>> {
@@ -143,8 +167,8 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         tag_regex,
         max_budget,
         budget_duration,
-        default_api_key_tpm_limit,
-        default_api_key_rpm_limit,
+        default_api_key_tpm_limit: _,
+        default_api_key_rpm_limit: _,
         use_in_pass_through,
         use_chat_completions_api,
         litellm_credential_name,
@@ -175,8 +199,6 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
             tag_regex,
             max_budget,
             budget_duration,
-            default_api_key_tpm_limit,
-            default_api_key_rpm_limit,
             litellm_credential_name,
             provider_affinity_header,
         ],

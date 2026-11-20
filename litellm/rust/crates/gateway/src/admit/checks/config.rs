@@ -97,6 +97,7 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         non_llm_connection_timeout: _,
         litellm_rate_limit_window_size: _,
         litellm_tpm_token_reservation_enabled: _,
+        no_max_tokens_tpm_reservation_fraction: _,
         legacy_multi_instance_rate_limiting,
         use_aws_kms,
         litellm_ssl_ciphers,

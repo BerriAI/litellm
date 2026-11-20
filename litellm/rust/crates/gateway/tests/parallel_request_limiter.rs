@@ -18,6 +18,7 @@ use litellm_gateway_auth::{
     hash_token,
     keys::{KeyLimits, ModelLimits},
 };
+use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_repositories::{KeyView, RawJson};
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -26,6 +27,8 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_partial_json, method},
 };
+
+const MASTER_KEY_ALIAS: &str = "litellm_proxy_master_key";
 
 const MASTER_KEY: &str = "sk-master";
 const KEY: &str = "sk-limited";
@@ -90,13 +93,56 @@ async fn provider() -> MockServer {
     upstream
 }
 
+/// 30 input tokens of which 10 were read from cache, and 7 output, which Python charges as 27.
+const RESPONSES_USAGE: &str = r#"{"input_tokens":30,"output_tokens":7,"total_tokens":37,"input_tokens_details":{"cached_tokens":10}}"#;
+
+/// The OpenAI provider `responder` calls: it answers a Responses stream when asked for one,
+/// and a complete response otherwise, each with [`RESPONSES_USAGE`].
+async fn responses_provider() -> MockServer {
+    let upstream = MockServer::start().await;
+    let response = format!(
+        r#"{{"id":"resp_1","object":"response","model":"responder-test","status":"completed","output":[],"usage":{RESPONSES_USAGE}}}"#
+    );
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({"stream": true})))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{response}}}\n\n"
+            ),
+            "text/event-stream",
+        ))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(response, "application/json"))
+        .mount(&upstream)
+        .await;
+    upstream
+}
+
 /// The inference routes as the gateway mounts them, for a key holding `limits`: the groups
-/// `claude` (also asked for as `sonnet`) and `gpt` answer, and `broken` is refused upstream.
+/// `claude` (also asked for as `sonnet`) and `gpt` answer, `responder` answers the Responses
+/// route, and `broken` is refused upstream.
 struct Served {
     app: Router,
     limiter: Arc<KeyLimiter>,
     upstream: MockServer,
+    responding: MockServer,
     _refusing: MockServer,
+}
+
+impl Served {
+    /// What the provider behind `path` was last sent as `param`.
+    async fn provider_saw(&self, path: &str, param: &str) -> Option<Value> {
+        let provider = match path {
+            RESPONSES => &self.responding,
+            _ => &self.upstream,
+        };
+        let received = provider.received_requests().await.unwrap();
+        received
+            .last()
+            .map(|request| serde_json::from_slice::<Value>(&request.body).unwrap()[param].clone())
+    }
 }
 
 async fn served(limits: KeyLimits) -> Served {
@@ -104,50 +150,97 @@ async fn served(limits: KeyLimits) -> Served {
 }
 
 async fn configured(limits: KeyLimits, general_settings: &str) -> Served {
-    held(
-        Holding {
-            limits,
-            owner: None,
-        },
+    Setup {
+        limits,
         general_settings,
-    )
+        ..Setup::default()
+    }
+    .serve()
     .await
 }
 
-async fn held(holding: Holding, general_settings: &str) -> Served {
-    let upstream = provider().await;
-    let refusing = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(
-            ResponseTemplate::new(400).set_body_json(json!({"type": "error",
-            "error": {"type": "invalid_request_error", "message": "refused upstream"}})),
-        )
-        .mount(&refusing)
-        .await;
-    let deployment = |name: &str, base: &str| {
-        format!(
-            "  - model_name: {name}\n    litellm_params: {{model: anthropic/{name}-test, api_base: \"{base}\", api_key: sk-upstream}}\n"
-        )
-    };
-    let config = Config::from_yaml(&format!(
-        "model_list:\n{}{}{}router_settings:\n  model_group_alias: {{sonnet: claude}}\ngeneral_settings:\n  master_key: {MASTER_KEY}\n{general_settings}",
-        deployment("claude", &upstream.uri()),
-        deployment("gpt", &upstream.uri()),
-        deployment("broken", &refusing.uri()),
-    ))
-    .unwrap();
-    let state = AppState {
-        keys: Some(authenticator(&config, Arc::new(holding), None)),
-        ..AppState::build(&config, &Environment::default())
-            .await
-            .unwrap()
-    };
-    let limiter = state.key_limiter.clone();
-    Served {
-        app: litellm_gateway::router(state, &config),
-        limiter,
-        upstream,
-        _refusing: refusing,
+async fn deployed(limits: KeyLimits, groups: &[(&str, &str)]) -> Served {
+    Setup {
+        limits,
+        groups,
+        ..Setup::default()
+    }
+    .serve()
+    .await
+}
+
+/// What [`Served`] is built from. `groups` are further groups, each a name and the
+/// `litellm_params` its deployment sets besides its model.
+#[derive(Default)]
+struct Setup<'a> {
+    limits: KeyLimits,
+    /// The owner of every key, which the native app does not serve a key for.
+    owner: Option<&'static str>,
+    general_settings: &'a str,
+    groups: &'a [(&'a str, &'a str)],
+    environment: Environment,
+}
+
+impl Setup<'_> {
+    async fn serve(self) -> Served {
+        let Self {
+            limits,
+            owner,
+            general_settings,
+            groups,
+            environment,
+        } = self;
+        let upstream = provider().await;
+        let responding = responses_provider().await;
+        let refusing = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(json!({"type": "error",
+                "error": {"type": "invalid_request_error", "message": "refused upstream"}})),
+            )
+            .mount(&refusing)
+            .await;
+        let deployment = |name: &str, base: &str| {
+            format!(
+                "  - model_name: {name}\n    litellm_params: {{model: anthropic/{name}-test, api_base: \"{base}\", api_key: sk-upstream}}\n"
+            )
+        };
+        let further: String = groups
+            .iter()
+            .map(|(name, params)| {
+                format!(
+                    "  - model_name: {name}\n    litellm_params: {{model: anthropic/further-test, api_base: \"{}\", api_key: sk-upstream{params}}}\n",
+                    upstream.uri()
+                )
+            })
+            .collect();
+        let responder = format!(
+            "  - model_name: responder\n    litellm_params: {{model: openai/responder-test, api_base: \"{}\", api_key: sk-upstream}}\n",
+            responding.uri()
+        );
+        let config = Config::from_yaml(&format!(
+            "model_list:\n{}{}{}{responder}{further}router_settings:\n  model_group_alias: {{sonnet: claude}}\ngeneral_settings:\n  master_key: {MASTER_KEY}\n{general_settings}",
+            deployment("claude", &upstream.uri()),
+            deployment("gpt", &upstream.uri()),
+            deployment("broken", &refusing.uri()),
+        ))
+        .unwrap();
+        let state = AppState {
+            keys: Some(authenticator(
+                &config,
+                Arc::new(Holding { limits, owner }),
+                None,
+            )),
+            ..AppState::build(&config, &environment).await.unwrap()
+        };
+        let limiter = state.key_limiter.clone();
+        Served {
+            app: litellm_gateway::router(state, &config),
+            limiter,
+            upstream,
+            responding,
+            _refusing: refusing,
+        }
     }
 }
 
@@ -196,10 +289,26 @@ fn failing() -> Value {
     asking("broken", Some(16))
 }
 
-async fn send_as(app: &Router, token: &str, body: Value) -> Response {
+const MESSAGES: &str = "/v1/messages";
+const CHAT: &str = "/v1/chat/completions";
+const RESPONSES: &str = "/v1/responses";
+
+/// A Responses body asking `responder` for at most `max_output_tokens`.
+fn responding(max_output_tokens: Option<u64>, stream: bool) -> Value {
+    let body = json!({"model": "responder", "input": "hi", "stream": stream});
+    match (body, max_output_tokens) {
+        (Value::Object(mut body), Some(max_output_tokens)) => {
+            body.insert("max_output_tokens".to_owned(), json!(max_output_tokens));
+            Value::Object(body)
+        }
+        (body, _) => body,
+    }
+}
+
+async fn post(app: &Router, token: &str, path: &str, body: Value) -> Response {
     app.clone()
         .oneshot(
-            Request::post("/v1/messages")
+            Request::post(path)
                 .header("authorization", format!("Bearer {token}"))
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
@@ -207,6 +316,10 @@ async fn send_as(app: &Router, token: &str, body: Value) -> Response {
         )
         .await
         .unwrap()
+}
+
+async fn send_as(app: &Router, token: &str, body: Value) -> Response {
+    post(app, token, MESSAGES, body).await
 }
 
 async fn send(app: &Router, body: Value) -> Response {
@@ -252,17 +365,16 @@ async fn a_key_the_native_app_does_not_serve_counts_nothing_against_its_limits()
         limiter,
         upstream,
         ..
-    } = held(
-        Holding {
-            limits: KeyLimits {
-                rpm: Some(1),
-                tpm: Some(100),
-                ..KeyLimits::default()
-            },
-            owner: Some("owner"),
+    } = Setup {
+        limits: KeyLimits {
+            rpm: Some(1),
+            tpm: Some(100),
+            ..KeyLimits::default()
         },
-        "",
-    )
+        owner: Some("owner"),
+        ..Setup::default()
+    }
+    .serve()
     .await;
 
     let first = send(&app, complete()).await;
@@ -454,11 +566,16 @@ async fn a_caller_without_limits_of_its_own_is_never_refused(
 }
 
 #[rstest]
-#[case::complete(complete())]
-#[case::streamed_to_its_end(streamed())]
+#[case::complete(MESSAGES, complete(), "claude")]
+#[case::streamed_to_its_end(MESSAGES, streamed(), "claude")]
+#[case::a_chat_completion(CHAT, complete(), "claude")]
+#[case::a_response(RESPONSES, responding(None, false), "responder")]
+#[case::a_streamed_response(RESPONSES, responding(None, true), "responder")]
 #[tokio::test]
 async fn a_served_call_charges_its_tokens_less_the_cached_reads_to_its_key_and_model(
+    #[case] path: &str,
     #[case] body: Value,
+    #[case] group: &str,
 ) {
     let Served { app, limiter, .. } = served(KeyLimits {
         rpm: Some(5),
@@ -467,14 +584,44 @@ async fn a_served_call_charges_its_tokens_less_the_cached_reads_to_its_key_and_m
     .await;
     let hash = hash_token(KEY);
 
-    read_to_its_end(send(&app, body).await).await;
+    let answered = post(&app, KEY, path, body).await;
+    let status = answered.status();
+    read_to_its_end(answered).await;
 
     assert_eq!(
         (
+            status,
             settled(&limiter, "api_key", &hash, 27.0).await,
-            settled(&limiter, "model_per_key", &format!("{hash}:claude"), 27.0).await
+            settled(&limiter, "model_per_key", &format!("{hash}:{group}"), 27.0).await
         ),
-        (Some(27.0), Some(27.0))
+        (StatusCode::OK, Some(27.0), Some(27.0))
+    );
+}
+
+#[rstest]
+#[case::a_chat_completion(CHAT, asking("claude", Some(50)))]
+#[case::a_response(RESPONSES, responding(Some(50), false))]
+#[case::a_streamed_response(RESPONSES, responding(Some(50), true))]
+#[tokio::test]
+async fn a_token_limit_reserves_what_a_call_of_any_route_asks_for_and_settles_what_it_used(
+    #[case] path: &str,
+    #[case] body: Value,
+) {
+    let Served { app, limiter, .. } = served(KeyLimits {
+        tpm: Some(60),
+        ..KeyLimits::default()
+    })
+    .await;
+
+    let admitted = post(&app, KEY, path, body.clone()).await;
+    let status = admitted.status();
+    read_to_its_end(admitted).await;
+    let used = settled(&limiter, "api_key", &hash_token(KEY), 27.0).await;
+    let over = post(&app, KEY, path, body).await;
+
+    assert_eq!(
+        (status, used, over.status()),
+        (StatusCode::OK, Some(27.0), StatusCode::TOO_MANY_REQUESTS)
     );
 }
 
@@ -618,21 +765,58 @@ async fn a_failed_call_gives_its_reserved_tokens_back() {
 }
 
 #[rstest]
-#[case::none_sent(None, json!(25))]
-#[case::one_sent(Some(50), json!(50))]
+#[case::none_sent(MESSAGES, asking("claude", None), "max_tokens", json!(25))]
+#[case::one_sent(MESSAGES, asking("claude", Some(50)), "max_tokens", json!(50))]
+#[case::none_sent_to_chat(CHAT, asking("claude", None), "max_tokens", json!(25))]
+#[case::none_sent_to_responses(
+    RESPONSES,
+    responding(None, false),
+    "max_output_tokens",
+    json!(25)
+)]
 #[tokio::test]
 async fn a_body_that_sets_no_output_cap_is_capped_at_a_quarter_of_the_token_limit(
-    #[case] sent: Option<u64>,
+    #[case] path: &str,
+    #[case] body: Value,
+    #[case] cap: &str,
     #[case] reached: Value,
 ) {
-    let Served { app, upstream, .. } = served(KeyLimits {
+    let served = served(KeyLimits {
         tpm: Some(100),
         rpm: Some(5),
         ..KeyLimits::default()
     })
     .await;
 
-    send(&app, asking("claude", sent)).await;
+    post(&served.app, KEY, path, body).await;
+
+    assert_eq!(served.provider_saw(path, cap).await, Some(reached));
+}
+
+#[rstest]
+#[case::set("0.5", json!(50))]
+#[case::beyond_the_whole_limit("1.5", json!(25))]
+#[case::not_a_number("half", json!(25))]
+#[tokio::test]
+async fn the_output_cap_is_the_fraction_of_the_token_limit_the_environment_sets(
+    #[case] fraction: &'static str,
+    #[case] reached: Value,
+) {
+    let variables = move |name: &str| {
+        (name == "NO_MAX_TOKENS_TPM_RESERVATION_FRACTION").then(|| fraction.to_owned())
+    };
+    let Served { app, upstream, .. } = Setup {
+        limits: KeyLimits {
+            tpm: Some(100),
+            ..KeyLimits::default()
+        },
+        environment: Environment::read(&variables).unwrap(),
+        ..Setup::default()
+    }
+    .serve()
+    .await;
+
+    send(&app, asking("claude", None)).await;
 
     let received = upstream.received_requests().await.unwrap();
     let provider_saw: Option<Value> = received.last().map(|request| {
@@ -729,12 +913,169 @@ async fn a_call_through_an_alias_is_charged_to_the_group_the_alias_names() {
     );
 }
 
+/// The first alias row of the bundled cost map that `picked` takes, with the model it stands
+/// for.
+fn alias_row(picked: fn(&str, &str) -> bool) -> (String, String) {
+    let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+    catalog
+        .aliases()
+        .iter()
+        .find(|(alias, model)| picked(alias, model))
+        .map(|(alias, model)| (alias.clone(), model.clone()))
+        .unwrap()
+}
+
+fn a_bare_alias() -> (String, String) {
+    alias_row(|alias, _| !alias.contains('/'))
+}
+
+fn an_alias_under_its_models_provider() -> (String, String) {
+    alias_row(|alias, model| {
+        alias
+            .split_once('/')
+            .is_some_and(|(provider, _)| model.starts_with(&format!("{provider}/")))
+    })
+}
+
+/// An alias asked for through a provider its model's own name does not carry, as a Bedrock
+/// alias of a `global.` model is. Its limit is found under that provider.
+fn an_alias_under_a_provider_hosting_its_model() -> (String, String) {
+    let (alias, model) = alias_row(|alias, model| {
+        alias
+            .split_once('/')
+            .is_some_and(|(provider, _)| !model.starts_with(&format!("{provider}/")))
+    });
+    let limited = format!("{}/{model}", alias.split_once('/').unwrap().0);
+    (alias, limited)
+}
+
 #[rstest]
-#[case::output("output", 14.0)]
-#[case::input("input", 13.0)]
-#[case::anything_else("tokens", 27.0)]
+#[case::bare(a_bare_alias())]
+#[case::under_its_models_provider(an_alias_under_its_models_provider())]
+#[case::under_a_provider_hosting_its_model(an_alias_under_a_provider_hosting_its_model())]
+#[tokio::test]
+async fn a_limit_on_the_model_a_latest_alias_stands_for_counts_a_call_to_the_alias(
+    #[case] (alias, limited): (String, String),
+) {
+    let Served { app, limiter, .. } = deployed(
+        KeyLimits {
+            model_tpm: by_model(&[(&limited, 60)]),
+            ..KeyLimits::default()
+        },
+        &[(&alias, "")],
+    )
+    .await;
+
+    let admitted = send(&app, asking(&alias, Some(50))).await;
+    let charged = settled(
+        &limiter,
+        "model_per_key",
+        &format!("{}:{limited}", hash_token(KEY)),
+        27.0,
+    )
+    .await;
+    let refused = send(&app, asking(&alias, Some(50))).await;
+
+    assert_eq!(
+        (admitted.status(), charged, refused.status()),
+        (StatusCode::OK, Some(27.0), StatusCode::TOO_MANY_REQUESTS)
+    );
+}
+
+#[rstest]
+#[case::a_key_without_limits(KEY, KeyLimits::default(), &[", default_api_key_rpm_limit: 1"], 1)]
+#[case::the_master_key(MASTER_KEY, KeyLimits::default(), &[", default_api_key_rpm_limit: 1"], 1)]
+#[case::the_least_of_its_groups_deployments(
+    KEY,
+    KeyLimits::default(),
+    &[", default_api_key_rpm_limit: 3", ", default_api_key_rpm_limit: 1", ""],
+    1
+)]
+#[case::a_key_with_its_own_limit_for_the_model(
+    KEY,
+    KeyLimits { model_rpm: by_model(&[("limited", 2)]), ..KeyLimits::default() },
+    &[", default_api_key_rpm_limit: 1"],
+    2
+)]
+#[tokio::test]
+async fn a_deployments_default_request_limit_counts_a_key_with_no_limit_for_its_model(
+    #[case] token: &str,
+    #[case] limits: KeyLimits,
+    #[case] deployments: &[&str],
+    #[case] admitted: usize,
+) {
+    let groups: Vec<(&str, &str)> = deployments
+        .iter()
+        .map(|params| ("limited", *params))
+        .collect();
+    let Served { app, .. } = deployed(limits, &groups).await;
+
+    let served = futures_util::future::join_all(
+        std::iter::repeat_n((), admitted)
+            .map(|()| send_as(&app, token, asking("limited", Some(16)))),
+    )
+    .await;
+    let refused = send_as(&app, token, asking("limited", Some(16))).await;
+    let another_group = send_as(&app, token, asking("claude", Some(16))).await;
+
+    assert_eq!(
+        served.iter().map(Response::status).collect::<Vec<_>>(),
+        vec![StatusCode::OK; admitted]
+    );
+    assert_eq!(
+        (refused.status(), another_group.status()),
+        (StatusCode::TOO_MANY_REQUESTS, StatusCode::OK)
+    );
+    let caller = match token {
+        MASTER_KEY => MASTER_KEY_ALIAS.to_owned(),
+        _ => hash_token(token),
+    };
+    let message = json_body(refused).await["error"]["message"].clone();
+    assert!(
+        message.as_str().unwrap().starts_with(&format!(
+            "Rate limit exceeded for model_per_key: {caller}:limited. Limit type: requests. Current limit: {admitted}"
+        )),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_deployments_default_token_limit_reserves_what_the_body_asks_for() {
+    let Served { app, upstream, .. } = deployed(
+        KeyLimits::default(),
+        &[("limited", ", default_api_key_tpm_limit: 60")],
+    )
+    .await;
+
+    let uncapped = send(&app, asking("limited", None)).await;
+    let received = upstream.received_requests().await.unwrap();
+    let provider_saw = received.last().map(|request| {
+        serde_json::from_slice::<Value>(&request.body).unwrap()["max_tokens"].clone()
+    });
+    let over = send(&app, asking("limited", Some(50))).await;
+
+    assert_eq!(
+        (uncapped.status(), provider_saw, over.status()),
+        (
+            StatusCode::OK,
+            Some(json!(15)),
+            StatusCode::TOO_MANY_REQUESTS
+        )
+    );
+}
+
+#[rstest]
+#[case::output(MESSAGES, complete(), "output", 14.0)]
+#[case::input(MESSAGES, complete(), "input", 13.0)]
+#[case::anything_else(MESSAGES, complete(), "tokens", 27.0)]
+#[case::a_chat_completions_input(CHAT, complete(), "input", 13.0)]
+#[case::a_responses_output(RESPONSES, responding(None, false), "output", 7.0)]
+#[case::a_responses_input(RESPONSES, responding(None, false), "input", 20.0)]
+#[case::a_streamed_responses_input(RESPONSES, responding(None, true), "input", 20.0)]
 #[tokio::test]
 async fn a_served_call_is_charged_the_tokens_the_configured_type_counts(
+    #[case] path: &str,
+    #[case] body: Value,
     #[case] token_rate_limit_type: &str,
     #[case] charged: f64,
 ) {
@@ -744,7 +1085,7 @@ async fn a_served_call_is_charged_the_tokens_the_configured_type_counts(
     )
     .await;
 
-    send(&app, complete()).await;
+    read_to_its_end(post(&app, KEY, path, body).await).await;
 
     assert_eq!(
         settled(&limiter, "api_key", &hash_token(KEY), charged).await,

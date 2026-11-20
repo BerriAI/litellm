@@ -114,6 +114,8 @@ impl Sent {
 #[case::callers("callers")]
 #[case::virtual_key_models("virtual_key_models")]
 #[case::virtual_key_token_limits("virtual_key_token_limits")]
+#[case::default_key_limits("default_key_limits")]
+#[case::rate_limit_policy("rate_limit_policy")]
 #[tokio::test]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();

@@ -1,4 +1,7 @@
-# A database alone keeps a request native: the master key is checked before any key is read.
+# A database alone keeps a request native: the master key is checked before any key is read. With
+# one the proxy looks up the end user a body names in `metadata.user_id` and applies that end
+# user's block, budget and rate limits, whoever the caller is. The native app reads no end user,
+# so that body goes to Python.
 config:
   model_list:
     - model_name: claude
@@ -14,4 +17,16 @@ requests:
   - name: plain
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a body naming an end user
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: customer-1}}
+    expect: python
+    reason: body
+    over: end_user
+
+  - name: a body with no end user in its metadata
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {}}
     expect: rust
