@@ -107,6 +107,13 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401 
     _is_mcp_admitted_user_subject,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_mcp_admitted_user_subject,
 )
+from litellm.proxy.mcp_server.auth_profiles import (
+    ValidatedProfiles,
+    describe_refusal,
+    profile_host_refusal,
+    profile_missing_credential,
+    validate_auth_profiles,
+)
 from litellm.proxy.mcp_server.catalog import _configuration_identity, _DiscoveryCache, _DiscoveryKey
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.elicitation_handler import (
@@ -419,6 +426,7 @@ class MCPServerConfig(TypedDict, total=False):
     alias: str
     description: str
     mcp_info: MCPInfo
+    additional_auth: ReadOnly[object]
     url: str
     spec_path: str
     transport: MCPTransportType
@@ -592,6 +600,45 @@ def _validate_config_server_names(mcp_servers_config: Mapping[str, MCPServerConf
     """
     for server_name in mcp_servers_config:
         validate_mcp_server_name(server_name)
+
+
+def _validated_config_auth_profiles(mcp_servers_config: Mapping[str, MCPServerConfig]) -> ValidatedProfiles:
+    profiled: Final = {
+        server_name: server_config
+        for server_name, server_config in mcp_servers_config.items()
+        if server_config.get("additional_auth") is not None
+    }
+    host_refusal: Final = next(
+        (
+            refusal
+            for server_name, server_config in profiled.items()
+            if server_config.get("additional_auth")
+            and (
+                refusal := profile_host_refusal(
+                    server_name,
+                    transport=server_config.get("transport"),
+                    is_byok=False,
+                    spec_path=server_config.get("spec_path"),
+                )
+            )
+            is not None
+        ),
+        None,
+    )
+    validated: Final = host_refusal or validate_auth_profiles(
+        {server_name: server_config.get("additional_auth") for server_name, server_config in profiled.items()}, ()
+    )
+    if not isinstance(validated, ValidatedProfiles):
+        raise ValueError(f"Invalid config for MCP servers: {describe_refusal(validated)}")  # noqa: TRY004  # startup reports every invalid config as ValueError
+    incomplete: Final = next(
+        filter(
+            None, (profile_missing_credential(server, profiles) for server, profiles in validated.by_server.items())
+        ),
+        None,
+    )
+    if incomplete is not None:
+        raise ValueError(f"Invalid config for MCP servers: {describe_refusal(incomplete)}")
+    return validated
 
 
 def _config_identifier_owners(
@@ -2721,6 +2768,7 @@ class MCPServerManager:
         assigned_server_ids: MutableMapping[str, str] = {}  # mutable-ok: per-load collision index
         _validate_config_server_names(mcp_servers_config)
         identifier_owners: Final = _config_identifier_owners(mcp_servers_config, mcp_aliases)
+        config_auth_profiles: Final = _validated_config_auth_profiles(mcp_servers_config)
 
         for server_name, raw_server_config in mcp_servers_config.items():
             server_config: MCPServerConfig = raw_server_config
@@ -3002,6 +3050,7 @@ class MCPServerManager:
                 rpm=server_config.get("rpm", None),
                 token_validation=server_config.get("token_validation", None),
                 oauth_identity_binding=server_config.get("oauth_identity_binding", None),
+                additional_auth=config_auth_profiles.by_server.get(server_name) or None,
             )
             self.assign_unique_short_prefix(new_server)
             _warn_overlapping_tool_policies(new_server)

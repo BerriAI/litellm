@@ -20,6 +20,7 @@ litellm/proxy/mcp_server/
     user_api_key_auth_mcp.py # LiteLLM admission auth and MCP request headers
     token_exchange.py        # OAuth token exchange handling                    [unchanged, V1TokenExchangeAdapter delegates here]
     litellm_auth_handler.py  # authenticated-user adapter for MCP sessions
+  auth_profiles.py           # additional_auth profile id grammar, uniqueness and refusals, shared by config load and API writes
   client_allowlist.py        # gateway-level client application allowlist (mcp_allowed_clients), a leaf module with no litellm.proxy imports
   outbound_credentials/      # NEW — typed upstream-credential resolution (resolve_credentials + arms)
     __init__.py              # public surface: resolve_credentials, the configs, CredError

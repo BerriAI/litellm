@@ -98,7 +98,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
-from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, PinnedMCPTool
+from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPOAuthMetadata, MCPServer, PinnedMCPTool
 
 _TSessionResult = TypeVar("_TSessionResult")
 
@@ -23253,3 +23253,274 @@ async def test_pre_call_guardrail_bearer_never_carries_the_admission_key(
 
     hook_kwargs: Final = proxy_logging_obj.create_mcp_request_object_from_kwargs.call_args.args[0]
     assert hook_kwargs["incoming_bearer_token"] == expected_bearer
+
+
+_PROFILE_BASE_CONFIG: Final = """
+mcp_servers:
+  analytics:
+    url: https://mcp.example/analytics
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    client_id: user-app
+    additional_auth:
+      - id: {first_id}
+        auth_type: oauth2
+        oauth2_flow: client_credentials
+        client_id: bot-app
+        client_secret: bot-secret
+        token_url: https://auth.example/token
+  news:
+    url: https://mcp.example/news
+    auth_type: bearer_token
+    additional_auth:
+      - id: {second_id}
+        auth_type: bearer_token
+        authentication_token: news-bot-token"""
+
+
+def _profile_config(first_id: str = "ana-bots", second_id: str = "news-bots") -> dict[str, MCPServerConfig]:
+    import yaml
+
+    return yaml.safe_load(_PROFILE_BASE_CONFIG.format(first_id=first_id, second_id=second_id))["mcp_servers"]
+
+
+@pytest.mark.asyncio
+async def test_config_additional_auth_loads_as_profiles_on_its_own_server(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+) -> None:
+    manager: Final = config_only_mcp_manager_factory()
+
+    await manager.load_servers_from_config(_profile_config())
+
+    by_name: Final = {server.server_name: server for server in manager.config_mcp_servers.values()}
+    assert by_name["analytics"].additional_auth == (
+        MCPAuthProfile(
+            id="ana-bots",
+            auth_type="oauth2",
+            oauth2_flow="client_credentials",
+            client_id="bot-app",
+            client_secret="bot-secret",
+            token_url="https://auth.example/token",
+        ),
+    )
+    assert by_name["news"].additional_auth == (
+        MCPAuthProfile(id="news-bots", auth_type="bearer_token", authentication_token="news-bot-token"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_config_profile_accepts_auth_value_like_the_top_level(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+) -> None:
+    import yaml
+
+    manager: Final = config_only_mcp_manager_factory()
+    config: Final = yaml.safe_load(
+        "mcp_servers:\n  analytics:\n    url: https://mcp.example/analytics\n    additional_auth:\n"
+        "      - id: ana-key\n        auth_type: bearer_token\n        auth_value: k1\n"
+    )["mcp_servers"]
+
+    await manager.load_servers_from_config(config)
+
+    server: Final = next(iter(manager.config_mcp_servers.values()))
+    assert server.additional_auth == (
+        MCPAuthProfile(id="ana-key", auth_type="bearer_token", authentication_token="k1"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_line", ["", "        authentication_token: ''\n"], ids=["omitted", "empty"])
+async def test_config_load_refuses_a_static_profile_without_a_token(
+    config_only_mcp_manager_factory: type[MCPServerManager], token_line: str
+) -> None:
+    import yaml
+
+    manager: Final = config_only_mcp_manager_factory()
+    config: Final = yaml.safe_load(
+        "mcp_servers:\n  analytics:\n    url: https://mcp.example/analytics\n    additional_auth:\n"
+        f"      - id: ana-key\n        auth_type: api_key\n{token_line}"
+    )["mcp_servers"]
+
+    with pytest.raises(ValueError, match="Invalid config for MCP servers") as refused:
+        await manager.load_servers_from_config(config)
+
+    assert (
+        "additional_auth[0] of MCP server 'analytics' is invalid. profile 'ana-key' needs authentication_token"
+        in str(refused.value)
+    )
+    assert manager.config_mcp_servers == {}
+
+
+_CLIENT_CREDENTIALS_PROFILE: Final = (
+    "mcp_servers:\n  analytics:\n    url: https://mcp.example/analytics\n    additional_auth:\n"
+    "      - id: ana-bots\n        auth_type: oauth2\n        oauth2_flow: client_credentials\n"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("credential_lines", "missing"),
+    [
+        ("        client_secret: s\n        token_url: https://auth.example/token\n", "client_id"),
+        (
+            "        client_id: bot-app\n        client_secret: os.environ/LITELLM_TEST_UNSET_PROFILE_SECRET\n"
+            "        token_url: https://auth.example/token\n",
+            "client_secret",
+        ),
+        (
+            "        client_id: bot-app\n        client_secret: ''\n        token_url: https://auth.example/token\n",
+            "client_secret",
+        ),
+        ("        client_id: bot-app\n        client_secret: s\n", "token_url"),
+    ],
+    ids=["no-client-id", "unset-env-secret", "empty-secret", "no-token-url"],
+)
+async def test_config_load_refuses_a_client_credentials_profile_missing_a_credential(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+    monkeypatch: pytest.MonkeyPatch,
+    credential_lines: str,
+    missing: str,
+) -> None:
+    import yaml
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.delenv("LITELLM_TEST_UNSET_PROFILE_SECRET", raising=False)
+    manager: Final = config_only_mcp_manager_factory()
+    raw: Final = yaml.safe_load(_CLIENT_CREDENTIALS_PROFILE + credential_lines)
+    config: Final = ProxyConfig()._check_for_os_environ_vars(config=raw)["mcp_servers"]  # pyright: ignore[reportPrivateUsage]  # the loader's own os.environ/ resolution
+
+    with pytest.raises(ValueError, match="Invalid config for MCP servers") as refused:
+        await manager.load_servers_from_config(config)
+
+    assert f"additional_auth[0] of MCP server 'analytics' is invalid. profile 'ana-bots' needs {missing}" in str(
+        refused.value
+    )
+    assert manager.config_mcp_servers == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("additional_auth", ["absent", None, []])
+async def test_a_config_server_without_profiles_serializes_exactly_as_before(
+    config_only_mcp_manager_factory: type[MCPServerManager], additional_auth: object
+) -> None:
+    manager: Final = config_only_mcp_manager_factory()
+    entry: Final[dict[str, object]] = {"url": "https://mcp.example/plain", "auth_type": "bearer_token"}
+    if additional_auth != "absent":
+        entry["additional_auth"] = additional_auth
+
+    await manager.load_servers_from_config({"plain": cast(MCPServerConfig, entry)})
+
+    server: Final = next(iter(manager.config_mcp_servers.values()))
+    assert server.additional_auth is None
+    assert "additional_auth" not in server.model_dump()
+    assert "additional_auth" not in server.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_config_load_refuses_ids_that_differ_only_by_case_across_servers(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+) -> None:
+    manager: Final = config_only_mcp_manager_factory()
+
+    with pytest.raises(ValueError, match="Invalid config for MCP servers") as refused:
+        await manager.load_servers_from_config(_profile_config(first_id="Ana-Bots", second_id="ana-bots"))
+
+    message: Final = str(refused.value)
+    assert all(part in message for part in ("'ana-bots'", "'news'", "'Ana-Bots'", "'analytics'")), message
+    assert manager.config_mcp_servers == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unquoted_id", ["no", "on", "yes", "off", "123", "null", "1.5"])
+async def test_config_load_refuses_an_unquoted_id_that_yaml_turns_into_another_type(
+    config_only_mcp_manager_factory: type[MCPServerManager], unquoted_id: str
+) -> None:
+    manager: Final = config_only_mcp_manager_factory()
+
+    with pytest.raises(ValueError, match=r"additional_auth\[0\] of MCP server 'analytics' has the invalid id"):
+        await manager.load_servers_from_config(_profile_config(first_id=unquoted_id))
+
+    assert manager.config_mcp_servers == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile_lines", "named_in_error"),
+    [
+        pytest.param(
+            "auth_type: oauth2\n        oauth2_flow: authorization_code\n        client_id: x",
+            "oauth2_flow 'authorization_code'",
+            id="authorization-code",
+        ),
+        pytest.param(
+            "auth_type: oauth2\n        client_id: x\n        client_secret: y\n        token_url: https://auth.example/t",
+            "oauth2_flow None",
+            id="machine-shaped-without-flow",
+        ),
+        pytest.param(
+            "auth_type: oauth2\n        client_id: x\n        authorization_url: https://auth.example/a",
+            "oauth2_flow None",
+            id="interactive-shaped-without-flow",
+        ),
+        pytest.param("auth_type: oauth_delegate", "not supported in an additional profile", id="delegate"),
+        pytest.param("auth_type: oauth2_token_exchange", "not supported in an additional profile", id="exchange"),
+        pytest.param("auth_type: true_passthrough", "not supported in an additional profile", id="passthrough"),
+    ],
+)
+async def test_config_load_refuses_a_profile_that_needs_a_person(
+    config_only_mcp_manager_factory: type[MCPServerManager], profile_lines: str, named_in_error: str
+) -> None:
+    import yaml
+
+    manager: Final = config_only_mcp_manager_factory()
+    config: Final = yaml.safe_load(
+        "mcp_servers:\n  analytics:\n    url: https://mcp.example/analytics\n    additional_auth:\n"
+        f"      - id: p1\n        {profile_lines}\n"
+    )["mcp_servers"]
+
+    with pytest.raises(ValueError, match="Invalid config for MCP servers") as refused:
+        await manager.load_servers_from_config(config)
+
+    assert named_in_error in str(refused.value)
+    assert manager.config_mcp_servers == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("host_lines", "host"),
+    [
+        pytest.param("transport: stdio\n    command: npx\n    args: [server]", "stdio", id="stdio"),
+        pytest.param("url: https://mcp.example/api\n    spec_path: ./openapi.json", "OpenAPI", id="openapi"),
+    ],
+)
+async def test_config_load_refuses_profiles_on_a_server_that_never_sends_a_profile_credential(
+    config_only_mcp_manager_factory: type[MCPServerManager], host_lines: str, host: str
+) -> None:
+    import yaml
+
+    manager: Final = config_only_mcp_manager_factory()
+    config: Final = yaml.safe_load(
+        f"mcp_servers:\n  tools:\n    {host_lines}\n    additional_auth:\n"
+        "      - id: p1\n        auth_type: bearer_token\n        authentication_token: t\n"
+    )["mcp_servers"]
+
+    with pytest.raises(ValueError, match="Invalid config for MCP servers") as refused:
+        await manager.load_servers_from_config(config)
+
+    assert f"MCP server 'tools' is a {host} server and cannot have additional_auth profiles" in str(refused.value)
+    assert manager.config_mcp_servers == {}
+
+
+@pytest.mark.asyncio
+async def test_debug_dump_of_the_registry_never_prints_a_profile_secret(
+    config_only_mcp_manager_factory: type[MCPServerManager], caplog: pytest.LogCaptureFixture
+) -> None:
+    manager: Final = config_only_mcp_manager_factory()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await manager.load_servers_from_config(_profile_config())
+
+    dump: Final = next(message for message in caplog.messages if "Loaded MCP Servers" in message)
+    assert "bot-secret" not in dump
+    assert "news-bot-token" not in dump
