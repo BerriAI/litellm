@@ -5432,7 +5432,6 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
     v = VertexGeminiConfig()
 
-    # Test pass-through with normalization (FLEX -> flex)
     optional_params = {}
     non_default_params = {"service_tier": "FLEX"}
 
@@ -5445,7 +5444,6 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
     assert result["service_tier"] == "flex"
 
-    # Test prefixed enum normalization (SERVICE_TIER_PRIORITY -> priority)
     optional_params_prefixed = {}
     non_default_params_prefixed = {"service_tier": "SERVICE_TIER_PRIORITY"}
 
@@ -5458,7 +5456,6 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
     assert result_prefixed["service_tier"] == "priority"
 
-    # Test auto -> omitted (lets provider decide)
     optional_params_auto = {}
     non_default_params_auto = {"service_tier": "auto"}
 
@@ -5471,7 +5468,6 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
     assert "service_tier" not in result_auto
 
-    # Test AUTO (uppercase) -> omitted
     optional_params_auto_upper = {}
     non_default_params_auto_upper = {"service_tier": "AUTO"}
 
@@ -5485,21 +5481,30 @@ def test_vertex_ai_service_tier_in_map_openai_params():
     assert "service_tier" not in result_auto_upper
 
 
-@pytest.mark.parametrize("drop_params", [False, True])
-def test_vertex_ai_unknown_service_tier_answers_400_unless_drop_params(drop_params: bool) -> None:
-    def map_turbo() -> dict:
-        return VertexGeminiConfig().map_openai_params(
+def test_vertex_ai_unknown_service_tier_answers_400() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="Invalid `service_tier`: 'turbo'"):
+        VertexGeminiConfig().map_openai_params(
             non_default_params={"service_tier": "turbo"},
             optional_params={},
             model="gemini-2.5-flash",
-            drop_params=drop_params,
+            drop_params=False,
         )
 
-    if not drop_params:
-        with pytest.raises(litellm.UnsupportedParamsError, match="Invalid `service_tier`: 'turbo'"):
-            map_turbo()
-        return
-    assert "service_tier" not in map_turbo()
+
+@pytest.mark.parametrize(("global_drop_params", "drop_params"), [(False, True), (True, False)])
+def test_vertex_ai_unknown_service_tier_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool, drop_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    mapped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"service_tier": "turbo"},
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=drop_params,
+    )
+
+    assert "service_tier" not in mapped
 
 
 _GENERATE_CONTENT_RESPONSE: Final = {
@@ -5518,11 +5523,15 @@ _GENERATE_CONTENT_RESPONSE: Final = {
         ("vertex_ai/gemini-2.5-flash", "standard", None, None),
         ("vertex_ai/gemini-2.5-flash", "default", None, None),
         ("vertex_ai/gemini-2.5-flash", "auto", None, None),
+        ("vertex_ai/gemini-2.5-flash", "scale", None, None),
+        ("vertex_ai/gemini-2.5-flash", "standard_only", None, None),
         ("vertex_ai_beta/gemini-2.5-flash", "flex", "flex", None),
         ("gemini/gemini-2.5-flash", "PRIORITY", None, "priority"),
         ("gemini/gemini-2.5-flash", "standard", None, "standard"),
         ("gemini/gemini-2.5-flash", "auto", None, None),
         ("gemini/gemini-2.5-flash", "default", None, None),
+        ("gemini/gemini-2.5-flash", "unspecified", None, None),
+        ("gemini/gemini-2.5-flash", "standard_only", None, "standard"),
     ],
 )
 def test_service_tier_reaches_vertex_as_headers_and_ai_studio_as_body(
@@ -5551,6 +5560,28 @@ def test_service_tier_reaches_vertex_as_headers_and_ai_studio_as_body(
     assert json.loads(sent.content).get("serviceTier") == body_service_tier
     assert sent.headers.get("X-Vertex-AI-LLM-Shared-Request-Type") == shared_request_type
     assert sent.headers.get("X-Vertex-AI-LLM-Request-Type") == ("shared" if shared_request_type else None)
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_caller_tier_header_in_any_case_replaces_the_service_tier_header(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:generateContent.*").mock(
+        return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE)
+    )
+
+    with patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")):
+        completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            service_tier="flex",
+            extra_headers={"x-vertex-ai-llm-shared-request-type": "priority"},
+            vertex_project="fake-project",
+            vertex_location="global",
+            client=HTTPHandler(),
+        )
+
+    sent: Final = route.calls.last.request
+    assert sent.headers.get_list("X-Vertex-AI-LLM-Shared-Request-Type") == ["priority"]
+    assert sent.headers.get_list("X-Vertex-AI-LLM-Request-Type") == ["shared"]
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():
