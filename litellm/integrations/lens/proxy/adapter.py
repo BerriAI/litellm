@@ -34,7 +34,9 @@ _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "re
 _REQUEST_AUDIENCE: Final = "litellm-lens"
 _LOGIN_AUDIENCE: Final = "litellm-lens-login"
 _LOGIN_TOKEN_SECONDS: Final = 60
-_LOGIN_UNAVAILABLE: Final = "Configure LITELLM_LENS_URL, LENS_GATEWAY_SECRET and LITELLM_LENS_PUBLIC_URL to sign in to Lens"
+_LOGIN_UNAVAILABLE: Final = (
+    "Configure LITELLM_LENS_URL, LENS_GATEWAY_SECRET and LITELLM_LENS_PUBLIC_URL to sign in to Lens"
+)
 
 
 class Identity(BaseModel):
@@ -150,10 +152,10 @@ async def service_connection(
 
 async def browser_session(request: Request) -> UserAPIKeyAuth | None:
     from litellm.proxy.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # circular import at module load
-        _session_identity_from_cookie,
+        session_identity_from_cookie,
     )
 
-    user_id, session_key = _session_identity_from_cookie(request)
+    user_id, session_key = session_identity_from_cookie(request)
     if not user_id or not session_key:
         return None
     try:
