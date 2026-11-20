@@ -14,7 +14,7 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi import HTTPException, WebSocket, status
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, status
 from fastapi import Request as FastAPIRequest
 from pydantic import PydanticDeprecatedSince20
 from starlette.datastructures import URL
@@ -392,6 +392,44 @@ def _serve_jwks(monkeypatch: pytest.MonkeyPatch, litellm_jwtauth: LiteLLM_JWTAut
     monkeypatch.setattr(server, "general_settings", {"enable_jwt_auth": True})
     monkeypatch.setattr(server, "premium_user", True)
     monkeypatch.setattr(server, "prisma_client", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_source", ("claim", "header", "alias"))
+async def test_unknown_jwt_team_returns_generic_auth_error(
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores, team_source: str
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    unknown_team: Final = "unknown-credential-team"
+    _serve_jwks(
+        monkeypatch,
+        LiteLLM_JWTAuth(
+            team_id_jwt_field="cid" if team_source != "alias" else None,
+            team_alias_jwt_field="team_alias" if team_source == "alias" else None,
+        ),
+    )
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "prisma_client", prisma_with_empty_config())
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    token: Final = _signed_jwt({"team_alias" if team_source == "alias" else "cid": unknown_team})
+    app: Final = FastAPI()
+    app.add_exception_handler(ProxyException, server.openai_exception_handler)
+
+    @app.post("/v1/chat/completions")
+    async def endpoint(auth: UserAPIKeyAuth = Depends(user_api_key_auth)) -> dict[str, object]:
+        return {"team_id": auth.team_id}
+
+    headers: Final = {
+        "Authorization": f"Bearer {token}",
+        **({"x-litellm-team-id": unknown_team} if team_source == "header" else {}),
+    }
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        response: Final = await client.post("/v1/chat/completions", json={"model": "qa-model"}, headers=headers)
+
+    assert response.status_code == 401, response.text
+    assert response.json()["error"]["type"] == "auth_error", response.text
+    assert "doesn't exist" not in response.text
+    assert unknown_team not in response.text
 
 
 @pytest.mark.asyncio
