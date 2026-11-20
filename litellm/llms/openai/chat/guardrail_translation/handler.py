@@ -17,7 +17,7 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -164,6 +164,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_with_server_calls: Final = [
             *tool_calls_to_check,
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
+            *(
+                _legacy_function_calls(messages)
+                if guardrail_to_apply.scan_tool_calls_as_text is True and not scan_only_tool_results
+                else ()
+            ),
         ]
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -460,7 +465,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """
 
         # Step 0: Check if response has any text content to process
-        if not self._has_text_content(response):
+        legacy_function_calls: Final = (
+            _legacy_function_calls(choice.message for choice in response.choices)
+            if guardrail_to_apply.scan_tool_calls_as_text is True
+            else ()
+        )
+        if not self._has_text_content(response) and not legacy_function_calls:
             verbose_proxy_logger.warning("OpenAI Chat Completions: No text content in response, skipping guardrail")
             return response
 
@@ -488,6 +498,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_with_server_calls: Final = [
             *tool_calls_to_check,
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
+            *legacy_function_calls,
         ]
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -1551,6 +1562,17 @@ def _choice_server_tool_calls(
     calls_by_id: Mapping[tuple[int, str | None], ChatCompletionAssistantToolCall], choice_index: int
 ) -> tuple[ChatCompletionAssistantToolCall, ...]:
     return tuple(call for (index, _), call in calls_by_id.items() if index == choice_index)
+
+
+def _legacy_function_calls(
+    messages: Iterable[object],
+) -> tuple[dict[str, object], ...]:  # mutable-ok: the dict shape guardrail tool_calls inputs take
+    """The deprecated `function_call` of each message, shaped as a tool call. Scanned only, never written back."""
+    calls: Final = (
+        message.get("function_call") if isinstance(message, Mapping) else getattr(message, "function_call", None)
+        for message in messages
+    )
+    return tuple({"type": "function", "function": call} for call in calls if call)
 
 
 def _server_tool_call_input(server_tool_call: ChatCompletionAssistantToolCall) -> dict[str, object]:

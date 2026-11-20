@@ -311,6 +311,13 @@ def _tool_call_arguments_as_text(arguments: object) -> str | None:
     return "\n".join((json.dumps(decoded, ensure_ascii=False, default=str), *escaped))
 
 
+def _response_tool_calls(response: ModelResponse) -> list[object]:  # mutable-ok: built here for the scan
+    """Tool calls of every choice, the deprecated `function_call` included."""
+    messages: Final = [choice.message for choice in response.choices]
+    legacy_calls: Final = ({"function": message.function_call} for message in messages if message.function_call)
+    return [*chain.from_iterable(message.tool_calls or [] for message in messages), *legacy_calls]
+
+
 def _tool_call_as_text(tool_call: object) -> str | None:
     """Name and decoded arguments of a tool call, or None when the arguments cannot be scanned."""
     wrapped: Final = _tool_call_field(tool_call, "function") or _tool_call_field(tool_call, "custom")
@@ -3110,11 +3117,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # produces.
             try:
                 await self._scan_tool_calls_as_text(
-                    tool_calls=list(
-                        chain.from_iterable(
-                            choice.message.tool_calls or [] for choice in assembled_model_response.choices
-                        )
-                    ),
+                    tool_calls=_response_tool_calls(assembled_model_response),
                     request_data=request_data,
                     input_type="response",
                 )
