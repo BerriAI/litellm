@@ -1860,6 +1860,14 @@ def test_gemini_tool_result_youtube_video_is_a_bad_request_instead_of_a_page_dow
         )
 
 
+def test_gemini_tool_result_keeps_the_tool_output_when_its_video_cannot_be_fetched() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result("https://clips.invalid/missing.mp4"), _FIND_CLIP_CALL
+    )
+
+    assert delivered == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+
+
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
     Test that Anthropic-native image blocks in tool_result list content are
