@@ -2,7 +2,7 @@ from typing import Final
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, normalize_cache_control_in_anthropic_payload
+from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
@@ -12,6 +12,10 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
+
+
+def _is_claude(model: str) -> bool:
+    return "claude" in model.lower()
 
 
 class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -50,7 +54,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         max_tokens: int | None,
         custom_llm_provider: str,
     ) -> None:
-        if AnthropicModelInfo.is_mapped_model(model, custom_llm_provider):
+        if _is_claude(model):
             AnthropicMessagesConfig._translate_adaptive_effort_for_non_adaptive_model(  # pyright: ignore[reportUnknownMemberType]  # the base takes a bare dict
                 model, optional_params, max_tokens, custom_llm_provider
             )
@@ -61,7 +65,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         optional_params: dict[str, object],  # mutable-ok: in-place out-param, as in the base signature
         custom_llm_provider: str,
     ) -> None:
-        if AnthropicModelInfo.is_mapped_model(model, custom_llm_provider):
+        if _is_claude(model):
             AnthropicMessagesConfig._drop_incompatible_temperature_for_thinking(  # pyright: ignore[reportUnknownMemberType]  # the base takes a bare dict
                 model, optional_params, custom_llm_provider
             )

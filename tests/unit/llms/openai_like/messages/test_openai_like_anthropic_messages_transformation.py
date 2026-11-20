@@ -6,6 +6,7 @@ import pytest
 
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+from litellm.llms.edenai.messages.transformation import EdenAIAnthropicMessagesConfig
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.messages.transformation import (
     JSONProviderAnthropicMessagesConfig,
@@ -278,6 +279,7 @@ _REASONING_REQUESTS: Final[list[dict[str, object]]] = [
     {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}},
     {"output_config": {"effort": "low"}, "temperature": 0},
     {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}, "temperature": 0},
+    {"thinking": {"type": "enabled", "budget_tokens": 1024}, "temperature": 0.3},
 ]
 
 
@@ -291,28 +293,47 @@ def _transform(config: AnthropicMessagesConfig, model: str, reasoning: dict[str,
     )
 
 
-@pytest.mark.parametrize("drop_params", [None, True])
-@pytest.mark.parametrize("reasoning", _REASONING_REQUESTS)
-def test_request_forwards_reasoning_fields_unchanged_for_an_unknown_model(
-    config: OpenAILikeAnthropicMessagesConfig, reasoning: dict[str, object], drop_params: bool | None
-) -> None:
-    payload = _transform(config, "example/reasoning-model", reasoning, drop_params)
-
-    assert {key: payload.get(key) for key in reasoning} == reasoning
-
-
 def _sail_config() -> JSONProviderAnthropicMessagesConfig:
     provider = JSONProviderRegistry.get("sail")
     assert provider is not None
     return JSONProviderAnthropicMessagesConfig(provider)
 
 
-@pytest.mark.parametrize("passthrough", [OpenAILikeAnthropicMessagesConfig, _sail_config])
-@pytest.mark.parametrize(
-    "model", ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5", "claude-opus-4-7", "claude-quill-4-5"]
-)
+@pytest.mark.parametrize("drop_params", [None, True])
 @pytest.mark.parametrize("reasoning", _REASONING_REQUESTS)
-def test_request_for_a_known_model_matches_the_native_anthropic_transform(
+@pytest.mark.parametrize(
+    ("passthrough", "model"),
+    [
+        (OpenAILikeAnthropicMessagesConfig, "example/reasoning-model"),
+        (OpenAILikeAnthropicMessagesConfig, "deepseek-reasoner"),
+        (OpenAILikeAnthropicMessagesConfig, "gpt-4o"),
+        (_sail_config, "zai-org/GLM-5.3"),
+    ],
+)
+def test_request_forwards_reasoning_fields_unchanged_for_a_non_claude_model(
+    passthrough: Callable[[], OpenAILikeAnthropicMessagesConfig],
+    model: str,
+    reasoning: dict[str, object],
+    drop_params: bool | None,
+) -> None:
+    payload = _transform(passthrough(), model, reasoning, drop_params)
+
+    assert {key: payload.get(key) for key in reasoning} == reasoning
+
+
+_CLAUDE_MODELS: Final = ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5", "claude-opus-4-7")
+
+
+@pytest.mark.parametrize("reasoning", _REASONING_REQUESTS)
+@pytest.mark.parametrize(
+    ("passthrough", "model"),
+    [
+        *((OpenAILikeAnthropicMessagesConfig, model) for model in _CLAUDE_MODELS),
+        *((_sail_config, model) for model in _CLAUDE_MODELS),
+        (EdenAIAnthropicMessagesConfig, "anthropic/claude-3-7-sonnet-latest"),
+    ],
+)
+def test_request_for_a_claude_model_matches_the_native_anthropic_transform(
     passthrough: Callable[[], OpenAILikeAnthropicMessagesConfig], model: str, reasoning: dict[str, object]
 ) -> None:
     assert _transform(passthrough(), model, reasoning, None) == _transform(
