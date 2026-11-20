@@ -1,5 +1,5 @@
 """
-Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
+Tests for the agent tracing endpoints (litellm/integrations/lens/proxy/tracing_endpoints.py).
 """
 
 import asyncio
@@ -29,20 +29,20 @@ from litellm.constants import (
     DEFAULT_AGENT_TRACING_RETENTION_DAYS,
     TRACE_READ_RETRY_AFTER_SECONDS,
 )
-from litellm.proxy import tracing_endpoints
-from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
-from litellm.proxy.auth.authorization import OwnedRows, ReadScope
-from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.tracing_runtime import manage_tracing
 from litellm.integrations.lens import TraceReceiver
 from litellm.integrations.lens.errors import TraceChanged
 from litellm.integrations.lens.generated.models import TraceQueryHelp
 from litellm.integrations.lens.generated.responses import TraceSQLResponse
 from litellm.integrations.lens.generated.types import TraceScope
+from litellm.integrations.lens.proxy import tracing_endpoints
+from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
 from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.integrations.lens.types import TraceAgent, TraceAgentList
+from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
+from litellm.proxy.auth.authorization import OwnedRows, ReadScope
+from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 SQL_ROWS: Final[tuple[Mapping[str, JsonValue], ...]] = (
     {

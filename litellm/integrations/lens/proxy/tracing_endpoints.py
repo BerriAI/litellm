@@ -48,6 +48,7 @@ from litellm.integrations.lens.generated.types import (
     TraceScope,
 )
 from litellm.integrations.lens.otlp_http import encode_otlp_response
+from litellm.integrations.lens.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.integrations.lens.types import TraceAgentList
 from litellm.proxy._types import UserAPIKeyAuth
@@ -55,7 +56,6 @@ from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_r
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
-from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router = APIRouter(tags=["agent tracing"])

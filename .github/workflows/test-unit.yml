@@ -990,7 +990,6 @@ jobs:
           - shard: endpoints-and-responses
             test-path: |-
               tests/unit/proxy/test_proxy_server_exception_mapping.py
-              tests/unit/proxy/lens
               tests/unit/proxy/auth/test_models_fallback_endpoint.py
               tests/unit/proxy/common_utils/test_check_batch_cost.py
               tests/unit/proxy/common_utils/test_check_responses_cost.py
@@ -1016,7 +1015,7 @@ jobs:
 
           - shard: lens-python-310
             test-path: >-
-              tests/unit/proxy/lens
+              tests/unit/integrations/lens/proxy
             python-version: "3.10"
             workers: 0
             reruns: 0

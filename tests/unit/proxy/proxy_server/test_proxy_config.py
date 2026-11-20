@@ -183,8 +183,8 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     import httpx
 
     from litellm.integrations.lens.exporter import LensExporter
+    from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
     from litellm.integrations.lens.remote import LensConnection
-    from litellm.proxy.tracing_runtime import manage_tracing
 
     monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
     monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
@@ -222,7 +222,7 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from litellm.proxy.tracing_runtime import manage_tracing
+    from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 
     monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
     monkeypatch.delenv("LITELLM_LENS_SERVICE_TOKEN", raising=False)

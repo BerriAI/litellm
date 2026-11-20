@@ -7,8 +7,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.lens.adapter import (
+from litellm.integrations.lens.proxy.adapter import (
     Connection,
     Identity,
     delegated_identity,
@@ -19,6 +18,7 @@ from litellm.proxy.lens.adapter import (
     service_status,
 )
 from litellm.integrations.lens.remote import LensConnection
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 SECRET: Final = "gateway-delegated-identity-fixture-32"
 
