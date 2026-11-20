@@ -15751,6 +15751,24 @@ from litellm.responses.litellm_completion_transformation.count_request import (
 _PROVIDERS_WITH_LISTING_ONLY_MODEL_INFO: Final = frozenset({LlmProviders.OPENROUTER})
 
 
+def _counts_claude(deployment_litellm_params: Mapping[str, object]) -> bool:
+    return names_a_claude_model(str(deployment_litellm_params.get("model") or ""))
+
+
+def _count_user_profile_id(
+    pinned_user_profile_id: str | None,
+    client_user_profile_id: str | None,
+    deployment_litellm_params: Mapping[str, object],
+) -> str | None:
+    if not _counts_claude(deployment_litellm_params):
+        return None
+    return (
+        pinned_user_profile_id
+        or anthropic_user_profile_id_in_headers(deployment_litellm_params)
+        or client_user_profile_id
+    )
+
+
 def _with_client_identity(
     counter: BaseTokenCounter | None,
     client_oauth_token: str | None,
@@ -15758,16 +15776,9 @@ def _with_client_identity(
     client_user_profile_id: str | None,
     deployment_litellm_params: Mapping[str, object],
 ) -> BaseTokenCounter | None:
-    counts_claude: Final = names_a_claude_model(str(deployment_litellm_params.get("model") or ""))
-    claude_client_user_profile_id: Final = client_user_profile_id if counts_claude else None
-    user_profile_id: Final = (
-        (
-            pinned_user_profile_id
-            or anthropic_user_profile_id_in_headers(deployment_litellm_params)
-            or client_user_profile_id
-        )
-        if counts_claude
-        else None
+    claude_client_user_profile_id: Final = client_user_profile_id if _counts_claude(deployment_litellm_params) else None
+    user_profile_id: Final = _count_user_profile_id(
+        pinned_user_profile_id, client_user_profile_id, deployment_litellm_params
     )
     match counter:
         case AnthropicTokenCounter() if client_oauth_token is not None:
@@ -17018,7 +17029,8 @@ async def _count_request_tokens(
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
             forwards_request_fields=(context_edits is not None and edited_request is None)
-            or bool(forwarded_count_options),
+            or bool(forwarded_count_options)
+            or bool(_count_user_profile_id(pinned_user_profile_id, client_user_profile_id, count_litellm_params)),
         )
     )
     if isinstance(ladder, TokenCountResponse):

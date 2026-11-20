@@ -94,7 +94,11 @@ from litellm.proxy.proxy_server import (
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicMessagesRequest
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_USER_PROFILE_ID_HEADER,
+    AnthropicMessagesRequest,
+)
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
@@ -4395,12 +4399,16 @@ def _groq_router(
     )
 
 
-async def _messages_endpoint_count(router: Router, request_body: Mapping[str, JsonValue]) -> object:
+async def _messages_endpoint_count(
+    router: Router,
+    request_body: Mapping[str, JsonValue],
+    headers: Mapping[str, str] = MappingProxyType({}),
+) -> object:
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
 
     mock_request: Final = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = dict(headers)
     with (
         patch.object(proxy_server, "llm_router", router),
         patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=dict(request_body))),
@@ -4832,6 +4840,7 @@ async def _count_on_a_bridged_provider_count_api(
     peer_reply: Mapping[str, JsonValue] = MappingProxyType({"inputTokens": 57}),
     model_info: Mapping[str, JsonValue] = MappingProxyType({}),
     peer_status: int = 200,
+    headers: Mapping[str, str] = MappingProxyType({}),
 ) -> tuple[object, tuple[httpx.Request, ...]]:
     from litellm.llms.bedrock.count_tokens import handler as bedrock_count_tokens_handler
     from litellm.llms.bedrock.count_tokens import mantle_handler as bedrock_mantle_count_tokens_handler
@@ -4857,7 +4866,7 @@ async def _count_on_a_bridged_provider_count_api(
         patch.object(bedrock_count_tokens_handler, "get_async_httpx_client", return_value=client),
         patch.object(bedrock_mantle_count_tokens_handler, "get_async_httpx_client", return_value=client),
     ):
-        response: Final = await _messages_endpoint_count(router, {**request_body, "model": "nova-agent"})
+        response: Final = await _messages_endpoint_count(router, {**request_body, "model": "nova-agent"}, headers)
     return response, peer.requests
 
 
@@ -4985,6 +4994,50 @@ async def test_a_mantle_count_rejecting_the_forwarded_count_options_answers_with
     assert ("thinking" in json.loads(sent[0].content)) == bool(count_options)
     message: Final = json.loads(bytes(response.body))["error"]["message"]
     assert message.count("counts tokens with us.anthropic.claude-sonnet-5-5 in us-west-2") == region_hints
+
+
+
+@pytest.mark.parametrize(
+    ("client_headers", "sent_profile_id", "region_hints"),
+    [({ANTHROPIC_USER_PROFILE_ID_HEADER: "uprof_malformed"}, "uprof_malformed", 0), ({}, None, 1)],
+    ids=["user_profile_id_forwarded", "no_user_profile_id"],
+)
+@pytest.mark.asyncio
+async def test_a_mantle_count_rejecting_the_forwarded_user_profile_id_answers_without_the_region_hint(
+    client_headers: Mapping[str, str],
+    sent_profile_id: str | None,
+    region_hints: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, sent = await _count_on_a_bridged_provider_count_api(
+        {"messages": [{"role": "user", "content": "Read the README"}]},
+        monkeypatch,
+        "bedrock/mantle/anthropic.claude-sonnet-5-5",
+        MappingProxyType(
+            {
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "user_profile_id: must be a well-formed ID"},
+            }
+        ),
+        MappingProxyType(
+            {
+                "token_count_model": {
+                    "model": "anthropic.claude-sonnet-5-5",
+                    "litellm_provider": "bedrock_mantle",
+                    "region": "us-west-2",
+                }
+            }
+        ),
+        peer_status=400,
+        headers=client_headers,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert len(sent) == 1
+    assert json.loads(sent[0].content).get("user_profile_id") == sent_profile_id
+    message: Final = json.loads(bytes(response.body))["error"]["message"]
+    assert message.count("counts tokens with anthropic.claude-sonnet-5-5 in us-west-2") == region_hints
 
 
 @pytest.mark.asyncio
