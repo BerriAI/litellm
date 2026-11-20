@@ -57510,6 +57510,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 agent_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -63531,6 +63533,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -64625,6 +64629,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -75910,6 +75916,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 organization_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -82326,6 +82334,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 start_date?: string | null;
                 end_date?: string | null;
                 model?: string | null;
@@ -83022,6 +83032,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 team_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -85568,6 +85580,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 /** @description Start date in YYYY-MM-DD format */
                 start_date?: string | null;
                 /** @description End date in YYYY-MM-DD format */
