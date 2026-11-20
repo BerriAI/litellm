@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -111,7 +112,7 @@ class OpenAIError(BaseLLMException):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         headers: dict | httpx.Headers | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -130,8 +131,12 @@ class OpenAIError(BaseLLMException):
             headers=self.headers,
             request=self.request,
             response=self.response,
-            body=body,
+            body=None if body is None else dict(body),
         )
+
+
+def upstream_error_body(error: Exception) -> Mapping[str, object] | None:
+    return as_str_mapping(error.body) if isinstance(error, openai.APIError) else None
 
 
 ####### Error Handling Utils for OpenAI API #######################
