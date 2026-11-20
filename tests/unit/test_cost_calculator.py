@@ -1,5 +1,6 @@
 import json
 import asyncio
+import math
 import datetime
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.model_cost_table import published
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
@@ -13207,6 +13209,22 @@ def test_rust_prices_the_plain_claude_call_the_deferral_cases_vary(local_model_c
     priced: Final = _rust_priced(_claude_response())
 
     assert priced is not None and priced > 0
+
+
+def test_rust_bills_a_price_edited_in_place_on_the_next_call(local_model_cost_map: None) -> None:
+    row: Final = cast(dict[str, object], published()["claude-opus-5-5"])
+    input_rate: Final = row["input_cost_per_token"]
+    assert isinstance(input_rate, float)
+    before: Final = _rust_priced(_claude_response())
+
+    row["input_cost_per_token"] = 2 * input_rate
+    try:
+        after: Final = _rust_priced(_claude_response())
+    finally:
+        row["input_cost_per_token"] = input_rate
+
+    assert before is not None and after is not None
+    assert math.isclose(after - before, 1000 * input_rate, rel_tol=1e-9)
 
 
 @pytest.mark.parametrize(
