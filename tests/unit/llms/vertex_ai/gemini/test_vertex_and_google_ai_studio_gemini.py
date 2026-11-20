@@ -6523,13 +6523,14 @@ def test_gemini_3_keeps_search_next_to_functions_only_when_the_cost_map_allows_f
     assert ("toolConfig" in body) is keeps_search
 
 
-@pytest.mark.parametrize("flag", ["include_server_side_tool_invocations", "includeServerSideToolInvocations"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
 def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_side_tools_off(
-    route: Literal["vertex", "studio"], flag: str
+    route: Literal["vertex", "studio"],
 ) -> None:
     body: Final = _mapped_request_body(
-        route, "gemini-3-flash-preview", {"tools": [{"type": "web_search"}, _EXEC_TOOL], flag: False}
+        route,
+        "gemini-3-flash-preview",
+        {"tools": [{"type": "web_search"}, _EXEC_TOOL], "include_server_side_tool_invocations": False},
     )
 
     assert _tool_keys(body) == {"function_declarations"}
@@ -6544,15 +6545,17 @@ def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_si
     ],
     ids=["retrieval_and_search", "retrieval_only"],
 )
+@pytest.mark.parametrize("caller_flag", [False, True], ids=["no_caller_flag", "caller_flag_on"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
 def test_gemini_3_drops_search_retrieval_next_to_functions_only_under_drop_params(
-    route: Literal["vertex", "studio"], tools: list[object], kept_keys: set[str], flagged: bool
+    route: Literal["vertex", "studio"], tools: list[object], kept_keys: set[str], flagged: bool, caller_flag: bool
 ) -> None:
-    dropped: Final = _mapped_request_body(route, "gemini-3-flash-preview", {"tools": tools}, drop_params=True)
-    sent_as_is: Final = _mapped_request_body(route, "gemini-3-flash-preview", {"tools": tools})
+    params: Final = {"tools": tools, **({"include_server_side_tool_invocations": True} if caller_flag else {})}
+    dropped: Final = _mapped_request_body(route, "gemini-3-flash-preview", params, drop_params=True)
+    sent_as_is: Final = _mapped_request_body(route, "gemini-3-flash-preview", params)
 
     assert _tool_keys(dropped) == kept_keys
-    assert ("toolConfig" in dropped) is flagged
+    assert ("toolConfig" in dropped) is (flagged or caller_flag)
     assert _tool_keys(sent_as_is) == kept_keys | {"googleSearchRetrieval"}
     assert sent_as_is.get("toolConfig") == {"includeServerSideToolInvocations": True}
 
