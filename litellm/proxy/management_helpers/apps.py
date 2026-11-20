@@ -705,12 +705,12 @@ class AppStore:
         data: AppOrganizationPut,
         actor: str,
     ) -> AppOrganization | AppFailure:
-        invalid_member: Final = await self.validate_member_profile(data.customer_member_budget_id)
-        if invalid_member is not None:
-            return invalid_member
         app: Final = await self.writable(app_id)
         if isinstance(app, AppFailure):
             return app
+        invalid_member: Final = await self.validate_member_profile(data.customer_member_budget_id)
+        if invalid_member is not None:
+            return invalid_member
         selected: Final = data.budget_id or data.tier_budget_id
         if not await self.valid_profile(selected):
             return AppFailure(
@@ -847,12 +847,12 @@ class AppStore:
         data: AppMemberPut,
         actor: str,
     ) -> AppMember | AppFailure:
-        invalid_member: Final = await self.validate_member_profile(data.budget_id)
-        if invalid_member is not None:
-            return invalid_member
         app: Final = await self.writable(app_id)
         if isinstance(app, AppFailure):
             return app
+        invalid_member: Final = await self.validate_member_profile(data.budget_id)
+        if invalid_member is not None:
+            return invalid_member
         customer: Final = await self.customers.members.find_unique(where={"customer_member_id": customer_member_id})
         if customer is None:
             return AppFailure(404, "Customer member not found.")
