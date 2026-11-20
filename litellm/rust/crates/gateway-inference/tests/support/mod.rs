@@ -87,9 +87,10 @@ pub fn app_with_callbacks(
         test_params(model, api_base),
         Value::Object(Map::new()),
         None,
-        NativeHost::new(Arc::new(
-            Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap(),
-        )),
+        NativeHost::new(
+            Arc::new(Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap()),
+            Arc::default(),
+        ),
     )
 }
 

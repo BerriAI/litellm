@@ -24,7 +24,7 @@ use crate::{
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
-    routing::{self, Host, RouteAttempt, RouteChunks},
+    routing::{self, Host, Prompt, RouteAttempt, RouteChunks},
     serve::{self, Call, Endpoint},
     stream_event::{Counts, Kind, Read, Reading},
     stream_outcome::{self, Streamed},
@@ -104,6 +104,10 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
     const OP: Op = Op::ANTHROPIC_MESSAGES;
     const PATH: &'static str = "/v1/messages";
     const ERRORS: ErrorFormat = ErrorFormat::Anthropic;
+
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        Some(Prompt::Messages(&self.body))
+    }
 
     fn counts((ran, _): &Self::Outcome) -> Option<Counts> {
         let usage = match ran {
