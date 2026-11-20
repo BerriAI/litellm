@@ -206,7 +206,7 @@ pub(crate) fn messages_client(
     kwargs: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Result<Client, litellm_http::Error>> {
-    let config = resolution(call_settings(py, kwargs, asynchronous)?).config;
+    let config = call_config(py, kwargs, asynchronous)?;
     Ok(pool().client(&config, ClientVariant::Undecoded))
 }
 
