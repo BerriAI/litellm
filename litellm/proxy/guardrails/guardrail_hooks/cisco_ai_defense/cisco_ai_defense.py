@@ -988,7 +988,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _finalize_inspection(
         self,
         inspect_response: dict[str, object],
-        request_data: dict,
+        request_data: dict[str, object],
         context: _ScanContext,
         start_time: datetime,
         response_obj: object = None,
@@ -1114,7 +1114,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
                 self.on_flagged_action,
             )
 
-        if self.on_flagged_action == "block":
+        if self.on_flagged_action == "block" or self._redacts_json_input(action, context, request_data.get("input")):
             raise HTTPException(
                 status_code=400,
                 detail=self._build_block_payload(context, verdict),
@@ -1367,7 +1367,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _apply_redaction(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response_obj: object,
         context: _ScanContext,
         verdict: _CiscoVerdict,
@@ -1428,7 +1428,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _redact_chat_input(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         sanitized_text: str | None,
         sanitized_messages: list[dict[str, object]] | None,
     ) -> bool:
@@ -1440,6 +1440,9 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             # field, so drop it before rewriting the real conversation.
             sanitized_messages = sanitized_messages[:-1] or None
         uses_input: Final = "input" in request_data and "messages" not in request_data
+        request_input: Final[object] = request_data.get("input")
+        if uses_input and self._carries_json_part(request_input):
+            return False
         has_instructions: Final = request_data.get("instructions") is not None
         instructions_redacted = False
         if has_instructions:
@@ -1460,7 +1463,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             return True
         if sanitized_text:
             if uses_input:
-                rewritten_input: Final = self._rewrite_responses_input_text(request_data.get("input"), sanitized_text)
+                rewritten_input: Final = self._rewrite_responses_input_text(request_input, sanitized_text)
                 if rewritten_input is not None:
                     request_data["input"] = rewritten_input
                     return True
@@ -1755,6 +1758,10 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
                 out.append({"role": role, "content": content})
         return out or None
 
+    @classmethod
+    def _redacts_json_input(cls, action: str, context: _ScanContext, request_input: object) -> bool:
+        return action == _ACTION_REDACT and context.direction == "input" and cls._carries_json_part(request_input)
+
     @staticmethod
     def _carries_json_part(request_input: object) -> bool:
         items: Final = parts_of(request_input)
@@ -1771,7 +1778,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         """
         if isinstance(original_input, str):
             return sanitized_text
-        if CiscoAIDefenseGuardrail._carries_json_part(original_input) or not isinstance(original_input, list):
+        if not isinstance(original_input, list):
             return None
 
         text_types: Final = CiscoAIDefenseGuardrail._TEXT_PART_TYPES

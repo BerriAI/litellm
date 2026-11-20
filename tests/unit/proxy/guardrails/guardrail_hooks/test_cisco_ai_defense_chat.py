@@ -810,6 +810,41 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
                     call_type="completion",
                 )
 
+    @pytest.mark.parametrize("on_flagged_action", ["block", "monitor"])
+    @pytest.mark.parametrize(
+        "verdict",
+        [
+            {"sanitized_text": 'My SSN is [REDACTED]. {"order": 7}'},
+            {"sanitized_messages": [{"role": "user", "content": 'My SSN is [REDACTED]. {"order": 7}'}]},
+        ],
+        ids=["sanitized_text", "sanitized_messages"],
+    )
+    @pytest.mark.asyncio
+    async def test_redact_blocks_input_json_requests_in_every_mode(self, on_flagged_action, verdict):
+        g = _make_guardrail(event_hook="pre_call", on_flagged_action=on_flagged_action)
+        request_input = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "My SSN is 123-45-6789."},
+                    {"type": "input_json", "data": {"order": 7}},
+                ],
+            }
+        ]
+        data = {"input": request_input}
+        cisco_resp = _redact_response(**verdict, rules=({"rule_name": "PII"},))
+
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
+            with pytest.raises(HTTPException):
+                await g.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=DualCache(),
+                    data=data,
+                    call_type="completion",
+                )
+
+        assert data["input"] == request_input
+
     @pytest.mark.asyncio
     async def test_redact_applies_sanitized_input_when_instructions_not_flagged(self):
         g = _make_guardrail(event_hook="pre_call")

@@ -200,11 +200,12 @@ def distinct_keys(renames: Sequence[tuple[str, str]]) -> tuple[str, ...]:
 
 def _claim_names(renames: Sequence[tuple[str, str]]) -> Iterator[str]:
     taken: Final[set[str]] = {new for old, new in renames if new == old}  # mutable-ok: names already used in one object
+    candidates: Final[dict[str, Iterator[str]]] = {}  # mutable-ok: resumes each name's suffix search where it stopped
     for old, new in renames:
         if new == old:
             yield old
             continue
-        name = next(candidate for candidate in _numbered(new) if candidate not in taken)
+        name = next(candidate for candidate in candidates.setdefault(new, _numbered(new)) if candidate not in taken)
         taken.add(name)
         yield name
 
