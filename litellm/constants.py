@@ -1223,6 +1223,7 @@ openai_compatible_providers: Final[list[str]] = [
     "reka",
     "streamlake",
     "wally",
+    "turing",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1252,6 +1253,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "lambda_ai",
     "hyperbolic",
     "wandb",
+    "turing",
 ]
 _openai_like_providers: Final[list[str]] = [
     "predibase",
