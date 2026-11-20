@@ -494,11 +494,16 @@ class _ProviderFileAccessGuard(Protocol):
 _METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-method-override")
 
 
+def _fully_decoded_path(path: str) -> str:
+    decoded: Final = unquote(path)
+    return path if decoded == path else _fully_decoded_path(decoded)
+
+
 def _gemini_passthrough_file_id(method: str, headers: Mapping[str, str], path: str) -> str | None:
     methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
     if methods.isdisjoint(("GET", "DELETE")):
         return None
-    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(unquote(path))
+    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(posixpath.normpath(f"/{_fully_decoded_path(path)}"))
     return single_file.group(1) if single_file is not None else None
 
 
