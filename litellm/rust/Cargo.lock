@@ -3969,6 +3969,7 @@ dependencies = [
  "litellm-circuit-breaker",
  "litellm-error",
  "litellm-secret-value",
+ "openssl",
  "rstest",
  "serde",
  "sqlx",

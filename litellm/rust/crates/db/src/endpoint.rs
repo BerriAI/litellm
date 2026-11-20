@@ -97,7 +97,7 @@ impl Endpoint {
             Some(identity) => options
                 .ssl_client_cert_from_pem(&identity.cert_pem)
                 .ssl_client_key_from_pem(identity.key_pem.expose()),
-            None => options,
+            None => pgsslkey_as_pkcs8(options),
         };
         match &self.ssl_root_cert {
             Some(cert) => options.ssl_root_cert(cert),
@@ -127,6 +127,31 @@ impl Endpoint {
     pub fn socket_timeout(&self) -> Result<Option<Duration>, Error> {
         seconds(self.pool.socket_timeout_seconds)
     }
+}
+
+/// The `PGSSLKEY` file sqlx reads, handed to it as PKCS#8 PEM, the only key form native-tls loads. libpq and rustls
+/// also load PKCS#1 and SEC1 keys. A file OpenSSL cannot read is left for sqlx to read and report.
+#[cfg(feature = "native-tls")]
+fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
+    match std::env::var_os("PGSSLKEY")
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|pem| pkcs8_pem(&pem))
+    {
+        Some(key) => options.ssl_client_key_from_pem(key),
+        None => options,
+    }
+}
+
+#[cfg(not(feature = "native-tls"))]
+fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
+    options
+}
+
+#[cfg(feature = "native-tls")]
+fn pkcs8_pem(pem: &[u8]) -> Option<Vec<u8>> {
+    openssl::pkey::PKey::private_key_from_pem(pem)
+        .and_then(|key| key.private_key_to_pem_pkcs8())
+        .ok()
 }
 
 fn seconds(value: Option<f64>) -> Result<Option<Duration>, Error> {
@@ -332,6 +357,35 @@ mod tests {
         probe().execute(&pool).await?;
 
         assert!(stale.is_err());
+        Ok(())
+    }
+
+    #[cfg(feature = "native-tls")]
+    #[test]
+    fn hands_pkcs1_sec1_and_exported_client_keys_to_native_tls_as_pkcs8()
+    -> Result<(), Box<dyn StdError>> {
+        use openssl::{
+            ec::{EcGroup, EcKey},
+            nid::Nid,
+            pkey::PKey,
+            rsa::Rsa,
+        };
+
+        let rsa = Rsa::generate(2048)?;
+        let p256 = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?;
+        let ec = EcKey::generate(&p256)?;
+        let pkcs8 = PKey::from_rsa(rsa.clone())?.private_key_to_pem_pkcs8()?;
+        let exported = [b"Bag Attributes\n    localKeyID: 01\n".as_slice(), &pkcs8].concat();
+
+        for pem in [
+            rsa.private_key_to_pem()?,
+            ec.private_key_to_pem()?,
+            exported,
+        ] {
+            let key = super::pkcs8_pem(&pem).ok_or("OpenSSL reads the key")?;
+            assert!(key.starts_with(b"-----BEGIN PRIVATE KEY-----\n"));
+        }
+        assert_eq!(super::pkcs8_pem(b"not a key"), None);
         Ok(())
     }
 }
