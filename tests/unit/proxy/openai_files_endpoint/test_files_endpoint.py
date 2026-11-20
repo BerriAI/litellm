@@ -6781,6 +6781,44 @@ def test_the_uploading_team_lists_reads_and_deletes_its_plain_upload(
     assert _listed_ids(listed_after_delete) == []
 
 
+def _upload_payroll_through_the_shared_model_as_team_a() -> httpx.Response:
+    return client.post(
+        "/v1/files",
+        files={"file": ("payroll-private.jsonl", b'{"salary": 100}', "application/jsonl")},
+        data={"purpose": "user_data", "model": "gpt-3.5-turbo"},
+        headers=_as_team_member("user-a", "team-a"),
+    )
+
+
+@pytest.mark.parametrize("id_kind", ["raw provider id", "model-routed id"])
+def test_another_team_cannot_read_or_delete_a_model_routed_upload(
+    plain_upload_proxy: _ManagedFileTableOverRows, id_kind: str
+):
+    with respx.mock(assert_all_called=False) as upstream:
+        shared_account: Final = _mock_shared_account(upstream, _OPENAI_ACCOUNT)
+        uploaded: Final = _upload_payroll_through_the_shared_model_as_team_a()
+        assert uploaded.status_code == 200, uploaded.text
+        routed_id: Final = uploaded.json()["id"]
+        file_id: Final = _PLAIN_UPLOAD_ID if id_kind == "raw provider id" else routed_id
+        read: Final = client.get(
+            f"/v1/files/{file_id}/content?model=gpt-3.5-turbo", headers=_as_team_member("user-b", "team-b")
+        )
+        deleted: Final = client.delete(
+            f"/v1/files/{file_id}?model=gpt-3.5-turbo", headers=_as_team_member("user-b", "team-b")
+        )
+        owner_read: Final = client.get(
+            f"/v1/files/{routed_id}/content?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a")
+        )
+
+    assert routed_id != _PLAIN_UPLOAD_ID
+    assert read.status_code == 403, read.text
+    assert deleted.status_code == 403, deleted.text
+    assert shared_account["delete"].call_count == 0
+    assert owner_read.status_code == 200, owner_read.text
+    assert owner_read.content == b'{"salary": 100}'
+    assert shared_account["content"].call_count == 1
+
+
 @_retrieve_and_delete_provider_bodies(_unified_managed_file_id())
 @_ROUTING_HINTS
 def test_proxy_without_managed_files_forwards_a_managed_id_to_the_hinted_model(
