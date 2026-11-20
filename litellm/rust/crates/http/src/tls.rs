@@ -1,9 +1,9 @@
 use std::{path::Path, str::FromStr, sync::Arc};
 
 use rustls::{
-    CipherSuite, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
+    CipherSuite, ClientConfig, DigitallySignedStruct, NamedGroup, RootCertStore, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    crypto::{CryptoProvider, SupportedKxGroup, ring},
+    crypto::{CryptoProvider, ring},
     pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject},
 };
 
@@ -33,13 +33,38 @@ impl FromStr for KeyExchangeGroup {
 }
 
 impl KeyExchangeGroup {
-    fn supported(self) -> &'static dyn SupportedKxGroup {
+    fn named(self) -> NamedGroup {
         match self {
-            Self::X25519 => ring::kx_group::X25519,
-            Self::Secp256r1 => ring::kx_group::SECP256R1,
-            Self::Secp384r1 => ring::kx_group::SECP384R1,
+            Self::X25519 => NamedGroup::X25519,
+            Self::Secp256r1 => NamedGroup::secp256r1,
+            Self::Secp384r1 => NamedGroup::secp384r1,
         }
     }
+
+    /// This group when `provider` offers it. The FIPS build's OpenSSL provider has no X25519, so there a curve the
+    /// provider lacks is unsupported and the default groups are used, as for a name rustls does not know.
+    pub(crate) fn offered_by(
+        self,
+        provider: &CryptoProvider,
+        name: &str,
+    ) -> Result<Self, Unsupported> {
+        if provider
+            .kx_groups
+            .iter()
+            .any(|kx| kx.name() == self.named())
+        {
+            Ok(self)
+        } else {
+            Err(Unsupported::EcdhCurveNotOffered(name.to_owned()))
+        }
+    }
+}
+
+/// The provider TLS configs are built from: the process default the bridge installs, or ring when none is installed.
+pub(crate) fn provider() -> CryptoProvider {
+    CryptoProvider::get_default().map_or_else(ring::default_provider, |installed| {
+        installed.as_ref().clone()
+    })
 }
 
 #[derive(
@@ -100,6 +125,10 @@ pub enum Unsupported {
         "ssl_ecdh_curve {0:?} is not supported: rustls with ring only offers X25519, prime256v1 and secp384r1, so the default key exchange groups are used"
     )]
     EcdhCurve(String),
+    #[error(
+        "ssl_ecdh_curve {0:?} is not offered by the FIPS build's OpenSSL provider, so the default key exchange groups are used"
+    )]
+    EcdhCurveNotOffered(String),
     #[error(
         "ssl_security_level {0:?} is not supported: rustls has one fixed security level, comparable to OpenSSL level 2, so legacy servers that need a lower level cannot be reached"
     )]
@@ -182,11 +211,18 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
     type Error = Error;
 
     fn try_from(config: &HttpClientConfig) -> Result<Self, Self::Error> {
-        let base = ring::default_provider();
+        let base = provider();
         let provider = Arc::new(CryptoProvider {
-            kx_groups: config
-                .key_exchange_group
-                .map_or_else(|| base.kx_groups.clone(), |group| vec![group.supported()]),
+            kx_groups: config.key_exchange_group.map_or_else(
+                || base.kx_groups.clone(),
+                |group| {
+                    base.kx_groups
+                        .iter()
+                        .copied()
+                        .filter(|kx| kx.name() == group.named())
+                        .collect()
+                },
+            ),
             cipher_suites: base
                 .cipher_suites
                 .iter()
@@ -377,6 +413,36 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(offered_groups(&tls), [expected]);
+    }
+
+    #[rstest]
+    #[case::lacking(
+        KeyExchangeGroup::X25519,
+        "X25519",
+        Err(Unsupported::EcdhCurveNotOffered("X25519".into()))
+    )]
+    #[case::offered(
+        KeyExchangeGroup::Secp256r1,
+        "prime256v1",
+        Ok(KeyExchangeGroup::Secp256r1)
+    )]
+    fn a_curve_is_used_only_when_the_provider_offers_it(
+        #[case] group: KeyExchangeGroup,
+        #[case] name: &str,
+        #[case] expected: Result<KeyExchangeGroup, Unsupported>,
+    ) {
+        let ring = ring::default_provider();
+        let without_x25519 = CryptoProvider {
+            kx_groups: ring
+                .kx_groups
+                .iter()
+                .copied()
+                .filter(|kx| kx.name() != NamedGroup::X25519)
+                .collect(),
+            ..ring
+        };
+
+        assert_eq!(group.offered_by(&without_x25519, name), expected);
     }
 
     #[test]

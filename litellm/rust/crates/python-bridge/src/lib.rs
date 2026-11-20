@@ -146,6 +146,9 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        #[cfg(feature = "fips")]
+        let _ = rustls_openssl::default_provider().install_default();
+        #[cfg(not(feature = "fips"))]
         let _ = rustls::crypto::ring::default_provider().install_default();
         module.add(
             "JWT_ID_JAG_TYP",
@@ -321,6 +324,7 @@ mod tests {
             assert_eq!(public_names, expected);
         });
     }
+    #[cfg(not(feature = "fips"))]
     #[rstest::rstest]
     fn module_import_installs_ring_as_the_process_crypto_provider() {
         Python::initialize();
@@ -333,6 +337,22 @@ mod tests {
         assert_eq!(
             format!("{installed:?}"),
             format!("{:?}", rustls::crypto::ring::default_provider())
+        );
+    }
+
+    #[cfg(feature = "fips")]
+    #[rstest::rstest]
+    fn module_import_installs_openssl_as_the_process_crypto_provider() {
+        Python::initialize();
+        Python::attach(|py| {
+            native_module(py);
+        });
+
+        let installed = rustls::crypto::CryptoProvider::get_default()
+            .expect("importing _native should install a process crypto provider");
+        assert_eq!(
+            format!("{installed:?}"),
+            format!("{:?}", rustls_openssl::default_provider())
         );
     }
 }
