@@ -54,7 +54,11 @@ mod _native {
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
     use crate::db_repository::{
+        RustAccessGroupRepository, RustBudgetRepository, RustEndUserRepository,
         RustJwtKeyMappingRepository, RustKeyRepository, RustModelAccessGroupRepository,
+        RustObjectPermissionRepository, RustOrganizationRepository, RustProjectRepository,
+        RustSpendLogRepository, RustTagRepository, RustTeamMembershipRepository,
+        RustTeamRepository, RustUserRepository,
     };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -121,7 +125,7 @@ mod _native {
     #[pymodule_export]
     use crate::routes::embeddings::{aembedding, embedding};
     #[pymodule_export]
-    use crate::routes::messages::{amessages, messages};
+    use crate::routes::messages::{amessages, messages, messages_optional_params};
     #[pymodule_export]
     use crate::routes::ocr::{aocr, ocr, ocr_health_check_document, ocr_passthrough_response};
     #[pymodule_export]
@@ -184,6 +188,7 @@ mod tests {
                 "atranscription",
                 "messages",
                 "amessages",
+                "messages_optional_params",
                 "completion",
                 "acompletion",
                 "responses",
@@ -227,6 +232,17 @@ mod tests {
                 "RustKeyRepository",
                 "RustJwtKeyMappingRepository",
                 "RustModelAccessGroupRepository",
+                "RustBudgetRepository",
+                "RustEndUserRepository",
+                "RustUserRepository",
+                "RustOrganizationRepository",
+                "RustTeamMembershipRepository",
+                "RustTeamRepository",
+                "RustAccessGroupRepository",
+                "RustObjectPermissionRepository",
+                "RustProjectRepository",
+                "RustTagRepository",
+                "RustSpendLogRepository",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",

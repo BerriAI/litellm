@@ -850,12 +850,19 @@ class ProxyInitializationHelpers:
         run_hypercorn: bool,
         run_granian: bool,
         tls: bool,
+        config: str | None,
     ) -> "PythonServer":
         """``run_gunicorn_server`` never hands ``--keepalive_timeout`` or forwarded IPs to gunicorn, so its workers keep
         gunicorn's keep-alive and gunicorn's trusted proxies, which include ``::1`` where uvicorn's do not."""
         import uvicorn
 
-        from litellm.proxy.rust_forward.server import Listener, PythonServer, Server, uvicorn_trusted_proxies
+        from litellm.proxy.rust_forward.server import (
+            Listener,
+            PythonServer,
+            Server,
+            local_config_path,
+            uvicorn_trusted_proxies,
+        )
         from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
         server: Final = (
@@ -885,6 +892,7 @@ class ProxyInitializationHelpers:
             keepalive_seconds=keepalive,
             graceful_timeout_seconds=GracefulShutdownManager.get_timeout(),
             trusted_proxies=trusted_proxies,
+            config_path=local_config_path(config, os.environ),
         )
 
     @staticmethod
@@ -1379,7 +1387,7 @@ def run_server(
     request_timeout,
     drop_params,
     add_function_to_prompt,
-    config,
+    config: str | None,
     max_budget,
     test: str | bool | None,
     local,
@@ -1500,6 +1508,7 @@ def run_server(
             run_hypercorn=run_hypercorn is True,
             run_granian=run_granian is True,
             tls=None not in (ssl_keyfile_path, ssl_certfile_path),
+            config=config,
         )
         if prometheus_metrics_port == server.port:
             raise click.UsageError("--prometheus_metrics_port must differ from --port")

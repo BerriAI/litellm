@@ -419,6 +419,7 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=virtual_logging_obj,
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
                 incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
+                flatten_url_elicitation=True,
             )
         except Exception as e:
             virtual_request_data: Final = virtual_processor.data
@@ -1286,6 +1287,7 @@ if MCP_AVAILABLE:
             requested_server_id=canonical_server_id,
             incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
             guardrail_auth=guardrail_auth,
+            flatten_url_elicitation=True,
         )
         return executed, tool_start_time
 

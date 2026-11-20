@@ -1650,6 +1650,52 @@ async def test_a_stored_blank_user_turn_is_filled_only_when_the_follow_up_route_
     ]
 
 
+_STORED_REFERENCES: Final = [{"type": "tool_reference", "tool_name": "get_weather"}]
+
+
+@pytest.mark.parametrize(
+    ("follow_up_route", "replayed_output"),
+    (
+        ({"model": "claude-opus-5-5", "custom_llm_provider": "anthropic"}, _STORED_REFERENCES),
+        ({"model": "gpt-5.6", "custom_llm_provider": "openai"}, json.dumps(_STORED_REFERENCES)),
+        ({"model": "gemini-3.1-pro-preview", "custom_llm_provider": "vertex_ai"}, json.dumps(_STORED_REFERENCES)),
+        ({"model": "my-batch-alias"}, json.dumps(_STORED_REFERENCES)),
+    ),
+    ids=(
+        "anthropic_follow_up_replays_references",
+        "openai_follow_up_replays_json",
+        "vertex_follow_up_replays_json",
+        "unresolved_alias_follow_up_replays_json",
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_stored_tool_reference_output_replays_in_the_shape_the_follow_up_route_takes(
+    follow_up_route: Mapping[str, str], replayed_output: object
+) -> None:
+    stored_turn: Final = {
+        **_spend_log("chatcmpl-loaded-tools", "session-tool-references", "", "Loaded."),
+        "proxy_server_request": {
+            "input": [
+                {"role": "user", "content": "Load the weather tools."},
+                {"type": "function_call", "call_id": "call_replayed_refs", "name": "load_tools", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_replayed_refs", "output": _STORED_REFERENCES},
+            ],
+            "model": "claude-bridge",
+        },
+    }
+
+    request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        previous_response_id="chatcmpl-loaded-tools",
+        litellm_completion_request={**follow_up_route, "messages": [{"role": "user", "content": "Weather in Paris?"}]},
+        instructions=None,
+        stored_turns=_stored_turns(stored_turn),
+        request_input="Weather in Paris?",
+    )
+
+    replayed: Final = _replayed_turns(ChatCompletionSession(messages=request["messages"], litellm_session_id=None))
+    assert [content for role, content in replayed if role == "tool"] == [replayed_output]
+
+
 @pytest.mark.asyncio
 async def test_stored_blank_user_items_that_inference_continues_replay_one_turn_each() -> None:
     replay: Final = await _replay_of_a_blank_follow_up(

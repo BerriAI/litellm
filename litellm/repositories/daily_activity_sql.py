@@ -215,6 +215,10 @@ def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) 
 
 
 def _rollup_metric_select(table: DailyActivityTable) -> str:
+    cache_cost: Final = "SUM(cache_cost)::float" if table is DailyActivityTable.CUSTOMER_MEMBER else "0::float"
+    priced_cache_tokens: Final = (
+        "SUM(priced_cache_tokens)::bigint" if table is DailyActivityTable.CUSTOMER_MEMBER else "0::bigint"
+    )
     return f"""
             SUM(spend)::float AS spend,
             {_ptu_flat_cost_select(table)},
@@ -222,6 +226,8 @@ def _rollup_metric_select(table: DailyActivityTable) -> str:
             SUM(completion_tokens)::bigint AS completion_tokens,
             SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
             SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
+            {cache_cost} AS cache_cost,
+            {priced_cache_tokens} AS priced_cache_tokens,
             SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
             SUM(compression_savings_spend)::float AS compression_savings_spend,
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,

@@ -10,12 +10,13 @@
 //! | [`reprlib`] | `reprlib.repr(value)` |
 //! | [`json`] | `json.dumps(value)`, `json.loads(text)`, `type(json.loads(text)).__name__`, and `str()` and `==` of loaded values |
 //! | [`pickle`] | `pickle.loads(data)` and `pickle.dumps(value)` for plain data |
-//! | [`truthy`] | `bool(value)`, also straight off a `serde_json` value |
+//! | [`truthy`] | `bool(value)`, also straight off a `serde_json` value, and `a or b or ...` |
 //! | [`number`] | `int(text)`, `float(text)`, `int(value)` and `float(value)` of loaded values, `sum(floats)`, `int(seconds)` as a `Duration`, and `str()` of an `int` or `float` |
 //! | [`format`] | `format(value, f".{precision}f")` and `format(value, f".{precision}%")` |
-//! | [`unicode`] | `str.isspace()` for one character, and whether `str.encode("latin-1")` succeeds |
+//! | [`unicode`] | `str.isspace()` and `unicodedata.category()` for one character, and whether `str.encode("latin-1")` succeeds |
 //! | [`pydantic`] | `TypeAdapter(bool)` and `TypeAdapter(int)` lax validation |
-//! | [`urllib`] | `urllib.parse.quote(text, safe=safe)` |
+//! | [`urllib`] | `urllib.parse.quote(text, safe=safe)` and `urllib.parse.urlsplit(url)` |
+//! | [`base64`] | `base64.b64decode(text, validate=True)` |
 //! | [`datetime`] | `datetime.fromtimestamp(seconds, timezone.utc)` fields and `datetime.fromisoformat(text)` |
 //! | [`flags`] | LiteLLM's own text-to-bool helpers, such as `str_to_bool` and `_redis._str_to_bool` |
 //! | [`lenient`] | how Python reads an unvalidated config value: `value is True`, or a value of the expected shape |
@@ -31,6 +32,7 @@
 //! - [`pickle::loads`] decodes `tuple`, `set`, and `frozenset` as lists.
 //! - [`number`] reads ASCII digits only, while Python's `int` and `float` accept any Unicode decimal digit.
 
+pub mod base64;
 pub mod datetime;
 mod error;
 pub mod flags;

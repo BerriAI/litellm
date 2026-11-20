@@ -226,6 +226,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    Litellm_EntityType,
     SpecialModelNames,
     UserAPIKeyAuth,
 )
@@ -335,9 +336,9 @@ from litellm.proxy.v2_proxy_fields import (
 )
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
 from litellm.repositories.table_repositories import (
-    EndUserRepository,
     HealthCheckRepository,
     SpendLogsRepository,
     UserNotificationsRepository,
@@ -4220,8 +4221,13 @@ class ProxyLogging:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if self.alerting is not None and (
-            "slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting
+        is_team_percentage_email: Final = (
+            type == "max_budget_alert" and user_info.event_group == Litellm_EntityType.TEAM
+        )
+        if (
+            not is_team_percentage_email
+            and self.alerting is not None
+            and ("slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting)
         ):
             if self.slack_alerting_instance is not None:
                 await self.slack_alerting_instance.budget_alerts(
@@ -6027,6 +6033,7 @@ class PrismaClient:
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
         self.autorouter_turn_transactions: list[AutoRouterTurnTransaction] = []
         self.baseline_accounting_lock: Final = asyncio.Lock()
+        self.baseline_accounting_recovery_due_at = 0.0
         self.proxy_logging_obj = proxy_logging_obj
         self.token_auth: DatabaseTokenAuth | None = resolve_database_token_auth()
         verbose_proxy_logger.debug("Creating Prisma Client..")

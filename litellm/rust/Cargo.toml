@@ -66,6 +66,7 @@ litellm-yaml = { path = "crates/yaml" }
 litellm-db = { path = "crates/db" }
 litellm-db-resolve = { path = "crates/db-resolve" }
 litellm-repositories = { path = "crates/repositories" }
+litellm-license = { path = "crates/license" }
 litellm-db-testing = { path = "crates/db-testing" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
@@ -153,6 +154,7 @@ tempfile = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
+struct-field-names-as-array = "0.3.0"
 url = "2.5.8"
 percent-encoding = "2.3"
 webpki-roots = "1.0.10"

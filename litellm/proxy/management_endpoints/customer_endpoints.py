@@ -47,7 +47,7 @@ from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
-from litellm.repositories.table_repositories import EndUserRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )

@@ -11,12 +11,12 @@ use serde::Deserialize;
 
 use super::{Failed, FallbackChain, FallbackHop, Lists, Target, Tried, group_members};
 use crate::{
-    Router, RouterStateSnapshot,
+    Call, Router, RouterStateSnapshot,
     config::Op,
     error::{AttemptError, Error, FailureKind},
     fallback::FallbackTarget,
     health::should_retry_status,
-    host::{RouterEvent, RouterRequest, UncountedRetries},
+    host::{CallError, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
     select::{Candidates, SelectInputs},
 };
 
@@ -169,14 +169,16 @@ impl Router {
     /// The fallback chain for a stream from `origin` that failed with `failure` before content:
     /// `async_function_with_fallbacks_common_utils` re-entered from the stream wrapper, so the
     /// group's own retry loop does not run again.
-    pub async fn fallback_stream(
+    pub async fn fallback_stream<H: RouterHost>(
         &self,
+        host: &H,
         op: Op,
         request: RouterRequest,
         origin: StreamOrigin,
         failure: AttemptError,
-    ) -> Result<super::RouterResponse, Error> {
+    ) -> Result<super::RouterResponse<H::Response>, CallError<H::Failure>> {
         self.live()?;
+        let call = Call::new(&self.core, host);
         let snapshot = self.core.snapshot.load_full();
         let request = Arc::new(request);
         let mut chain = FallbackChain::default();
@@ -185,36 +187,38 @@ impl Router {
                 .attempted
                 .push(Tried::Target(FallbackTarget::Name(request.model.clone())));
         }
-        self.core
-            .fall_back(
-                &snapshot,
-                &op,
-                &request,
-                origin.target(),
-                FallbackHop {
-                    depth: origin.depth,
-                    level: origin.level,
-                    scope: 0,
-                },
-                &mut chain,
-                Failed {
-                    routed: origin.routed.clone(),
-                    ..Failed::from(Error::Attempt(failure))
-                },
-            )
-            .await
+        call.fall_back(
+            &snapshot,
+            &op,
+            &request,
+            origin.target(),
+            FallbackHop {
+                depth: origin.depth,
+                level: origin.level,
+                scope: 0,
+            },
+            &mut chain,
+            Failed {
+                routed: origin.routed.clone(),
+                ..Failed::from(Error::from(failure))
+            },
+        )
+        .await
+        .map_err(|error| call.ended(error))
     }
 
     /// `_astream_retry_same_group`: re-run the attempt in the stream's own group until a retry
     /// returns a response or the budget runs out. The failed result carries the newest failure.
-    pub async fn retry_stream(
+    pub async fn retry_stream<H: RouterHost>(
         &self,
+        host: &H,
         op: Op,
         request: RouterRequest,
         origin: StreamOrigin,
         failure: AttemptError,
-    ) -> Result<super::RouterResponse, Error> {
+    ) -> Result<super::RouterResponse<H::Response>, CallError<H::Failure>> {
         self.live()?;
+        let call = Call::new(&self.core, host);
         let snapshot = self.core.snapshot.load_full();
         let request = Arc::new(request);
         let target = origin.target();
@@ -228,8 +232,7 @@ impl Router {
             ..SelectInputs::default()
         };
         let counted = |c: &Candidates, n: usize| if c.kind.is_single() { 0 } else { n };
-        let (healthy, all) = self
-            .core
+        let (healthy, all) = call
             .candidates(&snapshot, &op, &request, &target.group, &counting)
             .await
             .map(|c| (counted(&c, c.healthy.len()), counted(&c, c.all.len())))
@@ -244,18 +247,15 @@ impl Router {
             ..SelectInputs::default()
         };
         let mut last = failure;
+        let mut raised_at = None;
         for attempt in origin.attempted_retries..budget {
             if last.ends_retries() {
                 break;
             }
-            if !policy_applies
-                && !self
-                    .core
-                    .should_retry(&snapshot, &request, &last, healthy, all)
-            {
+            if !policy_applies && !call.should_retry(&snapshot, &request, &last, healthy, all) {
                 break;
             }
-            let delay = self.core.time_to_sleep(
+            let delay = call.time_to_sleep(
                 &snapshot,
                 last.retry_after,
                 budget - attempt,
@@ -263,14 +263,13 @@ impl Router {
                 healthy,
                 all,
             );
-            self.core.host.sleep(delay).await;
-            self.core.host.observe(&RouterEvent::Retry {
+            host.sleep(delay).await;
+            host.observe(&RouterEvent::Retry {
                 model_group: target.group.clone(),
                 retry: attempt + 1,
                 delay,
             });
-            match self
-                .core
+            match call
                 .attempt(
                     &snapshot,
                     &op,
@@ -290,7 +289,10 @@ impl Router {
                 Err(failed) => match *failed.error {
                     // `_stream_fallback_error_for_raised`: a status the pre-stream retry rule
                     // would not retry ends the retries with that failure.
-                    Error::Attempt(failure) => {
+                    Error::Attempt {
+                        failure,
+                        raised_at: slot,
+                    } => {
                         if let Some(id) = failure
                             .failed_deployment_id
                             .clone()
@@ -301,15 +303,19 @@ impl Router {
                         }
                         let stop = failure.status.is_some_and(|s| !should_retry_status(s));
                         last = failure;
+                        raised_at = slot;
                         if stop {
                             break;
                         }
                     }
-                    other => return Err(other),
+                    other => return Err(call.ended(other)),
                 },
             }
         }
-        Err(Error::Attempt(last))
+        Err(call.ended(Error::Attempt {
+            failure: last,
+            raised_at,
+        }))
     }
 }
 

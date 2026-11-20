@@ -1515,9 +1515,11 @@ class CustomStreamWrapper:
                     return model_response
 
                 if getattr(model_response, "usage", None) is not None:
-                    return model_response.model_copy(
-                        update={"choices": [choice for choice in model_response.choices if _carries_payload(choice)]}
-                    )
+                    payload_choices: Final = [choice for choice in model_response.choices if _carries_payload(choice)]
+                    if not payload_choices and self.custom_llm_provider == LlmProviders.BEDROCK.value:
+                        self._record_usage_only_chunk(model_response)
+                        return
+                    return model_response.model_copy(update={"choices": payload_choices})
                 return
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
@@ -2046,6 +2048,10 @@ class CustomStreamWrapper:
             chunk_usage: Final = getattr(chunk, "usage", None)
             if isinstance(chunk_usage, Usage):
                 model_response.usage = chunk_usage
+                if self.custom_llm_provider == LlmProviders.BEDROCK.value:
+                    served_tier: Final = stored_attribute(chunk, "service_tier")
+                    if isinstance(served_tier, str) and served_tier:
+                        set_extra_attribute(model_response, "service_tier", served_tier)
             elif isinstance(chunk_usage, BaseModel):
                 model_response.usage = Usage(**_keyword_fields(chunk_usage.model_dump()))
 

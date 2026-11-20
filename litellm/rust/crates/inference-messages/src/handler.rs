@@ -20,13 +20,16 @@ use litellm_host::{
 use litellm_http::Phases;
 use litellm_llms::anthropic::messages::transformation::is_claude_model;
 use litellm_llms::base_llm::{
-    auth::{Authenticated, AzureAdTokenHosts, ValidatedEnvironment, resolve_auth},
+    auth::{
+        Authenticated, AzureAdTokenHosts, ValidatedEnvironment, log_in_to_vertex, resolve_auth,
+    },
     messages::{
         context::MessagesTransformContext,
         streaming::{ByteStream, StreamDecoder},
         transformation::{BaseMessagesConfig, FederatedEnvironment},
     },
 };
+use litellm_llms::vertex_ai::messages::transformation::vertex_connection_params;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
@@ -36,7 +39,8 @@ use serde_json::{Map, Value};
 
 use super::{
     Delivered, Error, HostAnswer, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
-    Transport, TransportRequest, TransportResponse, UnencodableHeader, WorkloadIdentity,
+    Transport, TransportRequest, TransportResponse, UnencodableHeader, UnsendableUrl,
+    WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{
         MESSAGES_CONNECT_TIMEOUT_SECS, MESSAGES_HTTP_ERROR_ATTEMPTS,
@@ -335,7 +339,9 @@ async fn provider_call(
     let dropped_keys = top_level_paths(&shaping.settings.additional_drop_params);
     let without_keys = without_additional_drop_params(sanitized, &dropped_keys)?;
     let requested = requested_optional_params(without_keys, provider, &transform_context)?;
-    let requested_params = serde_json::to_value(&requested.params).map_err(serialize_failure)?;
+    let requested_params =
+        serde_json::to_value(config.logged_params(requested.params.clone(), &transform_context)?)
+            .map_err(serialize_failure)?;
     let trimmed =
         without_additional_drop_params(requested, &shaping.settings.additional_drop_params)?;
 
@@ -396,6 +402,15 @@ async fn provider_call(
         },
     }
     .with_azure_ad_token_hosts(credentials.azure_ad_token_hosts)?;
+    let (validated, logged_in_project) =
+        log_in_to_vertex(credentials.auth, validated, &env_lookup).await?;
+    let connection_params = vertex_connection_params(
+        connection_params,
+        &trimmed.model,
+        logged_in_project,
+        &shaping.vertex.supported_regions,
+        &env_lookup,
+    );
 
     let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let requested_output_format = trimmed.params.output_format.clone();
@@ -404,7 +419,10 @@ async fn provider_call(
         .map(|fallback_context| (trimmed.clone(), fallback_context));
     let body = config.request_body(
         tool_custom_field.apply(
-            config.transform_anthropic_messages_request(trimmed, &transform_context)?,
+            config.transform_anthropic_messages_request(
+                config.without_rejected_params(trimmed, &connection_params)?,
+                &transform_context,
+            )?,
             shaping.settings.drops_unsupported_params,
         ),
         &validated.headers,
@@ -439,7 +457,7 @@ async fn provider_call(
     };
 
     let request_context = RequestContext {
-        model: body.model.clone(),
+        model: config.logged_model(&body.model),
         custom_llm_provider: provider.as_str().to_string(),
         optional_params: requested_params,
         secret_fields: Vec::new(),
@@ -779,6 +797,13 @@ fn hosted_request(
     })
 }
 
+fn unsendable_url(provider: MessagesProvider, url: &str) -> Option<UnsendableUrl> {
+    provider
+        .refuses_unsendable_urls()
+        .then(|| UnsendableUrl::of(url))
+        .flatten()
+}
+
 async fn send_recovering(
     http: &litellm_http::Client,
     transport: Option<&dyn Transport>,
@@ -794,6 +819,9 @@ async fn send_recovering(
         log_request_body(request.provider.as_str(), request.stream, &body);
         if let Some(value) = &request.unencodable_request_header {
             return Err(Error::transport(UnencodableHeader::Sent(value.clone())));
+        }
+        if let Some(unsendable) = unsendable_url(request.provider, &request.wire.url) {
+            return Err(Error::transport(unsendable));
         }
         // The credential header built from the caller's api_key never passes the caller header
         // check, so it is checked on the wire headers as Python's client encodes them.
@@ -1060,7 +1088,11 @@ fn decode_response(
                 )));
             };
             body.entry("stop_sequence").or_insert(Value::Null);
-            return Ok(MessagesBody::Unchecked(body));
+            return config
+                .transform_unchecked_response(body)
+                .map(MessagesBody::Unchecked)
+                .map_err(Error::from)
+                .map_err(Error::after_send);
         }
     };
     let message = config
@@ -1285,6 +1317,31 @@ mod tests {
     use crate::{MessagesSettings, MessagesShaping, common_utils::messages_provider};
     use litellm_inference::provider::resolve_llm_provider;
 
+    #[rstest]
+    #[case::anthropic(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::Anthropic,
+        false
+    )]
+    #[case::azure_ai(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::AzureAi,
+        false
+    )]
+    #[case::vertex_ai(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::VertexAi,
+        true
+    )]
+    fn only_vertex_ai_refuses_a_url_with_a_control_character(
+        #[case] provider: litellm_core_utils::get_llm_provider_logic::LlmProviders,
+        #[case] refused: bool,
+    ) {
+        let provider = crate::common_utils::messages_provider(provider, "claude-sonnet-4-5")
+            .expect("provider");
+        assert_eq!(
+            super::unsendable_url(provider, "https://api.example.com/v1\t/messages").is_some(),
+            refused
+        );
+    }
+
     #[fixture]
     fn shaping() -> MessagesShaping {
         MessagesShaping::default()
@@ -1307,6 +1364,7 @@ mod tests {
                     ..SupportedEffortTiers::default()
                 },
                 bedrock: BedrockCapabilities {
+                    supports_adaptive_thinking: true,
                     output_config_effort_ceiling: Some(
                         litellm_llms_types::formats::messages::EffortLevel::Max,
                     ),
@@ -1350,6 +1408,8 @@ mod tests {
         provider_call_with_secrets(call, &|_: &str| None).await
     }
 
+    use litellm_auth_gcp::{google::OnGce, vertex::VertexLoginService};
+
     async fn provider_call_with_secrets(
         call: MessagesCall,
         secrets: &(dyn Lookup + Send + Sync),
@@ -1372,9 +1432,16 @@ mod tests {
         let model = provider.model.to_owned();
         let interceptors = ();
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
+        let auth = AuthServices {
+            vertex_login: VertexLoginService::new(std::sync::Arc::new(OnGce {
+                project: "token-project",
+                token: "google-token",
+            })),
+            ..AuthServices::default()
+        };
         provider_call(
             CallerCredentials {
-                auth: &AuthServices::default(),
+                auth: &auth,
                 workload_identity,
                 azure_ad_token_hosts: AzureAdTokenHosts::default(),
                 deferred_secrets: None,
@@ -1534,6 +1601,48 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn vertex_sends_the_google_token_beside_a_caller_bearer_and_only_vertex_betas(
+        shaping: MessagesShaping,
+    ) {
+        let call = vertex_call_requesting(shaping, "2023-06-01", false);
+        let call = MessagesCall {
+            extra_headers: call.extra_headers.map(|headers| {
+                headers
+                    .into_iter()
+                    .chain([(
+                        "anthropic-beta".to_string(),
+                        json!("files-api-2025-04-14,context-1m-2025-08-07"),
+                    )])
+                    .collect()
+            }),
+            ..call
+        };
+        let call = provider_call_with_secrets(call, &vertex_project)
+            .await
+            .unwrap();
+        let sent = |name: &str| {
+            call.wire
+                .headers
+                .iter()
+                .find(|(present, _)| present.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(
+            (
+                sent("authorization"),
+                sent("anthropic-beta"),
+                sent("content-type")
+            ),
+            (
+                Some("Bearer vertex-token, Bearer google-token"),
+                Some("context-1m-2025-08-07"),
+                Some("application/json")
+            )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn vertex_refuses_an_unsupported_version_without_drop_params(shaping: MessagesShaping) {
         assert!(matches!(
             provider_call_with_secrets(
@@ -1542,7 +1651,7 @@ mod tests {
             )
             .await,
             Err(Error::Llm(litellm_llms::Error::InvalidRequest(
-                litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+                litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
             )))
         ));
     }
@@ -2221,5 +2330,123 @@ mod tests {
                 .map(Bytes::from_static)
                 .collect::<Vec<_>>()
         );
+    }
+
+    async fn mantle_call(model: &str, fields: Value, api_key: Option<&str>) -> ProviderCall {
+        provider_call_with_secrets(
+            MessagesCall {
+                body: body(Value::Object(
+                    [
+                        ("model".to_string(), json!(model)),
+                        ("max_tokens".to_string(), json!(16)),
+                        (
+                            "messages".to_string(),
+                            json!([{"role": "user", "content": "hi"}]),
+                        ),
+                    ]
+                    .into_iter()
+                    .chain(fields.as_object().cloned().unwrap_or_default())
+                    .collect(),
+                )),
+                api_key: api_key.map(str::to_string),
+                api_base: Some("https://mantle.test".into()),
+                custom_llm_provider: None,
+                litellm_params: crate::litellm_params(Map::from_iter([
+                    ("model".into(), json!(model)),
+                    ("aws_access_key_id".into(), json!("AKIDEXAMPLE")),
+                    ("aws_secret_access_key".into(), json!("secret")),
+                ]))
+                .unwrap(),
+                extra_headers: None,
+                provider_specific_header: None,
+                timeout: None,
+                shaping: MessagesShaping::default(),
+            },
+            &|name: &str| (name == "AWS_BEARER_TOKEN_BEDROCK").then(|| "env-token".into()),
+        )
+        .await
+        .unwrap()
+    }
+
+    fn authorization(call: &ProviderCall) -> Option<&str> {
+        call.wire
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle_route_signs("bedrock/mantle/anthropic.claude-sonnet-5-5", None)]
+    #[case::bedrock_mantle_provider_reads_the_env(
+        "bedrock_mantle/anthropic.claude-sonnet-5-5",
+        Some("Bearer env-token")
+    )]
+    #[case::bedrock_invoke_signs("bedrock/anthropic.claude-sonnet-5-5", None)]
+    #[tokio::test]
+    async fn an_empty_api_key_reads_the_env_only_on_the_bedrock_mantle_provider(
+        #[case] model: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let call = mantle_call(model, json!({}), Some("")).await;
+        assert_eq!(
+            (authorization(&call), call.signer.is_some()),
+            (expected, expected.is_none())
+        );
+    }
+
+    #[rstest]
+    #[case::listed_region_is_routing_only(
+        "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5",
+        "anthropic.claude-sonnet-5-5"
+    )]
+    #[case::unlisted_region_stays_in_the_model(
+        "bedrock_mantle/ca-west-1/anthropic.claude-sonnet-5-5",
+        "ca-west-1/anthropic.claude-sonnet-5-5"
+    )]
+    #[case::bedrock_route_logs_its_mantle_prefix(
+        "bedrock/mantle/us-west-2/anthropic.claude-sonnet-5-5",
+        "mantle/us-west-2/anthropic.claude-sonnet-5-5"
+    )]
+    #[tokio::test]
+    async fn mantle_calls_are_logged_under_the_model_python_resolves(
+        #[case] model: &str,
+        #[case] logged: &str,
+    ) {
+        let call = mantle_call(model, json!({}), Some("key")).await;
+        assert_eq!(call.identity.model, logged);
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-sonnet-5-5")]
+    #[case::bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5-5")]
+    #[tokio::test]
+    async fn a_string_stream_flag_neither_streams_nor_sends_a_stream_key_to_mantle(
+        #[case] model: &str,
+    ) {
+        let call = mantle_call(model, json!({"stream": "true"}), Some("key")).await;
+        assert_eq!((call.wire.body.get("stream"), call.stream), (None, false));
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(litellm_core_utils::get_llm_provider_logic::LlmProviders::BedrockMantle, "anthropic.claude-sonnet-5-5", Some(json!({"input_tokens": 0, "output_tokens": 0})))]
+    #[case::bedrock_mantle_route(litellm_core_utils::get_llm_provider_logic::LlmProviders::Bedrock, "mantle/anthropic.claude-sonnet-5-5", Some(json!({"input_tokens": 0, "output_tokens": 0})))]
+    #[case::anthropic(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::Anthropic,
+        "claude-sonnet-5-5",
+        None
+    )]
+    fn an_error_envelope_bills_zero_usage_only_on_mantle(
+        #[case] provider: litellm_core_utils::get_llm_provider_logic::LlmProviders,
+        #[case] model: &str,
+        #[case] expected: Option<Value>,
+    ) {
+        let config = messages_provider(provider, model).unwrap().config();
+        let envelope =
+            r#"{"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}"#;
+        let Ok(MessagesBody::Unchecked(body)) = decode_response(config, model, envelope) else {
+            panic!("an error envelope decodes unchecked");
+        };
+        assert_eq!(body.get("usage").cloned(), expected);
     }
 }

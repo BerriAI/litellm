@@ -5,16 +5,16 @@
 //! `organization`, and the order everything happens in. What needs the embedding process is a
 //! host step, asked for one deployment at a time so an error surfaces exactly where the Python
 //! router raises it:
-//! - [`Host::secrets`]: the `os.environ/` references the entry holds;
-//! - [`Host::validate`]: the host's checks, and the entry as it normalizes it;
-//! - [`Host::provider`]: the provider that serves it;
-//! - [`Host::added`]: the host's side effects, and the entry as the registry stores it.
+//! - [`RegistryHost::secrets`]: the `os.environ/` references the entry holds;
+//! - [`RegistryHost::validate`]: the host's checks, and the entry as it normalizes it;
+//! - [`RegistryHost::provider`]: the provider that serves it;
+//! - [`RegistryHost::added`]: the host's side effects, and the entry as the registry stores it.
 
 use serde_json::{Map, Value};
 
 use crate::{
     error::{ConfigError, Error},
-    host::{BuildAsk, BuildPath, Built, Host, Provided, SecretAt, SecretRef},
+    host::{BuildAsk, BuildPath, Built, Provided, RegistryHost, SecretAt, SecretRef},
     registry::{DeploymentSpec, deployment_id},
 };
 
@@ -47,7 +47,7 @@ pub struct BuiltDeployment {
 /// accepted, so it joins the registry before the next one is built, as the Python router adds
 /// each in turn.
 pub async fn build(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     path: BuildPath,
     entries: Vec<Map<String, Value>>,
     resolve_secrets: bool,
@@ -126,7 +126,7 @@ pub async fn build(
 
 /// One deployment's steps: validate, provider, the data-source references, added.
 async fn build_one(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     path: BuildPath,
     index: usize,
     entry: &Map<String, Value>,
@@ -231,18 +231,12 @@ fn text(value: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
-    use async_trait::async_trait;
     use serde_json::json;
 
     use super::*;
-    use crate::{
-        cache::{InMemoryRouterCache, RouterCache},
-        error::AttemptError,
-        host::{Attempt, Output, RouterEvent, RouterRequest, RoutingContext, SelectStage},
-        registry::Deployment,
-    };
+    use crate::registry::Deployment;
 
     /// Records every build step and resolves `os.environ/X` to `secret-X`.
     #[derive(Default)]
@@ -250,31 +244,7 @@ mod tests {
         steps: Mutex<Vec<String>>,
     }
 
-    #[async_trait]
-    impl Host for Recording {
-        async fn invoke(&self, _attempt: &Attempt) -> Result<Output, AttemptError> {
-            unreachable!("the build runs no attempt")
-        }
-        async fn select(
-            &self,
-            _stage: &SelectStage,
-            _ctx: &RoutingContext<'_>,
-            candidates: Vec<Arc<Deployment>>,
-        ) -> Result<Vec<Arc<Deployment>>, Error> {
-            Ok(candidates)
-        }
-        async fn allow_fallback(
-            &self,
-            _request: &RouterRequest,
-            _target: &str,
-        ) -> Result<bool, crate::error::AttemptError> {
-            Ok(true)
-        }
-        async fn sleep(&self, _duration: std::time::Duration) {}
-        fn observe(&self, _event: &RouterEvent) {}
-        fn cache(&self) -> Arc<dyn RouterCache> {
-            Arc::new(InMemoryRouterCache::default())
-        }
+    impl RegistryHost for Recording {
         async fn secrets(&self, _index: usize, refs: &[SecretRef]) -> Result<Vec<Value>, Error> {
             self.steps.lock().unwrap().push(format!("secrets {refs:?}"));
             Ok(refs

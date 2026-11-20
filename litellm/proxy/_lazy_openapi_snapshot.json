@@ -3992,6 +3992,11 @@
               "title": "Total Autorouter Savings Spend",
               "type": "number"
             },
+            "total_cache_cost": {
+              "default": 0.0,
+              "title": "Total Cache Cost",
+              "type": "number"
+            },
             "total_cache_creation_input_tokens": {
               "default": 0,
               "title": "Total Cache Creation Input Tokens",
@@ -4041,6 +4046,11 @@
             "total_pages": {
               "default": 1,
               "title": "Total Pages",
+              "type": "integer"
+            },
+            "total_priced_cache_tokens": {
+              "default": 0,
+              "title": "Total Priced Cache Tokens",
               "type": "integer"
             },
             "total_prompt_caching_savings_spend": {
@@ -4892,6 +4902,12 @@
               "title": "Autorouter Savings Spend",
               "type": "number"
             },
+            "cache_cost": {
+              "default": 0.0,
+              "description": "Recorded cache read and write cost in USD for customer usage",
+              "title": "Cache Cost",
+              "type": "number"
+            },
             "cache_creation_input_tokens": {
               "default": 0,
               "title": "Cache Creation Input Tokens",
@@ -4943,6 +4959,12 @@
               "description": "Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost",
               "title": "Guardrail Spend",
               "type": "number"
+            },
+            "priced_cache_tokens": {
+              "default": 0,
+              "description": "Cache tokens with a recorded cost for customer usage",
+              "title": "Priced Cache Tokens",
+              "type": "integer"
             },
             "prompt_caching_savings_spend": {
               "default": 0.0,
@@ -17248,6 +17270,18 @@
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
             },
+            "scan_tool_descriptions_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For text-only guardrails (panw_prisma_airs, presidio). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.",
+              "title": "Scan Tool Descriptions As Text"
+            },
             "sensitive_data_route_to_model": {
               "anyOf": [
                 {
@@ -20297,6 +20331,18 @@
               ],
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
+            },
+            "scan_tool_descriptions_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For text-only guardrails (panw_prisma_airs, presidio). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.",
+              "title": "Scan Tool Descriptions As Text"
             },
             "send_user_api_key_alias": {
               "anyOf": [

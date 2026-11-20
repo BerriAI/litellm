@@ -4,3 +4,4 @@ Read [README.md](README.md) before adding or changing a repository or a query. I
 
 - Keep [README.md](README.md) in step with the code. A change to the layout, `Database`, or the test and metadata workflow updates it in the same commit
 - Connection concerns (pools, endpoints, error classification, `observe`, `within`, `Statements`) belong in `crates/db`, never here. See `crates/db/AGENTS.md`
+- A query may pick its filter column at runtime only under the README's closed-enum exception. Anything else stays a `.sql` file read with a checked macro
