@@ -38,7 +38,19 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeAlias, TypeVar, Union, cast, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import (
@@ -148,6 +160,17 @@ class _CompactionSummaryPosition:
     output_index: int
 
 
+_McpCallTextField: TypeAlias = Literal["output", "error"]
+_MCP_CALL_TEXT_FIELDS: Final[tuple[_McpCallTextField, ...]] = ("output", "error")
+
+
+@dataclass(frozen=True, slots=True)
+class _McpCallTextPosition:
+    output_index: int
+    item_id: str
+    text_field: _McpCallTextField
+
+
 @dataclass(frozen=True, slots=True)
 class _ReasoningSummaryPosition:
     output_index: int
@@ -172,7 +195,7 @@ class _ProviderThinkingBlockPosition:
     block_index: int
 
 
-_AnswerPosition: TypeAlias = _MessageContentPosition | _CompactionSummaryPosition
+_AnswerPosition: TypeAlias = _MessageContentPosition | _CompactionSummaryPosition | _McpCallTextPosition
 _ReasoningPosition: TypeAlias = _ReasoningSummaryPosition | _ReasoningContentPosition | _ThinkingBlockPosition
 _OutputItemPosition: TypeAlias = _AnswerPosition | _ReasoningPosition
 _ReasoningTextPosition: TypeAlias = _ReasoningPosition | _ProviderThinkingBlockPosition
@@ -185,6 +208,17 @@ def _output_compaction_summary(item: object) -> str | None:
         return None
     block: Final = decode_compaction_item(stream_item_field(item, "encrypted_content"))
     return None if block is None else block.summary
+
+
+def _mcp_call_texts(item: object, output_index: int) -> tuple[tuple[_McpCallTextPosition, str], ...]:
+    item_id: Final = stream_item_field(item, "id")
+    if stream_item_field(item, "type") != "mcp_call" or not isinstance(item_id, str):
+        return ()
+    return tuple(
+        (_McpCallTextPosition(output_index, item_id, text_field), text)
+        for text_field in _MCP_CALL_TEXT_FIELDS
+        if isinstance(text := stream_item_field(item, text_field), str) and text
+    )
 
 
 def _reasoning_output_texts(item: object, output_index: int) -> tuple[tuple[_ReasoningPosition, str], ...]:
@@ -2230,6 +2264,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         output_index: int,
         rewrites_by_position: Mapping[_OutputItemPosition, str],
     ) -> None:
+        if stream_item_field(item, "type") == "mcp_call":
+            for position, rewritten in rewrites_by_position.items():
+                if isinstance(position, _McpCallTextPosition) and position.item_id == stream_item_field(item, "id"):
+                    OpenAIResponsesHandler._write_event_field(item, position.text_field, rewritten)
+            return
         summary_rewrite: Final = rewrites_by_position.get(_CompactionSummaryPosition(output_index))
         if summary_rewrite is not None:
             OpenAIResponsesHandler._write_compaction_summary(item, summary_rewrite)
@@ -2578,6 +2617,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             task_mappings.append(_CompactionSummaryPosition(output_idx))
             return
 
+        mcp_call_texts: Final = _mcp_call_texts(output_item, output_idx)
+        if mcp_call_texts:
+            texts_to_check.extend(text for _, text in mcp_call_texts)
+            task_mappings.extend(position for position, _ in mcp_call_texts)
+            return
+
         # Handle both GenericResponseOutputItem and dict
         content: Sequence[object] | None = None
         if isinstance(output_item, BaseModel):
@@ -2638,6 +2683,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             match position:
                 case _CompactionSummaryPosition():
                     self._write_compaction_summary(output_item, guardrail_response)
+                case _McpCallTextPosition():
+                    self._write_event_field(output_item, position.text_field, guardrail_response)
                 case _MessageContentPosition():
                     self._write_part_text(
                         stream_item_items(output_item, "content"), position.content_index, guardrail_response

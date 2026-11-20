@@ -35,6 +35,7 @@ from openai.types.responses import (
     ResponseReasoningItem,
 )
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
+from openai.types.responses.response_output_item import McpCall
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1488,6 +1489,79 @@ class TestOpenAIResponsesHandlerOutputProcessing:
 
         # Should return unchanged response
         assert result == response
+
+
+def _persimmon_masking_filter() -> ContentFilterGuardrail:
+    return ContentFilterGuardrail(
+        guardrail_name="mask-persimmon",
+        blocked_words=[BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK)],
+    )
+
+
+def _mcp_call(item_id: str, **fields: str) -> McpCall:
+    return McpCall(
+        id=item_id,
+        type="mcp_call",
+        server_label="orchard",
+        name="lookup",
+        arguments="{}",
+        status="failed" if "error" in fields else "completed",
+        **fields,
+    )
+
+
+class TestMcpCallResultsReachOutputGuardrails:
+    @pytest.mark.asyncio
+    async def test_mcp_call_output_and_error_are_masked_and_the_message_keeps_its_text(self) -> None:
+        response: Final = {
+            "output": [
+                _message_item("a fig"),
+                _mcp_call("mcp_toolu_1", output="two persimmon trees"),
+                _mcp_call("mcp_toolu_2", error="persimmon orchard unreachable"),
+            ]
+        }
+
+        await OpenAIResponsesHandler().process_output_response(
+            response, _persimmon_masking_filter(), request_data={"metadata": {}}
+        )
+
+        answered, failed = response["output"][1], response["output"][2]
+        assert "persimmon" not in answered.output and "trees" in answered.output
+        assert "persimmon" not in failed.error and "unreachable" in failed.error
+        assert response["output"][0]["content"][0]["text"] == "a fig"
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_masks_each_mcp_call_in_its_own_done_event_when_the_envelope_orders_items_differently(
+        self,
+    ) -> None:
+        streamed: Final = _mcp_call("mcp_toolu_1", output="two persimmon trees")
+        streamed_failure: Final = _mcp_call("mcp_toolu_2", error="persimmon orchard unreachable")
+        in_envelope: Final = streamed.model_copy()
+        failure_in_envelope: Final = streamed_failure.model_copy()
+        events: Final[list[object]] = [
+            {"type": "response.output_item.done", "output_index": 0, "item": streamed},
+            {"type": "response.output_item.done", "output_index": 1, "item": streamed_failure},
+            {"type": "response.output_item.done", "output_index": 2, "item": _message_item("a fig")},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "claude",
+                    "output": [_message_item("a fig"), failure_in_envelope, in_envelope],
+                },
+            },
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=_persimmon_masking_filter(),
+            request_data={"metadata": {}},
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert "persimmon" not in streamed.output and "trees" in streamed.output
+        assert "persimmon" not in streamed_failure.error and "unreachable" in streamed_failure.error
+        assert (in_envelope, failure_in_envelope) == (streamed, streamed_failure)
 
 
 class TestOpenAIResponsesHandlerHelperMethods:
