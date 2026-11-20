@@ -7,9 +7,10 @@ Extends the A2A SDK's card resolver to support multiple well-known paths.
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 from litellm._logging import verbose_logger
-from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
+from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError, A2AAgentCardError
 from litellm.constants import LOCALHOST_URL_PATTERNS
 from litellm.litellm_core_utils.core_helpers import has_attributes
 
@@ -18,18 +19,14 @@ if TYPE_CHECKING:
 
 # Runtime imports with availability check
 _A2ACardResolver: Any = None
-AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
-PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
+AGENT_CARD_WELL_KNOWN_PATH: Final = "/.well-known/agent-card.json"
+PREV_AGENT_CARD_WELL_KNOWN_PATH: Final = "/.well-known/agent.json"
 FOUNDRY_AGENT_CARD_PATH: Final = "/agentCard/v1.0"
 AGENT_CARD_PATH_PARAM: Final = "agent_card_path"
 A2A_PROTOCOL_VERSION_PARAM: Final = "a2a_protocol_version"
 
 try:
     from a2a.client import A2ACardResolver as _A2ACardResolver
-    from a2a.utils.constants import (
-        AGENT_CARD_WELL_KNOWN_PATH,
-        PREV_AGENT_CARD_WELL_KNOWN_PATH,
-    )
 except ImportError:
     pass
 
@@ -46,6 +43,14 @@ def _discovery_status_code(failures: tuple[tuple[str, Exception], ...]) -> int:
         if isinstance(error, _HasStatusCode) and error.status_code is not None and error.status_code != 404
     )
     return statuses[0] if statuses else 404
+
+
+def _agent_origin(base_url: str) -> str | None:
+    """``scheme://host`` of an agent URL that has a path, where A2A 1.0 places the well-known card; None at the root."""
+    parts: Final = urlsplit(base_url)
+    if not parts.path.strip("/"):
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 def is_localhost_or_internal_url(url: str | None) -> bool:
@@ -204,14 +209,38 @@ def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
     return agent_card
 
 
+def _advertised_endpoints(agent_card: "AgentCard") -> tuple[str, ...]:
+    """Every interface URL of the card; the SDK folds a 0.3 card's ``url`` and ``additionalInterfaces`` into ``supported_interfaces``."""
+    interfaces: Final = getattr(agent_card, "supported_interfaces", None) or ()
+    urls: Final = (getattr(agent_card, "url", None), *(getattr(interface, "url", None) for interface in interfaces))
+    return tuple(url.rstrip("/") for url in urls if url)
+
+
+def _covers(endpoint: str, agent_url: str) -> bool:
+    """True when ``endpoint`` is ``agent_url`` or a path prefix of it (``http://h`` covers ``http://h/jsonrpc``)."""
+    agent: Final = agent_url.rstrip("/")
+    return agent == endpoint or agent.startswith(f"{endpoint}/")
+
+
+_RELATIVE_CARD_PATHS: Final = (AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH, FOUNDRY_AGENT_CARD_PATH)
+_ORIGIN_CARD_PATHS: Final = (AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH)
+
+
 class LiteLLMA2ACardResolver(_A2ACardResolver):
     """
     Custom A2A card resolver that supports multiple well-known paths.
 
-    Extends the base A2ACardResolver to try, in order:
+    Extends the base A2ACardResolver to try, in order, relative to the agent URL:
     - /.well-known/agent-card.json (standard)
     - /.well-known/agent.json (previous/alternative)
     - /agentCard/v1.0
+
+    and then, when the agent URL has a path (its JSON-RPC endpoint is a sub-path such as
+    ``/jsonrpc``), the two well-known paths at the URL's origin, where A2A 1.0 places the card.
+    The origin probes carry none of the agent's headers, since the public card at the well-known
+    URI is unauthenticated by spec and the origin may host other applications. A card found there
+    is accepted only when one of its interface URLs is the agent URL or a path prefix of it, so a
+    host that serves several agents cannot hand this agent's messages and headers to another one.
     """
 
     if TYPE_CHECKING:
@@ -229,30 +258,53 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
                 http_kwargs=http_kwargs,
             )
 
-        return await self._get_agent_card_from_first_reachable_path(
-            paths=(AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH, FOUNDRY_AGENT_CARD_PATH),
+        origin: Final = _agent_origin(self.base_url)
+        return await self._get_agent_card_from_first_reachable_url(
+            candidates=(
+                *((self.base_url, path) for path in _RELATIVE_CARD_PATHS),
+                *(((origin, path) for path in _ORIGIN_CARD_PATHS) if origin else ()),
+            ),
             http_kwargs=http_kwargs,
             failures=(),
         )
 
-    async def _get_agent_card_from_first_reachable_path(
+    async def _get_agent_card_from_first_reachable_url(
         self,
-        paths: tuple[str, ...],
+        candidates: tuple[tuple[str, str], ...],
         http_kwargs: Mapping[str, object] | None,
         failures: tuple[tuple[str, Exception], ...],
     ) -> "AgentCard":
-        if not paths:
+        if not candidates:
             raise A2AAgentCardDiscoveryError(
                 base_url=self.base_url,
                 failures=failures,
                 status_code=_discovery_status_code(failures),
             )
-        path: Final = paths[0]
+        base_url, path = candidates[0]
+        attempt: Final = path if base_url == self.base_url else f"{base_url}{path}"
         try:
-            verbose_logger.debug("Attempting to fetch agent card from %s%s", self.base_url, path)
-            return await super().get_agent_card(relative_card_path=path, http_kwargs=http_kwargs)
+            verbose_logger.debug("Attempting to fetch agent card from %s%s", base_url, path)
+            return await self._get_agent_card_at(base_url, path, http_kwargs)
         except Exception as e:
-            verbose_logger.debug("Failed to fetch agent card from %s%s: %s", self.base_url, path, e)
-            return await self._get_agent_card_from_first_reachable_path(
-                paths=paths[1:], http_kwargs=http_kwargs, failures=(*failures, (path, e))
+            verbose_logger.debug("Failed to fetch agent card from %s%s: %s", base_url, path, e)
+            return await self._get_agent_card_from_first_reachable_url(
+                candidates=candidates[1:], http_kwargs=http_kwargs, failures=(*failures, (attempt, e))
             )
+
+    async def _get_agent_card_at(
+        self, base_url: str, path: str, http_kwargs: Mapping[str, object] | None
+    ) -> "AgentCard":
+        if base_url == self.base_url:
+            return await super().get_agent_card(relative_card_path=path, http_kwargs=http_kwargs)
+        origin_resolver: Final = _A2ACardResolver(httpx_client=self.httpx_client, base_url=base_url)
+        card: Final = await origin_resolver.get_agent_card(relative_card_path=path)
+        endpoints: Final = _advertised_endpoints(card)
+        if not any(_covers(endpoint, self.base_url) for endpoint in endpoints):
+            raise A2AAgentCardError(
+                message=(
+                    f"the card at the origin advertises {endpoints!r}, none of which is the agent URL "
+                    f"{self.base_url!r} or a path prefix of it"
+                ),
+                url=f"{base_url}{path}",
+            )
+        return card
