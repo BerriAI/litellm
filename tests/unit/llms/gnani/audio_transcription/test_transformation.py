@@ -418,6 +418,38 @@ def test_additional_drop_params_drop_gnani_fields_and_never_reach_gnani(respx_mo
     }
 
 
+
+@pytest.mark.parametrize(
+    ("model", "params", "sent"),
+    [
+        (_MODEL, {"prompt": "hello", "additional_drop_params": ["previous_text"]}, {}),
+        (_MODEL, {"prompt": "hello", "additional_drop_params": ["prompt"]}, {}),
+        (_MODEL, {"keywords": ["Lincoln"], "additional_drop_params": ["keyterms"]}, {}),
+        (
+            "gnani/prisma-v2.5",
+            {"language": "hi", "keywords": ["Lincoln"], "additional_drop_params": ["bias_score"]},
+            {"bias_list": b'["Lincoln"]'},
+        ),
+        (_MODEL, {"extra_body": {"topic": "math"}, "additional_drop_params": ["topic", 1]}, {}),
+    ],
+    ids=["mapped_previous_text", "openai_prompt", "mapped_keyterms", "mapped_bias_score", "non_string_entry"],
+)
+def test_additional_drop_params_drop_fields_litellm_maps_or_unpacks(
+    respx_mock: MockRouter, model: str, params: dict[str, object], sent: dict[str, bytes]
+) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=model, file=_AUDIO, api_key="test", api_base=_BASE, **params)
+    form: Final = _form(route.calls.last.request)
+    assert {key: value for key, value in form.items() if key not in ("model", "language_code", "audio_file")} == sent
+
+
+
+def test_prisma_v3_sends_phrase_digit_and_punctuation_keywords_as_keyterms(respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, keywords=["HDFC Bank", "COVID-19"])
+    assert _form(route.calls.last.request)["keyterms"] == b'["HDFC Bank", "COVID-19"]'
+
+
 def test_drop_params_drops_keywords_prisma_v25_cannot_boost(respx_mock: MockRouter) -> None:
     route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
     litellm.transcription(
