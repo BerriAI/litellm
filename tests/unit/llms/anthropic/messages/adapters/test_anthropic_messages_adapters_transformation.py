@@ -13,6 +13,11 @@ import respx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    add_retry_headers_to_response,
+    ensure_response_additional_headers,
+)
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
 )
@@ -37,6 +42,8 @@ from litellm.llms.anthropic.messages.native.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
     AnthropicMessagesRequest,
@@ -55,6 +62,33 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import remove_additional_properties, remove_strict_from_schema
+
+
+@pytest.mark.parametrize("provider_request_id", [None, "azure-request-id"])
+def test_translated_response_preserves_provider_headers_after_retry(provider_request_id: str | None) -> None:
+    response: Final = ModelResponse(
+        model="test-model",
+        choices=[Choices(message=Message(content="hello"), finish_reason="stop")],
+        usage=Usage(prompt_tokens=2, completion_tokens=1, total_tokens=3),
+    )
+    provider_headers: Final = (
+        {"llm_provider-apim-request-id": provider_request_id, "llm_provider-x-ratelimit-remaining-requests": "42"}
+        if provider_request_id is not None
+        else {}
+    )
+    set_hidden_params(response, {"additional_headers": provider_headers})
+
+    translated: Final = AnthropicAdapter().translate_completion_output_params(response)
+    assert translated is not None
+    add_retry_headers_to_response(translated, attempted_retries=1)
+    headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=UserAPIKeyAuth(), **ensure_response_additional_headers(translated)
+    )
+
+    assert headers.get("llm_provider-apim-request-id") == provider_request_id
+    assert headers.get("llm_provider-x-ratelimit-remaining-requests") == ("42" if provider_request_id else None)
+    assert headers["x-litellm-attempted-retries"] == "1"
+    assert translated["content"] == [{"type": "text", "text": "hello"}]
 
 
 def test_translate_openai_response_to_anthropic_empty_choices() -> None:
