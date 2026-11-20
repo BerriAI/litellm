@@ -190,6 +190,11 @@ RUN --mount=type=secret,id=cgr-token \
     apk add --no-cache binutils
 RUN openssl-fips-test
 RUN python -c "from cryptography.hazmat.bindings._rust import openssl; assert openssl.is_fips_enabled(), openssl.openssl_version_text()"
+RUN for lib in "$(python -c 'import grpc._cython.cygrpc as m; print(m.__file__)')" \
+        "$(python -c 'import psycopg; psycopg.pq.version(); print(next(l.split()[-1] for l in open("/proc/self/maps") if "/libpq." in l))')"; do \
+      readelf -d "$lib" | grep -q 'NEEDED.*\[libssl\.so\.4\]' && ! nm -D --defined-only "$lib" | grep -qE ' (SSL|EVP|BIO)_' \
+        || { echo "$lib does not use the image's FIPS OpenSSL"; exit 1; }; \
+    done
 COPY litellm/deploy/docker/scan_bundled_crypto.sh litellm/deploy/docker/fips_elf_inventory.txt /fips-scan/
 RUN chmod +x /fips-scan/scan_bundled_crypto.sh && \
     /fips-scan/scan_bundled_crypto.sh /app/.venv /opt/prisma /usr/local/bin
