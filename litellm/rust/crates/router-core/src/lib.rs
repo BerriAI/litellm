@@ -131,7 +131,7 @@ use parking_lot::Mutex;
 pub use crate::{
     cache::{HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow},
     call::RouterResponse,
-    config::{Op, RouterConfig, RouterDynamicConfig, RoutingStrategy},
+    config::{Op, RouterConfig, RouterDynamicConfig},
     error::{AttemptError, ConfigError, Error, FailureKind, RaisedAt, Unsupported},
     health::{Clock, Health, Outcome, SystemClock},
     host::{
@@ -198,7 +198,7 @@ impl Core {
                 .map(|group| &group.routing_strategy),
         );
         for strategy in strategies {
-            if !strategy.is_native() && !selects {
+            if !strategy::implemented(strategy) && !selects {
                 return Err(Unsupported::Strategy(strategy.clone()).into());
             }
         }

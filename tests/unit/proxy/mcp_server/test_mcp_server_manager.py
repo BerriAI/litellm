@@ -22,18 +22,21 @@ import httpx
 import httpx2
 import pytest
 from fastapi import HTTPException
-from mcp import ClientSession, ReadResourceResult, Resource
+from mcp import ClientSession, MCPError, ReadResourceResult, Resource
 from mcp.server.context import ServerRequestContext
 from mcp.types import (
     CallToolRequestParams as MCPCallToolRequestParams,
 )
 from mcp.types import (
+    INVALID_PARAMS,
+    URL_ELICITATION_REQUIRED,
     CallToolResult,
     GetPromptResult,
     ListToolsResult,
     PaginatedRequestParams,
     Prompt,
     ResourceTemplate,
+    TextContent,
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
@@ -2742,6 +2745,36 @@ class TestMCPServerManager:
         # A genuine non-auth failure keeps operator visibility at warning level, since call_tool's
         # raise_on_error demoted the client-layer error log to debug.
         assert mock_log.warning.called
+
+    @pytest.mark.asyncio
+    async def test_call_passthrough_raises_upstream_url_elicitation_required_with_data(self) -> None:
+        server: Final = self._passthrough_call_server(MCPAuth.true_passthrough, server_id="pt-elicit")
+        manager: Final = MCPServerManager()
+        mock_client: Final = AsyncMock()
+        mock_client.call_tool = AsyncMock(side_effect=_upstream_mcp_error(URL_ELICITATION_REQUIRED))
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
+
+        with pytest.raises(MCPError) as raised:
+            await self._run_call_regular(manager, server)
+
+        assert raised.value.error.code == URL_ELICITATION_REQUIRED
+        assert raised.value.error.data == _URL_ELICITATION_DATA
+
+    @pytest.mark.asyncio
+    async def test_call_passthrough_other_upstream_error_code_stays_iserror(self) -> None:
+        from litellm.mcp_client.client import MCPClient
+
+        server: Final = self._passthrough_call_server(MCPAuth.true_passthrough, server_id="pt-invalid-params")
+        manager: Final = MCPServerManager()
+        mock_client: Final = AsyncMock()
+        mock_client.call_tool = AsyncMock(side_effect=_upstream_mcp_error(INVALID_PARAMS))
+        mock_client.error_tool_result = MCPClient.error_tool_result
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
+
+        result: Final = await self._run_call_regular(manager, server)
+
+        assert result.is_error is True
+        assert result.content == [TextContent(type="text", text="MCPError: upstream refused")]
 
     @pytest.mark.asyncio
     async def test_call_non_passthrough_does_not_opt_into_raise_on_error(self):
@@ -12383,6 +12416,22 @@ class _UpstreamAuthError(Exception):
         self.response = httpx.Response(status_code)
 
 
+_URL_ELICITATION_DATA: Final = {
+    "elicitations": [
+        {
+            "mode": "url",
+            "elicitationId": "el-1",
+            "url": "https://consent.example.invalid/authorize",
+            "message": "Authorize to continue.",
+        }
+    ]
+}
+
+
+def _upstream_mcp_error(code: int) -> MCPError:
+    return MCPError(code=code, message="upstream refused", data=_URL_ELICITATION_DATA)
+
+
 class _RetryFakeClient:
     """A fake MCPClient whose call_tool fails on the first attempt and (optionally) succeeds after."""
 
@@ -12563,6 +12612,45 @@ class TestOBOCallToolRetry:
         assert result.is_error is True
         manager._cred_provider.invalidate_credentials.assert_not_awaited()
         manager.create_mcp_client.assert_not_awaited()
+        assert first.attempts == 1
+
+    async def _call_obo_once(self, manager: MCPServerManager, client: "_RetryFakeClient") -> CallToolResult:
+        return await manager._obo_call_tool_with_retry(
+            client=client,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_upstream_url_elicitation_required_is_raised_with_data_and_not_retried(self) -> None:
+        manager: Final = self._manager()
+        first: Final = _RetryFakeClient(raises=_upstream_mcp_error(URL_ELICITATION_REQUIRED))
+        manager.create_mcp_client = AsyncMock()
+
+        with pytest.raises(MCPError) as raised:
+            await self._call_obo_once(manager, first)
+
+        assert raised.value.error.code == URL_ELICITATION_REQUIRED
+        assert raised.value.error.data == _URL_ELICITATION_DATA
+        manager._cred_provider.invalidate_credentials.assert_not_awaited()
+        assert first.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_other_upstream_error_code_degrades_to_an_error_result(self) -> None:
+        manager: Final = self._manager()
+        first: Final = _RetryFakeClient(raises=_upstream_mcp_error(INVALID_PARAMS))
+        manager.create_mcp_client = AsyncMock()
+
+        result: Final = await self._call_obo_once(manager, first)
+
+        assert result.is_error is True
+        assert result.content == [TextContent(type="text", text="MCPError: upstream refused")]
         assert first.attempts == 1
 
     @pytest.mark.asyncio

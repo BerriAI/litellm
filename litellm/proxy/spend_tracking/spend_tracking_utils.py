@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    claude_subscription_usage,
     get_litellm_metadata_from_kwargs,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
@@ -100,6 +101,7 @@ from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     AzureSpillover,
     CallTypes,
+    ClaudeSubscriptionUsage,
     CostBreakdown,
     LiteLLMBatch,
     LlmProviders,
@@ -214,6 +216,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_savings_estimate",
         "autorouter_baseline_observation",
         "used_client_oauth_token",
+        "claude_subscription_usage",
         "upstream_provider",
         KUBERNETES_POD_ROUTING_KEY,
         "litellm_roi_estimator",
@@ -312,6 +315,7 @@ def _get_spend_logs_metadata(
     router_metadata: SpendLogsRouterMetadata | None = None,
     azure_spillover: AzureSpillover | None = None,
     used_client_oauth_token: bool | None = None,
+    subscription_usage: ClaudeSubscriptionUsage | None = None,
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
     is_silent_experiment: bool = False,
     route_call_type: str | None = None,
@@ -370,6 +374,7 @@ def _get_spend_logs_metadata(
             router_metadata=router_metadata,
             azure_spillover=azure_spillover,
             used_client_oauth_token=used_client_oauth_token,
+            claude_subscription_usage=subscription_usage,
             kubernetes_pod_routing=None,
         )
     verbose_proxy_logger.debug("getting payload for SpendLogs, available keys in metadata: %s", [*metadata])
@@ -391,6 +396,7 @@ def _get_spend_logs_metadata(
         router_metadata=router_metadata,
         azure_spillover=azure_spillover,
         used_client_oauth_token=used_client_oauth_token,
+        claude_subscription_usage=subscription_usage,
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
         **(SilentExperimentFlag(is_silent_experiment=True) if is_silent_experiment else SilentExperimentFlag()),
@@ -741,6 +747,7 @@ def get_logging_payload(
         kwargs = {}
 
     row_kwargs: Final = _CUSTOMER_METADATA_ADAPTER.validate_python(kwargs)
+    subscription_usage: Final = claude_subscription_usage(as_str_mapping(row_kwargs) or {}, response_obj)
     rejected_as_unknown_model: Final = isinstance(response_obj, ProxyModelNotFoundError)
     failure_exception: Final = response_obj if isinstance(response_obj, BaseException) else None
     response_served_from_cache: Final = served_from_cache(response_obj)
@@ -1003,6 +1010,12 @@ def get_logging_payload(
         ),
         used_client_oauth_token=resolve_used_client_oauth_token(
             proxy_stamped_used_client_oauth_token(litellm_params.get("metadata"), litellm_params), custom_llm_provider
+        ),
+        subscription_usage=(
+            standard_logging_payload["metadata"]["claude_subscription_usage"]
+            if standard_logging_payload is not None
+            and "claude_subscription_usage" in standard_logging_payload["metadata"]
+            else subscription_usage
         ),
         kubernetes_pod_routing=kubernetes_pod_routing,
         route_call_type=route_call_type,

@@ -1,3 +1,4 @@
+import datetime
 import json
 from pathlib import Path
 from typing import Final
@@ -160,6 +161,28 @@ def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, o
         for model, info in cost_map.items()
         if model in ABSORBED_MODELS and info.get("mode") == mode
     )
+
+
+# Published serverless removals or redirects by July 29, 2026:
+# https://docs.together.ai/docs/deprecations and https://docs.together.ai/docs/changelog
+@pytest.mark.parametrize(
+    "model",
+    (
+        "together_ai/BAAI/bge-base-en-v1.5",
+        "together_ai/zai-org/GLM-4.6",
+        "together_ai/deepseek-ai/DeepSeek-R1-0528",
+        "together_ai/mistralai/Ministral-3-14B-Instruct-2512",
+        "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
+        "together_ai/meta-llama/Llama-3.2-1B-Instruct",
+        "together_ai/meta-llama/Llama-3.2-3B-Instruct",
+        "together_ai/Qwen/Qwen2-1.5B-Instruct",
+        "together_ai/Qwen/Qwen2.5-14B-Instruct",
+        "together_ai/Qwen/Qwen2.5-72B-Instruct",
+    ),
+)
+def test_together_retired_serverless_rows_keep_a_deprecation_date(model: str, cost_map: CostMap) -> None:
+    value: Final = cost_map[model].get("deprecation_date")
+    assert isinstance(value, str) and datetime.date.fromisoformat(value) <= datetime.date(2026, 7, 29)
 
 
 def test_together_image_rows_price_through_the_cost_calculator(cost_map: CostMap):

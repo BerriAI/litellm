@@ -177,8 +177,8 @@ pub struct ThinkingContext {
     /// The provider accepts `display: "updates"` on thinking translated from the legacy shape
     /// (Python's `LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS`).
     pub keeps_display_updates: bool,
-    /// Python's Mantle routes log why they drop `thinking: {"type": "disabled"}` on a model that
-    /// always thinks.
+    /// Python's Mantle and Vertex AI routes log why they drop `thinking: {"type": "disabled"}` on
+    /// a model that always thinks.
     pub warns_dropped_disabled_thinking: bool,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
