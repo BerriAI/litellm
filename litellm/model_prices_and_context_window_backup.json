@@ -123946,5 +123946,27 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "redrouter/red-cyber-1": {
+        "max_tokens": 32768,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 2.8e-07,
+        "output_cost_per_token": 1.1e-06,
+        "cache_read_input_token_cost": 1.3e-07,
+        "litellm_provider": "redrouter",
+        "supports_reasoning": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+        ],
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_prompt_caching": true,
+        "source": "https://redrouter.org/api/catalog"
     }
 }
