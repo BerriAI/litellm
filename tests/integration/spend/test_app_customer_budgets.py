@@ -14,6 +14,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.types.proxy.management_endpoints.apps import (
+    App,
     AppDefinition,
     AppResource,
     AppResourceType,
@@ -304,6 +305,10 @@ def test_known_app_customer_uses_shared_cache_when_its_database_read_fails(
             api_base=f"{wire.url}/v1", input_cost_per_token=0.001, output_cost_per_token=0.002
         )
         app_id, key = _app(scenario, model, "outage")
+        configured: Final = primary.request("PATCH", f"{_APPS}/{app_id}", {"budget": {"max_budget": 10}})
+        assert configured.status_code == 200, configured.text
+        budget_id: Final = App.model_validate_json(configured.content).budget_id
+        assert budget_id is not None
         customer: Final = _customer(scenario)
         warm: Final = _chat(primary, key, model, customer, asserted_app=app_id)
         assert warm.status_code == 200, warm.text
@@ -339,7 +344,7 @@ def test_known_app_customer_uses_shared_cache_when_its_database_read_fails(
             (app_id, customer.other_member),
             database_url=database,
         )
-        changed: Final = primary.request("PATCH", f"{_APPS}/{app_id}", {"budget": {"max_budget": 1}})
+        changed: Final = primary.request("POST", "/budget/update", {"budget_id": budget_id, "max_budget": 1})
         assert changed.status_code == 200, changed.text
         relay.arm()
         try:

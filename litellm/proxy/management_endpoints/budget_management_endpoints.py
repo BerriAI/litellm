@@ -40,6 +40,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
 )
+from litellm.proxy.management_helpers.apps import invalidate_app_auth_policy
 from litellm.proxy.management_helpers.customer_hierarchy import (
     BudgetGroupScope,
     Failure,
@@ -254,6 +255,7 @@ async def update_budget(
     response: Final = await BudgetRepository(prisma_client).table.update(
         where={"budget_id": budget_obj.budget_id}, data={**budget_obj_jsonified, **window_data}
     )
+    await invalidate_app_auth_policy(user_api_key_cache)
     members: Final = await CustomerMemberRepository(prisma_client).table.find_many(
         where={
             "OR": (
