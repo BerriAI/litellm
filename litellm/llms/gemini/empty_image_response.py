@@ -1,6 +1,5 @@
-from collections.abc import Iterator, Mapping
-from itertools import chain
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -11,22 +10,17 @@ from litellm.exceptions import (
     error_response_without_credentials,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.utils import ImageResponse, Usage
 
 _REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER"})
 _ERROR_DOCS_URL: Final = "https://docs.litellm.ai/docs"
 
 
-class _Part(BaseModel):
-    model_config = ConfigDict(frozen=True)
+class FailedImageBilling(Protocol):
+    def response_cost_calculator(self, result: ImageResponse) -> float | None: ...
 
-    text: str | None = None
-    thought: bool = False
-
-
-class _Content(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    parts: tuple[_Part, ...] = ()
+    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None: ...
 
 
 class _Candidate(BaseModel):
@@ -34,7 +28,6 @@ class _Candidate(BaseModel):
 
     finish_reason: str | None = Field(default=None, alias="finishReason")
     finish_message: str | None = Field(default=None, alias="finishMessage")
-    content: _Content | None = None
 
 
 class _PromptFeedback(BaseModel):
@@ -67,13 +60,15 @@ def _is_refusal(candidate: _Candidate) -> bool:
     )
 
 
-def _parts(candidate: _Candidate) -> tuple[_Part, ...]:
-    return candidate.content.parts if candidate.content else ()
-
-
-def _answer_texts(candidates: tuple[_Candidate, ...]) -> Iterator[str]:
-    parts: Final = chain.from_iterable(_parts(candidate) for candidate in candidates)
-    return (part.text for part in parts if part.text and not part.thought)
+def _bill_answer(billing: FailedImageBilling, answer: ImageResponse) -> None:
+    if answer.usage is None:
+        return
+    cost: Final = billing.response_cost_calculator(result=answer) or 0.0
+    if cost <= 0:
+        return
+    billing.record_partial_usage_for_failure(
+        ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(answer.usage.model_dump()), cost
+    )
 
 
 def _with_detail(summary: str, detail: str | None) -> str:
@@ -89,6 +84,8 @@ def empty_image_response_error(
     model: str,
     llm_provider: str,
     raw_response: httpx.Response,
+    answer: ImageResponse,
+    billing: FailedImageBilling,
 ) -> ContentPolicyViolationError | UnprocessableEntityError:
     result: Final = _parsed(response)
     feedback: Final = result.prompt_feedback
@@ -121,10 +118,9 @@ def empty_image_response_error(
             },
         )
     finish_reasons: Final = ",".join(candidate.finish_reason or "none" for candidate in candidates) or "none"
+    _bill_answer(billing, answer)
     return UnprocessableEntityError(
-        message=_with_detail(
-            f"Gemini returned no image, finishReason={finish_reasons}", " ".join(_answer_texts(candidates))
-        ),
+        message=f"Gemini returned no image, finishReason={finish_reasons}",
         model=model,
         llm_provider=llm_provider,
         response=_answered_as(422, raw_response),

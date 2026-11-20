@@ -151,10 +151,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                     )
 
         model_response.data = cast(list[OpenAIImage], data_list)
-        if not data_list:
-            raise empty_image_response_error(response_json, model, "gemini", raw_response)
         if "usageMetadata" in response_json:
             model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
+        if not data_list:
+            raise empty_image_response_error(response_json, model, "gemini", raw_response, model_response, logging_obj)
         return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:
