@@ -119,6 +119,9 @@ class TraceAgentRow(LiteLLMBaseModel):
     frameworks: tuple[str, ...] = ()
 
 
+KeyHashFilterMode: TypeAlias = Literal["all", "only"]
+
+
 class TraceAgentsParams(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -130,6 +133,8 @@ class TraceAgentsParams(LiteLLMBaseModel):
     team_ids: tuple[str, ...]
     filter_team_id: str = ""
     filter_api_key_hash: str = ""
+    filter_api_key_hashes_mode: KeyHashFilterMode = "all"
+    filter_api_key_hashes: tuple[str, ...] = ()
     start_ms: int = Field(..., ge=-9223372036854775808, le=9223372036854775807)
     end_ms: int = Field(..., ge=-9223372036854775808, le=9223372036854775807)
     limit: int = Field(..., ge=0, le=4294967295)

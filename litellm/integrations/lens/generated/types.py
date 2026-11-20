@@ -9,6 +9,8 @@ import typing_extensions
 from pydantic import Field
 from typing_extensions import NotRequired, ReadOnly
 
+KeyHashFilterMode: TypeAlias = Literal["all", "only"]
+
 
 class AllQueryScope(typing_extensions.TypedDict):
     kind: ReadOnly[Literal["all"]]
@@ -18,9 +20,6 @@ class OwnedQueryScope(typing_extensions.TypedDict):
     user_id: ReadOnly[str]
     team_ids: ReadOnly[tuple[str, ...]]
     kind: ReadOnly[Literal["owned"]]
-
-
-QueryScope: TypeAlias = AllQueryScope | OwnedQueryScope
 
 
 class UIText(typing_extensions.TypedDict):
@@ -84,14 +83,6 @@ SpanType: TypeAlias = Literal[
 SpendMatch: TypeAlias = Literal["matched", "no_call_id", "no_spend_log", "ambiguous", "incomplete_evidence"]
 
 
-class TraceScope(typing_extensions.TypedDict):
-    all_teams: ReadOnly[Literal[0, 1]]
-    user_id: ReadOnly[str]
-    team_ids: ReadOnly[tuple[str, ...]]
-    filter_team_id: ReadOnly[NotRequired[str]]
-    filter_api_key_hash: ReadOnly[NotRequired[str]]
-
-
 ReadQueryName: TypeAlias = Literal[
     "trace_agents",
     "availability",
@@ -103,6 +94,24 @@ ReadQueryName: TypeAlias = Literal[
     "feedback",
     "feedback_summary",
 ]
+
+
+class TraceScope(typing_extensions.TypedDict):
+    all_teams: ReadOnly[Literal[0, 1]]
+    user_id: ReadOnly[str]
+    team_ids: ReadOnly[tuple[str, ...]]
+    filter_team_id: ReadOnly[NotRequired[str]]
+    filter_api_key_hash: ReadOnly[NotRequired[str]]
+    filter_api_key_hashes_mode: ReadOnly[NotRequired[KeyHashFilterMode]]
+    filter_api_key_hashes: ReadOnly[NotRequired[tuple[str, ...]]]
+
+
+class ScopedQueryScope(typing_extensions.TypedDict):
+    scope: ReadOnly[TraceScope]
+    kind: ReadOnly[Literal["scoped"]]
+
+
+QueryScope: TypeAlias = AllQueryScope | OwnedQueryScope | ScopedQueryScope
 
 
 class UIFields(typing_extensions.TypedDict):

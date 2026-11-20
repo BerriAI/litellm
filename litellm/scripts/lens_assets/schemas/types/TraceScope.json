@@ -26,11 +26,31 @@
     "filter_api_key_hash": {
       "type": "string",
       "default": ""
+    },
+    "filter_api_key_hashes_mode": {
+      "$ref": "#/$defs/KeyHashFilterMode",
+      "default": "all"
+    },
+    "filter_api_key_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
     }
   },
   "required": [
     "all_teams",
     "user_id",
     "team_ids"
-  ]
+  ],
+  "$defs": {
+    "KeyHashFilterMode": {
+      "type": "string",
+      "enum": [
+        "all",
+        "only"
+      ]
+    }
+  }
 }

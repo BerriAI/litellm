@@ -28,6 +28,17 @@
       "type": "string",
       "default": ""
     },
+    "filter_api_key_hashes_mode": {
+      "$ref": "#/$defs/KeyHashFilterMode",
+      "default": "all"
+    },
+    "filter_api_key_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
     "start_ms": {
       "type": "integer",
       "format": "int64",
@@ -55,5 +66,14 @@
     "start_ms",
     "end_ms",
     "limit"
-  ]
+  ],
+  "$defs": {
+    "KeyHashFilterMode": {
+      "type": "string",
+      "enum": [
+        "all",
+        "only"
+      ]
+    }
+  }
 }

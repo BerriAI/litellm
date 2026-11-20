@@ -43,6 +43,7 @@ from litellm.integrations.lens.generated.types import (
     AllQueryScope,
     OwnedQueryScope,
     QueryScope,
+    ScopedQueryScope,
     SpanDetail,
     SpanErrorPage,
     Trace,
@@ -52,6 +53,12 @@ from litellm.integrations.lens.generated.types import (
 )
 from litellm.integrations.lens.otlp_http import encode_otlp_response
 from litellm.integrations.lens.proxy.tracing_runtime import provide_receiver, require_receiver
+from litellm.integrations.lens.proxy.workspace_scope import (
+    TraceWorkspaceFilters,
+    WorkspaceKeyLookup,
+    WorkspaceKeyLookupDependency,
+    workspace_trace_scope,
+)
 from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.integrations.lens.types import TraceAgentList
 from litellm.proxy._types import UserAPIKeyAuth
@@ -74,29 +81,30 @@ async def current_time_ms() -> int:
 class TraceAccessContext:
     receiver: TraceReceiver | None
     read_scope: ReadScope | None
+    key_lookup: WorkspaceKeyLookup
 
-    def reader(self, team_id: str | None = None, api_key_hash: str | None = None) -> tuple[TraceReceiver, TraceScope]:
+    async def reader(
+        self,
+        team_id: str | None = None,
+        api_key_hash: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+    ) -> tuple[TraceReceiver, TraceScope]:
         tracing: Final = require_receiver(self.receiver)
         if self.read_scope is None:
             raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
-        scope: Final = _trace_scope(self.read_scope)
-        if not team_id and not api_key_hash:
-            return tracing, scope
-        filtered: Final[TraceScope] = {
-            **scope,
-            "filter_team_id": team_id or "",
-            "filter_api_key_hash": api_key_hash or "",
-        }
-        return tracing, filtered
+        filters: Final = TraceWorkspaceFilters(organization_id, team_id, project_id, api_key_hash)
+        return tracing, await workspace_trace_scope(_trace_scope(self.read_scope), filters, self.key_lookup)
 
 
 async def provide_trace_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
     log_team_lookup: LogTeamLookupDependency,
+    key_lookup: WorkspaceKeyLookupDependency,
 ) -> TraceAccessContext:
     read_scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
-    return TraceAccessContext(tracing, read_scope)
+    return TraceAccessContext(tracing, read_scope, key_lookup)
 
 
 def _trace_scope(scope: ReadScope) -> TraceScope:
@@ -190,7 +198,9 @@ async def list_agent_traces(
     request: Annotated[TraceListRequest, Query()],
 ) -> TracePage:
     try:
-        tracing, scope = context.reader(request.team_id, request.api_key_hash)
+        tracing, scope = await context.reader(
+            request.team_id, request.api_key_hash, request.organization_id, request.project_id
+        )
         return await tracing.list_traces(
             scope=scope,
             start_ms=request.start_ms if request.start_ms is not None else now_ms - MS_PER_DAY,
@@ -208,7 +218,9 @@ async def list_trace_agents(
     request: Annotated[TraceAgentsRequest, Query()],
 ) -> TraceAgentList:
     try:
-        tracing, scope = context.reader(request.team_id, request.api_key_hash)
+        tracing, scope = await context.reader(
+            request.team_id, request.api_key_hash, request.organization_id, request.project_id
+        )
         return await tracing.list_agents(
             scope=scope,
             start_ms=(
@@ -227,6 +239,7 @@ class TraceQueryAccess:
     storage: LensTraceStorage
     scope: ReadScope
     secret: str
+    key_lookup: WorkspaceKeyLookup
 
 
 def provide_trace_query_secret() -> str:
@@ -252,12 +265,13 @@ async def provide_trace_query_access(
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
     secret: Annotated[str, Depends(provide_trace_query_secret)],
     log_team_lookup: LogTeamLookupDependency,
+    key_lookup: WorkspaceKeyLookupDependency,
 ) -> TraceQueryAccess:
     storage: Final = require_receiver(tracing).storage
     scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
     if scope is None:
         raise HTTPException(status_code=403, detail="Not allowed to view logs")
-    return TraceQueryAccess(storage, scope, secret)
+    return TraceQueryAccess(storage, scope, secret, key_lookup)
 
 
 @router.post("/v1/traces/query", response_model=TraceSQLResponse, response_model_exclude_unset=True)
@@ -266,7 +280,16 @@ async def query_agent_traces(
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
 ) -> TraceSQLResponse:
     try:
-        return await access.storage.query_sql(body.sql, trace_query_scope(access.scope), access.secret)
+        filters: Final = TraceWorkspaceFilters(body.organization_id, body.team_id, body.project_id, body.api_key_hash)
+        scope: Final = (
+            ScopedQueryScope(
+                kind="scoped",
+                scope=await workspace_trace_scope(_trace_scope(access.scope), filters, access.key_lookup),
+            )
+            if filters.active
+            else trace_query_scope(access.scope)
+        )
+        return await access.storage.query_sql(body.sql, scope, access.secret)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
@@ -291,7 +314,9 @@ async def get_agent_trace(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     request: Annotated[TraceDetailRequest, Query()],
 ) -> Trace:
-    tracing, scope = context.reader(request.team_id, request.api_key_hash)
+    tracing, scope = await context.reader(
+        request.team_id, request.api_key_hash, request.organization_id, request.project_id
+    )
     try:
         trace: Final = await tracing.get_trace(trace_id, scope, request.trace_ref, request.cursor, request.page_size)
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
@@ -307,7 +332,9 @@ async def get_agent_trace_conversation(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     request: Annotated[TraceConversationRequest, Query()],
 ) -> TraceConversationPage:
-    tracing, scope = context.reader(request.team_id, request.api_key_hash)
+    tracing, scope = await context.reader(
+        request.team_id, request.api_key_hash, request.organization_id, request.project_id
+    )
     try:
         page: Final = await tracing.get_conversation(
             trace_id, scope, request.trace_ref, request.cursor, request.page_size
@@ -326,7 +353,9 @@ async def get_agent_trace_span(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     request: Annotated[TraceSpanRequest, Query()],
 ) -> SpanDetail:
-    tracing, scope = context.reader(request.team_id, request.api_key_hash)
+    tracing, scope = await context.reader(
+        request.team_id, request.api_key_hash, request.organization_id, request.project_id
+    )
     try:
         span: Final = await tracing.get_span(trace_id, span_id, scope, request.trace_ref)
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
@@ -344,7 +373,9 @@ async def get_agent_trace_span_error(
     request: Annotated[TraceErrorPageRequest, Query()],
 ) -> SpanErrorPage:
     try:
-        tracing, scope = context.reader(request.team_id, request.api_key_hash)
+        tracing, scope = await context.reader(
+            request.team_id, request.api_key_hash, request.organization_id, request.project_id
+        )
         page: Final = await tracing.get_span_error(trace_id, span_id, scope, request.trace_ref, request.cursor)
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error

@@ -14,7 +14,9 @@ class TraceDetailRequest(LiteLLMBaseModel):
         frozen=True,
     )
 
+    organization_id: str | None = Field(None, max_length=256)
     team_id: str | None = Field(None, max_length=256)
+    project_id: str | None = Field(None, max_length=256)
     api_key_hash: str | None = Field(None, max_length=256)
     trace_ref: str = ""
     cursor: str | None = Field(None, max_length=512)
@@ -26,7 +28,9 @@ class TraceErrorPageRequest(LiteLLMBaseModel):
         frozen=True,
     )
 
+    organization_id: str | None = Field(None, max_length=256)
     team_id: str | None = Field(None, max_length=256)
+    project_id: str | None = Field(None, max_length=256)
     api_key_hash: str | None = Field(None, max_length=256)
     trace_ref: str = ""
     cursor: str | None = Field(None, max_length=512)
@@ -37,7 +41,9 @@ class TraceListRequest(LiteLLMBaseModel):
         frozen=True,
     )
 
+    organization_id: str | None = Field(None, max_length=256)
     team_id: str | None = Field(None, max_length=256)
+    project_id: str | None = Field(None, max_length=256)
     api_key_hash: str | None = Field(None, max_length=256)
     start_ms: int | None = Field(None, description="Window start, unix ms. Default: 24h ago")
     end_ms: int | None = Field(None, description="Window end, unix ms. Default: now")
@@ -51,6 +57,10 @@ class TraceQueryRequest(LiteLLMBaseModel):
         frozen=True,
     )
 
+    organization_id: str | None = Field(None, max_length=256)
+    team_id: str | None = Field(None, max_length=256)
+    project_id: str | None = Field(None, max_length=256)
+    api_key_hash: str | None = Field(None, max_length=256)
     sql: str
 
 
@@ -59,7 +69,9 @@ class TraceSpanRequest(LiteLLMBaseModel):
         frozen=True,
     )
 
+    organization_id: str | None = Field(None, max_length=256)
     team_id: str | None = Field(None, max_length=256)
+    project_id: str | None = Field(None, max_length=256)
     api_key_hash: str | None = Field(None, max_length=256)
     trace_ref: str = ""
 
@@ -69,7 +81,9 @@ class TraceAgentsRequest(LiteLLMBaseModel):
         frozen=True,
     )
 
+    organization_id: str | None = Field(None, max_length=256)
     team_id: str | None = Field(None, max_length=256)
+    project_id: str | None = Field(None, max_length=256)
     api_key_hash: str | None = Field(None, max_length=256)
     start_ms: int | None = None
     end_ms: int | None = None
@@ -80,7 +94,9 @@ class TraceConversationRequest(LiteLLMBaseModel):
         frozen=True,
     )
 
+    organization_id: str | None = Field(None, max_length=256)
     team_id: str | None = Field(None, max_length=256)
+    project_id: str | None = Field(None, max_length=256)
     api_key_hash: str | None = Field(None, max_length=256)
     trace_ref: str = ""
     cursor: str | None = Field(None, max_length=512)

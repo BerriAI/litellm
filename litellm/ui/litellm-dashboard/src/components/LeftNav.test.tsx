@@ -769,13 +769,13 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
   });
 
-  it.each(["/ui/lens", "/ui/lens/"])("shows only the workspace switcher, no gateway pages, at %s", (pathname) => {
+  it.each(["/ui/lens", "/ui/lens/"])("keeps gateway navigation available in the Lens workspace at %s", (pathname) => {
     navState.pathname = pathname;
     renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.getByRole("button", { name: "Switch workspace, current: Lens" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: "Virtual Keys" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
-    expect(screen.queryByText("AI Gateway")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("href", "/ui/api-keys");
+    expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("href", "/ui/logs");
+    expect(screen.getByRole("link", { name: "Lens Beta" })).toHaveAttribute("data-active");
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {

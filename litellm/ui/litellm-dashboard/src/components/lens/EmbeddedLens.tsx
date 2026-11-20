@@ -6,10 +6,12 @@ import { LogDetailsDrawer } from "@/components/logs/detail";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl, handleError, uiSpendLogsCall } from "@/components/networking";
 import { getAuthToken } from "@/lib/http/runtime";
 import { serverRootPath } from "@/lib/serverRootPath";
+import { GatewayWorkspaceSwitcher } from "./GatewayWorkspaceSwitcher";
 
 const host: LensHost = {
   surface: "embedded",
   analysis: "deployment",
+  WorkspaceSwitcher: GatewayWorkspaceSwitcher,
   spendLogs: { lookup: uiSpendLogsCall, Drawer: LogDetailsDrawer },
 };
 

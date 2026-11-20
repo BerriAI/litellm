@@ -40,6 +40,78 @@
         "user_id",
         "team_ids"
       ]
+    },
+    {
+      "title": "ScopedQueryScope",
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/TraceScope"
+        },
+        "kind": {
+          "type": "string",
+          "const": "scoped"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "scope"
+      ]
     }
-  ]
+  ],
+  "$defs": {
+    "TraceScope": {
+      "type": "object",
+      "properties": {
+        "all_teams": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "team_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filter_team_id": {
+          "type": "string",
+          "default": ""
+        },
+        "filter_api_key_hash": {
+          "type": "string",
+          "default": ""
+        },
+        "filter_api_key_hashes_mode": {
+          "$ref": "#/$defs/KeyHashFilterMode",
+          "default": "all"
+        },
+        "filter_api_key_hashes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "all_teams",
+        "user_id",
+        "team_ids"
+      ]
+    },
+    "KeyHashFilterMode": {
+      "type": "string",
+      "enum": [
+        "all",
+        "only"
+      ]
+    }
+  }
 }

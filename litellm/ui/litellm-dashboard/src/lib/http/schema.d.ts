@@ -9712,6 +9712,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/login/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login Resume
+         * @description Send a browser that is signed in to the dashboard back to the return_to it asked for before sign-in
+         */
+        get: operations["login_resume_login_resume_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/app_budget_groups": {
         parameters: {
             query?: never;
@@ -53013,8 +53033,16 @@ export interface components {
         };
         /** TraceQueryRequest */
         TraceQueryRequest: {
+            /** Api Key Hash */
+            api_key_hash?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /** Project Id */
+            project_id?: string | null;
             /** Sql */
             sql: string;
+            /** Team Id */
+            team_id?: string | null;
         };
         /** TraceQueryTable */
         TraceQueryTable: {
@@ -70528,6 +70556,26 @@ export interface operations {
         };
     };
     login_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    login_resume_login_resume_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -92207,7 +92255,9 @@ export interface operations {
     list_agent_traces_v1_traces_get: {
         parameters: {
             query?: {
+                organization_id?: string | null;
                 team_id?: string | null;
+                project_id?: string | null;
                 api_key_hash?: string | null;
                 /** @description Window start, unix ms. Default: 24h ago */
                 start_ms?: number | null;
@@ -92265,7 +92315,9 @@ export interface operations {
     list_trace_agents_v1_traces_agents_get: {
         parameters: {
             query?: {
+                organization_id?: string | null;
                 team_id?: string | null;
+                project_id?: string | null;
                 api_key_hash?: string | null;
                 start_ms?: number | null;
                 end_ms?: number | null;
@@ -92352,7 +92404,9 @@ export interface operations {
     get_agent_trace_v1_traces__trace_id__get: {
         parameters: {
             query?: {
+                organization_id?: string | null;
                 team_id?: string | null;
+                project_id?: string | null;
                 api_key_hash?: string | null;
                 trace_ref?: string;
                 cursor?: string | null;
@@ -92389,7 +92443,9 @@ export interface operations {
     get_agent_trace_conversation_v1_traces__trace_id__conversation_get: {
         parameters: {
             query?: {
+                organization_id?: string | null;
                 team_id?: string | null;
+                project_id?: string | null;
                 api_key_hash?: string | null;
                 trace_ref?: string;
                 cursor?: string | null;
@@ -92426,7 +92482,9 @@ export interface operations {
     get_agent_trace_span_v1_traces__trace_id__spans__span_id__get: {
         parameters: {
             query?: {
+                organization_id?: string | null;
                 team_id?: string | null;
+                project_id?: string | null;
                 api_key_hash?: string | null;
                 trace_ref?: string;
             };
@@ -92462,7 +92520,9 @@ export interface operations {
     get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
         parameters: {
             query?: {
+                organization_id?: string | null;
                 team_id?: string | null;
+                project_id?: string | null;
                 api_key_hash?: string | null;
                 trace_ref?: string;
                 cursor?: string | null;

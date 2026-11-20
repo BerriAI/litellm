@@ -30,6 +30,8 @@ class TraceReceiver:
                 team_ids=tuple(scope["team_ids"]),
                 filter_team_id=scope.get("filter_team_id", ""),
                 filter_api_key_hash=scope.get("filter_api_key_hash", ""),
+                filter_api_key_hashes_mode=scope.get("filter_api_key_hashes_mode", "all"),
+                filter_api_key_hashes=tuple(scope.get("filter_api_key_hashes", ())),
                 start_ms=start_ms,
                 end_ms=end_ms,
                 limit=AGENT_TRACING_AGENT_LIST_LIMIT,

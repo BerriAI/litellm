@@ -3,7 +3,23 @@
   "title": "TraceSpanRequest",
   "type": "object",
   "properties": {
+    "organization_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
     "team_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "project_id": {
       "type": [
         "string",
         "null"
