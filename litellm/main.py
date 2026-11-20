@@ -163,6 +163,7 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
 )
 from litellm.llms.openai.common_utils import get_openai_credentials
+from litellm.llms.openai_like.common_utils import resolve_nousresearch_api_key
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -2048,7 +2049,11 @@ def _complete_text_completion_openai(
 
     _validate_vispark_api_key(custom_llm_provider, api_key, model, has_client=client is not None)
 
-    api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+    api_key = (
+        resolve_nousresearch_api_key(api_key, model, client=client, is_async=acompletion is True)
+        if custom_llm_provider == "nousresearch"
+        else api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+    )
 
     headers = headers or litellm.headers
 
@@ -2936,10 +2941,14 @@ def _complete_custom_openai(
     openai.organization = organization
     # set API KEY
     api_key = (
-        api_key
-        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-        or litellm.openai_key
-        or get_secret("OPENAI_API_KEY")
+        resolve_nousresearch_api_key(
+            api_key,
+            model,
+            client=client if not get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER") else None,
+            is_async=acompletion is True,
+        )
+        if custom_llm_provider == "nousresearch"
+        else api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
     )
 
     headers = headers or litellm.headers
@@ -7458,8 +7467,14 @@ def embedding(
             api_base = api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
 
             # set API KEY
-            if api_key is None and not JSONProviderRegistry.supports_embeddings(custom_llm_provider):
-                api_key = litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
+            if custom_llm_provider == "nousresearch" or (
+                api_key is None and not JSONProviderRegistry.supports_embeddings(custom_llm_provider)
+            ):
+                api_key = (
+                    resolve_nousresearch_api_key(api_key, model)
+                    if custom_llm_provider == "nousresearch"
+                    else litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
+                )
 
             if headers:
                 optional_params["extra_headers"] = headers

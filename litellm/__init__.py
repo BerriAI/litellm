@@ -704,6 +704,7 @@ openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
 wally_models: Final[Set[str]] = set()
+nousresearch_models: Final[set[str]] = set()  # mutable-ok: shared registry updated by add_known_models
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 vispark_models: Final[Set[str]] = set()
@@ -1003,6 +1004,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             streamlake_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
+        elif value.get("litellm_provider") == "nousresearch":
+            nousresearch_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1078,6 +1081,10 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
     The refresh updates the dict in place, so references captured before a reload stay live.
     """
     _populate_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
+    refresh_model_discovery()
+
+
+def refresh_model_discovery() -> None:
     models_by_provider.update(_build_models_by_provider())
 
 
@@ -1187,6 +1194,7 @@ model_list = list(
     | kyma_models
     | streamlake_models
     | wally_models
+    | nousresearch_models
     | zerogpu_models
     | v0_models
     | vispark_models
@@ -1320,6 +1328,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "kyma": kyma_models,
         "streamlake": streamlake_models,
         "wally": wally_models,
+        "nousresearch": nousresearch_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "vispark": vispark_models,
