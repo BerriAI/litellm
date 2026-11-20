@@ -34,9 +34,9 @@ from litellm.types.utils import ModelResponseStream, TokenCountResponse
 @pytest.mark.parametrize(
     ("forwarded", "wire_params", "cacheable"),
     [
-        ({}, {}, False),
+        ({}, {}, True),
         ({"store": False}, {"store": False}, True),
-        ({"store": True}, {"store": True}, False),
+        ({"store": True}, {"store": True}, True),
         ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, False),
         (
             {"store": False, "previous_response_id": "resp_prior"},
@@ -57,9 +57,9 @@ from litellm.types.utils import ModelResponseStream, TokenCountResponse
         ),
         ({"extra_body": {"store": False}}, {"store": False}, True),
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, True),
-        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
-        ({"store": False, "extra_body": {"store": None}}, {"store": None}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": False, "extra_body": {"store": None}}, {"store": None}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
         ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {"store": False}, True),
         ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {"store": False}, True),
         ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {"store": False}, True),
