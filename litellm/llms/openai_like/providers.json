@@ -58,6 +58,12 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "lokutor": {
+    "base_url": "https://api.lokutor.com/v1",
+    "api_key_env": "LOKUTOR_API_KEY",
+    "api_base_env": "LOKUTOR_API_BASE",
+    "supported_endpoints": ["/v1/audio/speech", "/v1/audio/transcriptions"]
+  },
   "zerogpu": {
     "base_url": "https://api.zerogpu.ai/v1",
     "api_key_env": "ZEROGPU_API_KEY",
