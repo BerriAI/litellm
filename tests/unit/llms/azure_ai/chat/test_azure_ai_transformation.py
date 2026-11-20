@@ -623,6 +623,25 @@ def test_azure_model_router_dated_version_on_resource_base_calls_router_deployme
     assert response.choices[0].message.content == "ok"
 
 
+@pytest.mark.parametrize("deployment", ["public-test/../private", "..", "public%2F..%2Fprivate", "model_router/../private"])
+@pytest.mark.respx(assert_all_called=False)
+def test_azure_ai_dated_version_rejects_deployment_names_that_leave_their_path_segment(
+    respx_mock: respx.MockRouter, deployment: str
+) -> None:
+    upstream: Final = respx_mock.route(host="example-resource.openai.azure.com").mock(return_value=Response(200))
+
+    with pytest.raises(litellm.BadRequestError, match="one URL path segment"):
+        litellm.completion(
+            model=f"azure_ai/{deployment}",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base="https://example-resource.openai.azure.com/openai/",
+            api_key="azure-ai-test-key",
+            api_version="2024-10-21",
+        )
+
+    assert upstream.call_count == 0
+
+
 @pytest.mark.parametrize("model", ["gpt-4.1-mini", "DeepSeek-V4.1-Flash-1017"])
 @pytest.mark.respx(assert_all_called=True)
 def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRouter, model: str) -> None:

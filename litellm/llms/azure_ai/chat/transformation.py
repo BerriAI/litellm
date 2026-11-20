@@ -4,6 +4,7 @@ import re
 from collections.abc import AsyncIterator, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast
+from urllib.parse import quote
 
 import httpx
 from httpx import Response
@@ -12,7 +13,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import WarningLogger, verbose_logger
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     declared_prompt_cache_breakpoint,
@@ -66,6 +67,10 @@ if TYPE_CHECKING:
 
 
 _REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _is_plain_path_segment(segment: str) -> bool:
+    return quote(segment, safe="") == segment and segment.strip(".") != ""
 
 
 def _request_model(request: Mapping[str, object]) -> str | None:
@@ -486,6 +491,13 @@ class AzureAIStudioConfig(OpenAIConfig):
             and not BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
         ):
             deployment: Final = AzureFoundryModelInfo.get_base_model(model)
+            if not _is_plain_path_segment(deployment):
+                raise BadRequestError(
+                    message=f"azure_ai deployment name {deployment!r} must be one URL path segment made of letters, "
+                    "digits, '-', '_', '.', or '~'",
+                    model=model,
+                    llm_provider="azure_ai",
+                )
             deployment_chat_path: Final = "/" + "/".join(("openai", "deployments", deployment, *CHAT_COMPLETIONS_PATH))
             return str(original_url.copy_with(path=deployment_chat_path, params=query_params))
         v1_root: Final = foundry_v1_root(original_url) or (OPENAI_V1_PATH if resource_base else None)
