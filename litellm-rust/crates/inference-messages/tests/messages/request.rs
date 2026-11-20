@@ -279,6 +279,50 @@ async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall)
     assert_eq!(sent["top_k"], 3);
 }
 
+#[rstest]
+#[case::claude_base_model(Some("anthropic/claude-sonnet-4-5"), json!([]))]
+#[case::open_base_model(Some("deepseek/deepseek-v4-pro"), json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]
+#[case::no_base_model(None, json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]
+#[tokio::test]
+async fn unsigned_thinking_is_dropped_for_an_alias_whose_base_model_names_claude(
+    call: MessagesCall,
+    #[case] base_model: Option<&str>,
+    #[case] sent_thinking: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([
+        {"role": "user", "content": "plan it"},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "plan", "signature": ""}]},
+        {"role": "user", "content": "go on"}
+    ]);
+
+    run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        shaping: MessagesShaping {
+            settings: MessagesSettings {
+                base_model: base_model.map(str::to_owned),
+                ..MessagesSettings::default()
+            },
+            ..MessagesShaping::default()
+        },
+        ..with_fields(call, json!({"model": "prod-sonnet", "messages": history}))
+    })
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    let thinking: Vec<Value> = sent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter(|block| block["type"] == "thinking")
+        .cloned()
+        .collect();
+    assert_eq!(Value::from(thinking), sent_thinking);
+}
+
 fn sent_betas(request: &wiremock::Request) -> BetaSet {
     let [header] = <[&str; 1]>::try_from(request.header_values("anthropic-beta"))
         .unwrap_or_else(|values| panic!("expected one anthropic-beta header, got {values:?}"));

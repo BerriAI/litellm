@@ -561,6 +561,7 @@ mod tests {
                     ..ThinkingContext::default()
                 },
                 drop_params: false,
+                claude_base_model: false,
             },
         );
         assert_eq!(body["system"], json!("be terse"));
@@ -578,6 +579,7 @@ mod tests {
                 ..ThinkingContext::default()
             },
             drop_params: false,
+            claude_base_model: false,
         }
     }
 
