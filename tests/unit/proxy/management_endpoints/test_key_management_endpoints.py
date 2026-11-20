@@ -54,7 +54,6 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheI
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    app_key_resource_cache_key,
     project_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
@@ -113,6 +112,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_team_change,
 )
 from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -6140,8 +6140,8 @@ async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_
     raw_key: Final = "sk-" + uuid4().hex
     hashed_token: Final = hash_token(raw_key)
     other_team_counter: Final = "spend:team:other-team"
-    resource_key: Final = app_key_resource_cache_key(hashed_token)
-    unrelated_resource_key: Final = app_key_resource_cache_key(hash_token("sk-other-owner"))
+    resource_key: Final = AuthObject.customer_app_key_resource(hashed_token).key
+    unrelated_resource_key: Final = AuthObject.customer_app_key_resource(hash_token("sk-other-owner")).key
     deleting_worker_cache: Final = UserApiKeyCache()
     peer_worker_cache: Final = UserApiKeyCache()
     peer_spend_counters: Final = InMemoryCache()

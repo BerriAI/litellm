@@ -31,16 +31,12 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
     get_budget_reset_time,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    app_budget_cache_key,
-    app_customer_cache_key,
-    app_shared_profiles_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.list_api.common import escape_like
 from litellm.proxy.management_helpers.customer_budget_usage import customer_budget_usage
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, lock_budget_limits
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, count_in, delete_many_in, find_many_in
@@ -442,7 +438,11 @@ class _AssociationDeletionRow(BaseModel):
         )
 
     def cache_keys(self, scope: str, customer_id: str) -> tuple[str, ...]:
-        return (app_customer_cache_key(scope, self.app_id, customer_id),) if self.app_id is not None else ()
+        return (
+            (AuthObject.customer_app_association(scope, self.app_id, customer_id).key,)
+            if self.app_id is not None
+            else ()
+        )
 
 
 class _TeamDeletionRow(BaseModel):
@@ -865,7 +865,7 @@ class CustomerHierarchyStore:
             ),
             actor,
         )
-        self.auth_cache_keys += (app_budget_cache_key(budget_id),)
+        self.auth_cache_keys += (AuthObject.customer_app_budget(budget_id).key,)
         return budget_id
 
     async def write_template_metadata(
@@ -1148,7 +1148,7 @@ class CustomerHierarchyStore:
                     "update": {"param_value": Json(list(ids))},
                 },
             )
-            self.auth_cache_keys += (app_shared_profiles_cache_key(),)
+            self.auth_cache_keys += (AuthObject.customer_app_shared_profiles().key,)
             if scope == BudgetGroupScope.ORGANIZATION:
                 default_value: Final = Json({"budget_id": default_id})
                 await self.config.upsert(
@@ -1622,7 +1622,7 @@ class CustomerHierarchyStore:
             where=where,
             chunk_size=_DELETE_BATCH_SIZE,
         )
-        self.auth_cache_keys += tuple(app_budget_cache_key(budget_id) for budget_id in budget_ids)
+        self.auth_cache_keys += tuple(AuthObject.customer_app_budget(budget_id).key for budget_id in budget_ids)
 
     async def _delete_member_batch(self, where: Mapping[str, object]) -> bool:
         rows: Final = await self.members.find_many(
