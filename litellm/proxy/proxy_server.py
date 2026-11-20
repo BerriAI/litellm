@@ -16374,6 +16374,14 @@ def _rejected_view(status_code: int, message: str) -> ProxyException:
     ).to_proxy_exception()
 
 
+def _reject_unsupported_messages_params(route: Target | None, litellm_params: Mapping[str, object]) -> None:
+    from litellm.llms.anthropic.messages.responses_adapters.handler import previous_response_id_error
+
+    error: Final = previous_response_id_error(litellm_params) if route in _GATEWAY_EDIT_ROUTES else None
+    if error is not None:
+        raise _rejected_view(400, error)
+
+
 async def _bridged_request_view(
     messages: Sequence[Mapping[str, object]],
     system: object,
@@ -16788,6 +16796,7 @@ async def _count_request_tokens(
         if request_messages is not None and messages_format == "anthropic"
         else None
     )
+    _reject_unsupported_messages_params(route, count_litellm_params)
     if context_edits is not None and route in _GATEWAY_EDIT_ROUTES and malformed_messages is not None:
         raise malformed_messages
     edited_request: Final = (

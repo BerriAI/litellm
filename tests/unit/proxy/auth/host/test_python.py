@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import jwt
@@ -27,7 +28,7 @@ from litellm.proxy.auth.host.facts import AliasMissing, EndUserRow, RegisteredAg
 from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.router_cooldowns import RouterCooldownStore
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustIdentity
@@ -58,6 +59,7 @@ def _host(
     api_key: str | None = None,
     with_request: bool = True,
     agent_lookup: AgentLookup | None = None,
+    prisma_client: PrismaClient | None = None,
 ) -> PythonAuthHost:
     user_api_key_cache: Final = cache or UserApiKeyCache()
     return PythonAuthHost(
@@ -70,7 +72,7 @@ def _host(
         )
         if with_request
         else None,
-        prisma_client=None,
+        prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
         llm_router=None,
@@ -90,6 +92,28 @@ async def test_end_user_row_carries_the_id_it_was_asked_for_not_the_request_body
     end_user: Final = await _host(request_data={"user": "from-body"}).end_user("from-key")
 
     assert (end_user.end_user_id, dict(end_user.params)) == ("from-key", {"end_user_id": "from-key"})
+
+
+@pytest.mark.asyncio
+async def test_a_role_change_is_stored_and_the_stored_user_is_cached_and_returned(
+    rust_auth_stores: RustAuthStores,
+) -> None:
+    rust_auth_stores.user.rows["u1"] = {
+        "user_id": "u1",
+        "user_role": "internal_user",
+        "user_email": "stored@example.com",
+    }
+    cache: Final = UserApiKeyCache()
+    stale: Final = LiteLLM_UserTable(user_id="u1", user_role="internal_user", user_email="stale@example.com")
+
+    updated: Final = await _host(cache=cache, prisma_client=MagicMock(spec=PrismaClient)).set_user_role(
+        stale, "proxy_admin"
+    )
+
+    cached: Final = await cache.async_get_cache(key="u1", model_type=LiteLLM_UserTable)
+    assert rust_auth_stores.user.rows["u1"]["user_role"] == "proxy_admin"
+    assert (updated.user_role, updated.user_email) == ("proxy_admin", "stored@example.com")
+    assert cached == updated
 
 
 @pytest.mark.asyncio
