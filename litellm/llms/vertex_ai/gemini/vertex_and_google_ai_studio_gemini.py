@@ -1570,7 +1570,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         thinking_blocks: Final[list[ChatCompletionThinkingBlock]] = []
         for part in parts:
-            if part.get("thought") is True:
+            if part.get("thought") is True and "inlineData" not in part:
                 thinking_text = part.get("text", "")
                 block: ChatCompletionThinkingBlock = {
                     "type": "thinking",
