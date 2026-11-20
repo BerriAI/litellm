@@ -1307,6 +1307,16 @@ def test_get_model_from_request_no_request_extracts_model():
     )
 
 
+@pytest.mark.parametrize("route", ["/compliance/gdpr", "/compliance/eu-ai-act"])
+def test_get_model_from_request_treats_compliance_log_model_as_metadata(route: str) -> None:
+    assert get_model_from_request(request_data={"model": "logged-model"}, route=route) is None
+
+
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/embeddings"])
+def test_get_model_from_request_resolves_inference_target(route: str) -> None:
+    assert get_model_from_request(request_data={"model": "logged-model"}, route=route) == "logged-model"
+
+
 @pytest.mark.parametrize(
     "provider,model",
     [

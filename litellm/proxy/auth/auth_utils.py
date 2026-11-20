@@ -2830,8 +2830,14 @@ def get_model_from_request(
     configured route shadowed by such a catch-all is dispatched ahead of it unless
     ``LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST`` is set. Built-in provider passthrough
     routes (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
+
+    Returns ``None`` for compliance validators, where ``model`` records which
+    model was used for a past request.
     """
     if request_dispatched_to_pass_through_endpoint(request):
+        return None
+
+    if route in LiteLLMRoutes.compliance_check_routes.value:
         return None
 
     handler_request_data: Final = _MODEL_REQUEST_DATA.validate_python(request_data)
