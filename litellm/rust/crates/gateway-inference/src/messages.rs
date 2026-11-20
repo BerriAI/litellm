@@ -16,7 +16,9 @@ use litellm_host_http::Sse;
 use litellm_inference_messages::{
     MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
 };
-use litellm_llms_types::formats::messages::MessagesOptionalParams;
+use litellm_llms_types::formats::messages::{
+    MessagesOptionalParams, streaming::MessagesStreamUsage,
+};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use litellm_router_core::{Attempt, Deployment, Op, Served};
 use serde_json::{Map, Value};
@@ -25,10 +27,11 @@ use crate::{
     Ended, Error, Gateway, JsonObject, RequestId,
     caching::CacheHeaders,
     headers::Routing,
+    hooks::{self, Answer, CallType},
     model_restamp::{ReportedModel, Stamp},
     request,
     routing::{self, Host, RouteAttempt, RouteChunks},
-    stream_event::{self, Read},
+    stream_event::{self, Counts, Read},
     stream_outcome::{self, Streamed},
 };
 
@@ -41,6 +44,11 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
 const TOOLS: &str = "tools";
+const PATH: &str = "/v1/messages";
+const FORMAT: hooks::Format = hooks::Format {
+    read: stream_event::messages_event,
+    usage: Counts::messages_usage,
+};
 
 pub async fn create<H: Host>(
     State(gateway): State<Arc<Gateway<H>>>,
@@ -68,6 +76,23 @@ async fn handle<H: Host>(
     headers: &HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Ended> {
+    hooks::around(
+        gateway,
+        identity,
+        CallType::AnthropicMessages,
+        body,
+        |hooks, body| serve(gateway, identity, headers, hooks, body),
+    )
+    .await
+}
+
+async fn serve<H: Host>(
+    gateway: &Gateway<H>,
+    identity: &AuthenticatedRequest,
+    headers: &HeaderMap,
+    hooks: Arc<H::Hooks>,
+    body: Map<String, Value>,
+) -> Result<Answer, Ended> {
     let model = request::model(&body)?.to_owned();
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.messages.clone();
@@ -89,19 +114,32 @@ async fn handle<H: Host>(
         gateway,
         identity,
         Op::ANTHROPIC_MESSAGES,
-        "/v1/messages",
+        PATH,
         &model,
         &attempt,
     )
     .await?;
     let routing = Routing::served(&routed);
     let reported = ReportedModel::of(&model, &routed);
+    let model_group = routed.model_group.clone();
     let (ran, cache) = routed.output.response;
+    let (ran, told) = hooks::answered(&hooks, ran, model_group, FORMAT, complete_counts).await?;
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let ran = reported.stream(reported.complete(ran), message_start);
     let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
-    Ok((Extension(routing), cache.apply(response)).into_response())
+    Ok(told.answer((Extension(routing), cache.apply(response))))
+}
+
+/// What a complete answer's `usage` counts.
+fn complete_counts(body: &MessagesBody) -> Option<Counts> {
+    let usage = match body {
+        MessagesBody::Message(message) => message.usage.as_ref(),
+        MessagesBody::Unchecked(fields) => fields.get("usage"),
+    }?;
+    serde_json::from_value::<MessagesStreamUsage>(usage.clone())
+        .ok()
+        .map(Counts::from)
 }
 
 /// Where a Messages stream names its model: the `message_start` event, the first one that is

@@ -19,6 +19,7 @@ use crate::{
     Ended, Error, Gateway, JsonObject,
     caching::CacheHeaders,
     headers::Routing,
+    hooks::{self, Answer, CallType, ServedCall},
     model_restamp::ReportedModel,
     request::{self, Path},
     routing::{self, Host, RouteAttempt},
@@ -53,6 +54,22 @@ async fn handle<H: Host>(
     identity: &AuthenticatedRequest,
     body: Map<String, Value>,
 ) -> Result<Response, Ended> {
+    hooks::around(
+        gateway,
+        identity,
+        CallType::Acompletion,
+        body,
+        |hooks, body| serve(gateway, identity, hooks, body),
+    )
+    .await
+}
+
+async fn serve<H: Host>(
+    gateway: &Gateway<H>,
+    identity: &AuthenticatedRequest,
+    hooks: Arc<H::Hooks>,
+    body: Map<String, Value>,
+) -> Result<Answer, Ended> {
     let model = request::model(&body)?.to_owned();
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.chat_completions.clone();
@@ -80,12 +97,17 @@ async fn handle<H: Host>(
     .await?;
     let routing = Routing::served(&routed);
     let reported = ReportedModel::of(&model, &routed);
+    let model_group = routed.model_group.clone();
     let (response, cache) = routed.output.response;
-    Ok((
+    let served = ServedCall {
+        model_group,
+        usage: Some(response.usage.clone()),
+    };
+    let told = hooks::complete(&*hooks, served).await?;
+    Ok(told.answer((
         Extension(routing),
         cache.apply(Json(reported.complete(response)).into_response()),
-    )
-        .into_response())
+    )))
 }
 
 struct ChatAttempt<'a, H> {

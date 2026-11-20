@@ -49,8 +49,8 @@ pub(crate) fn bytes<R, H, E: 'static>(
     }
 }
 
-/// How a stream went: the tokens it counted, or the failure that ended it.
-pub(crate) type Outcome = Result<u64, AttemptError>;
+/// How a stream went: what it counted, or the failure that ended it.
+pub(crate) type Outcome = Result<Counts, AttemptError>;
 
 fn lost_connection() -> AttemptError {
     AttemptError::new(FailureKind::ApiConnection, None)
@@ -114,7 +114,7 @@ where
                 }
             }
             (Some(Err(error)), Some(_)) => (None, Some(Err(broke(error)))),
-            (None, Some(counted)) => (None, Some(Ok(counted.total()))),
+            (None, Some(counted)) => (None, Some(Ok(counted))),
         };
         if let Some(outcome) = outcome {
             report(outcome).await;
@@ -172,7 +172,7 @@ pub(crate) fn reporting_outcome<H: routing::Host>(
                 (router.clone(), routing.clone(), deployment.clone());
             async move {
                 let total_tokens = match outcome {
-                    Ok(total_tokens) => total_tokens,
+                    Ok(counted) => counted.total(),
                     Err(failure) => {
                         return record_failure(&router, &*routing, &deployment, &failure).await;
                     }
@@ -233,8 +233,11 @@ mod tests {
             stream::iter(chunks).map(|chunk| chunk.map(|text| Bytes::from_static(text.as_bytes())));
         let blocks = sse::blocks(chunks).boxed();
         let delivered = watched(blocks, read, dropped, move |outcome: Outcome| {
-            sink.lock()
-                .push(outcome.map_err(|failure| (failure.status, failure.kind)));
+            sink.lock().push(
+                outcome
+                    .map(Counts::total)
+                    .map_err(|failure| (failure.status, failure.kind)),
+            );
             async {}
         })
         .take(take)

@@ -1,5 +1,6 @@
 mod admit;
 mod boot;
+mod callbacks;
 mod db;
 mod error;
 mod health;
@@ -10,6 +11,7 @@ mod redis;
 mod resources;
 mod state;
 pub use admit::{Admit, Reason, Refused};
+pub use callbacks::Callbacks;
 pub use error::Error;
 pub use redis::RedisClients;
 pub use resources::Resources;
@@ -66,7 +68,7 @@ pub async fn build_inference(
             resources.secrets.clone(),
             router,
             shaping,
-            host::NativeHost,
+            host::NativeHost::default(),
         )?
         .with_client_side_credentials(config.general_settings.allow_client_side_credentials)
         .with_routing(redis::routing(redis, resources.environment.as_ref())?),

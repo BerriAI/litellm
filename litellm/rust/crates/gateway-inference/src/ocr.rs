@@ -1,7 +1,7 @@
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
-use axum::{Extension, Json, extract::State, http::HeaderMap, response::IntoResponse};
+use axum::{Extension, Json, extract::State, http::HeaderMap, response::Response};
 use litellm_inference_ocr::{
     OcrRoute,
     types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput},
@@ -14,6 +14,7 @@ use serde_json::{Map, Value};
 use crate::{
     Ended, Error, Gateway,
     headers::Routing,
+    hooks::{self, Answer, CallType, ServedCall},
     request::{self, InferenceBody, Upload},
     routing::{self, Host, RouteAttempt},
 };
@@ -23,21 +24,26 @@ pub(crate) async fn create<H: Host>(
     identity: AuthenticatedRequest,
     headers: HeaderMap,
     body: InferenceBody,
-) -> Result<impl IntoResponse, Ended> {
-    handle(&gateway, &identity, &headers, body)
-        .await
-        .map(|(routing, body)| (routing, Json(body)))
+) -> Result<Response, Ended> {
+    let InferenceBody { fields, upload } = body;
+    hooks::around(
+        &gateway,
+        &identity,
+        CallType::Aocr,
+        fields,
+        |hooks, fields| serve(&gateway, &identity, &headers, hooks, fields, upload),
+    )
+    .await
 }
 
-async fn handle<H: Host>(
+async fn serve<H: Host>(
     gateway: &Gateway<H>,
     identity: &AuthenticatedRequest,
     headers: &HeaderMap,
-    InferenceBody {
-        fields: body,
-        upload,
-    }: InferenceBody,
-) -> Result<(Extension<Routing>, Value), Ended> {
+    hooks: Arc<H::Hooks>,
+    body: Map<String, Value>,
+    upload: Option<Upload>,
+) -> Result<Answer, Ended> {
     let header_format = headers
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
@@ -65,7 +71,15 @@ async fn handle<H: Host>(
         options,
     };
     let routed = routing::call(gateway, identity, Op::OCR, "/ocr", &model, &attempt).await?;
-    Ok((Extension(Routing::served(&routed)), routed.output.response))
+    let served = ServedCall {
+        model_group: routed.model_group.clone(),
+        usage: None,
+    };
+    let told = hooks::complete(&*hooks, served).await?;
+    Ok(told.answer((
+        Extension(Routing::served(&routed)),
+        Json(routed.output.response),
+    )))
 }
 
 struct OcrAttempt<'a> {

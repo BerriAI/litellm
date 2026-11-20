@@ -3,7 +3,9 @@
 //! `stream_outcome` for the tokens and the failure it tells the router, `stream_hold` for whether
 //! the stream has begun to answer.
 
+use litellm_core_utils::core_helpers::usage_from_parts;
 use litellm_llms_types::formats::{
+    chat_completions::{ChatCompletionsUsage, PromptTokensDetails},
     messages::streaming::{MessagesStreamEvent, MessagesStreamUsage},
     responses::streaming::ResponsesEventType,
 };
@@ -18,6 +20,15 @@ pub struct Counts {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     total_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+    input_tokens_details: Option<InputDetails>,
+}
+
+/// The part of a Responses usage's input that was read from cache.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+struct InputDetails {
+    cached_tokens: Option<u64>,
 }
 
 impl Counts {
@@ -27,7 +38,47 @@ impl Counts {
             input_tokens: self.input_tokens.or(earlier.input_tokens),
             output_tokens: self.output_tokens.or(earlier.output_tokens),
             total_tokens: self.total_tokens.or(earlier.total_tokens),
+            cache_creation_input_tokens: self
+                .cache_creation_input_tokens
+                .or(earlier.cache_creation_input_tokens),
+            cache_read_input_tokens: self
+                .cache_read_input_tokens
+                .or(earlier.cache_read_input_tokens),
+            input_tokens_details: self.input_tokens_details.or(earlier.input_tokens_details),
         }
+    }
+
+    /// The counts as Python's litellm `Usage` holds a Responses answer's, which `get_usage_object`
+    /// converts: the input is the prompt, with the part read from cache still inside it and named
+    /// as `cached_tokens`.
+    pub(crate) fn responses_usage(self) -> ChatCompletionsUsage {
+        let prompt_tokens = self.input_tokens.unwrap_or(0);
+        let completion_tokens = self.output_tokens.unwrap_or(0);
+        ChatCompletionsUsage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: self
+                .total_tokens
+                .unwrap_or(prompt_tokens + completion_tokens),
+            prompt_tokens_details: PromptTokensDetails {
+                cached_tokens: self
+                    .input_tokens_details
+                    .and_then(|details| details.cached_tokens)
+                    .unwrap_or(0),
+                ..PromptTokensDetails::default()
+            },
+        }
+    }
+
+    /// The counts as Python's litellm `Usage` holds a Messages answer's: the cache tokens folded
+    /// into `prompt_tokens`, the reads also named as `cached_tokens`.
+    pub(crate) fn messages_usage(self) -> ChatCompletionsUsage {
+        usage_from_parts(
+            self.input_tokens.unwrap_or(0),
+            self.output_tokens.unwrap_or(0),
+            self.cache_read_input_tokens.unwrap_or(0),
+            self.cache_creation_input_tokens.unwrap_or(0),
+        )
     }
 
     /// `total_tokens`, else the input plus the output, as [`crate::routing::total_tokens`]
@@ -44,6 +95,9 @@ impl From<MessagesStreamUsage> for Counts {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             total_tokens: None,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
+            input_tokens_details: None,
         }
     }
 }

@@ -9,7 +9,7 @@ use litellm_llms_types::formats::messages::MessagesErrorType;
 use litellm_python_compat::{Value as PyValue, repr::repr};
 use serde_json::{Map, Value, json};
 
-use crate::headers::Routing;
+use crate::{headers::Routing, hooks::Refusal};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -31,6 +31,8 @@ pub enum Error {
     NoDeployments(#[from] NoDeployments),
     #[error(transparent)]
     Routing(litellm_router_core::Error),
+    #[error("{}", .0.message)]
+    Refused(Refusal),
     #[error("{0} is not implemented by the Rust gateway")]
     Unsupported(String),
     #[error("request body exceeds the size limit")]
@@ -136,6 +138,12 @@ impl IntoResponse for Ended {
     }
 }
 
+impl From<Refusal> for Error {
+    fn from(refusal: Refusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
 impl From<litellm_host_http::Error<InferenceError>> for Error {
     fn from(error: litellm_host_http::Error<InferenceError>) -> Self {
         match error {
@@ -158,6 +166,7 @@ impl Error {
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
             Self::Routing(error) => routing_status(error),
+            Self::Refused(refusal) => refusal.status,
         }
     }
 
@@ -215,6 +224,7 @@ impl Error {
     fn message(&self) -> String {
         match self {
             Self::Auth(error) => error.to_string(),
+            Self::Refused(refusal) => refusal.message.clone(),
             Self::InvalidBody(_)
             | Self::InvalidPath(_)
             | Self::UnknownModel { .. }
