@@ -2973,10 +2973,11 @@ async def test_messages_drops_diagnostics_for_a_rejecting_provider_when_asked(
     response: Final = await python_messages.anthropic_messages(
         max_tokens=16,
         messages=[{"role": "user", "content": "hi"}],
-        model=_OPUS_4_8_ON_BEDROCK_INVOKE,
+        model="vertex_ai/claude-opus-5-5",
+        api_key="ya29.test-token",
+        vertex_project="test-project",
         client=_bedrock_invoke_recording(bodies),
         diagnostics=_DIAGNOSTICS,
-        **_AWS_TEST_CREDENTIALS,
         **drop,
     )
 
