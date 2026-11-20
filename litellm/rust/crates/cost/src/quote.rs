@@ -106,7 +106,8 @@ impl Quote<'_> {
                 Some(Rate::own(rate))
             }
             base => self
-                .base(&IMAGE, ServiceTier::Standard)
+                .base(&IMAGE, self.tier)
+                .or_else(|| self.base(&IMAGE, ServiceTier::Standard))
                 .map(|rate| Rate {
                     unit_price: rate,
                     fallback_from: Some(IMAGE),
@@ -456,6 +457,24 @@ mod tests {
         assert_eq!(
             quoted(&prices(rates), &call(), prompt_tokens, &OUTPUT),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::own_tier_image_price(Priority, 11.0)]
+    #[case::standard_image_price_when_the_tier_has_none(Flex, 7.0)]
+    #[case::standard_call(Standard, 7.0)]
+    fn output_borrows_the_image_token_rate_of_the_call_tier(
+        #[case] tier: ServiceTier,
+        #[case] expected: f64,
+    ) {
+        let prices = prices(&[
+            (IMAGE_OUTPUT, Standard, BASE, 7.0),
+            (IMAGE_OUTPUT, Priority, BASE, 11.0),
+        ]);
+        assert_eq!(
+            quoted(&prices, &tier_call(tier), 10, &OUTPUT),
+            Some((expected, Some(IMAGE_OUTPUT)))
         );
     }
 
