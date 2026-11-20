@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     apply_off_peak_pricing,
     parse_completion_tokens_details,
     parse_prompt_tokens_details,
+    unbilled_minimum_input_tokens,
 )
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
@@ -138,4 +139,6 @@ def cost_per_token(
     standard_rates: Final = _flat_rates(model_info) if tier is None else _tier_rates(model_info, tier)
     rates: Final = apply_off_peak_pricing(model_info, current_time, standard_rates)
 
-    return _bill(breakdown, rates)
+    prompt_cost, completion_cost = _bill(breakdown, rates)
+    minimum_cost: Final = unbilled_minimum_input_tokens(model_info, usage.prompt_tokens) * rates.input_rate
+    return prompt_cost + minimum_cost, completion_cost

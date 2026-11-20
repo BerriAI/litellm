@@ -576,3 +576,22 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
+
+
+@pytest.mark.parametrize("minimum", [0, 600])
+def test_model_info_preserves_configured_billing_minimum(minimum: int) -> None:
+    model: Final = "openai/billing-minimum-fixture"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "min_billed_input_tokens": minimum,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    assert litellm.get_model_info(model)["min_billed_input_tokens"] == minimum

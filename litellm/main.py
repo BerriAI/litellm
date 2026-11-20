@@ -1764,6 +1764,13 @@ def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     return response
 
 
+def _validate_vispark_api_key(provider: str | None, api_key: str | None, model: str, has_client: bool = False) -> None:
+    if provider == "vispark" and not api_key and not has_client:
+        raise litellm.AuthenticationError(
+            message="Set VISPARK_LAB_API_KEY or pass api_key", llm_provider="vispark", model=model
+        )
+
+
 def _complete_text_completion_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -1795,6 +1802,8 @@ def _complete_text_completion_openai(
 
     openai.api_version = None
     # set API KEY
+
+    _validate_vispark_api_key(custom_llm_provider, api_key, model, has_client=client is not None)
 
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
 
@@ -2643,6 +2652,13 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
+    _validate_vispark_api_key(
+        custom_llm_provider,
+        api_key,
+        model,
+        has_client=isinstance(client, (openai.OpenAI, openai.AsyncOpenAI))
+        and not get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"),
+    )
     organization = (
         organization
         or litellm.organization

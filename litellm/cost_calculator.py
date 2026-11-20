@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
+    billed_input_token_minimum,
     calculate_cost_component,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -462,6 +463,7 @@ def cost_per_token(
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
     bedrock_model_info: ModelInfo | None = None,
+    requested_model_info_override: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -540,8 +542,16 @@ def cost_per_token(
     if _is_anthropic_style:
         _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
 
+    billed_prompt_tokens: Final = (
+        max(
+            _normalized_prompt_tokens,
+            _custom_rate_input_minimum(custom_cost_per_token, model, custom_llm_provider),
+        )
+        if custom_cost_per_token is not None and _normalized_prompt_tokens > 0
+        else _normalized_prompt_tokens
+    )
     response_cost: Final = _cost_per_token_custom_pricing_helper(
-        prompt_tokens=_normalized_prompt_tokens,
+        prompt_tokens=billed_prompt_tokens,
         completion_tokens=completion_tokens,
         response_time_ms=response_time_ms,
         cached_tokens=_cache_read_tokens,
@@ -552,6 +562,21 @@ def cost_per_token(
 
     if response_cost is not None:
         return response_cost[0], response_cost[1]
+
+    if requested_model_info_override is not None:
+        if custom_llm_provider == "anthropic":
+            return anthropic_cost_per_token(
+                model=model, usage=usage_block, service_tier=service_tier, model_info=requested_model_info_override
+            )
+        return generic_cost_per_token(
+            model=model,
+            usage=usage_block,
+            custom_llm_provider=custom_llm_provider or "",
+            service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            model_info=requested_model_info_override,
+        )
 
     model_cost_ref: Final = litellm.model_cost
     # Only callers that explicitly pass `custom_llm_provider` get the
@@ -1479,6 +1504,23 @@ def _store_cost_breakdown_in_logging_obj(
         # Don't fail the main cost calculation if breakdown storage fails
 
 
+def _prices_only_a_billing_minimum(litellm_logging_obj: LitellmLoggingObject | None) -> bool:
+    from litellm.litellm_core_utils.litellm_logging import MODEL_INFO_RATE_KEYS, use_custom_pricing_for_model
+
+    logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
+    return (
+        isinstance(logged_params, dict)
+        and use_custom_pricing_for_model(logged_params)
+        and not use_custom_pricing_for_model(logged_params, MODEL_INFO_RATE_KEYS)
+    )
+
+
+def overrides_provider_stated_cost(
+    custom_pricing: bool | None, litellm_logging_obj: LitellmLoggingObject | None
+) -> bool:
+    return custom_pricing is True and not _prices_only_a_billing_minimum(litellm_logging_obj)
+
+
 def _without_provider_stated_cost(usage: Usage | None) -> Usage | None:
     if usage is None or getattr(usage, "cost", None) is None:
         return usage
@@ -1557,6 +1599,7 @@ def completion_cost(
     data_residency: str | None = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
+    requested_model_info_override: ModelInfo | None = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -1609,6 +1652,7 @@ def completion_cost(
                         quality=quality,
                         n=n,
                         custom_cost_per_token=custom_cost_per_token,
+                        requested_model_info_override=requested_model_info_override,
                         custom_cost_per_second=custom_cost_per_second,
                         optional_params=optional_params,
                         custom_pricing=custom_pricing,
@@ -1641,8 +1685,9 @@ def completion_cost(
         cache_read_input_tokens: int | None = None
         audio_transcription_file_duration: float = 0.0
         provider_usage_object: Final = get_usage_object(completion_response=completion_response)
+        sets_prices: Final = overrides_provider_stated_cost(custom_pricing, litellm_logging_obj)
         cost_per_token_usage_object: Final[Usage | None] = (
-            _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
+            _without_provider_stated_cost(provider_usage_object) if sets_prices else provider_usage_object
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
@@ -1851,7 +1896,10 @@ def completion_cost(
                             video_resolution = str(_vr).strip().lower()
                         video_count = _vc if isinstance(_vc, int) and not isinstance(_vc, bool) and _vc > 1 else 1
 
-                        if _video_model_info is None and provider_reported_cost is not None:
+                        if provider_reported_cost is not None and (
+                            _video_model_info is None
+                            or not overrides_provider_stated_cost(custom_pricing, litellm_logging_obj)
+                        ):
                             return float(provider_reported_cost)
 
                         if duration_seconds is not None:
@@ -2053,6 +2101,7 @@ def completion_cost(
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,
+                    requested_model_info_override=requested_model_info_override,
                     prompt_characters=prompt_characters,
                     completion_characters=completion_characters,
                     cache_creation_input_tokens=cache_creation_input_tokens,
@@ -2289,7 +2338,9 @@ def response_cost_calculator(
                         getattr(response_object, HIDDEN_PARAMS_ATTR),
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
-                    if provider_response_cost is not None and not custom_pricing:
+                    if provider_response_cost is not None and not overrides_provider_stated_cost(
+                        custom_pricing, litellm_logging_obj
+                    ):
                         return provider_response_cost
 
             response_cost = completion_cost(
@@ -2430,6 +2481,18 @@ def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, .
 def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
     raw_entry: Final = litellm.model_cost.get(key)
     return raw_entry if isinstance(raw_entry, Mapping) else None
+
+
+def _custom_rate_input_minimum(
+    custom_cost_per_token: CostPerToken,
+    model: str,
+    custom_llm_provider: str | None,
+) -> int:
+    configured_minimum: Final = custom_cost_per_token.get("min_billed_input_tokens")
+    if configured_minimum is not None:
+        return configured_minimum
+    cost_entry: Final = _raw_cost_map_entry(model) or _raw_cost_map_entry(f"{custom_llm_provider}/{model}") or {}
+    return billed_input_token_minimum(cost_entry)
 
 
 def pricing_entry_for_cost_calc(

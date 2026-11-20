@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import NonNegativeInt, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
@@ -51,6 +52,7 @@ _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
 _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
+_BILLED_INPUT_TOKEN_MINIMUM: Final[TypeAdapter[NonNegativeInt]] = TypeAdapter(NonNegativeInt)
 
 _IMAGE_TOKEN_RATE_KEYS: Final[tuple[str, ...]] = (
     "input_cost_per_token",
@@ -568,6 +570,39 @@ def _open_off_peak_block(model_info: ModelInfo, current_time: datetime | None) -
     if not isinstance(off_peak, Mapping) or not _is_off_peak(off_peak, current_time):
         return None
     return off_peak
+
+
+def billed_input_token_minimum(info: Mapping[str, object]) -> int:
+    minimum: Final = info.get("min_billed_input_tokens")
+    if minimum is None:
+        return 0
+    try:
+        return _BILLED_INPUT_TOKEN_MINIMUM.validate_python(minimum)
+    except ValidationError:
+        return 0
+
+
+def deployment_billed_input_token_minimum(model_info: Mapping[str, object]) -> int | None:
+    return None if model_info.get("min_billed_input_tokens") is None else billed_input_token_minimum(model_info)
+
+
+def deployment_billing_model_info(
+    model: str, model_info: Mapping[str, object], custom_llm_provider: str | None = None
+) -> ModelInfo | None:
+    minimum: Final = deployment_billed_input_token_minimum(model_info)
+    if minimum is None:
+        return None
+    try:
+        builtin: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        return None
+    return {**builtin, "min_billed_input_tokens": minimum}
+
+
+def unbilled_minimum_input_tokens(model_info: ModelInfo, prompt_tokens: int) -> int:
+    if prompt_tokens <= 0:
+        return 0
+    return max(billed_input_token_minimum(model_info) - prompt_tokens, 0)
 
 
 def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:
@@ -1498,16 +1533,19 @@ def generic_cost_per_token(
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
 
-    prompt_cost = _calculate_input_cost(
-        prompt_tokens_details=prompt_tokens_details,
-        model_info=resolved_model_info,
-        prompt_base_cost=prompt_base_cost,
-        cache_read_cost=cache_read_cost,
-        cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
-        service_tier=service_tier,
-        prompt_tokens=usage.prompt_tokens,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    prompt_cost = (
+        _calculate_input_cost(
+            prompt_tokens_details=prompt_tokens_details,
+            model_info=resolved_model_info,
+            prompt_base_cost=prompt_base_cost,
+            cache_read_cost=cache_read_cost,
+            cache_creation_cost=cache_creation_cost,
+            cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+            service_tier=service_tier,
+            prompt_tokens=usage.prompt_tokens,
+            threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+        )
+        + unbilled_minimum_input_tokens(resolved_model_info, usage.prompt_tokens) * prompt_base_cost
     )
 
     ## CALCULATE OUTPUT COST

@@ -701,6 +701,7 @@ moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
 v0_models: Set = set()
+vispark_models: Final = set[str]()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
 inception_models: Set = set()
@@ -986,6 +987,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             darkbloom_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
+        elif value.get("litellm_provider") == "vispark":
+            vispark_models.add(key)
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
@@ -1153,6 +1156,7 @@ model_list = list(
     | publicai_models
     | darkbloom_models
     | v0_models
+    | vispark_models
     | morph_models
     | lambda_ai_models
     | inception_models
@@ -1267,6 +1271,7 @@ def _build_models_by_provider() -> dict:
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
         "v0": v0_models,
+        "vispark": vispark_models,
         "morph": morph_models,
         "lambda_ai": lambda_ai_models,
         "inception": inception_models,

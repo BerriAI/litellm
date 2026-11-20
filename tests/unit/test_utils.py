@@ -1141,6 +1141,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
+                "min_billed_input_tokens": {"type": "number"},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
                 "supports_thinking_cache_preservation": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
@@ -9015,6 +9016,13 @@ def test_logprobs_type():
     assert logprobs.token_logprobs is None
     assert logprobs.tokens is None
     assert logprobs.top_logprobs is None
+
+
+def test_get_valid_models_lists_a_json_provider_keyed_by_its_own_env_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VISPARK_API_KEY", raising=False)
+    monkeypatch.setenv("VISPARK_LAB_API_KEY", "sk-vispark")
+
+    assert "vispark/vision-small" in get_valid_models()
 
 
 def test_get_valid_models_openai_proxy(monkeypatch):

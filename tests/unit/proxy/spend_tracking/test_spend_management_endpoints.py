@@ -7869,6 +7869,64 @@ async def test_spend_calc_model_on_router_messages(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("custom_rates", [{}, {"input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}])
+@pytest.mark.parametrize("backend_model", ["openai/deployment-minimum-fixture", "deployment-minimum-fixture"])
+async def test_spend_calc_bills_a_custom_priced_deployment_at_its_own_billing_minimum(
+    monkeypatch, custom_rates: dict[str, float], backend_model: str
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/deployment-minimum-fixture",
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "min_billed_input_tokens": 600,
+        },
+    )
+    temp_llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": backend_model,
+                    "custom_llm_provider": "openai",
+                    "api_key": "fake-key",
+                    **custom_rates,
+                },
+                "model_info": model_info,
+            }
+            for name, model_info in (
+                ("inherits-minimum", {}),
+                ("waives-minimum", {"min_billed_input_tokens": 0}),
+                ("raises-minimum", {"min_billed_input_tokens": 1000}),
+            )
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
+    messages: Final = [{"role": "user", "content": "What is the capital of France?"}]
+
+    costs: Final = {
+        name: (
+            await spend_management_endpoints.calculate_spend(
+                request=SpendCalculateRequest(model=name, messages=messages)
+            )
+        )["cost"]
+        for name in ("inherits-minimum", "waives-minimum", "raises-minimum")
+    }
+
+    assert costs == pytest.approx(
+        {
+            "inherits-minimum": 600 * custom_rates.get("input_cost_per_token", 1e-6),
+            "waives-minimum": litellm.token_counter(model=backend_model, messages=messages)
+            * custom_rates.get("input_cost_per_token", 1e-6),
+            "raises-minimum": 1000 * custom_rates.get("input_cost_per_token", 1e-6),
+        }
+    )
+
+
+@pytest.mark.asyncio
 async def test_spend_calc_using_response():
     cost_obj: Final = await spend_management_endpoints.calculate_spend(
         request=SpendCalculateRequest(
