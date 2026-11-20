@@ -1,4 +1,7 @@
 import asyncio
+import os
+from datetime import timedelta
+from pathlib import Path
 from typing import Final, NoReturn
 
 import pytest
@@ -69,4 +72,48 @@ async def test_failed_engine_startup_clears_connection_state(
         assert caught.value is fault
         assert original.is_connected() is False
     finally:
+        await client.disconnect()
+
+
+class _SilentEngineProcess:
+    def __init__(self, stdout_fd: int) -> None:
+        self.stdout: Final = os.fdopen(stdout_fd, "rb")
+
+    def poll(self) -> int | None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+    def terminate(self) -> None:
+        return None
+
+    def send_signal(self, _: int) -> None:
+        return None
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine_exits", (False, True), ids=("never_listens", "exits_before_listening"))
+async def test_engine_that_never_publishes_an_address_fails_to_connect(
+    engine_exits: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    read_fd, write_fd = os.pipe()
+    if engine_exits:
+        os.close(write_fd)
+    monkeypatch.setattr(QueryEngine, "_ensure_file", lambda _: Path("query-engine"))
+    monkeypatch.setattr(
+        "litellm.proxy.db.prisma_engine.subprocess.Popen", lambda *_, **__: _SilentEngineProcess(read_fd)
+    )
+    original: Final = Prisma(datasource={"url": "postgresql://unused@localhost/unused"})
+    client: Final = PrismaWrapper(original)
+    try:
+        with pytest.raises(EngineConnectionError):
+            await client.connect(timeout=timedelta(milliseconds=200))
+        assert original.is_connected() is False
+    finally:
+        if not engine_exits:
+            os.close(write_fd)
         await client.disconnect()
