@@ -936,9 +936,7 @@ class TestUpdateProxyRequest:
         call_kwargs = {
             "input": "hello",
             "store": True,
-            "litellm_metadata": {
-                "proxy_server_request": {"headers": {}, "body": {}},
-            },
+            "proxy_server_request": {"headers": {}, "body": {}},
         }
 
         ManagedResponsesWebSocketHandler._update_proxy_request(
@@ -951,22 +949,65 @@ class TestUpdateProxyRequest:
         )
         assert call_kwargs["proxy_server_request"]["body"]["input"] == "hello"
 
-    def test_proxy_server_request_matches_metadata(self):
+    def test_body_stays_out_of_litellm_metadata(self):
+        """The body must only reach the spend-log writer through the top-level kwarg,
+        which it redacts and sanitises; a copy in litellm_metadata lands raw in the
+        metadata column (#49878)."""
         from litellm.responses.streaming_iterator import (
             ManagedResponsesWebSocketHandler,
         )
 
         call_kwargs = {
             "input": "hi",
-            "litellm_metadata": {"proxy_server_request": {"body": {}}},
+            "litellm_metadata": {"model_group": "gpt-4o"},
+            "proxy_server_request": {"headers": {"x-id": "1"}, "url": "wss://p/v1/responses", "body": {}},
         }
 
         ManagedResponsesWebSocketHandler._update_proxy_request(call_kwargs, "gpt-4o")
 
-        assert (
-            call_kwargs["proxy_server_request"]
-            == call_kwargs["litellm_metadata"]["proxy_server_request"]
+        assert call_kwargs["litellm_metadata"] == {"model_group": "gpt-4o"}
+        assert call_kwargs["proxy_server_request"]["headers"] == {"x-id": "1"}
+        assert call_kwargs["proxy_server_request"]["url"] == "wss://p/v1/responses"
+        assert call_kwargs["proxy_server_request"]["body"]["input"] == "hi"
+
+    def test_handshake_request_is_copied_per_turn_and_not_passed_through(self):
+        """The handshake's proxy_server_request seeds each turn's record and does not
+        come back through extra_kwargs, which would overwrite the turn's body."""
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
         )
+
+        handshake = {"headers": {"x-id": "1"}, "body": {"first": True}}
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=MagicMock(),
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            litellm_metadata={},
+            proxy_server_request=handshake,
+            extra_headers={"x-extra": "1"},
+        )
+
+        assert "proxy_server_request" not in handler.extra_kwargs
+        assert handler.extra_kwargs["extra_headers"] == {"x-extra": "1"}
+
+        call_kwargs: dict = {"input": "turn one"}
+        handler._inject_credentials(call_kwargs, model="test-model")
+        handler._update_proxy_request(call_kwargs, "test-model")
+        call_kwargs.update(handler.extra_kwargs)
+
+        assert call_kwargs["proxy_server_request"]["headers"] == {"x-id": "1"}
+        assert call_kwargs["proxy_server_request"]["body"]["input"] == "turn one"
+        # The handshake record itself is untouched for the next turn.
+        assert handshake == {"headers": {"x-id": "1"}, "body": {"first": True}}
 
 
 class TestWebSocketEventTypes:
