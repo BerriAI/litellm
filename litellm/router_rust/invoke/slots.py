@@ -10,6 +10,7 @@ core's routing cache under the same key, so its in-flight count is shared by eve
 """
 
 import contextlib
+import weakref
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
@@ -21,6 +22,9 @@ from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET, as_dict
 
 if TYPE_CHECKING:
     from litellm.router_rust.invoke.endpoints import EndpointCore, Plan
+    from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
+
+_ACTIVE_LIMITS: Final[weakref.WeakValueDictionary[str, "MaxParallelRequestsLimit"]] = weakref.WeakValueDictionary()
 
 # The attempt helpers that run inside `_deployment_slot` (`_acompletion` holds the same slot
 # itself). Sync helpers, rerank, moderation and the search helper hold none.
@@ -56,8 +60,20 @@ def max_parallel_requests_limit(
     span: Final = get_parent_otel_span_from_kwargs(dict(kwargs))
     cache: Final = core.routing_cache
     cached: Final[object] = cache.get_cache(key=key, local_only=True, parent_otel_span=span)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]  # the cache holds untyped values
+    if isinstance(cached, MaxParallelRequestsLimit):
+        _ACTIVE_LIMITS[key] = cached
+        return cached
     if cached is not None:
         return cached  # pyright: ignore[reportUnknownVariableType]  # the cache holds untyped values
+    active: Final[MaxParallelRequestsLimit | None] = _ACTIVE_LIMITS.get(key)
+    if active is not None:
+        cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # the routing cache
+            key=key,
+            value=active,
+            local_only=True,
+            ttl=float("inf"),
+        )
+        return active
     params: Final = as_dict(deployment.get("litellm_params"))
     calculated: Final = calculate_max_parallel_requests(
         rpm=params.get("rpm"),  # pyright: ignore[reportArgumentType]  # the configured value, as the Python router reads it
@@ -66,16 +82,20 @@ def max_parallel_requests_limit(
         default_max_parallel_requests=core.endpoints.default_max_parallel_requests,  # pyright: ignore[reportArgumentType]  # the setting as given, as the Python router passes it
     )
     if calculated:
+        limit: Final = MaxParallelRequestsLimit(
+            max_parallel_requests=calculated,
+            model_id=str(model_id),
+            model_group=str(deployment.get("model_name", "")),
+        )
+        _ACTIVE_LIMITS[key] = limit
         cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # the routing cache
             key=key,
-            value=MaxParallelRequestsLimit(
-                max_parallel_requests=calculated,
-                model_id=str(model_id),
-                model_group=str(deployment.get("model_name", "")),
-            ),
+            value=limit,
             local_only=True,
+            ttl=float("inf"),
         )
-    return cache.get_cache(key=key, local_only=True, parent_otel_span=span)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]  # see above
+        return limit
+    return None
 
 
 def enter_deployment_slot(
