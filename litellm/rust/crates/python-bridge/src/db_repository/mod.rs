@@ -3,6 +3,7 @@
 
 mod access_group;
 mod agent_identity;
+mod audit_log;
 mod budget;
 mod end_user;
 mod jwt_key_mapping;
@@ -19,6 +20,7 @@ mod user;
 
 pub(crate) use access_group::RustAccessGroupRepository;
 pub(crate) use agent_identity::RustAgentIdentityRepository;
+pub(crate) use audit_log::RustAuditLogRepository;
 pub(crate) use budget::RustBudgetRepository;
 pub(crate) use end_user::RustEndUserRepository;
 pub(crate) use jwt_key_mapping::RustJwtKeyMappingRepository;

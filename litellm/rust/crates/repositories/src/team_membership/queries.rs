@@ -2,15 +2,13 @@
 //! the statements of a member add.
 
 use serde::Serialize;
-use sqlx::{
-    PgExecutor,
-    types::{Json, chrono::DateTime},
-};
+use sqlx::{PgExecutor, types::Json};
 
 use litellm_db::Error;
 
 use super::repository::NewMemberBudget;
 use crate::budget::Budget;
+use crate::utc_timestamp::naive_utc;
 
 /// A user's membership of a team, with the per-member budget when one is assigned, as the host's
 /// `LiteLLM_TeamMembership` model reads it
@@ -106,10 +104,7 @@ pub(super) async fn insert_member_budget(
         budget.budget_id,
         &budget.allowed_models,
         budget.budget_duration,
-        budget
-            .budget_reset_at
-            .and_then(|at| DateTime::from_timestamp_micros(at.as_microsecond()))
-            .map(|at| at.naive_utc()),
+        budget.budget_reset_at.and_then(naive_utc),
         budget.created_by,
         budget.updated_by,
         user_id,

@@ -9,7 +9,7 @@ another field of ``RustAuthStores``.
 import json
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
 
 import pytest
@@ -26,6 +26,7 @@ from litellm.repositories import rust_database
 from litellm.rust_bridge._native import (
     RustAccessGroupRepository,
     RustAgentIdentityRepository,
+    RustAuditLogRepository,
     RustBudgetRepository,
     RustEndUserRepository,
     RustJwtKeyMappingRepository,
@@ -110,6 +111,65 @@ class FakeJwtKeyMappingStore:
             return False, holder.token if holder.is_active else None
         self.mappings.append(JwtMapping(*scope[:2], token=token, jwt_issuer=scope[2], written_by=written_by))
         return True, token
+
+
+AuditLogRow = tuple[str, int, str | None, str | None, str, str, str, str | None, str | None]
+_AUDIT_LOG_COLUMNS: Final = (
+    "id",
+    "updated_at",
+    "changed_by",
+    "changed_by_api_key",
+    "action",
+    "table_name",
+    "object_id",
+    "before_value",
+    "updated_values",
+)
+_EPOCH: Final = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def audit_log_data(row: AuditLogRow) -> Mapping[str, object]:
+    """One row the audit log repository was handed, as the mapping Prisma's ``create`` took: columns that are None
+    left out, the time as an aware UTC datetime, and the two values as JSON text."""
+    values: Final = (row[0], _EPOCH + timedelta(microseconds=row[1]), *row[2:])
+    return {column: value for column, value in zip(_AUDIT_LOG_COLUMNS, values) if value is not None}
+
+
+@dataclass
+class FakeAuditLogStore:
+    """Audit log rows in the order they were inserted, each as ``audit_log_data`` shapes it.
+
+    A test that hands the proxy a Prisma double with an audit log table also sees each insert there, as a
+    ``create`` or a ``create_many`` with the same mapping, so that double's side effects (an error, a stall) still
+    decide how the write ends."""
+
+    rows: list[Mapping[str, object]] = field(default_factory=list)
+    error: Exception | None = None
+
+    @staticmethod
+    def _prisma_table() -> object | None:
+        from litellm.proxy import proxy_server
+
+        client: Final = proxy_server.prisma_client
+        return None if client is None else client.db.litellm_auditlog
+
+    async def insert(self, row: AuditLogRow) -> None:
+        if self.error is not None:
+            raise self.error
+        data: Final = audit_log_data(row)
+        self.rows.append(data)
+        table: Final = self._prisma_table()
+        if table is not None:
+            await table.create(data=data)
+
+    async def insert_many(self, rows: Sequence[AuditLogRow]) -> None:
+        if self.error is not None:
+            raise self.error
+        data: Final = tuple(audit_log_data(row) for row in rows)
+        self.rows.extend(data)
+        table: Final = self._prisma_table()
+        if table is not None:
+            await table.create_many(data=data)
 
 
 @dataclass
@@ -623,6 +683,7 @@ class RustAuthStores:
     key: FakeKeyStore = field(default_factory=FakeKeyStore)
     jwt_key_mapping: FakeJwtKeyMappingStore = field(default_factory=FakeJwtKeyMappingStore)
     agent_identity: FakeAgentIdentityStore = field(default_factory=FakeAgentIdentityStore)
+    audit_log: FakeAuditLogStore = field(default_factory=FakeAuditLogStore)
     model_access_group: FakeModelAccessGroupStore = field(default_factory=FakeModelAccessGroupStore)
     budget: FakeBudgetStore = field(default_factory=FakeBudgetStore)
     end_user: FakeEndUserStore = field(default_factory=FakeEndUserStore)
@@ -641,6 +702,7 @@ class RustAuthStores:
             RustKeyRepository: self.key,
             RustJwtKeyMappingRepository: self.jwt_key_mapping,
             RustAgentIdentityRepository: self.agent_identity,
+            RustAuditLogRepository: self.audit_log,
             RustModelAccessGroupRepository: self.model_access_group,
             RustBudgetRepository: self.budget,
             RustEndUserRepository: self.end_user,
@@ -666,3 +728,15 @@ def install_rust_auth_stores(monkeypatch: pytest.MonkeyPatch, stores: RustAuthSt
 @pytest.fixture
 def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
     return install_rust_auth_stores(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def audit_log_store(monkeypatch: pytest.MonkeyPatch) -> FakeAuditLogStore:
+    """Audit log rows are inserted through the Rust repository, which unit tests have no database for. This store
+    takes them in every test, on top of whatever else answers ``rust_database.repository``."""
+    store: Final = FakeAuditLogStore()
+    answer: Final = rust_database.repository
+    monkeypatch.setattr(
+        rust_database, "repository", lambda kind: store if kind is RustAuditLogRepository else answer(kind)
+    )
+    return store

@@ -3,10 +3,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{
     PgExecutor,
-    types::{
-        Json,
-        chrono::{DateTime, NaiveDateTime},
-    },
+    types::{Json, chrono::NaiveDateTime},
 };
 
 use litellm_db::Error;
@@ -203,10 +200,7 @@ pub(super) async fn insert_user(
         defaults.user_role.as_deref(),
         defaults.max_budget,
         defaults.budget_duration.as_deref(),
-        defaults
-            .budget_reset_at
-            .and_then(|at| DateTime::from_timestamp_micros(at.as_microsecond()))
-            .map(|at| at.naive_utc()),
+        defaults.budget_reset_at.and_then(utc_timestamp::naive_utc),
         defaults.models.as_deref(),
         defaults.budget_limits.as_ref(),
         defaults.tpm_limit,
