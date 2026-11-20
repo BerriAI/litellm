@@ -331,9 +331,13 @@ class AmazonNovaEmbeddingConfig:
                 image_count=image_count,
             )
 
+        text_and_image_metered: Final = tuple(
+            None if _is_audio_or_video_request(request_data) else metered
+            for request_data, metered in zip(batch_data or (), metered_input_tokens)
+        )
         prompt_tokens: Final = sum(
             _estimated_input_tokens(response) if metered is None else metered
-            for response, metered in zip_longest(response_list, metered_input_tokens)
+            for response, metered in zip_longest(response_list, text_and_image_metered)
         )
         usage: Final = Usage(
             prompt_tokens=prompt_tokens,
@@ -350,11 +354,7 @@ class AmazonNovaEmbeddingConfig:
         batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
         metered_input_tokens: Sequence[int | None] = (),
     ) -> EmbeddingResponse:
-        text_and_image_metered: Final = tuple(
-            None if _is_audio_or_video_request(request_data) else metered
-            for request_data, metered in zip(batch_data or (), metered_input_tokens)
-        )
-        return self._transform_response(response_list, model, batch_data, text_and_image_metered)
+        return self._transform_response(response_list, model, batch_data, metered_input_tokens)
 
     def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
         """
