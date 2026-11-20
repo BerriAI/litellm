@@ -45,6 +45,7 @@ export const customerBudgetLimit = (entity: CustomerUsageEntity): number | null 
   entity.budgetLimits.find((limit) => customerBudgetPeriod(limit.budget_duration) === "monthly")?.max_budget ??
   entity.budgetLimit ??
   entity.budgetLimits.find((limit) => customerBudgetPeriod(limit.budget_duration) === "yearly")?.max_budget ??
+  entity.budgetLimits[0]?.max_budget ??
   null;
 
 export const compareCustomerBudgets = (left: CustomerUsageEntity, right: CustomerUsageEntity, descending: boolean) => {

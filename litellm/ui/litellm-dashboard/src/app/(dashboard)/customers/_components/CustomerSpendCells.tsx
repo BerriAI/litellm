@@ -119,6 +119,7 @@ export function CustomerSpendCells({
   const monthlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "monthly");
   const yearlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "yearly");
   const otherBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "other");
+  const customWindows = otherBudgets.some((budget) => budget.source === "window");
 
   const status = customerBudgetStatus(budgets);
   const atLimit = status === "customerPortal.analytics.reachedLimit";
@@ -131,10 +132,15 @@ export function CustomerSpendCells({
             <CustomerBudgetWindow key={budget.source} budget={budget} showReset={monthlyBudgets.length > 1} />
           ))}
           {monthlyBudgets.length === 0 && (
-            <CustomerBudgetSpend spend={monthlySpend} limit={null} label={t("customerPortal.analytics.monthlySpend")} />
+            <CustomerBudgetSpend
+              spend={monthlySpend}
+              limit={null}
+              label={t("customerPortal.analytics.monthlySpend")}
+              showLimit={!customWindows}
+            />
           )}
           {otherBudgets.map((budget) => (
-            <div key={budget.source} className="space-y-1 text-xs text-muted-foreground">
+            <div key={`${budget.source}-${budget.budget_duration}`} className="space-y-1 text-xs text-muted-foreground">
               <span>
                 {t("customerPortal.analytics.budgetPeriod")}
                 {budget.budget_duration && ` (${budget.budget_duration})`}
@@ -156,7 +162,12 @@ export function CustomerSpendCells({
             />
           ))}
           {yearlyBudgets.length === 0 && (
-            <CustomerBudgetSpend spend={yearlySpend} limit={null} label={t("customerPortal.analytics.yearlySpend")} />
+            <CustomerBudgetSpend
+              spend={yearlySpend}
+              limit={null}
+              label={t("customerPortal.analytics.yearlySpend")}
+              showLimit={!customWindows}
+            />
           )}
         </div>
       </TableCell>
