@@ -637,7 +637,7 @@ def _window_spend_start(
         start: Final = (
             get_annual_budget_window_start(next_reset_at, reset_settings.timezone)
             if is_annual_budget_duration(budget_duration)
-            else next_reset_at - timedelta(seconds=duration_in_seconds(budget_duration))
+            else next_reset_at.astimezone(timezone.utc) - timedelta(seconds=duration_in_seconds(budget_duration))
         )
         return normalize_budget_window_start(start)
     except Exception as error:  # noqa: BLE001  # duration_in_seconds raises bare exceptions on bad input
@@ -1111,7 +1111,12 @@ class ResetBudgetJob:
             budget_resets=tuple(
                 (
                     b.budget_id,
-                    compute_budget_reset_at(budget_duration=b.budget_duration, settings=self.reset_settings),
+                    compute_budget_reset_at(
+                        budget_duration=b.budget_duration,
+                        settings=self.reset_settings,
+                        now=now,
+                        previous_reset=b.budget_reset_at,
+                    ),
                 )
                 for b in budgets_to_reset
                 if b.budget_id is not None and b.budget_id in windows and b.budget_duration is not None
@@ -1910,12 +1915,11 @@ class ResetBudgetJob:
         budget_duration: Final = window.get("budget_duration")
         if not isinstance(reset_at_str, str) or not reset_at_str or not isinstance(budget_duration, str):
             return None
-        annual: Final = is_annual_budget_duration(budget_duration)
         saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
         if _as_utc(saved_reset_at) > _as_utc(now):
             return None
         return compute_budget_reset_at(
-            budget_duration=budget_duration, settings=reset_settings, now=now if annual else None
+            budget_duration=budget_duration, settings=reset_settings, now=now, previous_reset=saved_reset_at
         )
 
     @staticmethod
@@ -2174,7 +2178,8 @@ class ResetBudgetJob:
                 item.budget_reset_at = compute_budget_reset_at(
                     budget_duration=item.budget_duration,
                     settings=reset_settings,
-                    now=current_time if is_annual_budget_duration(item.budget_duration) else None,
+                    now=current_time,
+                    previous_reset=item.budget_reset_at,
                 )
             return item
         except Exception as e:
