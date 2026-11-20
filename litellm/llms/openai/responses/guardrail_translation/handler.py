@@ -461,6 +461,9 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
     _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
+_MCP_CALL_ARGUMENTS_EVENT_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"response.mcp_call_arguments.delta": "delta", "response.mcp_call_arguments.done": "arguments"}
+)
 _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
 _TEXT_DELTA_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.refusal.delta"})
 _REASONING_SUMMARY_TEXT_EVENT_TYPES: Final = frozenset(
@@ -618,6 +621,16 @@ _RewriteKey: Final = TypeVar("_RewriteKey")
 
 def _delta_replacements(rewrites: Mapping[_RewriteKey, str]) -> Mapping[_RewriteKey, Iterator[str]]:
     return MappingProxyType({key: chain((rewritten,), repeat("")) for key, rewritten in rewrites.items()})
+
+
+def _mcp_call_arguments_rewrites(rewrites: Mapping[_OutputItemPosition, str]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            position.item_id: rewritten
+            for position, rewritten in rewrites.items()
+            if isinstance(position, _McpCallTextPosition) and position.text_field == "arguments"
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2239,10 +2252,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         rule."""
         delta_replacements: Final = _delta_replacements(rewrites_by_position)
         reasoning_rewrites: Final = _reasoning_stream_rewrites(rewrites_by_position)
+        mcp_arguments: Final = _mcp_call_arguments_rewrites(rewrites_by_position)
+        mcp_argument_deltas: Final = _delta_replacements(mcp_arguments)
         for event in stream_events:
             if not has_attributes(event, _StreamEventFields, "get"):
                 continue
             event_type = _stream_event_field(event, "type")
+            if self._sync_mcp_call_arguments_event(event, event_type, mcp_arguments, mcp_argument_deltas):
+                continue
             output_index = _stream_event_field(event, "output_index")
             content_index = _stream_event_field(event, "content_index")
             if _carries_whole_output_item(event) and isinstance(output_index, int):
@@ -2263,6 +2280,23 @@ class OpenAIResponsesHandler(BaseTranslation):
                 self._write_event_field(event, "refusal", rewrites_by_position[position])
             elif event_type == "response.content_part.done" and position in rewrites_by_position:
                 self._write_content_part_text(event.get("part"), rewrites_by_position[position])
+
+    @staticmethod
+    def _sync_mcp_call_arguments_event(
+        event: _StreamEventFields,
+        event_type: object,
+        arguments_by_item_id: Mapping[str, str],
+        argument_deltas_by_item_id: Mapping[str, Iterator[str]],
+    ) -> bool:
+        field: Final = _MCP_CALL_ARGUMENTS_EVENT_FIELDS.get(event_type) if isinstance(event_type, str) else None
+        item_id: Final = _stream_event_field(event, "item_id")
+        if field is None or not isinstance(item_id, str) or item_id not in arguments_by_item_id:
+            return False
+        rewritten: Final = (
+            next(argument_deltas_by_item_id[item_id]) if field == "delta" else arguments_by_item_id[item_id]
+        )
+        OpenAIResponsesHandler._write_event_field(event, field, rewritten)
+        return True
 
     @staticmethod
     def _sync_provider_fields_to_stream_events(stream_events: Sequence[object], response: object) -> None:

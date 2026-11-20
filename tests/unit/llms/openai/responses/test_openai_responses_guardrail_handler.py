@@ -1564,6 +1564,52 @@ class TestMcpCallResultsReachOutputGuardrails:
         assert "persimmon" not in streamed_failure.error and "unreachable" in streamed_failure.error
         assert (in_envelope, failure_in_envelope) == (streamed, streamed_failure)
 
+    @pytest.mark.asyncio
+    async def test_ended_stream_masks_mcp_call_arguments_in_their_delta_and_done_events(self) -> None:
+        arguments: Final = '{"fruit": "persimmon"}'
+        streamed: Final = _mcp_call("mcp_toolu_1", arguments=arguments, output="two trees")
+        delta_event: Final = {
+            "type": "response.mcp_call_arguments.delta",
+            "output_index": 0,
+            "item_id": "mcp_toolu_1",
+            "delta": arguments,
+        }
+        done_event: Final = {
+            "type": "response.mcp_call_arguments.done",
+            "output_index": 0,
+            "item_id": "mcp_toolu_1",
+            "arguments": arguments,
+        }
+        events: Final[list[object]] = [
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": streamed.model_copy(update={"arguments": ""}),
+            },
+            delta_event,
+            done_event,
+            {"type": "response.output_item.done", "output_index": 0, "item": streamed},
+            {"type": "response.output_item.done", "output_index": 1, "item": _message_item("a fig")},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "claude",
+                    "output": [streamed.model_copy(), _message_item("a fig")],
+                },
+            },
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=_persimmon_masking_filter(),
+            request_data={"metadata": {}},
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert "persimmon" not in streamed.arguments and "fruit" in streamed.arguments
+        assert delta_event["delta"] == done_event["arguments"] == streamed.arguments
+
 
 class TestReplayedMcpCallsReachInputGuardrails:
     @pytest.mark.asyncio
