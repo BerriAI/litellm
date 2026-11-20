@@ -62,6 +62,7 @@ from .realtime_guardrails import (
     realtime_screening_guardrails,
     rewritten_item,
 )
+from .realtime_turn_limits import RealtimeTurnLimiterSource, realtime_turn_limits, registered_realtime_turn_limiters
 
 if TYPE_CHECKING:
     from openai.types.realtime.realtime_audio_formats import RealtimeAudioFormats
@@ -507,6 +508,7 @@ class RealTimeStreaming:
         lazy_setup_deadline_seconds: float = REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
         lazy_setup_content_grace_seconds: float = REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        turn_limiters: RealtimeTurnLimiterSource = registered_realtime_turn_limiters,
     ):
         self.websocket: _ClientWebSocket = websocket
         self._clock: Final = clock
@@ -558,6 +560,10 @@ class RealTimeStreaming:
         self.session_configuration_request: str | None = None
         self.user_api_key_dict = user_api_key_dict
         self.request_data: Mapping[str, object] = request_data or {}
+        self._turn_limits: Final = realtime_turn_limits(
+            turn_limiters, user_api_key_dict, logging_obj.model_call_details, model
+        )
+        self._admitted_response_creates: int = 0
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
@@ -1478,7 +1484,7 @@ class RealTimeStreaming:
             return self._event_normalizer.should_drop(event)
         return False
 
-    def _normalize_event_for_ga_client(self, event: dict) -> dict:
+    def _normalize_event_for_ga_client(self, event: dict) -> dict[str, object]:
         """Apply per-provider GA normalization before forwarding to clients."""
         if self._event_normalizer is not None:
             return self._event_normalizer.normalize(event)
@@ -1549,10 +1555,41 @@ class RealTimeStreaming:
         """Return a session.update that disables VAD auto-response."""
         return json.dumps(self._make_turn_detection_update(self._gate_turn_detection(None)))
 
-    async def _send_guardrail_cancel(self) -> None:
+    async def _send_guardrail_cancel(self) -> bool:
         event_id: Final = _guardrail_event_id()
         self._guardrail_cancel_event_ids = self._guardrail_cancel_event_ids | {event_id}
-        await self._send_to_backend(json.dumps({"type": "response.cancel", "event_id": event_id}))
+        return await self._send_to_backend(json.dumps({"type": "response.cancel", "event_id": event_id}))
+
+    async def _refuses_turn_over_token_limit(self) -> bool:
+        if self._turn_limits is None:
+            return False
+        refusal: Final = await self._turn_limits.refusal()
+        if refusal is None:
+            self._admitted_response_creates += 1
+            return False
+        await self.websocket.send_text(refusal)
+        return True
+
+    async def _send_proxy_response_create(self, events: Sequence[str]) -> None:
+        if await self._refuses_turn_over_token_limit():
+            return
+        for event in events:
+            await self._send_to_backend(event)
+
+    async def _apply_turn_limits(self, event: Mapping[str, object]) -> None:
+        if self._turn_limits is None:
+            return
+        if event.get("type") == "response.done":
+            await self._turn_limits.charge(event)
+            return
+        if event.get("type") != "response.created":
+            return
+        if self._admitted_response_creates > 0:
+            self._admitted_response_creates -= 1
+            return
+        refusal: Final = await self._turn_limits.refusal()
+        if refusal is not None and await self._send_guardrail_cancel():
+            await self.websocket.send_text(refusal)
 
     async def _send_blocked_turn_to_backend(self, pre_block_backend_message: str | None, item_id: str | None) -> None:
         if pre_block_backend_message is None and self._is_transcription_session:
@@ -1752,8 +1789,7 @@ class RealTimeStreaming:
         await self._send_blocked_turn_to_backend(pre_block_backend_message, item_id)
         await self.websocket.send_text(guardrail_violation_error_event(block.message))
         if not self._is_transcription_session:
-            for voice_prompt_event in guardrail_voice_prompt_events(block.message):
-                await self._send_to_backend(voice_prompt_event)
+            await self._send_proxy_response_create(guardrail_voice_prompt_events(block.message))
 
         self._violation_count += 1
         if block.ends_session(self._violation_count):
@@ -1802,6 +1838,7 @@ class RealTimeStreaming:
             if isinstance(event, dict):
                 self._detect_transcription_session_from_backend(event)
                 self._capture_translation_output_audio(event)
+                await self._apply_turn_limits(event)
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
@@ -1851,7 +1888,7 @@ class RealTimeStreaming:
                 await self._send_event_to_client(event, event_str)
                 blocked = await self.run_realtime_guardrails(transcript)
                 if not blocked and self._should_disable_vad_auto_response():
-                    await self._send_to_backend(json.dumps({"type": "response.create"}))
+                    await self._send_proxy_response_create((json.dumps({"type": "response.create"}),))
                 continue
             ## LOGGING
             self.store_message(event_str)
@@ -1896,7 +1933,7 @@ class RealTimeStreaming:
                 item_id=event_obj.get("item_id"),
             )
             if not blocked and self._should_disable_vad_auto_response():
-                await self._send_to_backend(json.dumps({"type": "response.create"}))
+                await self._send_proxy_response_create((json.dumps({"type": "response.create"}),))
             return True
         return False
 
@@ -1946,6 +1983,7 @@ class RealTimeStreaming:
                     continue
 
                 event = self._normalize_event_for_ga_client(event)
+                await self._apply_turn_limits(event)
                 self.store_message(event)
 
                 if not self._client_wants_beta:
@@ -2373,6 +2411,9 @@ class RealTimeStreaming:
 
                 if self._refuses_unscreened_audio(msg_type):
                     await self._refuse_unscreened_audio(msg_type, message)
+                    continue
+
+                if msg_type == "response.create" and await self._refuses_turn_over_token_limit():
                     continue
 
                 ## LOGGING

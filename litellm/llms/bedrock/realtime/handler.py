@@ -46,6 +46,11 @@ from litellm.litellm_core_utils.realtime_guardrails import (
     rewritten_item,
 )
 from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeEventTypes
+from litellm.litellm_core_utils.realtime_turn_limits import (
+    RealtimeTurnLimits,
+    realtime_turn_limits,
+    registered_realtime_turn_limiters,
+)
 from litellm.llms.base_llm.realtime.transformation import RealtimeSessionUpdateRejection
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import OpenAIRealtimeEvents
@@ -278,6 +283,18 @@ def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseExc
     if error is failure:
         raise failure
     raise error from failure
+
+
+async def _refused_response_create(
+    turn_limits: RealtimeTurnLimits | None, client_event: Mapping[str, JsonValue], client_ws: RealtimeClientWebSocket
+) -> bool:
+    if turn_limits is None or client_event.get("type") != "response.create":
+        return False
+    refusal: Final = await turn_limits.refusal()
+    if refusal is None:
+        return False
+    await client_ws.send_text(refusal)
+    return True
 
 
 def _parse_client_message(message: str) -> Mapping[str, JsonValue] | None:
@@ -673,6 +690,9 @@ class BedrockRealtime(BaseAWSLLM):
                 BedrockRealtimeGuardrails(
                     request_data={"litellm_metadata": litellm_metadata or {}}, user_api_key_dict=user_api_key_dict
                 ),
+                realtime_turn_limits(
+                    registered_realtime_turn_limiters, user_api_key_dict, logging_obj.model_call_details, model
+                ),
             )
         finally:
             await _close_bedrock_client(bedrock_client)
@@ -686,6 +706,7 @@ class BedrockRealtime(BaseAWSLLM):
         pending_opening_message: str | None,
         drop_params: bool = False,
         guardrails: BedrockRealtimeGuardrails | None = None,
+        turn_limits: RealtimeTurnLimits | None = None,
     ) -> None:
         transformation_config: Final = BedrockRealtimeConfig(drop_params=drop_params)
 
@@ -718,6 +739,7 @@ class BedrockRealtime(BaseAWSLLM):
             logging_obj,
             initial_message=pending_opening_message,
             guardrails=session_guardrails,
+            turn_limits=turn_limits,
         )
         if session_guardrails.failed:
             logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
@@ -761,6 +783,7 @@ class BedrockRealtime(BaseAWSLLM):
         logging_obj: LiteLLMLogging,
         initial_message: str | None,
         guardrails: BedrockRealtimeGuardrails | None = None,
+        turn_limits: RealtimeTurnLimits | None = None,
     ) -> _BridgeOutcome:
         """Run both forwarding directions until the client leaves or either side fails."""
         logged: Final[list[OpenAIRealtimeEvents]] = []  # mutable-ok: events forwarded before a failure are still spend
@@ -778,6 +801,7 @@ class BedrockRealtime(BaseAWSLLM):
                     session_state,
                     signals=signals,
                     guardrails=session_guardrails,
+                    turn_limits=turn_limits,
                 ):
                     logged.append(event)
             except Exception:
@@ -795,6 +819,7 @@ class BedrockRealtime(BaseAWSLLM):
                 initial_message,
                 signals=signals,
                 guardrails=session_guardrails,
+                turn_limits=turn_limits,
             )
         )
         bedrock_task: Final = asyncio.create_task(collect_logged_events())
@@ -831,6 +856,7 @@ class BedrockRealtime(BaseAWSLLM):
         *,
         signals: SessionEndSignals,
         guardrails: BedrockRealtimeGuardrails | None = None,
+        turn_limits: RealtimeTurnLimits | None = None,
     ) -> None:
         """Forward messages from client WebSocket to Bedrock stream.
 
@@ -885,7 +911,8 @@ class BedrockRealtime(BaseAWSLLM):
                     case _ClientEventRoute.DROP:
                         continue
                     case _ClientEventRoute.FORWARD:
-                        await forward_to_bedrock(message)
+                        if not await _refused_response_create(turn_limits, parsed_client_message, client_ws):
+                            await forward_to_bedrock(message)
 
                 if is_session_update and not await _ack_session_update(
                     client_ws, transformation_config, model, logging_obj, parsed_client_message
@@ -911,6 +938,7 @@ class BedrockRealtime(BaseAWSLLM):
         *,
         signals: SessionEndSignals,
         guardrails: BedrockRealtimeGuardrails | None = None,
+        turn_limits: RealtimeTurnLimits | None = None,
     ) -> AsyncIterator[OpenAIRealtimeEvents]:
         """Forward messages from Bedrock to the client, yielding the ones to record for spend logging.
 
@@ -979,6 +1007,8 @@ class BedrockRealtime(BaseAWSLLM):
                 response_value = transformed_response["response"]
                 openai_messages = response_value if isinstance(response_value, list) else (response_value,)
                 for openai_message in openai_messages:
+                    if turn_limits is not None:
+                        await turn_limits.charge(openai_message)
                     if not await send_to_client(json.dumps(openai_message)):
                         return
                     if _should_log_event(openai_message):

@@ -103,6 +103,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeAuth
 from litellm.types.utils import (
     CallTypes,
+    Usage,
 )
 
 if TYPE_CHECKING:
@@ -1233,10 +1234,13 @@ class ParallelRequestLimiterHook(CustomLogger):
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def enforce_token_limits_for_frame(
-        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+        call_type: str = CallTypes.aresponses_websocket.value,
     ) -> None:
-        """Read one Responses WebSocket turn's token windows: every TPM limit the socket's request would
-        check, plus the agent windows its admission held, without the slot and RPM it already took."""
+        """Read one WebSocket turn's token windows: every TPM limit the socket's request would check, plus
+        the agent windows its admission held, without the slot and RPM it already took."""
         connection_stash: Final = get_request_stash()
         tags: Final = sorted(connection_stash.tpm_limited_tags) if connection_stash is not None else []
         agent_windows: Final = connection_stash.socket_agent_windows if connection_stash is not None else ()
@@ -1247,7 +1251,7 @@ class ParallelRequestLimiterHook(CustomLogger):
                 MappingProxyType({"model": requested_model, "metadata": {"tags": tags}}),
                 {"kind": "socket_turn", "agent_windows": [dict(window) for window in agent_windows]},
                 {"kind": "check", "read_only": True, "skip_parallel_check": True},
-                call_type=CallTypes.aresponses_websocket.value,
+                call_type=call_type,
             )
             response: Final = _native_reply(scoped.reply)
         except RateLimitUnverifiableError as unverifiable:
@@ -1256,6 +1260,49 @@ class ParallelRequestLimiterHook(CustomLogger):
             ) from unverifiable
         if response["overall_code"] == "OVER_LIMIT":
             handle_rate_limit_error(self, response, scoped.descriptors, requested_model)
+
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def charge_realtime_turn_usage(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        """Charge one realtime response's tokens to the TPM windows its session's next check reads, keeping
+        the session's parallel slot and RPM untouched. The session's own success log still runs once at close."""
+        from litellm.proxy.hooks.parallel_request_limiter_v3_native import post_call_request
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+        turn_kwargs: Final = MappingProxyType(
+            {
+                "call_type": CallTypes.arealtime.value,
+                "litellm_params": {
+                    "metadata": {
+                        "model_group": requested_model,
+                        "user_api_key_metadata": LiteLLMProxyRequestSetup.get_tenant_logging_metadata(
+                            user_api_key_dict
+                        )["user_api_key_metadata"],
+                        "user_api_key_model_max_budget": _METADATA.validate_python(
+                            user_api_key_dict.model_max_budget or {}  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.model_max_budget is a bare dict
+                        ),
+                    }
+                },
+                "standard_logging_object": {
+                    "metadata": dict(
+                        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict)
+                    )
+                },
+                "combined_usage_object": usage,
+            }
+        )
+        await self.native_companion.log_success(
+            _native_state(self, get_request_stash()),
+            turn_kwargs,
+            None,
+            None,
+            None,
+            _settlement_resolved(self, turn_kwargs, None, charges_ptu=False),
+            token_rate_limit_type(),
+            request=post_call_request() if self.rate_limits.has_redis else None,
+            turn=True,
+        )
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
@@ -2386,6 +2433,8 @@ def _settlement_resolved(
     limiter: ParallelRequestLimiterHook,
     kwargs: Mapping[str, object],
     native_state: "NativeParallelRequestLimiterState | None",
+    *,
+    charges_ptu: bool = True,
 ) -> Mapping[str, object]:
     """What only the proxy resolves for a native settlement: the served and reserved models through the
     router's aliases, whether the key owns each one's TPM limit, the team's PTU share, and the live policy.
@@ -2433,7 +2482,7 @@ def _settlement_resolved(
             if model is not None
             for ceiling in (
                 limiter.ptu_team_ceiling_resolver(team_id, model.group)
-                if isinstance(team_id, str) and team_id
+                if charges_ptu and isinstance(team_id, str) and team_id
                 else None,
             )
         },
