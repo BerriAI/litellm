@@ -1,6 +1,7 @@
-from typing import Literal, Self
+from typing import Literal
 
 from pydantic import ConfigDict, Field, SecretStr, model_validator
+from typing_extensions import Self
 
 from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
 

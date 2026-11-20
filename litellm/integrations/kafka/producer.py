@@ -1,7 +1,8 @@
 import threading
 import time
 from collections.abc import Callable, Mapping
-from concurrent.futures import Future, TimeoutError
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, replace
 from typing import Final, Protocol, TypeAlias
 
@@ -299,7 +300,7 @@ class KafkaSink:
         closed: Final = self.request_close(budget)
         try:
             closed.result(timeout=budget)
-        except TimeoutError:
+        except FutureTimeoutError:
             self._report_failure()
             verbose_logger.warning(
                 "Kafka logging shutdown deadline reached; client cleanup continues in the background"

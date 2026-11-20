@@ -4,6 +4,7 @@ import time
 from collections.abc import Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import datetime
 from functools import partial
 from typing import Final, TypeVar
@@ -45,7 +46,7 @@ async def _wait_until(future: Future[_T], deadline: float) -> bool:
         return True
     try:
         _ = await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(future)), max(0.0, deadline - time.monotonic()))
-    except TimeoutError:
+    except asyncio.TimeoutError:
         return False
     except asyncio.CancelledError:
         if future.cancelled():
@@ -131,7 +132,7 @@ class KafkaLogger(CustomLogger):
         if finished is not None:
             try:
                 await asyncio.wait_for(asyncio.wrap_future(finished), self.sink.params.callback_timeout_ms / 1000)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 self.sink.preparation_timed_out()
 
     async def flush_queue(self) -> None:
@@ -160,7 +161,7 @@ class KafkaLogger(CustomLogger):
         deadline: Final = time.monotonic() + self.sink.budget(timeout)
         try:
             self._worker.stop(deadline).result(timeout=max(0.0, deadline - time.monotonic()))
-        except TimeoutError:
+        except FutureTimeoutError:
             self._shutdown_timeout()
         self._worker.discard_pending()
         self.sink.close(max(0.0, deadline - time.monotonic()))
