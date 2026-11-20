@@ -491,15 +491,21 @@ class _ProviderFileAccessGuard(Protocol):
     async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: UserAPIKeyAuth) -> None: ...
 
 
-def _gemini_passthrough_file_id(method: str, path: str) -> str | None:
-    if method not in ("GET", "DELETE"):
+_METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-method-override")
+
+
+def _gemini_passthrough_file_id(method: str, headers: Mapping[str, str], path: str) -> str | None:
+    methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
+    if methods.isdisjoint(("GET", "DELETE")):
         return None
     single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(unquote(path))
     return single_file.group(1) if single_file is not None else None
 
 
-async def _enforce_gemini_passthrough_file_ownership(method: str, path: str, user_api_key_dict: UserAPIKeyAuth) -> None:
-    file_id: Final = _gemini_passthrough_file_id(method, path)
+async def _enforce_gemini_passthrough_file_ownership(
+    request: Request, path: str, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    file_id: Final = _gemini_passthrough_file_id(request.method, request.headers, path)
     if file_id is None:
         return
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -540,7 +546,7 @@ async def gemini_proxy_route(
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
-    await _enforce_gemini_passthrough_file_ownership(request.method, updated_url.path, user_api_key_dict)
+    await _enforce_gemini_passthrough_file_ownership(request, updated_url.path, user_api_key_dict)
 
     # Add or update query parameters
     gemini_api_key: Final[str | None] = passthrough_endpoint_router.get_credentials(

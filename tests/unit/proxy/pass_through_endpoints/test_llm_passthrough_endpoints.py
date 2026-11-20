@@ -246,7 +246,7 @@ class _DenyingFileAccessGuard:
         raise HTTPException(status_code=403, detail="not the owner")
 
 
-async def _call_gemini_pass_through(method: str, endpoint: str) -> object:
+async def _call_gemini_pass_through(method: str, endpoint: str, override_header: str | None = None) -> object:
     from fastapi import Request, Response
 
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import gemini_proxy_route
@@ -260,7 +260,10 @@ async def _call_gemini_pass_through(method: str, endpoint: str) -> object:
         "raw_path": f"/gemini/{endpoint}".encode(),
         "root_path": "",
         "query_string": b"key=sk-9876",
-        "headers": [(b"content-type", b"application/json")],
+        "headers": [
+            (b"content-type", b"application/json"),
+            *([(override_header.encode(), b"DELETE")] if override_header else []),
+        ],
         "client": ("127.0.0.1", 51234),
         "server": ("proxy.local", 4000),
         "state": {},
@@ -308,6 +311,34 @@ async def test_gemini_pass_through_refuses_a_file_the_caller_does_not_own(
 
     with pytest.raises(HTTPException) as refused:
         await _call_gemini_pass_through(method, endpoint)
+
+    assert refused.value.status_code == 403
+    assert guard.checked == ("abc123",)
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override_header", ["x-http-method-override", "x-pass-x-http-method-override"])
+async def test_gemini_pass_through_refuses_a_method_override_on_a_file_the_caller_does_not_own(
+    override_header: str,
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _DenyingFileAccessGuard()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await _call_gemini_pass_through("POST", "v1beta/files/abc123", override_header)
 
     assert refused.value.status_code == 403
     assert guard.checked == ("abc123",)
