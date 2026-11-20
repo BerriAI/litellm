@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import (
     McpReplayPlan,
+    is_mcp_block,
     mcp_replay_plan,
     mcp_server_name,
 )
@@ -3121,7 +3122,7 @@ def anthropic_messages_pt(
                             m.get("type", "") == "server_tool_use"
                             or m.get("type", "").endswith("_tool_result")
                             or _is_answered_mcp_tool_use(m, _answered_mcp_tool_use_ids)
-                        ):
+                        ) and (replays_mcp_calls or not is_mcp_block(m)):
                             assistant_content.append(m)
                 elif (
                     "content" in assistant_content_block

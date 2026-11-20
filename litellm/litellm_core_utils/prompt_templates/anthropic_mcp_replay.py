@@ -159,8 +159,12 @@ def mcp_replay_plan(messages: Sequence[object], *, replays_mcp_calls: bool) -> M
     return _plan(turns) if replays_mcp_calls else _plan_dropping_every_mcp_block(turns)
 
 
+def is_mcp_block(block: object) -> bool:
+    return message_field(block, "type") in _MCP_BLOCK_TYPES
+
+
 def holds_mcp_blocks(anthropic_messages: Sequence[object]) -> bool:
     return any(
-        message_field(block, "type") in _MCP_BLOCK_TYPES
+        is_mcp_block(block)
         for block in chain.from_iterable(parts_of(message_field(message, "content")) for message in anthropic_messages)
     )

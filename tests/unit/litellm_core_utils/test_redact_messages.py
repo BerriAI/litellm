@@ -657,6 +657,36 @@ class TestPerformRedaction:
         assert redacted["output"][0]["name"] == "grep"
         assert redacted["output"][1]["input"] == "not-a-custom-input"
 
+    def test_redacts_responses_api_mcp_call_content_dict(self):
+        result = {
+            "output": [
+                {
+                    "type": "mcp_call",
+                    "id": "mcp_mcptoolu_01Wiki",
+                    "name": "ask_question",
+                    "server_label": "deepwiki",
+                    "arguments": '{"question": "secret-question"}',
+                    "output": "secret-answer",
+                    "error": "secret-error",
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        assert {field: redacted["output"][0][field] for field in ("arguments", "output", "error")} == dict.fromkeys(
+            ("arguments", "output", "error"), "redacted-by-litellm"
+        )
+        assert (redacted["output"][0]["name"], redacted["output"][0]["server_label"]) == ("ask_question", "deepwiki")
+
+    def test_keeps_an_mcp_call_without_output_or_error_unset_dict(self):
+        result = {"output": [{"type": "mcp_call", "name": "ask_question", "arguments": "{}", "output": None}]}
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted["output"][0]["output"] is None
+        assert "error" not in redacted["output"][0]
+
     def test_redacts_responses_api_refusal_parts_dict(self):
         result = {
             "output": [
@@ -754,6 +784,25 @@ class TestPerformRedaction:
 
         assert output_item.input == "redacted-by-litellm"
         assert output_item.name == "grep"
+
+    def test_redacts_responses_api_mcp_call_content_object(self):
+        output_item = SimpleNamespace(
+            type="mcp_call",
+            name="ask_question",
+            server_label="deepwiki",
+            arguments='{"question": "secret-question"}',
+            output="secret-answer",
+            error=None,
+        )
+
+        _redact_responses_api_output([output_item])
+
+        assert (output_item.arguments, output_item.output, output_item.error) == (
+            "redacted-by-litellm",
+            "redacted-by-litellm",
+            None,
+        )
+        assert output_item.name == "ask_question"
 
     def test_redacts_responses_api_refusal_parts_object(self):
         refusal = SimpleNamespace(type="refusal", refusal="I cannot share the secret")

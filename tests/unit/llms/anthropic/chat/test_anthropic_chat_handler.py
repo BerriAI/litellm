@@ -3671,6 +3671,44 @@ def test_streamed_mcp_call_next_to_a_client_tool_call_stays_out_of_tool_calls():
     ]
 
 
+@pytest.mark.parametrize("tool_name", ["web_search", "web_fetch"])
+def test_streamed_mcp_tool_named_like_a_hosted_web_tool_is_not_a_web_search_call(tool_name: str) -> None:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {"id": "msg_01", "model": "claude-opus-5-5", "usage": {"input_tokens": 9}},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_01Search",
+                "name": tool_name,
+                "server_name": "search",
+                "input": {"query": "Paris"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcptoolu_01Search",
+                "is_error": False,
+                "content": [{"type": "text", "text": "Paris is in France."}],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        _streamed_stop("end_turn"),
+    )
+    message: Final = _assemble_stream(events).choices[0].message
+
+    assert not (message.provider_specific_fields or {}).get("web_search_calls")
+    assert [call[0] for call in _streamed_server_tool_calls(message)] == ["mcptoolu_01Search"]
+
+
 def test_streamed_refusal_stop_details_reach_the_assembled_message():
     stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
     assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))

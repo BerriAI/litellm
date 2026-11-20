@@ -10,7 +10,7 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
     redact_vertex_ai_metadata_from_logged_object,
@@ -198,6 +199,24 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
     }
 
 
+_MCP_CALL_CONTENT_FIELDS: Final = ("arguments", "output", "error")
+
+
+def _present_mcp_call_content_fields(output_item: object) -> tuple[str, ...]:
+    if stream_item_field(output_item, "type") != "mcp_call":
+        return ()
+    return tuple(field for field in _MCP_CALL_CONTENT_FIELDS if stream_item_field(output_item, field) is not None)
+
+
+def _redact_mcp_call_content(output_items: Iterable[object], redacted_str: str) -> None:
+    for output_item in output_items:
+        for field in _present_mcp_call_content_fields(output_item):
+            if isinstance(output_item, dict):
+                output_item[field] = redacted_str
+            else:
+                setattr(output_item, field, redacted_str)
+
+
 def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
@@ -222,6 +241,7 @@ def _redact_responses_api_output(output_items):
             output_item.arguments = REDACTED_BY_LITELLM
         if hasattr(output_item, "type") and output_item.type == "custom_tool_call" and hasattr(output_item, "input"):
             output_item.input = REDACTED_BY_LITELLM
+    _redact_mcp_call_content(output_items, REDACTED_BY_LITELLM)
 
 
 def _redact_responses_api_output_dict(output_items, redacted_str: str):
@@ -249,6 +269,7 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             output_item["arguments"] = redacted_str
         if output_item.get("type") == "custom_tool_call" and "input" in output_item:
             output_item["input"] = redacted_str
+    _redact_mcp_call_content(output_items, redacted_str)
 
 
 _REDACTED_REQUEST_FIELDS: Final = ("query_image", *RETRIEVAL_QUERY_PARAMS)
