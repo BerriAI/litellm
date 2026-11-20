@@ -6857,17 +6857,29 @@ def test_auto_truncation_keeps_system_prompt_in_instructions(location: str) -> N
     assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
 
 
-@pytest.mark.parametrize("continuation", [{}, {"truncation": "auto"}])
-def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> None:
-    request: Final = _bridged_transform_request(
-        "gpt-6.2-sol",
-        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
-        {"custom_llm_provider": "openai"},
-        {"instructions": "Caller instructions", **continuation},
-    )
-    assert request["instructions"] == ("Be brief.\nCaller instructions" if continuation else "Caller instructions")
-    if not continuation:
-        assert request["input"][0] == _system_input_item("Be brief.")
+@pytest.mark.parametrize(
+    ("field", "value", "equivalent"),
+    [
+        ("instructions", "Caller instructions", "a `system` message"),
+        ("reasoning", {"effort": "low"}, "`reasoning_effort`"),
+        ("text", {"verbosity": "low"}, "`response_format` and `verbosity`"),
+        ("max_output_tokens", 64, "`max_completion_tokens`"),
+    ],
+)
+@pytest.mark.parametrize("in_extra_body", [False, True])
+def test_responses_only_fields_are_rejected_with_their_chat_equivalent(
+    field: str, value: object, equivalent: str, in_extra_body: bool
+) -> None:
+    optional_params: Final = {"extra_body": {field: value}} if in_extra_body else {field: value}
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _bridged_transform_request(
+            "gpt-6.2-sol",
+            [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+            {"custom_llm_provider": "openai"},
+            optional_params,
+        )
+    assert f"`{field}` is only supported on the Responses API" in str(rejected.value)
+    assert equivalent in str(rejected.value)
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():

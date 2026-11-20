@@ -247,6 +247,29 @@ _PREVIOUS_RESPONSE_ID_UNSUPPORTED: Final = (
 )
 
 
+_RESPONSES_ONLY_FIELD_EQUIVALENTS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "instructions": "a `system` message",
+        "reasoning": "`reasoning_effort`",
+        "text": "`response_format` and `verbosity`",
+        "max_output_tokens": "`max_completion_tokens`",
+    }
+)
+
+
+def _responses_only_field_error(sent_params: Sequence[Mapping[str, object]]) -> str | None:
+    sent: Final = tuple(
+        field for field in _RESPONSES_ONLY_FIELD_EQUIVALENTS if any(params.get(field) is not None for params in sent_params)
+    )
+    if not sent:
+        return None
+    return " ".join(
+        f"`{field}` is only supported on the Responses API (`/v1/responses`). "
+        f"On chat completions, send {_RESPONSES_ONLY_FIELD_EQUIVALENTS[field]} instead."
+        for field in sent
+    )
+
+
 def replays_responses_history(provider: str | None) -> bool:
     return provider in _HISTORY_REPLAY_PROVIDERS
 
@@ -1396,6 +1419,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             raise litellm.UnsupportedParamsError(
                 message=_PREVIOUS_RESPONSE_ID_UNSUPPORTED, model=model, llm_provider=_served_provider(litellm_params)
             )
+        responses_only_field_error: Final = _responses_only_field_error(sent_params[:2])
+        if responses_only_field_error is not None:
+            raise litellm.UnsupportedParamsError(
+                message=responses_only_field_error, model=model, llm_provider=_served_provider(litellm_params)
+            )
         preserve_system_instructions: Final = any(params.get("truncation") == "auto" for params in sent_params)
         optional_params = self._extract_extra_body_params(optional_params)
         provider: Final = _served_provider(litellm_params)
@@ -1468,11 +1496,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             custom_llm_provider=_served_provider(litellm_params),
         )
 
-        caller_instructions: Final = responses_api_request.get("instructions")
         if instructions:
-            responses_api_request["instructions"] = (
-                f"{instructions}\n{caller_instructions}" if caller_instructions else instructions
-            )
+            responses_api_request["instructions"] = instructions
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug("Chat provider: Stream parameter: %s", stream)
