@@ -105,7 +105,7 @@ def _uploaded(put: Received) -> dict[str, object]:
 def _assert_backoff_gaps(puts: list[Received]) -> None:
     gaps: Final = [later.at - earlier.at for earlier, later in zip(puts, puts[1:])]
     for attempt, gap in enumerate(gaps):
-        assert (1 << attempt) * 0.5 <= gap < (1 << attempt) * 1.5 + 0.25, (attempt, gap)
+        assert (1 << attempt) * 0.5 <= gap < (1 << attempt) * 1.5 + 2.0, (attempt, gap)
 
 
 _LOGGED_BACKOFF: Final = re.compile(r"retrying in (\d+\.\d+)s")

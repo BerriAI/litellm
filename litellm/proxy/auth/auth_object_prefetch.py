@@ -14,7 +14,6 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.redis_batch import Batch
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, REGISTRY_ERROR_NEGATIVE_CACHE_TTL
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
@@ -223,7 +222,7 @@ async def _fill_from_redis(
     before_read()
     try:
         with service_target(AUTH_OBJECTS_TARGET):
-            found: Final = await shared.read_missing(sorted(entry.cache_key for entry in entries), batch=Batch.PRE_CALL)
+            found: Final = await shared.read_missing(sorted(entry.cache_key for entry in entries))
     except Exception as e:  # noqa: BLE001  # the DB fill below takes over, as it does after a failed MGET
         verbose_proxy_logger.debug("auth prefetch Redis read failed, filling from the database: %s", e)
         return
@@ -273,7 +272,7 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
     shared: Final = cache.shared
     if shared is not None:
         with service_target(AUTH_OBJECTS_TARGET):
-            await shared.write_back(payloads, batch=Batch.PRE_CALL)
+            await shared.write_back(payloads)
         return
     for cache_key, payload, ttl in payloads:
         cache.set_local(cache_key, payload, ttl)
@@ -340,7 +339,7 @@ async def prefetch_identity_keys(
             return
         before_read()
         with service_target(AUTH_OBJECTS_TARGET):
-            found: Final = await shared.read_missing(sorted(missing), batch=Batch.PRE_CALL)
+            found: Final = await shared.read_missing(sorted(missing))
         management_ttl: Final = get_management_object_ttl(user_api_key_cache)
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters read Redis and the database on their own
         verbose_proxy_logger.warning("auth identity prefetch skipped, falling back to per-key lookups: %s", e)

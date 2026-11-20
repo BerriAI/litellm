@@ -46,6 +46,7 @@ from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (
     UI_TEAM_ID,
     BlockTeamRequest,
@@ -242,6 +243,7 @@ from litellm.proxy.utils import (
 )
 from litellm.redis.stores.spend_counters import team_counter, team_window_counter
 from litellm.repositories.access_group_repository import AccessGroupRepository
+from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, rebase_budget_limits_update
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
@@ -485,6 +487,11 @@ class _TeamCreateTx(AccessGroupSyncTx, Protocol):
     def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
 
 
+class _TeamUpdateTx(BudgetLimitsTransaction, Protocol):
+    @property
+    def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
+
+
 class _MemberDeleteTx(Protocol):
     """The tables `/team/member_delete` reads while it holds the team's advisory lock.
 
@@ -655,9 +662,7 @@ async def refresh_cached_team(
     await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
         await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
-    await evict_budget_windows_absent_marker(
-        entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id, user_api_key_cache=user_api_key_cache
-    )
+    await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id)
 
 
 _refresh_cached_team: Final = refresh_cached_team
@@ -1542,22 +1547,39 @@ async def _write_team_update(
     team_id: str,
     team_update_data: Mapping[str, object],
     max_budget_guard: _MaxBudgetGuard | None,
+    original_windows: Sequence[BudgetLimitEntry] | None,
+) -> "prisma_models.LiteLLM_TeamTable | None":
+    if "budget_limits" in team_update_data and prisma_client is not None:
+        async with prisma_client.tx() as tx_ctx:
+            tx: Final = cast("_TeamUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
+            rebased: Final = await rebase_budget_limits_update(
+                tx, "LiteLLM_TeamTable", team_id, original_windows, team_update_data
+            )
+            return await _write_team_update_on_table(tx.litellm_teamtable, team_id, rebased, max_budget_guard)
+    return await _write_team_update_on_table(_team_db(prisma_client), team_id, team_update_data, max_budget_guard)
+
+
+async def _write_team_update_on_table(
+    table: "TableActions[prisma_models.LiteLLM_TeamTable]",
+    team_id: str,
+    team_update_data: Mapping[str, object],
+    max_budget_guard: _MaxBudgetGuard | None,
 ) -> "prisma_models.LiteLLM_TeamTable | None":
     by_id: Final[_TeamIdWhere] = {"team_id": team_id}
     if max_budget_guard is None:
-        return await _team_db(prisma_client).update(where=by_id, data=team_update_data, include=_TEAM_UPDATE_INCLUDE)
+        return await table.update(where=by_id, data=team_update_data, include=_TEAM_UPDATE_INCLUDE)
     as_checked: Final[_TeamBudgetGuardWhere] = {
         "team_id": team_id,
         "max_budget": max_budget_guard.max_budget,
         "organization_id": max_budget_guard.organization_id,
     }
-    written: Final = await _team_db(prisma_client).update_many(where=as_checked, data=team_update_data)
+    written: Final = await table.update_many(where=as_checked, data=team_update_data)
     if written == 0:
         conflict: Final[_ErrorDetail] = {
             "error": "The team's organization or max_budget changed during this update. Reload the team and try again."
         }
         raise HTTPException(status_code=409, detail=conflict)
-    return await _team_db(prisma_client).find_unique(where=by_id, include=_TEAM_UPDATE_INCLUDE)
+    return await table.find_unique(where=by_id, include=_TEAM_UPDATE_INCLUDE)
 
 
 def _existing_model_cap(raw_budget_config: object) -> BudgetConfig | None:
@@ -2496,7 +2518,7 @@ def _member_user_ids(members_with_roles: Sequence[dict[str, object]]) -> tuple[s
     return tuple(user_id for member in members_with_roles if isinstance((user_id := member.get("user_id")), str))
 
 
-async def _evict_created_membership_caches(
+async def evict_created_membership_caches(
     user_ids: Iterable[str],
     team_id: str,
     user_api_key_cache: UserApiKeyCache,
@@ -2518,6 +2540,9 @@ async def _evict_created_membership_caches(
             for user_id in user_ids
         )
     )
+
+
+_evict_created_membership_caches: Final = evict_created_membership_caches
 
 
 @router.post("/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
@@ -3020,7 +3045,9 @@ async def update_team(
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_update_data: Final[Mapping[str, object]] = updated_kv
-        team_row: Final = await _write_team_update(prisma_client, data.team_id, team_update_data, max_budget_guard)
+        team_row: Final = await _write_team_update(
+            prisma_client, data.team_id, team_update_data, max_budget_guard, existing_team.budget_limits
+        )
 
         if team_row is None or team_row.team_id is None:
             raise HTTPException(
@@ -3565,7 +3592,7 @@ async def _update_team_member_role(
     return before, after
 
 
-def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
+def emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
     """Update the Prometheus team members gauge after a membership change.
 
     No-ops when the Prometheus callback is not registered, and never lets a
@@ -3578,6 +3605,9 @@ def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
         prometheus_logger.set_team_members_metric(team)
     except Exception as e:
         verbose_proxy_logger.debug("Prometheus: failed to emit team members metric: %s", str(e))
+
+
+_emit_team_members_metric: Final = emit_team_members_metric
 
 
 async def _resolve_existing_member_user_ids(
@@ -3702,7 +3732,7 @@ def _schedule_team_membership_audit_log(
     )
 
 
-def _schedule_team_member_add_audit_logs(
+def schedule_team_member_add_audit_logs(
     team_id: str,
     team_alias: str | None,
     updated_users: Sequence[LiteLLM_UserTable],
@@ -3745,6 +3775,9 @@ def _schedule_team_member_add_audit_logs(
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
+
+
+_schedule_team_member_add_audit_logs: Final = schedule_team_member_add_audit_logs
 
 
 async def _validate_and_populate_member_user_info(

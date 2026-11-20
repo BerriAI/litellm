@@ -128,6 +128,7 @@ from litellm.proxy.mcp_server.proxy_api_credentials import (
     lookup_consent_teams,
     mint_proxy_credential,
 )
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPTokenEndpointAuthMethod
@@ -918,13 +919,13 @@ def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
 
 
 def _register_relays_bridge_client(mcp_server: MCPServer) -> bool:
-    """``/register`` relays the caller's own registration only when the gateway cannot keep a shared
-    client: with ``PROXY_BASE_URL`` set it registers one client bound to its own ``/callback`` and
-    keeps it as the server's client, so an upstream that restricts redirect domains (Atlassian)
-    never sees a laptop loopback redirect. Without a database the shared client would live only in
-    this process, so a database-free gateway keeps relaying as well."""
+    """Creating a shared client changes callback routing and identity binding, so it requires opt-in.
+    Already configured or persisted clients retain their existing gateway-callback flow.
+    """
     return _dcr_bridge_relays_client_registration(mcp_server) and (
-        configured_proxy_base_url() is None or not _shared_client_store_available()
+        not get_secret_bool("LITELLM_MCP_DCR_GATEWAY_CLIENT", False)
+        or configured_proxy_base_url() is None
+        or not _shared_client_store_available()
     )
 
 
@@ -2514,7 +2515,7 @@ async def token_endpoint(
     ):
         from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
             master_key,
-            user_api_key_cache,
+            mcp_state_cache,
         )
 
         return await aggregate_token(
@@ -2527,7 +2528,7 @@ async def token_endpoint(
             refresh_token=refresh_token,
             master_key=master_key,
             reload_user=reload_active_user_by_id,
-            cache=user_api_key_cache,
+            cache=mcp_state_cache,
             resource=resource,
             mint_proxy_credential=mint_proxy_credential,
             subject_token=subject_token,
@@ -2614,14 +2615,14 @@ async def authorize_complete(
     Each ``server`` field is the id of a server the connect page shows as on."""
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
         master_key,
-        user_api_key_cache,
+        mcp_state_cache,
     )
 
     return await complete_connect_flow(
         request=request,
         flow_handle=flow,
         session_user_id=await _session_cookie_user_id(request),
-        cache=user_api_key_cache,
+        cache=mcp_state_cache,
         delivery=delivery,
         team_id=team_id,
         decision=decision,
@@ -2639,10 +2640,10 @@ async def revoke_endpoint(request: Request, token: str = Form(...), client_id: s
     access tokens expire on their own."""
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
         master_key,
-        user_api_key_cache,
+        mcp_state_cache,
     )
 
-    return await revoke_refresh_token(token=token, client_id=client_id, master_key=master_key, cache=user_api_key_cache)
+    return await revoke_refresh_token(token=token, client_id=client_id, master_key=master_key, cache=mcp_state_cache)
 
 
 @router.post("/introspect", dependencies=[Depends(user_api_key_auth)])
@@ -2654,14 +2655,14 @@ async def introspect_endpoint(token: str = Form(...)) -> Response:
     ``{"active": false}`` with no further detail."""
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
         master_key,
-        user_api_key_cache,
+        mcp_state_cache,
     )
 
     return await introspect_gateway_token(
         token=token,
         master_key=master_key,
         reload_user=reload_active_user_by_id,
-        cache=user_api_key_cache,
+        cache=mcp_state_cache,
     )
 
 
