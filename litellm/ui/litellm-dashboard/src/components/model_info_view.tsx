@@ -13,7 +13,7 @@ import { UserReference } from "@/components/shared/UserReference";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
 import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
@@ -87,6 +87,7 @@ export default function ModelInfoView({
   const [isUpdateCredentialsModalOpen, setIsUpdateCredentialsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const modelInfoAtEditStart = useRef<Record<string, unknown>>({});
   const [existingCredential, setExistingCredential] = useState<CredentialItem | null>(null);
   const [showCacheControl, setShowCacheControl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -274,7 +275,7 @@ export default function ModelInfoView({
 
       const modelInfoPricing = editedModelInfoPricing(
         parseModelExtraParams(values.model_info) ?? {},
-        { ...modelData?.model_info },
+        modelInfoAtEditStart.current,
         parsedExtraParams,
         localModelData?.litellm_params ?? {},
       );
@@ -724,7 +725,13 @@ export default function ModelInfoView({
                   )}
                   {canEditModel ? (
                     !isEditing && (
-                      <Button onClick={() => setIsEditing(true)} className="flex items-center">
+                      <Button
+                        onClick={() => {
+                          modelInfoAtEditStart.current = { ...modelData?.model_info };
+                          setIsEditing(true);
+                        }}
+                        className="flex items-center"
+                      >
                         {t("modelInfoView.settings.editSettings")}
                       </Button>
                     )

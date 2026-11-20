@@ -958,6 +958,40 @@ describe("ModelInfoView", () => {
     expect(resave).not.toHaveProperty("litellm_params_to_remove");
   });
 
+  it("does not turn a rate the cost map changed while the form was open into an override", async () => {
+    const displayedModel = {
+      ...defaultModelData,
+      model_info: {
+        ...defaultModelData.model_info,
+        key: "azure/gpt-5.4",
+        input_cost_per_token_above_272k_tokens: 2,
+        output_cost_per_token_above_272k_tokens: 3,
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({ data: { data: [displayedModel] }, isLoading: false });
+    const user = userEvent.setup();
+    const { rerender } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+    const refreshedModel = {
+      ...displayedModel,
+      model_info: { ...displayedModel.model_info, output_cost_per_token_above_272k_tokens: 30 },
+    };
+    mockUseModelsInfo.mockReturnValue({ data: { data: [refreshedModel] }, isLoading: false });
+    rerender(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Model Info" }), {
+      target: {
+        value: JSON.stringify({ ...displayedModel.model_info, input_cost_per_token_above_272k_tokens: 20 }),
+      },
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledOnce());
+
+    const payload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(payload.litellm_params.input_cost_per_token_above_272k_tokens).toBe(20);
+    expect(payload.litellm_params).not.toHaveProperty("output_cost_per_token_above_272k_tokens");
+  });
+
   it("sends a rate edited in the Model Info JSON after an earlier save through the dedicated cost input", async () => {
     const displayedModel = {
       ...defaultModelData,
