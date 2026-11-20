@@ -66,7 +66,27 @@ async def authenticated_resource_id(
         case AppResourceType.PROJECT:
             return authenticated.project_id
         case AppResourceType.VIRTUAL_KEY:
-            return await store.key_resource_id(authenticated.token)
+            return authenticated.key_id or await store.key_resource_id(authenticated.token)
+
+
+def authenticated_resource_alias(
+    resource_type: AppResourceType, resource_id: str, authenticated: UserAPIKeyAuth
+) -> str | None:
+    match resource_type:
+        case AppResourceType.TEAM:
+            return (authenticated.team_alias or resource_id) if "team_alias" in authenticated.model_fields_set else None
+        case AppResourceType.PROJECT:
+            return (
+                (authenticated.project_alias or resource_id)
+                if "project_alias" in authenticated.model_fields_set
+                else None
+            )
+        case AppResourceType.VIRTUAL_KEY:
+            return (
+                (authenticated.key_alias or resource_id)
+                if authenticated.key_id is not None or "key_alias" in authenticated.model_fields_set
+                else None
+            )
 
 
 async def resolve_app_hierarchy(
@@ -99,7 +119,11 @@ async def resolve_app_hierarchy(
                 )
             )
         return hierarchy
-    app: Final = await store.by_resource(definition.resource_type, resource_id)
+    app: Final = await store.by_resource(
+        definition.resource_type,
+        resource_id,
+        authenticated_resource_alias(definition.resource_type, resource_id, authenticated),
+    )
     if app is None:
         if assertion is not None and assertion != resource_id:
             resource: Final = await store.resource(definition.resource_type, resource_id)

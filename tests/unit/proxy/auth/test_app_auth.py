@@ -9,13 +9,18 @@ from unittest.mock import patch
 import pytest
 
 import litellm
+from fastapi import HTTPException
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.app_auth import app_scope, resolve_app_hierarchy
+from litellm.proxy.auth.auth_checks import virtual_key_max_budget_check
 from litellm.proxy.auth.customer_hierarchy_auth import CustomerBudgetExceededError, check_customer_hierarchy_budget
+from litellm.proxy.auth.customer_spend import customer_spend_counter
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
 from litellm.proxy.spend_tracking.customer_cost_margin import key_customer_cost_margin, request_customer_cost_margin
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerScopeAuth,
@@ -25,16 +30,179 @@ from litellm.types.proxy.management_endpoints.apps import (
     AppCreate,
     AppDefinition,
     AppFailure,
+    AppOrganizationPut,
+    AppPatch,
     AppResourceType,
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
-from tests.unit.proxy.management_helpers.test_apps import AppDatabase, seed_resources
+from tests.unit.proxy.management_helpers.test_apps import AppDatabase, UnavailableAppDatabase, seed_resources
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 if TYPE_CHECKING:
     from prisma import Prisma
 
     from litellm.proxy.utils import PrismaClient
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resource_type", "legacy_key"),
+    (
+        (AppResourceType.TEAM, False),
+        (AppResourceType.PROJECT, False),
+        (AppResourceType.VIRTUAL_KEY, False),
+        (AppResourceType.VIRTUAL_KEY, True),
+    ),
+)
+async def test_cached_app_auth_preserves_identity_and_enforcement_during_database_outage(
+    resource_type: AppResourceType, legacy_key: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    database: Final = AppDatabase()
+    writer: Final = AppStore(database, NOW)
+    await seed_resources(database)
+    await writer.put_definition(AppDefinition(resource_type=resource_type))
+    resource: Final = (await writer.resources(0, 10))[0]
+    app: Final = await writer.create(
+        AppCreate(resource_id=resource.resource_id, budget=Budget(max_budget=10)), "admin"
+    )
+    assert isinstance(app, App)
+    authenticated: Final = UserAPIKeyAuth(
+        team_id="chat",
+        team_alias="Chat",
+        project_id="project",
+        project_alias="Project",
+        key_id=None if legacy_key else resource.resource_id,
+        token="token-a",
+        key_alias="Service key",
+    )
+    hierarchy: Final = CustomerHierarchyAuth(customer_org_id="org", customer_member_id="member", scopes=())
+    cache, shared = shared_cache()
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+
+    async def resolve(
+        db: object, assertion: str, identity: UserAPIKeyAuth = authenticated
+    ) -> CustomerHierarchyAuth | None:
+        connection: Final = cast("PrismaClient", SimpleNamespace(db=db))  # cast-ok: external database edge
+        return await resolve_app_hierarchy(
+            hierarchy, {"x-litellm-app": assertion}, {}, connection, None, None,
+            "/v1/chat/completions", identity,
+        )
+
+    warm: Final = await resolve(database, app.app_id)
+    cold, _ = shared_cache(FakeAuthCache(redis=shared.redis, generations=shared.generations))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cold)
+    offline: Final = await resolve(UnavailableAppDatabase(), app.app_id)
+    assert offline == warm
+    assert offline is not None and offline.customer_member_id == "member"
+    assert tuple(scope.key for scope in offline.scopes) == ("app", "app_customer_org", "app_customer_member")
+    with pytest.raises(ProxyException) as rejected:
+        await resolve(UnavailableAppDatabase(), "different-app")
+    assert int(rejected.value.code) == 403
+    alias_field: Final = {
+        AppResourceType.TEAM: "team_alias",
+        AppResourceType.PROJECT: "project_alias",
+        AppResourceType.VIRTUAL_KEY: "key_alias",
+    }[resource_type]
+    cleared: Final = authenticated.model_copy(update={alias_field: None})
+    without_alias: Final = await resolve(UnavailableAppDatabase(), app.app_id, cleared)
+    assert without_alias is not None and without_alias.app_alias == resource.resource_id
+    with pytest.raises(ProxyException) as removed_alias:
+        await resolve(UnavailableAppDatabase(), resource.alias, cleared)
+    assert int(removed_alias.value.code) == 403
+    if resource_type == AppResourceType.VIRTUAL_KEY and not legacy_key:
+        fresh: Final = UserAPIKeyAuth.model_validate(cleared.model_dump(exclude_none=True))
+        with pytest.raises(ProxyException) as omitted_alias:
+            await resolve(UnavailableAppDatabase(), resource.alias, fresh)
+        assert int(omitted_alias.value.code) == 403
+
+    updater: Final = AppStore(database, NOW, cache=cold, cache_reads=False)
+    await updater.patch(app.app_id, AppPatch(budget=Budget(max_budget=0)), "admin")
+    await updater.invalidate_cache()
+    with pytest.raises(CustomerBudgetExceededError):
+        await resolve(database, app.app_id)
+    with pytest.raises(CustomerBudgetExceededError):
+        await resolve(UnavailableAppDatabase(), app.app_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope_key", ("app", "app_customer_org", "app_customer_member"))
+async def test_cached_app_spend_follows_api_key_budget_enforcement(
+    scope_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    database: Final = AppDatabase()
+    writer: Final = AppStore(database, NOW)
+    await seed_resources(database)
+    await database.litellm_customerorganizationtable.create({"customer_org_id": "org"})
+    await writer.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    app: Final = await writer.create(
+        AppCreate(
+            resource_id="chat", budget=Budget(max_budget=10),
+            default_customer_member_budget=Budget(max_budget=10),
+        ), "admin",
+    )
+    assert isinstance(app, App)
+    await writer.put_organization(app.app_id, "org", AppOrganizationPut(budget=Budget(max_budget=10)), "admin")
+    connection: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: external database edge
+    cache, _ = shared_cache()
+    redis: Final[dict[str, object]] = {}
+    spend: Final = FakeSpendCounters(redis=redis, redis_default=0)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", connection)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "spend_counter_store", spend.store())
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    async def resolve(db: object = database) -> CustomerHierarchyAuth:
+        result: Final = await resolve_app_hierarchy(
+            CustomerHierarchyAuth(customer_org_id="org", customer_member_id="member", scopes=()),
+            {}, {}, cast("PrismaClient", SimpleNamespace(db=db)), None, None,
+            "/v1/chat/completions", UserAPIKeyAuth(team_id="chat", team_alias="Chat"),
+        )  # cast-ok: external database edge
+        assert result is not None
+        return result
+
+    warm: Final = await resolve()
+    counter: Final = customer_spend_counter(next(scope for scope in warm.scopes if scope.key == scope_key))
+    table: Final = {
+        "app": database.litellm_apptable,
+        "app_customer_org": database.litellm_appcustomerorgtable,
+        "app_customer_member": database.litellm_appcustomermembertable,
+    }[scope_key]
+    for identity, row in tuple(table.rows.items()):
+        table.rows[identity] = row.model_copy(update={"spend": 12.0})
+    await database.litellm_verificationtoken.update(where={"token": "token-a"}, data={"spend": 12.0})
+    redis.update({counter: 5.0, "spend:key:token-a": 5.0})
+    key: Final = UserAPIKeyAuth(token="token-a", spend=0, max_budget=10)
+    logger: Final = ProxyLogging(user_api_key_cache=cache)
+
+    # Default API-key policy trusts Redis; strict mode also checks the DB when both cached totals are stale.
+    await virtual_key_max_budget_check(key, logger)
+    default: Final = await resolve()
+    assert next(scope.spend for scope in default.scopes if scope.key == scope_key) == 5
+    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
+    with pytest.raises(litellm.BudgetExceededError):
+        await virtual_key_max_budget_check(key, logger)
+    with pytest.raises(CustomerBudgetExceededError):
+        await resolve()
+    assert redis[counter] == redis["spend:key:token-a"] == 12
+
+    # A healthy shared counter still works offline; losing both stores rejects the same cached policy.
+    offline: Final = UnavailableAppDatabase()
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=offline))
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
+    redis[counter] = 5.0
+    spend.memory.clear()
+    assert await resolve(offline)
+    spend.fail = True
+    with pytest.raises(HTTPException) as rejected:
+        await resolve(offline)
+    assert rejected.value.status_code == 503
 
 
 @pytest.mark.asyncio

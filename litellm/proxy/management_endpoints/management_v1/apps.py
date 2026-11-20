@@ -42,9 +42,9 @@ async def get_app_store() -> AsyncIterator[AppStore]:
     if prisma_client is None:
         raise HTTPException(503, "Database unavailable.")
     async with prisma_client.db.tx() as db:
-        store: Final = AppStore(db, cache=user_api_key_cache)
+        store: Final = AppStore(db, cache=user_api_key_cache, cache_reads=False)
         yield store
-    await store.invalidate_definition_cache()
+    await store.invalidate_cache()
 
 
 Store: TypeAlias = Annotated[AppStore, Depends(get_app_store)]

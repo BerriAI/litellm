@@ -16,10 +16,17 @@ from litellm.models.budget import (
     carry_budget_limit_resets,
     initialize_budget_limits,
 )
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import broadcast_evictions, evict_local, evict_shared
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     get_budget_reset_settings,
     get_budget_reset_time,
+)
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    app_budget_cache_key,
+    app_customer_cache_key,
+    app_shared_profiles_cache_key,
 )
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -406,6 +413,7 @@ class _MemberDeletionRow(BaseModel):
 class _AssociationDeletionRow(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
+    app_id: str | None = None
     budget_id: str | None = None
     budget_override_id: str | None = None
     customer_member_budget_id: str | None = None
@@ -422,6 +430,9 @@ class _AssociationDeletionRow(BaseModel):
             )
             if budget_id is not None
         )
+
+    def cache_keys(self, scope: str, customer_id: str) -> tuple[str, ...]:
+        return (app_customer_cache_key(scope, self.app_id, customer_id),) if self.app_id is not None else ()
 
 
 class _TeamDeletionRow(BaseModel):
@@ -658,6 +669,7 @@ class CustomerHierarchyStore:
         self.premium_user = premium_user
         self.now = now
         self.settings = settings if settings is not None else get_budget_reset_settings()
+        self.auth_cache_keys: tuple[str, ...] = ()
         self.organizations: TableActions[PrismaRecord] = db.litellm_customerorganizationtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.teams: TableActions[PrismaRecord] = db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.members: TableActions[PrismaRecord] = db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
@@ -837,6 +849,7 @@ class CustomerHierarchyStore:
             ),
             actor,
         )
+        self.auth_cache_keys += (app_budget_cache_key(budget_id),)
         return budget_id
 
     async def write_template_metadata(
@@ -1119,6 +1132,7 @@ class CustomerHierarchyStore:
                     "update": {"param_value": Json(list(ids))},
                 },
             )
+            self.auth_cache_keys += (app_shared_profiles_cache_key(),)
             if scope == BudgetGroupScope.ORGANIZATION:
                 default_value: Final = Json({"budget_id": default_id})
                 await self.config.upsert(
@@ -1592,6 +1606,7 @@ class CustomerHierarchyStore:
             where=where,
             chunk_size=_DELETE_BATCH_SIZE,
         )
+        self.auth_cache_keys += tuple(app_budget_cache_key(budget_id) for budget_id in budget_ids)
 
     async def _delete_member_batch(self, where: Mapping[str, object]) -> bool:
         rows: Final = await self.members.find_many(
@@ -1605,6 +1620,9 @@ class CustomerHierarchyStore:
         member_ids: Final = tuple(member.customer_member_id for member in members)
         budget_ids: Final = self._member_deletion_budget_ids(members)
         await delete_many_in(self.members, "customer_member_id", member_ids, atomicity="caller_transaction")
+        for member in members:
+            for association in member.apps or ():
+                self.auth_cache_keys += association.cache_keys("member", member.customer_member_id)
         await self._delete_unused_budgets(budget_ids)
         return True
 
@@ -1647,6 +1665,8 @@ class CustomerHierarchyStore:
             return Failure(ErrorCode.NOT_FOUND)
         member: Final = _MemberDeletionRow.model_validate(row)
         await self.members.delete(where={"customer_member_id": member_id})
+        for association in member.apps or ():
+            self.auth_cache_keys += association.cache_keys("member", member_id)
         await self._delete_unused_budgets(self._member_deletion_budget_ids((member,)))
         return None
 
@@ -1684,6 +1704,8 @@ class CustomerHierarchyStore:
             row.model_dump().get("apps") or () if row is not None else ()
         )
         await self.organizations.delete(where={"customer_org_id": organization_id})
+        for association in associations:
+            self.auth_cache_keys += association.cache_keys("organization", organization_id)
         budget_ids: Final = (
             tuple(template.budget_id for template in organization.default_budgets)
             + ((organization.budget_id,) if organization.budget_id is not None else ())
@@ -1709,10 +1731,18 @@ async def delete_unattached_customer_budget(
 
 
 class CustomerHierarchy:
-    def __init__(self, db: TransactionSource, *, premium_user: bool, clock: Callable[[], datetime] = utc_now) -> None:
+    def __init__(
+        self,
+        db: TransactionSource,
+        *,
+        premium_user: bool,
+        clock: Callable[[], datetime] = utc_now,
+        cache: UserApiKeyCache | None = None,
+    ) -> None:
         self.db = db
         self.clock = clock
         self.premium_user = premium_user
+        self.cache: Final = cache
 
     async def portal_limits(self) -> CustomerPortalLimits | Failure:
         return await self.transaction(lambda store: store.portal_limits())
@@ -1733,7 +1763,8 @@ class CustomerHierarchy:
 
         try:
             async with self.db.tx() as tx:
-                return await operation(CustomerHierarchyStore(tx, self.clock(), premium_user=self.premium_user))
+                store: Final = CustomerHierarchyStore(tx, self.clock(), premium_user=self.premium_user)
+                result: Final = await operation(store)
         except UniqueViolationError:
             return Failure(ErrorCode.ALREADY_EXISTS)
         except RecordNotFoundError:
@@ -1748,6 +1779,12 @@ class CustomerHierarchy:
             if PrismaDBExceptionHandler.is_lock_timeout_error(error):
                 return Failure(ErrorCode.CAPACITY_BUSY)
             raise
+        if self.cache is not None:
+            keys: Final = tuple(dict.fromkeys(store.auth_cache_keys))
+            evict_local(keys, self.cache)
+            await evict_shared(keys, self.cache)
+            await broadcast_evictions(keys)
+        return result
 
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
         return await self.transaction(lambda store: store.create_organization(payload, actor))
