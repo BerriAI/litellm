@@ -242,8 +242,8 @@ def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
 _HISTORY_REPLAY_PROVIDERS: Final = frozenset({"openai", "azure"})
 _SYSTEM_INPUT_PROVIDERS: Final = frozenset({"openai", "azure", "azure_ai", "bedrock_mantle"})
 _PREVIOUS_RESPONSE_ID_UNSUPPORTED: Final = (
-    "`previous_response_id` is not supported on chat completions. Continue a stored response on the "
-    "Responses API (`/v1/responses`), or send the earlier turns in `messages`."
+    "`previous_response_id` is only supported on the Responses API (`/v1/responses`). Continue the stored "
+    "response there, or send the earlier turns in `messages`."
 )
 
 
