@@ -10002,3 +10002,117 @@ def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every
     assert "deepwiki" not in json.dumps(mapped)
     assert "get_weather" in json.dumps(mapped["tools"])
     assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+
+GEMINI_FLASH_IMAGE_URL: Final = r"https://generativelanguage\.googleapis\.com/v1\w+/models/gemini-3\.1-flash-image"
+
+
+def _gemini_image_turn(*parts: dict[str, object]) -> dict[str, object]:
+    return {
+        "candidates": [{"content": {"role": "model", "parts": list(parts)}, "finishReason": "STOP", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1290, "totalTokenCount": 1300},
+        "modelVersion": "gemini-3.1-flash-image",
+    }
+
+
+def _replayed_model_parts(request: httpx.Request) -> list[list[tuple[str, str | None]]]:
+    return [
+        [(part.get("text") or part["inline_data"]["data"], part.get("thoughtSignature")) for part in content["parts"]]
+        for content in json.loads(request.content)["contents"]
+        if content["role"] == "model"
+    ]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_edits_replay_every_image_with_its_own_signature(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__regex=rf"{GEMINI_FLASH_IMAGE_URL}:generateContent").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_gemini_image_turn(
+                    {"text": "A cat on a red chair.", "thoughtSignature": "sig-text-1"},
+                    {"inlineData": {"mimeType": "image/png", "data": "Y2F0LXJlZA=="}, "thoughtSignature": "sig-img-1"},
+                ),
+            ),
+            httpx.Response(
+                200,
+                json=_gemini_image_turn(
+                    {"inlineData": {"mimeType": "image/png", "data": "Y2F0LWJsdWU="}, "thoughtSignature": "sig-img-2"}
+                ),
+            ),
+            httpx.Response(200, json=_gemini_image_turn({"text": "Done."})),
+        ]
+    )
+    prompts: Final = ("Draw a cat on a chair", "Make the chair blue", "Make the cat orange")
+
+    first: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": prompts[0]}],
+        api_key="test-api-key",
+    )
+    second: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": prompts[0]}, first.choices[0].message, {"role": "user", "content": prompts[1]}],
+        api_key="test-api-key",
+    )
+    await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[
+            {"role": "user", "content": prompts[0]},
+            first.choices[0].message,
+            {"role": "user", "content": prompts[1]},
+            json.loads(second.choices[0].message.model_dump_json()),
+            {"role": "user", "content": prompts[2]},
+        ],
+        api_key="test-api-key",
+    )
+
+    assert _replayed_model_parts(route.calls[2].request) == [
+        [("A cat on a red chair.", "sig-text-1"), ("Y2F0LXJlZA==", "sig-img-1")],
+        [("Y2F0LWJsdWU=", "sig-img-2")],
+    ]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_streamed_image_keeps_its_signature_through_the_rebuilt_message(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_FLASH_IMAGE_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(
+            _gemini_image_turn({"text": "A cat on a red chair.", "thoughtSignature": "sig-text"}),
+            _gemini_image_turn(
+                {"inlineData": {"mimeType": "image/png", "data": "Y2F0LXJlZA=="}, "thoughtSignature": "sig-img"}
+            ),
+        )
+    )
+    replay: Final = respx_mock.post(url__regex=rf"{GEMINI_FLASH_IMAGE_URL}:generateContent").mock(
+        return_value=httpx.Response(200, json=_gemini_image_turn({"text": "Done."}))
+    )
+
+    stream: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a cat on a chair"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    chunks: Final = [chunk async for chunk in stream]
+    streamed_images: Final = [
+        image for chunk in chunks if chunk.choices for image in getattr(chunk.choices[0].delta, "images", None) or ()
+    ]
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+    await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[
+            {"role": "user", "content": "Draw a cat on a chair"},
+            json.loads(rebuilt.choices[0].message.model_dump_json()),
+            {"role": "user", "content": "Make the chair blue"},
+        ],
+        api_key="test-api-key",
+    )
+
+    assert [image.get("provider_specific_fields") for image in streamed_images] == [{"thought_signature": "sig-img"}]
+    assert _replayed_model_parts(replay.calls.last.request) == [
+        [("A cat on a red chair.", "sig-text"), ("Y2F0LXJlZA==", "sig-img")]
+    ]
