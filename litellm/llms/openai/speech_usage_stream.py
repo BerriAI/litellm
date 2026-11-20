@@ -19,6 +19,16 @@ _AUDIO_MEDIA_TYPES: Final[Mapping[str, str]] = {
     "wav": "audio/wav",
     "pcm": "audio/pcm",
 }
+_BILLED_TOKENS_PER_SECOND: Final = 20
+_PCM_BYTES_PER_SECOND: Final = 24000 * 2
+_WAV_HEADER_BYTES: Final = 44
+_HEAD_BYTES: Final = 64
+_OGG_MAX_PAGE_BYTES: Final = 27 + 255 + 255 * 255
+_OPUS_GRANULES_PER_SECOND: Final = 48000
+_MP3_SAMPLES_PER_FRAME: Final = 576
+_MP3_ENCODER_DELAY_SAMPLES: Final = 1105
+_MPEG2_LAYER3_KBPS: Final = (0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160)
+_MPEG2_SAMPLE_RATES: Final = (22050, 24000, 16000)
 
 
 class _SpeechUsage(BaseModel):
@@ -46,6 +56,81 @@ class _SpeechEvent(BaseModel):
     usage: _SpeechUsage | None = None
 
 
+def _pcm_tokens(total: int) -> int:
+    return total * _BILLED_TOKENS_PER_SECOND // _PCM_BYTES_PER_SECOND
+
+
+def _wav_tokens(head: bytes, total: int) -> int | None:
+    byte_rate: Final = int.from_bytes(head[28:32], "little")
+    if head[:4] != b"RIFF" or head[36:40] != b"data" or byte_rate == 0:
+        return None
+    return (total - _WAV_HEADER_BYTES) * _BILLED_TOKENS_PER_SECOND // byte_rate
+
+
+def _is_mpeg2_layer3_frame(head: bytes) -> bool:
+    return len(head) >= 4 and head[0] == 0xFF and head[1] & 0xFE == 0xF2
+
+
+def _mp3_tokens(head: bytes, total: int) -> int | None:
+    if not _is_mpeg2_layer3_frame(head):
+        return None
+    bitrate_index: Final = head[2] >> 4
+    sample_rate_index: Final = head[2] >> 2 & 3
+    if bitrate_index == 15 or sample_rate_index == 3:
+        return None
+    sample_rate: Final = _MPEG2_SAMPLE_RATES[sample_rate_index]
+    frame_bytes, uneven = divmod(72000 * _MPEG2_LAYER3_KBPS[bitrate_index], sample_rate)
+    if frame_bytes == 0 or uneven or total % frame_bytes:
+        return None
+    samples: Final = total // frame_bytes * _MP3_SAMPLES_PER_FRAME - _MP3_ENCODER_DELAY_SAMPLES
+    return samples * _BILLED_TOKENS_PER_SECOND // sample_rate
+
+
+def _opus_tokens(head: bytes, tail: bytes) -> int | None:
+    last_page: Final = tail.rfind(b"OggS")
+    if head[28:36] != b"OpusHead" or last_page < 0 or len(tail) < last_page + 14:
+        return None
+    played: Final = int.from_bytes(tail[last_page + 6 : last_page + 14], "little") - int.from_bytes(
+        head[38:40], "little"
+    )
+    return played * _BILLED_TOKENS_PER_SECOND // _OPUS_GRANULES_PER_SECOND
+
+
+class BilledAudioClock:
+    """Counts the audio tokens OpenAI bills for speech: 20 per second of audio at normal speed, not the larger
+    `output_tokens` of its `speech.audio.done` event. None for a container whose length it cannot read."""
+
+    def __init__(self, response_format: object, speed: object = None) -> None:
+        self._format: Final = str(response_format or "mp3")
+        self._speed: Final = speed if isinstance(speed, (int, float)) and speed > 0 else 1
+        self._head = b""
+        self._tail = b""
+        self._total = 0
+
+    def feed(self, audio: bytes) -> None:
+        if len(self._head) < _HEAD_BYTES:
+            self._head = (self._head + audio)[:_HEAD_BYTES]
+        self._tail = (self._tail + audio)[-_OGG_MAX_PAGE_BYTES:]
+        self._total += len(audio)
+
+    def _at_normal_speed(self) -> int | None:
+        match self._format:
+            case "pcm":
+                return _pcm_tokens(self._total)
+            case "wav":
+                return _wav_tokens(self._head, self._total)
+            case "mp3":
+                return _mp3_tokens(self._head, self._total)
+            case "opus":
+                return _opus_tokens(self._head, self._tail)
+            case _:
+                return None
+
+    def tokens(self) -> int | None:
+        counted: Final = self._at_normal_speed()
+        return int(counted * self._speed) if counted is not None and counted >= 0 else None
+
+
 def _parse_event(line: bytes) -> _SpeechEvent | None:
     if not line.startswith(b"data:"):
         return None
@@ -58,8 +143,9 @@ def _parse_event(line: bytes) -> _SpeechEvent | None:
 class SpeechUsageDecoder:
     """Turns OpenAI's speech SSE events back into the audio bytes and keeps the usage the last event reports."""
 
-    def __init__(self) -> None:
+    def __init__(self, response_format: object = None, speed: object = None) -> None:
         self._pending = b""
+        self._clock: Final = BilledAudioClock(response_format, speed)
         self.usage: Usage | None = None
 
     def feed(self, chunk: bytes) -> bytes:
@@ -67,14 +153,18 @@ class SpeechUsageDecoder:
         return b"".join(self._audio(event) for line in lines if (event := _parse_event(line)) is not None)
 
     def _audio(self, event: _SpeechEvent) -> bytes:
+        audio: Final = b"" if event.audio is None else base64.b64decode(event.audio)
+        self._clock.feed(audio)
         if event.usage is not None:
+            billed: Final = self._clock.tokens()
+            audio_tokens: Final = event.usage.output_tokens if billed is None else billed
             self.usage = Usage(
                 prompt_tokens=event.usage.input_tokens,
-                completion_tokens=event.usage.output_tokens,
-                total_tokens=event.usage.input_tokens + event.usage.output_tokens,
-                completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=event.usage.output_tokens),
+                completion_tokens=audio_tokens,
+                total_tokens=event.usage.input_tokens + audio_tokens,
+                completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=audio_tokens),
             )
-        return b"" if event.audio is None else base64.b64decode(event.audio)
+        return audio
 
 
 def _decoded_audio(decoder: SpeechUsageDecoder, speech_response: HttpxBinaryResponseContent, chunk: bytes) -> bytes:
@@ -86,10 +176,12 @@ def _decoded_audio(decoder: SpeechUsageDecoder, speech_response: HttpxBinaryResp
 
 
 class _UsageAsyncByteStream(httpx.AsyncByteStream):
-    def __init__(self, stream: httpx.AsyncByteStream, speech_response: HttpxBinaryResponseContent) -> None:
+    def __init__(
+        self, stream: httpx.AsyncByteStream, speech_response: HttpxBinaryResponseContent, decoder: SpeechUsageDecoder
+    ) -> None:
         self._stream: Final = stream
         self._speech_response: Final = speech_response
-        self._decoder: Final = SpeechUsageDecoder()
+        self._decoder: Final = decoder
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         async for chunk in self._stream:
@@ -103,10 +195,12 @@ class _UsageAsyncByteStream(httpx.AsyncByteStream):
 
 
 class _UsageSyncByteStream(httpx.SyncByteStream):
-    def __init__(self, stream: httpx.SyncByteStream, speech_response: HttpxBinaryResponseContent) -> None:
+    def __init__(
+        self, stream: httpx.SyncByteStream, speech_response: HttpxBinaryResponseContent, decoder: SpeechUsageDecoder
+    ) -> None:
         self._stream: Final = stream
         self._speech_response: Final = speech_response
-        self._decoder: Final = SpeechUsageDecoder()
+        self._decoder: Final = decoder
 
     def __iter__(self) -> Iterator[bytes]:
         for chunk in self._stream:
@@ -173,9 +267,10 @@ def speech_response_with_usage(
     unchanged: Final = HttpxBinaryResponseContent(response=raw_response)
     if not wants_usage_stream(model, optional_params) or not (unchanged.content_type or "").startswith(_SSE_MEDIA_TYPE):
         return unchanged
-    headers: Final = _audio_headers(raw_response.headers, optional_params.get("response_format"))
+    response_format: Final = optional_params.get("response_format")
+    headers: Final = _audio_headers(raw_response.headers, response_format)
+    decoder: Final = SpeechUsageDecoder(response_format, optional_params.get("speed"))
     if raw_response.is_stream_consumed:
-        decoder: Final = SpeechUsageDecoder()
         audio: Final = decoder.feed(raw_response.content + b"\n")
         return HttpxBinaryResponseContent(
             response=httpx.Response(
@@ -186,8 +281,8 @@ def speech_response_with_usage(
     raw_response.headers = headers  # rebind-ok: the unread provider response is what streams the audio to the caller
     speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
     raw_response.stream = (  # rebind-ok: the unread provider response is what streams the audio to the caller
-        _UsageAsyncByteStream(raw_response.stream, speech_response)
+        _UsageAsyncByteStream(raw_response.stream, speech_response, decoder)
         if isinstance(raw_response.stream, httpx.AsyncByteStream)
-        else _UsageSyncByteStream(raw_response.stream, speech_response)
+        else _UsageSyncByteStream(raw_response.stream, speech_response, decoder)
     )
     return speech_response
