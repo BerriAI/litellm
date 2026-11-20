@@ -34,8 +34,8 @@ from litellm.llms.anthropic.messages.adapters.transformation import (
     truncate_tool_name,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
-    keep_non_string_tool_result_texts,
-    keep_url_documents,
+    is_non_empty_text_block,
+    keep_original_fields,
     scannable_tool_result_request,
 )
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
@@ -154,6 +154,12 @@ class _ModelDumpBlock(Protocol):
 @runtime_checkable
 class _TextAttrBlock(Protocol):
     text: str
+
+
+@runtime_checkable
+class _ToolUseAttrBlock(Protocol):
+    name: str
+    input: Mapping[str, object]
 
 
 @runtime_checkable
@@ -443,13 +449,33 @@ def _rewritten_tool_use_input(arguments: str) -> Mapping[str, object] | None:
 def _write_back_tool_use(
     message: _WritableMessage, target: ToolUseInputTarget, shape: _ToolCallShape, rewritten_input: Mapping[str, object]
 ) -> None:
-    content: Final = message.get("content", None)
-    block: Final = content[target.content_idx] if isinstance(content, list) else None
-    if not isinstance(block, dict):
+    blocks: Final = list_field(message, "content")
+    _write_back_tool_use_block(
+        blocks[target.content_idx] if target.content_idx < len(blocks) else None, shape, rewritten_input
+    )
+
+
+def _write_back_tool_use_block(block: object, shape: _ToolCallShape, rewritten_input: Mapping[str, object]) -> None:
+    if isinstance(block, dict):
+        block["input"] = rewritten_input  # rebind-ok: the tool_use block is the client-visible object being rewritten
+        if shape.name is not None and shape.name != block.get("name"):
+            block["name"] = shape.name  # rebind-ok: same in-place rewrite as the input above
         return
-    block["input"] = rewritten_input
-    if shape.name is not None and shape.name != block.get("name"):
-        block["name"] = shape.name
+    if not isinstance(block, _ToolUseAttrBlock):
+        return
+    block.input = rewritten_input  # rebind-ok: same in-place rewrite for an object-shaped tool_use block
+    if shape.name is not None and shape.name != block.name:
+        block.name = shape.name  # rebind-ok: same in-place rewrite as the input above
+
+
+def _redact_output_safeguard_results(response: object, unchanged_tool_use_ids: frozenset[str]) -> None:
+    fields: Final = as_str_mapping(response)
+    raw: Final = fields.get("safeguard_results") if fields is not None else None
+    if raw is None or not isinstance(response, dict):
+        return
+    response["safeguard_results"] = filtered_safeguard_results(  # rebind-ok: client-visible response rewrite
+        raw, unchanged_tool_use_ids, keep_explanations=False
+    )
 
 
 def _streamed_query_strings(
@@ -572,6 +598,11 @@ def _parse_sse_event(adapter: TypeAdapter[_SSEEventT], event_type: str, data_lin
     except ValidationError:
         verbose_proxy_logger.warning("Skipping a %s SSE event with an unexpected shape", event_type)
     return None
+
+
+def _mapping_type(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    return mapping.get("type") if mapping is not None else None
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -698,6 +729,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         open_index, max_index = self._content_block_state(responses_so_far)
         new_index: Final = (max_index + 1) if max_index is not None else 0
         chunks: list[bytes] = []
+        if open_index is not None and self._is_unsigned_thinking_block(responses_so_far, open_index):
+            chunks.append(
+                _sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": open_index,
+                        "delta": {"type": "signature_delta", "signature": ""},
+                    },
+                )
+            )
         if open_index is not None:
             chunks.append(_sse("content_block_stop", {"type": "content_block_stop", "index": open_index}))
         chunks += [
@@ -729,6 +771,18 @@ class AnthropicMessagesHandler(BaseTranslation):
             _sse("message_stop", {"type": "message_stop"}),
         ]
         return chunks
+
+    @staticmethod
+    def _is_unsigned_thinking_block(responses_so_far: Sequence[object], index: int) -> bool:
+        events: Final = tuple(
+            event
+            for event in chain.from_iterable(map(AnthropicMessagesHandler._iter_sse_events, responses_so_far))
+            if event.get("index") == index
+        )
+        return any(
+            event.get("type") == "content_block_start" and _mapping_type(event.get("content_block")) == "thinking"
+            for event in events
+        ) and not any(_mapping_type(event.get("delta")) == "signature_delta" for event in events)
 
     @staticmethod
     def _content_block_state(
@@ -1051,15 +1105,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not isinstance(content, list):
             return None
         blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "text":
-                continue
-            text = block.get("text")
-            if not isinstance(text, str) or not text:
+        for item in cast(Sequence[object], content):  # cast-ok: untrusted client payload
+            if (block := as_str_mapping(item)) is None or not is_non_empty_text_block(block):
                 continue
             anthropic_block: dict[str, object] = {  # mutable-ok: API message payload
                 "type": "text",
-                "text": text,
+                "text": block["text"],
             }
             cache_control = block.get("cache_control")
             if cache_control:
@@ -1224,9 +1275,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             original_tool_names,
         )
         original_messages: Final = data.get("messages")
-        data["messages"] = keep_url_documents(
-            keep_non_string_tool_result_texts(converted, original_messages), original_messages
-        )
+        data["messages"] = keep_original_fields(converted, original_messages)
 
     @staticmethod
     def _extract_midturn_system_text(
@@ -1523,6 +1572,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 tool_calls_to_check,
                 response,
             )
+            pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -1544,6 +1594,15 @@ class AnthropicMessagesHandler(BaseTranslation):
             self._write_back_web_search_strings(
                 response_content, _web_search_rewrites_by_block(web_search_strings, web_search_rewrites)
             )
+            unchanged_tool_use_ids: Final = self._write_back_output_tool_calls(
+                response_content,
+                scanned_tool_calls=tool_calls_to_check,
+                pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                returned_tool_calls=guardrailed_inputs.get("tool_calls"),
+                guardrail_name=guardrail_to_apply.guardrail_name,
+            )
+            if unchanged_tool_use_ids is not None:
+                _redact_output_safeguard_results(response, unchanged_tool_use_ids)
 
         verbose_proxy_logger.debug("Anthropic Messages: Processed output response: %s", response)
 
@@ -1719,6 +1778,47 @@ class AnthropicMessagesHandler(BaseTranslation):
     ) -> None:
         for block_idx, rewrites in rewrites_by_block.items():
             _write_back_web_search_block(_content_block_at(response_content, block_idx), rewrites)
+
+    @classmethod
+    def _write_back_output_tool_calls(
+        cls,
+        response_content: Sequence[object],
+        *,
+        scanned_tool_calls: Sequence[object],
+        pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        returned_tool_calls: Sequence[object] | None,
+        guardrail_name: str | None,
+    ) -> frozenset[str] | None:
+        post_guardrail_tool_calls: Final = _tool_call_shapes(
+            returned_tool_calls
+            if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
+            else scanned_tool_calls
+        )
+        tool_use_blocks: Final = tuple(
+            (block, fields[1].get("id"))
+            for block in response_content
+            if (fields := cls._output_block_fields(block)) is not None and fields[0] == "tool_use"
+        )
+        if len(tool_use_blocks) != len(pre_guardrail_tool_calls):
+            return None
+        rewrites: Final = tuple(
+            (position, after, _rewritten_tool_use_input(after.arguments))
+            for position, (before, after) in enumerate(zip(pre_guardrail_tool_calls, post_guardrail_tool_calls))
+            if before != after
+        )
+        if not rewrites:
+            return None
+        if any(rewritten_input is None for _, _, rewritten_input in rewrites):
+            raise unappliable_request_rewrite(guardrail_name)
+        for position, after, rewritten_input in rewrites:
+            if rewritten_input is not None:
+                _write_back_tool_use_block(tool_use_blocks[position][0], after, rewritten_input)
+        rewritten_positions: Final = frozenset(position for position, _, _ in rewrites)
+        return frozenset(
+            tool_use_id
+            for position, (_, tool_use_id) in enumerate(tool_use_blocks)
+            if position not in rewritten_positions and isinstance(tool_use_id, str)
+        )
 
     @staticmethod
     def _get_response_content(response: object) -> Sequence[object]:

@@ -16,8 +16,11 @@ from litellm.litellm_core_utils.core_helpers import (
     RESPONSE_COST_HEADER,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
+    claude_subscription_usage,
     drop_params_env_flag,
+    env_flag,
     drop_params_flag,
+    filter_internal_params,
     get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
@@ -25,6 +28,7 @@ from litellm.litellm_core_utils.core_helpers import (
     json_contains,
     map_finish_reason,
     normalize_drop_params,
+    only,
     preserve_upstream_non_openai_attributes,
     process_response_headers,
     provider_reported_usage_cost,
@@ -47,6 +51,58 @@ from litellm.types.utils import (
     StreamingChoices,
     TranscriptionResponse,
 )
+
+
+@pytest.mark.parametrize("prefix", ("", "llm_provider-"))
+@pytest.mark.parametrize(
+    "signals, expected_overage",
+    (
+        ({"status": "allowed"}, False),
+        ({"status": "allowed_warning", "overage-status": "allowed"}, False),
+        ({"status": "rejected", "overage-status": "allowed"}, True),
+        ({"status": "rejected", "overage-status": "allowed_warning"}, True),
+        ({"status": "allowed", "overage-in-use": "true"}, True),
+        ({"overage-in-use": "true"}, True),
+        ({"status": "rejected", "overage-status": "rejected"}, False),
+    ),
+)
+def test_claude_subscription_usage_reads_oauth_billing_signals(
+    prefix: str, signals: dict[str, str], expected_overage: bool
+) -> None:
+    usage: Final = claude_subscription_usage(
+        {
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {"litellm_metadata": {"used_client_oauth_token": True}},
+            "response_headers": {
+                f"{prefix}anthropic-ratelimit-unified-{key}": value
+                for key, value in signals.items()
+            },
+        }
+    )
+    assert usage == {
+        "is_overage": expected_overage,
+        "status": signals.get("status"),
+        "overage_status": signals.get("overage-status"),
+    }
+
+
+@pytest.mark.parametrize(
+    "provider, metadata, headers",
+    (
+        ("anthropic", {"used_client_oauth_token": True}, {}),
+        ("anthropic", {"used_client_oauth_token": True}, {"anthropic-ratelimit-unified-status": 123}),
+        ("anthropic", {}, {"anthropic-ratelimit-unified-status": "allowed"}),
+        ("anthropic", {"used_client_oauth_token": False}, {"anthropic-ratelimit-unified-status": "allowed"}),
+        ("bedrock", {"used_client_oauth_token": True}, {"anthropic-ratelimit-unified-status": "allowed"}),
+    ),
+)
+def test_claude_subscription_usage_requires_oauth_anthropic_and_valid_headers(provider, metadata, headers) -> None:
+    assert (
+        claude_subscription_usage(
+            {"custom_llm_provider": provider, "litellm_params": {"metadata": metadata}, "response_headers": headers}
+        )
+        is None
+    )
 
 
 def test_parent_otel_span_reads_dict_like_metadata_by_index():
@@ -202,6 +258,27 @@ class TestGetOrCreateMetadataBucket:
         assert key == "litellm_metadata"
         assert isinstance(request_data["litellm_metadata"], dict)
         assert bucket is request_data["litellm_metadata"]
+
+
+def test_filter_internal_params_drops_only_the_mcp_handler_keys() -> None:
+    rest_of_the_call: Final = {
+        "api_key": "sk-test",
+        "guardrails": ["default"],
+        "metadata": {"team": "search"},
+        "stream_chunk_size": 64,
+        "temperature": 0.2,
+    }
+
+    filtered: Final = filter_internal_params(
+        {
+            **rest_of_the_call,
+            "_skip_mcp_handler": True,
+            "skip_mcp_handler": True,
+            "mcp_handler_context": {"server": "docs"},
+        }
+    )
+
+    assert filtered == rest_of_the_call
 
 
 def test_reconstruct_model_name_prefers_deployment_value():
@@ -495,6 +572,32 @@ def test_drop_params_env_flag_keeps_a_non_flag_value_on_with_a_warning(configure
         f"LITELLM_DROP_PARAMS={configured!r} is not a flag value, treating it as on. Set it to true or false"
         in caplog.text
     )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("", False), ("false", False), ("False", False), ("0", False), ("no", False), ("true", True), (" 1 ", True)],
+)
+def test_env_flag_parses_modify_params_as_a_bool(configured: str, expected: bool, caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": configured}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is expected
+        )
+    assert caplog.text == ""
+
+
+def test_env_flag_treats_a_non_flag_value_as_on_with_a_warning(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": "enabled"}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is True
+        )
+    assert "LITELLM_MODIFY_PARAMS='enabled' is not a flag value, treating it as on" in caplog.text
+
+
+def test_env_flag_is_off_when_unset():
+    assert env_flag({}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test")) is False
 
 
 class TestIsExpectedClientError:
@@ -907,3 +1010,14 @@ def test_without_returns_a_new_dict_and_leaves_the_source_unchanged() -> None:
 
     assert source == {"a": 1, "b": 2}
     assert result == {"b": 2, "c": 3}
+
+
+def test_only_keeps_the_named_keys_in_order_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    result: Final = only(source, "d", "b", "missing")
+    result["e"] = 5
+
+    assert list(result.items()) == [("b", 2), ("d", 4), ("e", 5)]
+    assert only(source) == {}
+    assert source == {"a": 1, "b": 2, "c": 3, "d": 4}

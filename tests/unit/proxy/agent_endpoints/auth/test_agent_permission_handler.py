@@ -22,6 +22,12 @@ from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     accessible_agents,
 )
 from litellm.types.agents import AgentCaller
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
+
+
+def _key_row(auth: UserAPIKeyAuth) -> dict[str, object]:
+    """The combined_view row the key store answers with for ``auth``."""
+    return auth.model_dump(exclude_none=True)
 
 
 def _registry_with(*agent_names: str) -> AgentRegistry:
@@ -845,6 +851,8 @@ async def test_managed_agent_invocation_grants_intersect_verified_user_grants(
 async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches(
     monkeypatch: pytest.MonkeyPatch, revoked: str
 ) -> None:
+    stores: Final = install_rust_auth_stores(monkeypatch)
+    users: Final = stores.user
     from unittest.mock import MagicMock
 
     from litellm.proxy import proxy_server
@@ -877,34 +885,33 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
     cache.set_cache(object_permission_cache_key("grant"), permission)
     cache.set_cache("access_group_id:group", group)
     client: Final = MagicMock()
-    client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=human)
-    client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
-    client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
-    client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
+    users.writer = {"human": human.model_dump(mode="json")}
+    stores.team.writer = {"team": team}
+    stores.object_permission.writer["grant"] = permission
+    stores.access_group.writer["group"] = group
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await verified_human_agent_grants("human", "team") == frozenset({"target"})
-    client.writer_db.litellm_usertable.find_unique.return_value = (
-        human.model_copy(update={"teams": []}) if revoked == "user" else human
+    users.writer["human"] = (human.model_copy(update={"teams": []}) if revoked == "user" else human).model_dump(
+        mode="json"
     )
-    client.writer_db.litellm_teamtable.find_unique.return_value = (
+    assert stores.team.writer is not None
+    stores.team.writer["team"] = (
         team.model_copy(update={"members_with_roles": []})
         if revoked == "team-member"
         else team.model_copy(update={"object_permission_id": None})
         if revoked == "team-grant"
         else team
     )
-    client.writer_db.litellm_objectpermissiontable.find_unique.return_value = (
+    stores.object_permission.writer["grant"] = (
         permission.model_copy(update={"agents": []}) if direct or revoked == "team-permission" else permission
     )
-    client.writer_db.litellm_accessgrouptable.find_unique.return_value = (
-        group.model_copy(update={"access_agent_ids": []}) if grouped else group
-    )
+    stores.access_group.writer["group"] = group.model_copy(update={"access_agent_ids": []}) if grouped else group
     assert await verified_human_agent_grants("human", "team") == frozenset()
-    client.db.litellm_usertable.find_unique.assert_not_called()
-    client.db.litellm_teamtable.find_unique.assert_not_called()
-    client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
-    client.db.litellm_accessgrouptable.find_unique.assert_not_called()
+    assert all(writer for _, writer in users.sign_ins)
+    assert all(use_writer for _, use_writer in stores.team.lookups)
+    assert not [lookup for lookup in stores.object_permission.lookups if not lookup[1]]
+    assert not [lookup for lookup in stores.access_group.lookups if not lookup[1]]
 
 
 @pytest.mark.asyncio
@@ -952,7 +959,9 @@ async def test_strict_invocation_policy_outage_denies_instead_of_allowing_all(
     from litellm.proxy import proxy_server
 
     database: Final = MagicMock()
-    database.writer_db.litellm_teamtable.find_unique = AsyncMock(side_effect=ConnectionError("writer unavailable"))
+    install_rust_auth_stores(
+        monkeypatch, RustAuthStores(team=FakeTeamStore(writer={"team": ConnectionError("writer unavailable")}))
+    )
     database.writer_db.litellm_agentstable.find_many = AsyncMock(side_effect=ConnectionError("writer unavailable"))
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     auth: Final = UserAPIKeyAuth(
@@ -1062,31 +1071,35 @@ async def test_managed_target_rechecks_authoritative_key_after_peer_revocation(
     )
     client: Final = MagicMock()
     client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
-    client.get_data = AsyncMock(return_value=warm)
-    client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
+    stores: Final = install_rust_auth_stores(monkeypatch)
+    keys: Final = stores.key
+    keys.rows["a" * 64] = _key_row(warm)
+    stores.object_permission.writer["grant"] = permission
     cache: Final = UserApiKeyCache()
     cache.set_cache("a" * 64, warm)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await AgentRequestHandler.is_agent_allowed("target", warm) is True
-    client.get_data.return_value = warm.model_copy(
-        update={
-            "object_permission": None,
-            "object_permission_id": "replacement" if change == "permission_reference" else "grant",
-            "access_group_ids": [],
-            "team_id": "new-team" if change == "team" else None,
-            "blocked": change == "blocked",
-            "expires": "2000-01-01T00:00:00+00:00" if change == "expired" else None,
-        }
+    keys.rows["a" * 64] = _key_row(
+        warm.model_copy(
+            update={
+                "object_permission": None,
+                "object_permission_id": "replacement" if change == "permission_reference" else "grant",
+                "access_group_ids": [],
+                "team_id": "new-team" if change == "team" else None,
+                "blocked": change == "blocked",
+                "expires": "2000-01-01T00:00:00+00:00" if change == "expired" else None,
+            }
+        )
     )
-    client.writer_db.litellm_objectpermissiontable.find_unique.return_value = permission.model_copy(
+    stores.object_permission.writer["grant"] = stores.object_permission.writer["replacement"] = permission.model_copy(
         update={"agents": []}
     )
     if change == "team":
         from litellm.proxy._types import LiteLLM_TeamTable
         from litellm.proxy.auth import auth_checks
 
-        client.writer_db.litellm_objectpermissiontable.find_unique.return_value = permission
+        stores.object_permission.writer["grant"] = stores.object_permission.writer["replacement"] = permission
         monkeypatch.setattr(
             auth_checks,
             "get_team_object",
@@ -1103,9 +1116,9 @@ async def test_managed_target_rechecks_authoritative_key_after_peer_revocation(
 
         monkeypatch.setattr(auth_checks, "get_agent_ids_from_access_groups", AsyncMock(return_value=["target"]))
     if change == "deleted":
-        client.get_data.return_value = None
+        del keys.rows["a" * 64]
     if change == "outage":
-        client.get_data.side_effect = RuntimeError("writer unavailable")
+        keys.rows["a" * 64] = RuntimeError("writer unavailable")
     if change in ("blocked", "expired", "deleted", "outage"):
         with pytest.raises((HTTPException, RuntimeError)):
             await AgentRequestHandler.is_agent_allowed("target", warm)
@@ -1176,13 +1189,14 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
         ),
     )
     database: Final = MagicMock()
-    database.get_data = AsyncMock(return_value=persisted)
-    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
-    database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: permission if where["object_permission_id"] == "key-grant" else team.object_permission
+    stores: Final = install_rust_auth_stores(
+        monkeypatch, RustAuthStores(team=FakeTeamStore(writer={"caller-team": team}))
     )
-    database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
-    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
+    stores.key.rows["a" * 64] = _key_row(persisted)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    stores.object_permission.writer["key-grant"] = permission
+    stores.object_permission.writer["caller-grant"] = team.object_permission
+    stores.access_group.writer["actor-group"] = group
     cache: Final = UserApiKeyCache()
     cache.set_cache("access_group_id:actor-group", group.model_copy(update={"access_agent_ids": ["target"]}))
     cache.set_cache("team_id:caller-team", team.model_copy(update={"object_permission": permission}))
@@ -1193,7 +1207,7 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
     assert await AgentRequestHandler.is_agent_allowed("target", auth) is (
         permitted and ceiling != "group-without-grant"
     )
-    database.get_data.assert_awaited_once()
+    assert len(stores.key.lookups) == 1
     assert auth.agent_caller == (AgentCaller(team_id="caller-team") if ceiling == "caller-team" else None)
 
 
@@ -1451,6 +1465,7 @@ async def test_personal_key_accessible_agents_keep_declared_grants(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-open")], indirect=True)
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_personal_key_strict_agent_access_keeps_declared_grants(
     personal_key_owner_teams: UserAPIKeyAuth,
 ) -> None:
@@ -1798,7 +1813,7 @@ async def test_personal_key_agent_billing_carries_team_rate_limits(
     from litellm.models.team_membership import LiteLLM_TeamMembership
     from litellm.proxy._types import LiteLLM_TeamTable
     from litellm.proxy.auth import auth_checks
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3, run_scoped
     from litellm.proxy.utils import InternalUsageCache
 
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
@@ -1838,13 +1853,7 @@ async def test_personal_key_agent_billing_carries_team_rate_limits(
     assert (personal_key_owner_teams.team_id, personal_key_owner_teams.team_rpm_limit) == (None, None)
 
     limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-    descriptors: Final = limiter.create_rate_limit_descriptors(
-        user_api_key_dict=billed,
-        data={},
-        rpm_limit_type=None,
-        tpm_limit_type=None,
-        model_has_failures=False,
-    )
+    descriptors: Final = (await run_scoped(limiter, billed, {}, {"kind": "request"}, {"kind": "build"})).descriptors
     team_limits: Final = tuple(
         (descriptor["key"], descriptor["value"], descriptor["rate_limit"]["requests_per_unit"])
         for descriptor in descriptors
@@ -1884,6 +1893,7 @@ async def test_personal_key_non_strict_agent_check_denies_ungranted_agent(
     ids=["eligible-grant", "eligible-unrestricted"],
 )
 @pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_unreadable_withheld_team_only_adds_conservative_agent_restriction(
     monkeypatch: pytest.MonkeyPatch,
     personal_key_owner_teams: UserAPIKeyAuth,
@@ -1917,6 +1927,7 @@ async def test_unreadable_withheld_team_only_adds_conservative_agent_restriction
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_unreadable_eligible_owner_team_still_raises_in_strict_agent_access(
     monkeypatch: pytest.MonkeyPatch,
     personal_key_owner_teams: UserAPIKeyAuth,

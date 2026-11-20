@@ -1831,11 +1831,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     text=text,
                     output_parse_pii=self.output_parse_pii,
                     presidio_config=None,
-                    request_data=request_data or {},
+                    request_data=request_data,
                 )
                 new_texts.append(modified_text)
         inputs["texts"] = new_texts
         return inputs
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return True
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """

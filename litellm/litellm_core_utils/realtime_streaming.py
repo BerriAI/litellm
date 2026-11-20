@@ -26,7 +26,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, json_contains
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import (
@@ -220,9 +220,13 @@ def _unscreened_audio_error_event(client_event_id: object) -> Mapping[str, objec
     }
 
 
+def _decode_json(payload: str) -> object:
+    return _DECODED_JSON.validate_python(json.loads(payload))
+
+
 def _decode_json_object(payload: str) -> Mapping[str, object]:
     """Decode a realtime frame into its top-level field mapping."""
-    return json.loads(payload)
+    return decoded_json_object(_decode_json(payload))
 
 
 _GUARDRAIL_TURN_DETECTION_GATE: Final[Mapping[str, object]] = MappingProxyType(
@@ -511,7 +515,7 @@ class RealTimeStreaming:
         self._held_client_content: tuple[str, ...] = ()
         self._held_client_content_bytes: int = 0
         self._held_client_content_deadline: float | None = None
-        self._replay_scope: Final = client_websocket_scope(websocket)
+        self._replay_scope: Final = client_websocket_scope(self.websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
@@ -533,7 +537,7 @@ class RealTimeStreaming:
         self._translation_usage_finalized = False
 
         # Detect whether the client is explicitly opting into the beta protocol.
-        self._client_wants_beta = self.detect_beta_header(websocket)
+        self._client_wants_beta = self.detect_beta_header(self.websocket)
         self._backend_uses_beta_protocol = not translation_session and (
             self._client_wants_beta if backend_uses_beta_protocol is None else backend_uses_beta_protocol
         )
@@ -674,7 +678,7 @@ class RealTimeStreaming:
         if not self._should_store_message(message_obj):
             return
         try:
-            event_type: Final = message_obj.get("type", "")
+            event_type: Final = decoded_json_object(message_obj).get("type", "")
             if event_type in self._SESSION_EVENT_TYPES:
                 typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)
             else:
@@ -732,21 +736,24 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
-    def _detect_transcription_session_from_backend(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _detect_transcription_session_from_backend(self, event_obj: Mapping[str, object]) -> None:
         """Flag transcription-only sessions from backend session events."""
-        try:
-            event_type: Final = event_obj.get("type", "")
-            if event_type in (
-                "transcription_session.created",
-                "transcription_session.updated",
-            ):
+        match event_obj:
+            case {"type": "transcription_session.created" | "transcription_session.updated"}:
                 self._is_transcription_session = True
-            elif event_type in ("session.created", "session.updated"):
-                session: Final = cast(dict, event_obj).get("session", {}) or {}
-                if session.get("type") == "transcription":
-                    self._is_transcription_session = True
-        except (AttributeError, TypeError):
-            pass
+            case {"type": "session.created" | "session.updated", "session": {"type": "transcription"}}:
+                self._is_transcription_session = True
+            case _:
+                return
+
+    async def send_synthetic_session_created(self, event: Mapping[str, object]) -> None:
+        event_obj: Final = dict(event)
+        event_str: Final = json.dumps(event_obj)
+        self.store_message(event_str)
+        self._detect_transcription_session_from_backend(event_obj)
+        await self.websocket.send_text(event_str)
+        self.session_created_sent_to_client = True
+        verbose_logger.debug("Sent synthetic session.created to client to unblock connection")
 
     def _capture_transcription_usage(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
         """
@@ -1020,7 +1027,7 @@ class RealTimeStreaming:
                     sent = True
                     continue
                 try:
-                    msg_obj = _decode_json_object(msg)
+                    msg_obj = as_str_mapping(_decode_json(msg))
                 except (json.JSONDecodeError, TypeError):
                     msg_obj = None
                 if isinstance(msg_obj, dict) and self.provider_config.is_setup_message(msg_obj):
@@ -1162,13 +1169,15 @@ class RealTimeStreaming:
         return _session_update_frame(self._held_session_update or _NO_SESSION_FIELDS)
 
     async def _hold_session_update(self, message: str) -> None:
-        client_event: Final = _decode_json_object(message)
+        client_event: Final = _decode_json(message)
         if self._held_session_update_bytes + len(message.encode("utf-8")) > RealTimeStreaming._MAX_BUFFERED_BYTES:
             await self.websocket.send_text(
-                json.dumps(_HELD_SESSION_UPDATE_TOO_LARGE.error_event(client_event.get("event_id")))
+                json.dumps(
+                    _HELD_SESSION_UPDATE_TOO_LARGE.error_event(decoded_json_object(client_event).get("event_id"))
+                )
             )
             return
-        session: Final = client_event.get("session")
+        session: Final = decoded_json_object(client_event).get("session")
         update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
         held: Final = _merge_session_fields(self._held_session_update or _NO_SESSION_FIELDS, update)
         self._held_session_update = held
@@ -1182,7 +1191,7 @@ class RealTimeStreaming:
             _session_update_frame(session), self.model, None
         )
         return next(
-            (frame for frame in preview if isinstance(frame, str) and "setup" in _decode_json_object(frame)), None
+            (frame for frame in preview if isinstance(frame, str) and json_contains(_decode_json(frame), "setup")), None
         )
 
     def _leaves_applied_setup_unchanged(self, update: Mapping[str, object]) -> bool:
@@ -1194,7 +1203,7 @@ class RealTimeStreaming:
         return (
             applied_setup is not None
             and merged_setup is not None
-            and _decode_json_object(applied_setup) == _decode_json_object(merged_setup)
+            and _decode_json(applied_setup) == _decode_json(merged_setup)
         )
 
     async def _acknowledge_session_setup(self, session: Mapping[str, object]) -> None:
@@ -1522,8 +1531,8 @@ class RealTimeStreaming:
         ``return_new_content_delta_events`` modality lookup, ...).
         """
         try:
-            message_obj: Final = _decode_json_object(transformed_message)
-            if "setup" in message_obj:
+            message_obj: Final = _decode_json(transformed_message)
+            if json_contains(message_obj, "setup"):
                 self.session_configuration_request = transformed_message
         except (json.JSONDecodeError, TypeError):
             return
@@ -1852,7 +1861,7 @@ class RealTimeStreaming:
     def _parse_backend_event(raw_response: str) -> dict[str, object] | None:
         """Parse a backend frame once. Returns None for non-JSON or non-object frames."""
         try:
-            event: Final = _decode_json_object(raw_response)
+            event: Final = as_str_mapping(_decode_json(raw_response))
         except (json.JSONDecodeError, TypeError):
             return None
         return event if isinstance(event, dict) else None
@@ -1863,8 +1872,6 @@ class RealTimeStreaming:
         Returns True if the caller should skip the default store+forward (i.e. continue the loop).
         """
         event_type: Final = event_obj.get("type")
-
-        self._detect_transcription_session_from_backend(event_obj)
 
         # Send session.created to the client FIRST so it stays in sync, then inject
         # the disable-auto-response session.update; otherwise a backend error could
@@ -1933,6 +1940,7 @@ class RealTimeStreaming:
                     verbose_logger.debug("Realtime: not forwarding an error caused by a guardrail event: %s", event)
                     continue
 
+                self._detect_transcription_session_from_backend(event)
                 self._capture_translation_output_audio(event)
                 if await self._handle_raw_backend_message(event, raw_response):
                     continue

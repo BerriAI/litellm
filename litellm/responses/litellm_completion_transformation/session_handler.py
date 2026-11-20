@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial, reduce
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
@@ -100,6 +101,27 @@ def _is_a_response_read(spend_log: "SpendLogsPayload") -> bool:
 
 def _stored_response(spend_log: "SpendLogsPayload") -> object:
     return spend_log.get("response")
+
+
+def _stored_model_map_key(metadata: object) -> str | None:
+    match json.loads(metadata) if isinstance(metadata, str) and metadata else metadata:
+        case {"model_map_information": {"model_map_key": str() as model_map_key}}:
+            return model_map_key
+        case _:
+            return None
+
+
+def _stored_turn_fills_empty_user_turns(spend_log: "SpendLogsPayload") -> bool:
+    from litellm.responses.litellm_completion_transformation.transformation import target_fills_empty_user_turns
+
+    fields: Final = as_str_mapping(spend_log) or {}
+    model: Final = fields.get("model")
+    provider: Final = fields.get("custom_llm_provider")
+    return target_fills_empty_user_turns(
+        model if isinstance(model, str) else "",
+        provider if isinstance(provider, str) else None,
+        _stored_model_map_key(fields.get("metadata")),
+    )
 
 
 def _output_items(spend_log: "SpendLogsPayload") -> Iterator[tuple[str | None, object]]:
@@ -279,6 +301,11 @@ def _instruction_items_before(
     )
 
 
+def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> object | None:
+    """The stored turn's ``tools``, so its calls read the same namespace shapes it was sent with."""
+    return proxy_server_request.get("tools") if proxy_server_request is not None else None
+
+
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
@@ -300,6 +327,8 @@ class ResponsesSessionHandler:
         client_response_ids: tuple[str, ...] = (),
         tool_call_provider_fields: bool = False,
         stored_turns: StoredTurns | None = None,
+        empty_user_turn_text: str | None = None,
+        keep_tool_references: bool = False,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -341,12 +370,16 @@ class ResponsesSessionHandler:
             ],
             item_cache_control,
             tool_call_provider_fields,
+            empty_user_turn_text,
+            keep_tool_references,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
             proxy_server_requests[: start.index],
             item_cache_control,
             tool_call_provider_fields,
+            empty_user_turn_text,
+            keep_tool_references,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -407,18 +440,21 @@ class ResponsesSessionHandler:
         proxy_server_requests: Sequence[Mapping[str, object] | None],
         item_cache_control: bool,
         tool_call_provider_fields: bool,
+        empty_user_turn_text: str | None = None,
+        keep_tool_references: bool = False,
     ) -> list["SessionMessage"]:
-        return list(
-            chain.from_iterable(
-                ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
-                    spend_log=spend_log,
-                    proxy_server_request_dict=proxy_server_request,
-                    chat_completion_message_history=[],
-                    item_cache_control=item_cache_control,
-                    tool_call_provider_fields=tool_call_provider_fields,
-                )
-                for spend_log, proxy_server_request in zip(spend_logs, proxy_server_requests, strict=True)
-            )
+        return reduce(
+            lambda history, turn: ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+                spend_log=turn[0],
+                proxy_server_request_dict=turn[1],
+                chat_completion_message_history=history,
+                item_cache_control=item_cache_control,
+                tool_call_provider_fields=tool_call_provider_fields,
+                empty_user_turn_text=empty_user_turn_text,
+                keep_tool_references=keep_tool_references,
+            ),
+            zip(spend_logs, proxy_server_requests, strict=True),
+            [],
         )
 
     @staticmethod
@@ -434,22 +470,28 @@ class ResponsesSessionHandler:
         ],
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
+        empty_user_turn_text: str | None = None,
+        keep_tool_references: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
             LiteLLMCompletionResponsesConfig,
+            restored_empty_user_turn,
+            without_blank_user_tail,
         )
 
         response_input_param: str | ResponseInputParam | None = None
+        stored_tools: Final = _stored_request_tools(proxy_server_request_dict)
 
         ############################################################
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
-            _response_input_param: Final = proxy_server_request_dict.get("input") or proxy_server_request_dict.get(
-                "messages"
+            stored_request_input: Final = proxy_server_request_dict.get("input")
+            _response_input_param: Final = (
+                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input
             )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
@@ -459,41 +501,73 @@ class ResponsesSessionHandler:
                     [_response_input_param],
                 )
 
-        if response_input_param:
-            chat_completion_message_history.extend(
-                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=bridge_client_tool_search(response_input_param, None).input,
-                    responses_api_request={},
-                    replay_reasoning=True,
-                    item_cache_control=item_cache_control,
-                    tool_call_provider_fields=tool_call_provider_fields,
-                    only_since_compaction=True,
-                )
+        output_messages: Final = ResponsesSessionHandler._stored_output_messages(
+            _stored_response(spend_log), stored_tools, item_cache_control, tool_call_provider_fields
+        )
+        if response_input_param is not None:
+            stored_input: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=bridge_client_tool_search(response_input_param, None).input,
+                responses_api_request={"tools": stored_tools} if stored_tools is not None else {},
+                replay_reasoning=True,
+                item_cache_control=item_cache_control,
+                tool_call_provider_fields=tool_call_provider_fields,
+                only_since_compaction=True,
+                replay_tool_search=True,
+                keep_tool_references=keep_tool_references,
             )
+            input_before_blank_tail: Final = without_blank_user_tail(stored_input)
+            inference_continues_the_blank_tail: Final = empty_user_turn_text == "" and len(
+                input_before_blank_tail
+            ) < len(stored_input)
+            restored_turn: Final = (
+                restored_empty_user_turn(
+                    response_input_param,
+                    (*chat_completion_message_history, *input_before_blank_tail),
+                    item_cache_control,
+                    partial(_stored_turn_fills_empty_user_turns, spend_log),
+                    text=empty_user_turn_text,
+                )
+                if empty_user_turn_text is not None and output_messages and not inference_continues_the_blank_tail
+                else ()
+            )
+            chat_completion_message_history.extend(input_before_blank_tail if restored_turn else stored_input)
+            chat_completion_message_history.extend(restored_turn)
 
-        ############################################################
-        # Add Output messages for this Spend Log
-        ############################################################
-        _response_output: Final = _stored_response(spend_log)
-        if (responses_api_output := _stored_responses_api_output(_response_output)) is not None:
-            chat_completion_message_history.extend(
-                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=bridge_client_tool_search(responses_api_output, None).input,
-                    responses_api_request={},
-                    replay_reasoning=True,
-                    item_cache_control=item_cache_control,
-                    tool_call_provider_fields=tool_call_provider_fields,
-                    only_since_compaction=True,
-                )
-            )
-        elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
-            # transform `ChatCompletion Response` to `ResponsesAPIResponse`
-            model_response: Final = ModelResponse(**_response_output)
-            for choice in model_response.choices:
-                if hasattr(choice, "message"):
-                    _normalize_redacted_tool_call_arguments(choice.message)
-                    chat_completion_message_history.append(choice.message)
+        chat_completion_message_history.extend(output_messages)
         return chat_completion_message_history
+
+    @staticmethod
+    def _stored_output_messages(
+        stored_response: object, stored_tools: object | None, item_cache_control: bool, tool_call_provider_fields: bool
+    ) -> Sequence[
+        AllMessageValues
+        | GenericChatCompletionMessage
+        | ChatCompletionMessageToolCall
+        | ChatCompletionResponseMessage
+        | Message
+    ]:
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        if (responses_api_output := _stored_responses_api_output(stored_response)) is not None:
+            return LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=bridge_client_tool_search(responses_api_output, None).input,
+                responses_api_request={"tools": stored_tools} if stored_tools is not None else {},
+                replay_reasoning=True,
+                item_cache_control=item_cache_control,
+                tool_call_provider_fields=tool_call_provider_fields,
+                only_since_compaction=True,
+                replay_tool_search=True,
+            )
+        if not isinstance(stored_response, dict) or not stored_response:
+            return ()
+        chat_completion_messages: Final = tuple(
+            choice.message for choice in ModelResponse(**stored_response).choices if hasattr(choice, "message")
+        )
+        for message in chat_completion_messages:
+            _normalize_redacted_tool_call_arguments(message)
+        return chat_completion_messages
 
     @staticmethod
     async def get_proxy_server_request_from_spend_log(
