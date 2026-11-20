@@ -3,29 +3,9 @@ use std::sync::Arc;
 use crate::{AuthFuture, AuthenticatedCaller, Clock, Error, SharedCaller};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum McpAction {
-    Connect,
-    ListTools,
-    CallTool(String),
-    ListPrompts,
-    GetPrompt(String),
-    ListResources,
-    ListResourceTemplates,
-    ReadResource(String),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum UiAction {
-    SessionInfo,
-    Logout,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AccessRequest {
     Route { method: String, path: String },
     Model { name: String, deployment: String },
-    Mcp { server: String, action: McpAction },
-    Ui(UiAction),
 }
 
 #[derive(Clone, Debug, Default)]

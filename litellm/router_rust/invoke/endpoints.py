@@ -52,6 +52,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     initialize_compaction_state,
     surface_for_call,
 )
+from litellm.router_utils.dynamic_queue_router import DynamicQueueRouter, bound_request_queue
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
 from litellm.vector_stores.search_query import store_search_params
 
@@ -1333,8 +1334,6 @@ async def _run_silent(core: EndpointCore, silent_model: str, messages: object, k
 
 async def _silent_async(core: EndpointCore, silent_model: str, messages: object, kwargs: Mapping[str, object]) -> None:
     try:
-        if as_dict(kwargs.get("metadata")).get("is_silent_experiment", False):
-            return
         silent: Final = _silent_kwargs(kwargs)
         as_dict_metadata: Final = silent["metadata"]
         if isinstance(as_dict_metadata, dict):
@@ -1346,8 +1345,6 @@ async def _silent_async(core: EndpointCore, silent_model: str, messages: object,
 
 def _silent_thread(core: EndpointCore, silent_model: str, messages: object, kwargs: Mapping[str, object]) -> None:
     try:
-        if as_dict(kwargs.get("metadata")).get("is_silent_experiment", False):
-            return
         silent: Final = _silent_kwargs(kwargs)
         metadata: Final = silent["metadata"]
         if isinstance(metadata, dict):
@@ -1481,6 +1478,7 @@ class RustEndpoints:
         self._caching_groups: Final = config.get("caching_groups")
         self._default_max_parallel_requests: object = config.get("default_max_parallel_requests")
         self._scheduler: object = None
+        self._queue_router: DynamicQueueRouter | None = None
 
     @property
     def cache_responses(self) -> bool:
@@ -2041,12 +2039,32 @@ class RustEndpoints:
             def factory() -> Awaitable[object]:
                 return prompt_management_acompletion(self._core, model, messages, prepared)
 
-            if priority is None:
-                return await factory()
-            return await self._schedule(model, priority, factory, prepared)
-        if priority is None:
-            return await self._core.drive(plan, rest)
-        return await self._schedule(model, priority, lambda: self._core.drive(plan, rest), rest)
+            return await self._prioritized(model, priority, factory, prepared)
+        return await self._prioritized(model, priority, lambda: self._core.drive(plan, rest), rest)
+
+    def _dynamic_queue(self) -> DynamicQueueRouter | None:
+        settings: Final = self._core.resolved.dynamic_queue
+        if settings is None:
+            return None
+        if self._queue_router is None or self._queue_router.settings is not settings:
+            self._queue_router = self._core.host.dynamic_queue(settings, lambda: self._core.routing_cache.redis_cache)
+        return self._queue_router
+
+    async def _prioritized(
+        self, model: str, priority: int | None, run: Callable[[], Awaitable[object]], request: Mapping[str, object]
+    ) -> object:
+        """The scheduler as ever; once it admits the request, its attempts run bound to this router's per-request
+        queue, or to none, so a nested call never waits in another request's queue."""
+        queue_router: Final = self._dynamic_queue()
+        request_queue: Final = (
+            None if queue_router is None or priority is None else queue_router.request(priority, str(uuid.uuid4()))
+        )
+
+        async def queued() -> object:
+            with bound_request_queue(request_queue):
+                return await run()
+
+        return await queued() if priority is None else await self._schedule(model, priority, queued, request)
 
     async def atext_completion(self, request: Mapping[str, object]) -> object:
         model: Final = request.get("model")

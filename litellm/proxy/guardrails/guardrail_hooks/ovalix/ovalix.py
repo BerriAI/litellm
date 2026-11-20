@@ -335,6 +335,9 @@ class OvalixGuardrail(CustomGuardrail):
                 return reason
         return None
 
+    def scans_each_text_separately(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,

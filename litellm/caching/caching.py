@@ -13,9 +13,11 @@ import json
 import logging
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Generator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from enum import Enum
+from itertools import chain
+from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -75,6 +77,135 @@ def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
         for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
         if extra_body.get(param)
     )
+
+
+_REPR_WALK_MAX_DEPTH: Final = 32
+_LARGE_STR_CHARS: Final = 64 * 1024
+_RECURSIVE_REPR_PLACEHOLDERS: Final[Mapping[type, str]] = MappingProxyType(
+    {dict: "{...}", list: "[...]", tuple: "(...)"}
+)
+_WALKED_TYPES: Final = frozenset(_RECURSIVE_REPR_PLACEHOLDERS)
+_NO_IDS: Final[frozenset[int]] = frozenset()
+
+
+def _container_children(value: object) -> Iterable[object]:
+    match value:
+        case dict():
+            return cast(dict[object, object], value).values()  # cast-ok: an exact dict of unknown key/value types
+        case list() | tuple():
+            return cast(Iterable[object], value)  # cast-ok: an exact list or tuple of unknown items
+        case _:
+            return ()
+
+
+def _ids_to_walk(value: object, path: frozenset[int], depth: int) -> frozenset[int]:
+    value_type: Final = type(value)
+    if value_type is str:
+        return frozenset((id(value),)) if len(cast(str, value)) > _LARGE_STR_CHARS else _NO_IDS  # cast-ok: exact str
+    if value_type not in _WALKED_TYPES or depth >= _REPR_WALK_MAX_DEPTH:
+        return _NO_IDS
+    if id(value) in path:
+        return frozenset((id(value),))
+    inner_path: Final = path | frozenset((id(value),))
+    below: Final = _NO_IDS.union(*(_ids_to_walk(child, inner_path, depth + 1) for child in _container_children(value)))
+    return below | frozenset((id(value),)) if below else _NO_IDS
+
+
+def _repr_items_fragments(
+    items: Iterable[object], walk: frozenset[int], seen: frozenset[int], depth: int
+) -> Iterator[str]:
+    for index, item in enumerate(items):
+        if index:
+            yield ", "
+        yield from _repr_fragments(item, walk, seen, depth)
+
+
+def _repr_entries_fragments(
+    entries: Iterable[tuple[object, object]], walk: frozenset[int], seen: frozenset[int], depth: int
+) -> Iterator[str]:
+    for index, (key, item) in enumerate(entries):
+        if index:
+            yield ", "
+        yield repr(key)
+        yield ": "
+        yield from _repr_fragments(item, walk, seen, depth)
+
+
+def _repr_fragments(value: object, walk: frozenset[int], seen: frozenset[int], depth: int) -> Iterator[str]:
+    """Yields repr(value) in pieces, byte for byte, so cache keys stay stable without building one huge string"""
+    placeholder: Final = _RECURSIVE_REPR_PLACEHOLDERS.get(type(value))
+    if placeholder is None:
+        yield repr(value)
+        return
+    if id(value) in seen:
+        yield placeholder
+        return
+    if id(value) not in walk or depth >= _REPR_WALK_MAX_DEPTH:
+        yield repr(value)
+        return
+    inner_seen: Final = seen | frozenset((id(value),))
+    match value:
+        case dict():
+            yield "{"
+            yield from _repr_entries_fragments(
+                cast(dict[object, object], value).items(),  # cast-ok: an exact dict of unknown key/value types
+                walk,
+                inner_seen,
+                depth + 1,
+            )
+            yield "}"
+        case list():
+            yield "["
+            yield from _repr_items_fragments(
+                cast(list[object], value),  # cast-ok: an exact list of unknown items
+                walk,
+                inner_seen,
+                depth + 1,
+            )
+            yield "]"
+        case tuple():
+            items: Final = cast(tuple[object, ...], value)  # cast-ok: an exact tuple of unknown items
+            yield "("
+            yield from _repr_items_fragments(items, walk, inner_seen, depth + 1)
+            yield ",)" if len(items) == 1 else ")"
+        case _:
+            yield repr(value)
+
+
+def _level_holds_large_str(level: tuple[object, ...], visited: frozenset[int], depth: int) -> bool:
+    if not level or depth > _REPR_WALK_MAX_DEPTH:
+        return False
+    if any(type(item) is str and len(item) > _LARGE_STR_CHARS for item in level):
+        return True
+    fresh: Final = {id(item): item for item in level if type(item) in _WALKED_TYPES and id(item) not in visited}
+    dicts: Final = cast(  # cast-ok: the comprehension keeps only exact dicts
+        "Iterable[dict[object, object]]", [item for item in fresh.values() if type(item) is dict]
+    )
+    sequences: Final = [item for item in fresh.values() if type(item) is not dict]
+    children: Final = (
+        *chain.from_iterable(map(dict[object, object].values, dicts)),
+        *chain.from_iterable(cast(list[Iterable[object]], sequences)),  # cast-ok: exact lists and tuples
+    )
+    return _level_holds_large_str(children, visited.union(fresh), depth + 1)
+
+
+def _format_fragments(value: object) -> Iterator[str]:
+    if type(value) not in _WALKED_TYPES:
+        yield f"{value}"
+        return
+    if not _level_holds_large_str((value,), _NO_IDS, 0):
+        yield repr(value)
+        return
+    yield from _repr_fragments(value, _ids_to_walk(value, _NO_IDS, 0), _NO_IDS, 0)
+
+
+def _hash_cache_key_fragments(fragments: Iterable[str]) -> str:
+    digest: Final = hashlib.sha256()
+    for fragment in fragments:
+        digest.update(fragment.encode())
+    hash_hex: Final = digest.hexdigest()
+    verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
+    return hash_hex
 
 
 @contextmanager
@@ -178,6 +309,7 @@ class Cache:
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
         _backend: BaseCache | None = None,
+        excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
         **kwargs,
     ):
         """
@@ -224,6 +356,7 @@ class Cache:
 
             # Common Cache Args
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
+            excluded_call_types (Sequence, optional): Call types to drop from supported_call_types. Defaults to None.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
@@ -346,7 +479,9 @@ class Cache:
         if "cache" not in litellm._async_success_callback:
             litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
         self.supported_call_types = (
-            supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
+            supported_call_types
+            if supported_call_types is None or not excluded_call_types
+            else [call_type for call_type in supported_call_types if call_type not in excluded_call_types]
         )
         self.type = type
         self.namespace = namespace
@@ -396,10 +531,14 @@ class Cache:
             return (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
         return self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
 
-    def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
-        litellm_params: Final[dict] = kwargs.get("litellm_params") or {}
-        metadata_sources: Final[tuple[dict, ...]] = tuple(
-            source.get(key) or {} for source in (kwargs, litellm_params) for key in ("metadata", "litellm_metadata")
+    def _get_semantic_cache_tenant_scope(self, kwargs: Mapping[str, object]) -> str:
+        litellm_params: Final = cast(  # cast-ok: the request's untyped litellm_params dict, or empty
+            Mapping[str, object], kwargs.get("litellm_params") or {}
+        )
+        metadata_sources: Final = tuple(
+            cast(Mapping[str, object], source.get(key) or {})  # cast-ok: an untyped request metadata dict, or empty
+            for source in (kwargs, litellm_params)
+            for key in ("metadata", "litellm_metadata")
         )
         scope_values: Final = (
             (field, next((source[field] for source in metadata_sources if source.get(field) is not None), None))
@@ -417,59 +556,52 @@ class Cache:
         Returns:
             str: The cache key generated from the arguments, or None if no cache key could be generated.
         """
-        cache_key = ""
-        # verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
-
         preset_cache_key: Final = self.get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
-        is_semantic_cache: Final = self._is_semantic_cache()
-        scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
-        for param in kwargs:
-            if param in scope_excluded_params:
-                continue
-            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
-                param_value: str | None = self._get_param_value(param, kwargs)
-                if param in _ALWAYS_KEYED_PROVIDER_PARAMS and not param_value:
-                    continue
-                if param_value is not None:
-                    cache_key += f"{param}: {param_value}"
-            elif not is_litellm_owned_kwarg(param):
-                if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
-                    if kwargs[param] is None:
-                        continue  # ignore None params
-                    cache_key += f"{param}: {kwargs[param]}"
-
-        if is_semantic_cache:
-            cache_key += self._get_semantic_cache_tenant_scope(kwargs)
-
-        reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
-        reasoning_summary_material: Final = (
-            "" if reasoning_summary is None else f"reasoning_summary: {reasoning_summary}"
+        hashed_cache_key: Final = self._add_namespace_to_cache_key(
+            _hash_cache_key_fragments(self._cache_key_fragments(kwargs)), **kwargs
         )
-        tool_call_id_shape_material: Final = (
-            "" if embeds_thought_signature_in_tool_call_id(kwargs) else "thought_signature_in_tool_call_id: False"
-        )
-        hashed_cache_key = Cache._get_hashed_cache_key(
-            cache_key
-            + _keyed_provider_params_in_extra_body(kwargs)
-            + reasoning_summary_material
-            + tool_call_id_shape_material
-        )
-        hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
-        verbose_logger.debug(
-            "\nCreated cache key: %s (source material length: %d)",
-            hashed_cache_key,
-            len(cache_key),
-        )
+        verbose_logger.debug("\nCreated cache key: %s", hashed_cache_key)
         # Remove preset_cache_key from kwargs to avoid "got multiple values" TypeError
         # when kwargs already contains preset_cache_key from upstream callers
         kwargs_for_preset: Final = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
         self._set_preset_cache_key_in_kwargs(preset_cache_key=hashed_cache_key, **kwargs_for_preset)
         return hashed_cache_key
+
+    def _keyed_param_values(self, kwargs: dict[str, object], is_semantic_cache: bool) -> Iterator[tuple[str, object]]:
+        combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
+        scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        for param in kwargs:
+            if param in scope_excluded_params:
+                continue
+            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
+                if (param_value := self._get_param_value(param, kwargs)) is not None and (
+                    param not in _ALWAYS_KEYED_PROVIDER_PARAMS or param_value
+                ):
+                    yield param, param_value
+            elif (
+                not is_litellm_owned_kwarg(param)
+                and litellm.enable_caching_on_provider_specific_optional_params is True
+                and kwargs[param] is not None
+            ):
+                yield param, kwargs[param]
+
+    def _cache_key_fragments(self, kwargs: dict[str, object]) -> Iterator[str]:
+        is_semantic_cache: Final = self._is_semantic_cache()
+        for param, param_value in self._keyed_param_values(kwargs, is_semantic_cache):
+            yield f"{param}: "
+            yield from _format_fragments(param_value)
+        if is_semantic_cache:
+            yield self._get_semantic_cache_tenant_scope(kwargs)
+        yield _keyed_provider_params_in_extra_body(kwargs)
+        reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
+        if reasoning_summary is not None:
+            yield f"reasoning_summary: {reasoning_summary}"
+        if not embeds_thought_signature_in_tool_call_id(kwargs):
+            yield "thought_signature_in_tool_call_id: False"
 
     def _get_param_value(
         self,
@@ -594,11 +726,7 @@ class Cache:
         Returns:
             str: The hashed cache key.
         """
-        hash_object: Final = hashlib.sha256(cache_key.encode())
-        # Hexadecimal representation of the hash
-        hash_hex: Final = hash_object.hexdigest()
-        verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
-        return hash_hex
+        return _hash_cache_key_fragments((cache_key,))
 
     def _add_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
         """
@@ -1079,6 +1207,7 @@ def enable_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+    excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
     **kwargs,
 ):
     """
@@ -1091,6 +1220,7 @@ def enable_cache(
         password (Optional[str]): The password for the cache server. Defaults to None.
         supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
             The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        excluded_call_types (Optional[Sequence[str]]): Call types to drop from supported_call_types.
         **kwargs: Additional keyword arguments.
 
     Returns:
@@ -1114,6 +1244,7 @@ def enable_cache(
             port=port,
             password=password,
             supported_call_types=supported_call_types,
+            excluded_call_types=excluded_call_types,
             **kwargs,
         )
     print_verbose(f"LiteLLM: Cache enabled, litellm.cache={litellm.cache}")
@@ -1126,6 +1257,7 @@ def update_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+    excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
     **kwargs,
 ):
     """
@@ -1138,6 +1270,7 @@ def update_cache(
         password (Optional[str]): The password for the cache. Defaults to None.
         supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
             The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        excluded_call_types (Optional[Sequence[str]]): Call types to drop from supported_call_types.
         **kwargs: Additional keyword arguments for the cache.
 
     Returns:
@@ -1151,6 +1284,7 @@ def update_cache(
         port=port,
         password=password,
         supported_call_types=supported_call_types,
+        excluded_call_types=excluded_call_types,
         **kwargs,
     )
     print_verbose(f"LiteLLM: Cache Updated, litellm.cache={litellm.cache}")

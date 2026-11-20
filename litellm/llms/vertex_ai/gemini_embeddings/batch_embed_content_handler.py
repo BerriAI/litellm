@@ -3,15 +3,20 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    MaskedHTTPStatusError,
     get_async_httpx_client,
 )
 from litellm.types.llms.vertex_ai import (
@@ -21,6 +26,7 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.utils import EmbeddingResponse
 
+from ..common_utils import VertexAIError
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
     file_reference_name,
@@ -36,9 +42,30 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
+_HTTPX_RESPONSE: Final = TypeAdapter(httpx.Response, config=ConfigDict(arbitrary_types_allowed=True))
+
+
 class _GeminiFileResource(TypedDict, total=False):
     mimeType: ReadOnly[str]
     uri: ReadOnly[str]
+
+
+def _vertex_error(response: httpx.Response) -> VertexAIError:
+    try:
+        body: Final = response.text
+    except httpx.ResponseNotRead:
+        return VertexAIError(status_code=response.status_code, message=response.reason_phrase, headers=response.headers)
+    return VertexAIError(status_code=response.status_code, message=redact_string(body), headers=response.headers)
+
+
+@contextmanager
+def _raise_status_errors_as_vertex_errors() -> Generator[None, None, None]:
+    try:
+        yield
+    except MaskedHTTPStatusError:
+        raise
+    except httpx.HTTPStatusError as err:
+        raise _vertex_error(err.response) from err
 
 
 class GoogleBatchEmbeddings(VertexLLM):
@@ -262,14 +289,15 @@ class GoogleBatchEmbeddings(VertexLLM):
             },
         )
 
-        response: Final = sync_handler.post(
-            url=url,
-            headers=headers,
-            data=json.dumps(request_data),
-        )
+        with _raise_status_errors_as_vertex_errors():
+            response: Final[httpx.Response] = sync_handler.post(
+                url=url,
+                headers=headers,
+                data=json.dumps(request_data),
+            )
 
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise _vertex_error(_HTTPX_RESPONSE.validate_python(response))
 
         _json_response: Final = response.json()
 
@@ -369,14 +397,15 @@ class GoogleBatchEmbeddings(VertexLLM):
                 },
             )
 
-        response: Final = await async_handler.post(
-            url=url,
-            headers=headers,
-            data=json.dumps(data),
-        )
+        with _raise_status_errors_as_vertex_errors():
+            response: Final[httpx.Response] = await async_handler.post(
+                url=url,
+                headers=headers,
+                data=json.dumps(data),
+            )
 
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise _vertex_error(response)
 
         _json_response: Final = response.json()
 

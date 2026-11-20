@@ -1428,6 +1428,7 @@ class PreRoutingHookResponse(LiteLLMBaseModel):
     messages: list[dict[str, Any]] | None
     routing_decision: StandardLoggingRoutingDecision | None = None
     session_affinity_ttl_seconds: int | None = None
+    session_affinity_conversation_id: str | None = None
     litellm_params: Mapping[str, object] | None = None
 
 

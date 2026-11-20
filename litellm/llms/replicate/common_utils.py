@@ -24,8 +24,15 @@ from litellm.litellm_core_utils.url_utils import (
     safe_get,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, HTTPResponseLimitError
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    HTTPResponseLimitError,
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
+    get_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
+)
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import LlmProviders
 
 REPLICATE_DEFAULT_API_BASE: Final[str] = "https://api.replicate.com/v1"
 REPLICATE_TERMINAL_STATUSES: Final[frozenset[str]] = frozenset({"succeeded", "failed", "canceled"})
@@ -49,6 +56,14 @@ class ReplicateError(BaseLLMException):
 class ReplicatePredictionRequest:
     url: str
     body: Mapping[str, object]
+
+
+def replicate_httpx_client(ssl_verify: object) -> HTTPHandler:
+    return get_httpx_client(params={"ssl_verify": ssl_verify})
+
+
+def replicate_async_httpx_client(ssl_verify: object) -> AsyncHTTPHandler:
+    return get_async_httpx_client(llm_provider=LlmProviders.REPLICATE, params={"ssl_verify": ssl_verify})
 
 
 def replicate_api_base(api_base: str | None) -> str:

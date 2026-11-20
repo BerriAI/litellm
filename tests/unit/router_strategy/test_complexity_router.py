@@ -7616,7 +7616,7 @@ class _DummyPlugin:
 
 class TestChildSessionTierPins:
     @staticmethod
-    def _router(session_affinity: bool = False) -> Router:
+    def _router(session_affinity: bool = False, conversation_header: str | None = None) -> Router:
         return Router(
             model_list=[
                 {
@@ -7628,6 +7628,7 @@ class TestChildSessionTierPins:
                             "classification_mode": "user_turn",
                             "session_affinity": session_affinity,
                             "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}],
+                            **({"conversation_header": conversation_header} if conversation_header else {}),
                         },
                     },
                 },
@@ -7675,9 +7676,19 @@ class TestChildSessionTierPins:
         expected_tier: str, expected_cause: str, caller: str = "caller-a", child: bool = True,
         expected_deployment: str | None = None,
     ) -> str:
+        data, bucket = self._normalized_request(surface, session_id, caller, child)
+        return await self._route_request(
+            router, surface, data, bucket, prompt, (expected_tier, expected_cause), "parent-session",
+            expected_deployment,
+        )
+
+    @staticmethod
+    async def _route_request(
+        router: Router, surface: str, data: dict[str, object], bucket: str, prompt: str | None,
+        expected_decision: tuple[str, str], expected_log_id: str, expected_deployment: str | None = None,
+    ) -> str:
         from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 
-        data, bucket = self._normalized_request(surface, session_id, caller, child)
         turn: Final[dict[str, object]] = (
             {"role": "user", "content": prompt} if prompt is not None else
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "done"}]}
@@ -7703,11 +7714,9 @@ class TestChildSessionTierPins:
         metadata: Final = data[bucket]
         assert isinstance(metadata, dict)
         assert (metadata["session_id"], metadata["trace_id"], data["litellm_session_id"], data["litellm_trace_id"]) == (
-            "parent-session", "parent-session", "parent-session", "parent-session"
+            expected_log_id, expected_log_id, expected_log_id, expected_log_id
         )
-        assert (metadata["routing_decision"]["tier"], metadata["routing_decision"]["cause"]) == (
-            expected_tier, expected_cause
-        )
+        assert (metadata["routing_decision"]["tier"], metadata["routing_decision"]["cause"]) == expected_decision
         affinity: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
         if expected_deployment is not None:
             filtered: Final = await affinity.async_filter_deployments(
@@ -7782,6 +7791,196 @@ class TestChildSessionTierPins:
             assert await strategy._pin_model_for_tier("REASONING", "reasoning-peer", candidates, child) == "reasoning"
         finally:
             router.discard()
+
+
+class TestConversationHeaderPins:
+    REASONING: Final = ("REASONING", "literal_keyword_match")
+    SIMPLE: Final = ("SIMPLE", "heuristic_scorer")
+    CONTINUED: Final = ("REASONING", "user_turn_continuation")
+
+    @staticmethod
+    def _request(
+        surface: str, headers: Mapping[str, str], caller: tuple[str, str] = ("user_api_key_hash", "caller-a")
+    ) -> tuple[dict[str, object], str]:
+        from litellm.proxy.litellm_pre_call_utils import (
+            LiteLLMProxyRequestSetup,
+            metadata_variable_name_for_route,
+            redact_credential_headers,
+        )
+
+        route: Final = {
+            "chat": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"
+        }[surface]
+        bucket: Final = metadata_variable_name_for_route(route)
+        data: Final[dict[str, object]] = {
+            bucket: {caller[0]: caller[1], "user_api_key_request_route": route},
+            "proxy_server_request": {"headers": redact_credential_headers(headers)},
+        }
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=dict(headers), data=data, _metadata_variable_name=bucket
+        )
+        return data, bucket
+
+    async def _route(
+        self, router: Router, surface: str, headers: Mapping[str, str], prompt: str | None,
+        expected_decision: tuple[str, str], caller: tuple[str, str] = ("user_api_key_hash", "caller-a"),
+        expected_deployment: str | None = None,
+    ) -> str:
+        data, bucket = self._request(surface, headers, caller)
+        return await TestChildSessionTierPins._route_request(
+            router, surface, data, bucket, prompt, expected_decision,
+            headers.get("x-parent-session-id") or headers["X-Session-Id"], expected_deployment,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("session_affinity", [False, True])
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_one_conversation_keeps_its_pins_across_message_ids(
+        self, surface: str, session_affinity: bool
+    ) -> None:
+        router: Final = TestChildSessionTierPins._router(session_affinity, conversation_header=" X-App-Conversation ")
+        replay: Final = "session_affinity_pin" if session_affinity else "user_turn_continuation"
+        try:
+            first: Final = await self._route(
+                router, surface, {"x-app-conversation": "Ab", "X-Session-Id": "message-0001"}, "reason carefully",
+                self.REASONING,
+            )
+            await self._route(
+                router, surface, {"X-App-Conversation": "ab", "X-Session-Id": "message-0001"}, None, self.SIMPLE
+            )
+            assert await self._route(
+                router, surface, {"X-APP-CONVERSATION": "Ab", "X-Session-Id": "message-0002"}, None,
+                ("REASONING", replay), expected_deployment=first,
+            ) == first
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("child", [False, True])
+    @pytest.mark.parametrize(
+        "conversation_header,conversation",
+        [
+            ("x-app-conversation", {}),
+            ("x-app-conversation", {"x-app-conversation": ""}),
+            ("authorization", {"Authorization": "Bearer test-only"}),
+        ],
+        ids=["absent", "empty", "redacted"],
+    )
+    async def test_configured_header_without_a_usable_value_disables_reuse(
+        self, conversation_header: str, conversation: Mapping[str, str], child: bool
+    ) -> None:
+        from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
+
+        router: Final = TestChildSessionTierPins._router(conversation_header=conversation_header)
+        headers: Final = {
+            **conversation,
+            "X-Session-Id": "message-0001",
+            **({"x-parent-session-id": "parent-session"} if child else {}),
+        }
+        try:
+            first: Final = await self._route(router, "chat", headers, "reason carefully", self.REASONING)
+            data, bucket = self._request("chat", headers)
+            await TestChildSessionTierPins._route_request(
+                router, "chat", data, bucket, None, self.SIMPLE, "parent-session" if child else "message-0001"
+            )
+            affinity: Final = next(
+                cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck)
+            )
+            first_group: Final = first.rsplit("-", 1)[0]
+            filtered: Final = await affinity.async_filter_deployments(
+                model=first_group, healthy_deployments=router.get_model_list(first_group) or [],
+                messages=None, request_kwargs=data,
+            )
+            assert sorted(deployment["model_info"]["id"] for deployment in filtered) == [
+                f"{first_group}-0", f"{first_group}-1"
+            ]
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    async def test_configured_children_stay_inside_their_conversation(self) -> None:
+        router: Final = TestChildSessionTierPins._router(conversation_header="x-app-conversation")
+        child: Final = {"x-app-conversation": "c1", "x-parent-session-id": "parent-0001", "X-Session-Id": "child-000a"}
+        try:
+            parent: Final = await self._route(
+                router, "chat", {"x-app-conversation": "c1", "X-Session-Id": "parent-0001"}, "reason carefully",
+                self.REASONING,
+            )
+            await self._route(router, "chat", child, "Hello!", self.SIMPLE)
+            await self._route(router, "chat", child, None, ("SIMPLE", "user_turn_continuation"))
+            assert await self._route(
+                router, "chat", {"x-app-conversation": "c1", "X-Session-Id": "parent-0002"}, None, self.CONTINUED,
+                expected_deployment=parent,
+            ) == parent
+            await self._route(
+                router, "chat", {**child, "X-Session-Id": "parent-0001"}, None, self.SIMPLE
+            )
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("identity", ["user_api_key_hash", "user_api_key_user_id"])
+    async def test_callers_sharing_a_conversation_id_never_share_pins(self, identity: str) -> None:
+        router: Final = TestChildSessionTierPins._router(conversation_header="x-app-conversation")
+        try:
+            first: Final = await self._route(
+                router, "chat", {"x-app-conversation": "shared", "X-Session-Id": "message-0001"}, "reason carefully",
+                self.REASONING, caller=(identity, "tenant-a"),
+            )
+            await self._route(
+                router, "chat", {"x-app-conversation": "shared", "X-Session-Id": "message-0002"}, None, self.SIMPLE,
+                caller=(identity, "tenant-b"),
+            )
+            assert await self._route(
+                router, "chat", {"x-app-conversation": "shared", "X-Session-Id": "message-0003"}, None,
+                self.CONTINUED, caller=(identity, "tenant-a"), expected_deployment=first,
+            ) == first
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    async def test_unset_header_keeps_session_id_pins_under_the_key_hash(self) -> None:
+        from litellm.redis.stores.router_session_pins import TierSessionPin
+
+        router: Final = TestChildSessionTierPins._router()
+        strategy: Final = router.complexity_routers["child-tier-router"][0].strategy
+        try:
+            await strategy.ctx.health().session_pins.set(
+                TierSessionPin(router="child-tier-router", caller="caller-a", session_id="message-0001"),
+                {"model": "reasoning", "tier": "REASONING"},
+                60,
+            )
+            replayed: Final = await self._route(
+                router, "chat", {"x-app-conversation": "Ab", "X-Session-Id": "message-0001"}, None, self.CONTINUED
+            )
+            fresh: Final = await self._route(
+                router, "chat", {"x-app-conversation": "Ab", "X-Session-Id": "message-0002"}, None, self.SIMPLE
+            )
+            assert (replayed.rsplit("-", 1)[0], fresh.rsplit("-", 1)[0]) == ("reasoning", "simple")
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    async def test_tier_model_pin_follows_the_conversation(self) -> None:
+        router: Final = TestChildSessionTierPins._router(conversation_header="x-app-conversation")
+        strategy: Final = router.complexity_routers["child-tier-router"][0].strategy
+        candidates: Final = ("reasoning", "reasoning-peer")
+        try:
+            for headers, offered, pinned in (
+                ({"X-Session-Id": "message-0001"}, "reasoning-peer", "reasoning-peer"),
+                ({"X-Session-Id": "message-0001"}, "reasoning", "reasoning"),
+                ({"x-app-conversation": "Ab", "X-Session-Id": "message-0001"}, "reasoning", "reasoning"),
+                ({"x-app-conversation": "Ab", "X-Session-Id": "message-0002"}, "reasoning-peer", "reasoning"),
+                ({"x-app-conversation": "ab", "X-Session-Id": "message-0001"}, "reasoning-peer", "reasoning-peer"),
+            ):
+                request, _ = self._request("chat", headers)
+                assert await strategy._pin_model_for_tier("REASONING", offered, candidates, request) == pinned
+        finally:
+            router.discard()
+
+    def test_conversation_header_must_name_a_header(self) -> None:
+        with pytest.raises(ValidationError, match="conversation_header"):
+            ComplexityRouterConfig.model_validate({"conversation_header": "  "})
 
 
 class TestClaudeCodeTierPins:
@@ -14511,6 +14710,109 @@ class TestHeuristicFirstConfig:
         )
         assert config.uses_llm_classifier is True
         assert ComplexityRouterConfig(tiers=dict(HEURISTIC_FIRST_TIERS)).uses_llm_classifier is False
+
+
+@pytest.mark.parametrize("limit", (0, -1, 1.5, True))
+def test_heuristic_context_limit_rejects_invalid_values(limit: object) -> None:
+    with pytest.raises(ValidationError, match="heuristic_first_max_context_tokens"):
+        _heuristic_first_router(MagicMock(), heuristic_first_max_context_tokens=limit)
+
+
+def test_heuristic_context_limit_requires_heuristic_first() -> None:
+    with pytest.raises(ValidationError, match="heuristic_first_max_context_tokens"):
+        ComplexityRouterConfig(tiers=dict(HEURISTIC_FIRST_TIERS), heuristic_first_max_context_tokens=8000)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "history_content",
+    (
+        "trace " * 6000,
+        [{"type": "text", "text": "trace " * 6000}],
+        [{"type": "tool_result", "tool_use_id": "call_1", "content": "trace " * 6000}],
+        [{"type": "tool_result", "tool_use_id": "call_1", "content": [{"type": "text", "text": "trace " * 6000}]}],
+    ),
+    ids=("plain", "text-parts", "tool-result", "nested-tool-result"),
+)
+async def test_short_followup_in_long_conversation_reaches_classifier(
+    mock_router_instance: MagicMock, history_content: object
+) -> None:
+    mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+    router: Final = _heuristic_first_router(mock_router_instance, heuristic_first_max_context_tokens=8000)
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "debug this failure"},
+        {"role": "user", "content": history_content},
+        {"role": "user", "content": "why did that fail?"},
+    ]
+    result: Final = await router.async_pre_routing_hook(
+        model="test-complexity-router", messages=messages, request_kwargs={}
+    )
+    assert result is not None
+    assert result.model == HEURISTIC_FIRST_TIERS["COMPLEX"]
+    assert result.routing_decision["cause"] == "llm_classifier"
+    mock_router_instance.acompletion.assert_awaited_once()
+    classifier_messages: Final = mock_router_instance.acompletion.call_args.kwargs["messages"]
+    assert "Conversation so far: ~9008 tokens" in str(classifier_messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit, history_chars, cause",
+    (
+        (None, 40000, "heuristic_first_short_circuit"),
+        (10, 35, "heuristic_first_short_circuit"),
+        (10, 36, "heuristic_first_short_circuit"),
+        (10, 40, "llm_classifier"),
+    ),
+)
+async def test_heuristic_context_limit_boundary_and_disabled(
+    mock_router_instance: MagicMock, limit: int | None, history_chars: int, cause: str
+) -> None:
+    mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+    router: Final = _heuristic_first_router(mock_router_instance, heuristic_first_max_context_tokens=limit)
+    messages: Final = [{"role": "system", "content": "x" * history_chars}, {"role": "user", "content": "hi!!"}]
+    outcome: Final = await router.aclassify("hi!!", messages=messages)
+    assert outcome.cause == cause
+    assert mock_router_instance.acompletion.await_count == int(cause == "llm_classifier")
+
+
+@pytest.mark.asyncio
+async def test_long_context_preserves_tool_pin_then_classifies_next_human_ask(mock_router_instance: MagicMock) -> None:
+    mock_router_instance.health.return_value.session_pins = memory_pins()
+    mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+    router: Final = _heuristic_first_router(
+        mock_router_instance,
+        heuristic_first_max_context_tokens=8000,
+        classification_mode="user_turn",
+        session_affinity=False,
+    )
+    first: Final[list[dict[str, object]]] = [{"role": "user", "content": "hi"}]
+    continuation: Final[list[dict[str, object]]] = [
+        *first,
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "trace " * 6000},
+    ]
+    for messages, cause, model in (
+        (first, "heuristic_first_short_circuit", HEURISTIC_FIRST_TIERS["SIMPLE"]),
+        (continuation, "user_turn_continuation", HEURISTIC_FIRST_TIERS["SIMPLE"]),
+        (
+            [*continuation, {"role": "user", "content": "why did that fail?"}],
+            "llm_classifier",
+            HEURISTIC_FIRST_TIERS["COMPLEX"],
+        ),
+    ):
+        result: Final = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            messages=messages,
+            request_kwargs={"metadata": {"session_id": "context-test"}},
+        )
+        assert result is not None
+        assert (result.model, result.routing_decision["cause"]) == (model, cause)
+    mock_router_instance.acompletion.assert_awaited_once()
 
 
 class TestHeuristicFirst:

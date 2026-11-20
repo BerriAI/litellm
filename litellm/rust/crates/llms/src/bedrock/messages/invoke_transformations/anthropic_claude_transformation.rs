@@ -19,8 +19,13 @@ use litellm_auth_aws::{
     },
     resolve_bedrock_region,
 };
-use litellm_llms_types::formats::messages::{MessagesOptionalParams, MessagesRequest};
-use litellm_llms_types::providers::bedrock::{INVOKE_PATH, INVOKE_STREAM_PATH};
+use litellm_llms_types::formats::messages::{
+    MessagesOptionalParams, MessagesRequest, MessagesResponse, StopReason,
+};
+use litellm_llms_types::providers::bedrock::{
+    GUARDRAIL_ACTION_KEY, INVOKE_PATH, INVOKE_STREAM_PATH,
+};
+use litellm_python_compat::{Value as PythonValue, json as python_json};
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
@@ -40,7 +45,8 @@ use crate::bedrock::{
         GUARDRAIL_CONFIG_PARAM, bedrock_invoke_guardrail_headers,
     },
     common_utils::{
-        strip_bedrock_routing_prefix,
+        guardrail::invoke_guardrail_blocked,
+        split_bedrock_region_path,
         structured_output::{
             NATIVE_OUTPUT_UNSUPPORTED, bedrock_native_output_format,
             bedrock_native_output_retry_requested, is_bedrock_native_output_rejection,
@@ -72,7 +78,7 @@ pub struct AmazonAnthropicClaudeMessagesConfig;
 pub const BEDROCK_ANTHROPIC_MESSAGES_CONFIG: AmazonAnthropicClaudeMessagesConfig =
     AmazonAnthropicClaudeMessagesConfig;
 
-fn bearer_token(
+pub(crate) fn bearer_token(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
@@ -81,6 +87,29 @@ fn bearer_token(
         None => env_lookup(AWS_BEARER_TOKEN_BEDROCK),
     }
     .filter(|token| !token.is_empty())
+}
+
+/// Port of Python's `bedrock_invoke_guardrail_blocked` on a decoded reply, read only when Bedrock
+/// says a guardrail intervened.
+fn guardrail_blocked(response: &MessagesResponse) -> bool {
+    if !response.extra.contains_key(GUARDRAIL_ACTION_KEY) {
+        return false;
+    }
+    let reply: serde_json::Map<String, Value> = response
+        .extra
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .chain(
+            response
+                .usage
+                .iter()
+                .map(|usage| ("usage".to_string(), usage.clone())),
+        )
+        .collect();
+    match python_json::from_json(Value::Object(reply)) {
+        PythonValue::Dict(fields) => invoke_guardrail_blocked(&fields),
+        _ => false,
+    }
 }
 
 /// Port of Python's `BaseAWSLLM.encode_model_id`.
@@ -100,7 +129,7 @@ fn get_bedrock_model_id(model: &str, model_id: Option<&str>) -> String {
     if let Some(model_id) = model_id {
         return encode_model_id(model_id).replacen(INVOKE_MODEL_PREFIX, "", 1);
     }
-    let stripped = strip_bedrock_routing_prefix(model);
+    let (_, stripped) = split_bedrock_region_path(model);
     if stripped.starts_with("arn:") {
         return encode_model_id(stripped);
     }
@@ -137,12 +166,19 @@ fn contains_bedrock_arn(model: &str) -> bool {
 }
 
 /// Port of Python's `BaseAWSLLM._get_aws_region_from_model_arn`.
-fn get_aws_region_from_model_arn(model: &str) -> Option<String> {
+pub(crate) fn get_aws_region_from_model_arn(model: &str) -> Option<String> {
     contains_bedrock_arn(model)
         .then(|| model.split(':').nth(3))
         .flatten()
         .filter(|region| !region.is_empty() && region.chars().all(is_arn_partition_char))
         .map(str::to_string)
+}
+
+/// The region a Bedrock model names: an ARN's region, else a `<region>/` path segment after the
+/// routing prefixes, as Python's `BaseAWSLLM._get_aws_region_name` reads it before the environment.
+pub(crate) fn region_from_model(model: &str) -> Option<String> {
+    get_aws_region_from_model_arn(model)
+        .or_else(|| split_bedrock_region_path(model).0.map(str::to_string))
 }
 
 /// Port of Python's `AmazonInvokeConfig.get_complete_url`.
@@ -161,11 +197,7 @@ fn invoke_url(
             .get(MODEL_ID_PARAM)
             .and_then(Value::as_str),
     );
-    let region = resolve_bedrock_region(
-        get_aws_region_from_model_arn(model).as_deref(),
-        aws,
-        env_lookup,
-    );
+    let region = resolve_bedrock_region(region_from_model(model).as_deref(), aws, env_lookup);
     let path = if stream {
         INVOKE_STREAM_PATH
     } else {
@@ -191,7 +223,10 @@ fn invoke_url(
 }
 
 /// The header half of Python's `validate_anthropic_messages_environment`.
-fn invoke_headers(headers: Headers, litellm_params: &LitellmParams) -> Result<Headers, Error> {
+pub(crate) fn invoke_headers(
+    headers: Headers,
+    litellm_params: &LitellmParams,
+) -> Result<Headers, Error> {
     let guardrail = match litellm_params.extra.get(GUARDRAIL_CONFIG_PARAM) {
         None | Some(Value::Null) => Vec::new(),
         Some(raw) => bedrock_invoke_guardrail_headers(raw)?,
@@ -212,6 +247,47 @@ fn without_native_output(context: &MessagesTransformContext) -> MessagesTransfor
         ..fallback.thinking.capabilities.bedrock.native_output
     };
     fallback
+}
+
+/// Port of Python's `native_output_fallback_litellm_params`.
+pub(crate) fn native_output_fallback_litellm_params(
+    request: &MessagesRequest,
+    context: &MessagesTransformContext,
+) -> Option<MessagesTransformContext> {
+    let native = context.thinking.capabilities.bedrock.native_output;
+    let Ok(Value::Object(params)) = serde_json::to_value(&request.params) else {
+        return None;
+    };
+    if !bedrock_native_output_retry_requested(&params, native) {
+        return None;
+    }
+    let output_format = requested_output_format(&params)?;
+    bedrock_native_output_format(output_format, native)
+        .ok()
+        .flatten()
+        .map(|_| without_native_output(context))
+}
+
+/// Port of Python's `should_retry_anthropic_messages_without_native_output`.
+pub(crate) fn should_retry_anthropic_messages_without_native_output(
+    status: u16,
+    error_text: &str,
+    request_body: &Value,
+    model: &str,
+) -> bool {
+    let retries = sent_output_config_format(request_body)
+        && is_bedrock_native_output_rejection(status, error_text);
+    if retries {
+        let opt_out_advice = if error_text.contains(NATIVE_OUTPUT_UNSUPPORTED) {
+            " Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the rejected call."
+        } else {
+            ""
+        };
+        litellm_tracing::warn!(
+            "Bedrock rejected native structured output for model={model}, so litellm sent the request again without it.{opt_out_advice}"
+        );
+    }
+    retries
 }
 
 impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
@@ -260,30 +336,22 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         headers: Headers,
         context: &MessagesTransformContext,
     ) -> Result<(MessagesRequest, Headers), Error> {
-        request::transform_anthropic_messages_request(request, context, headers)
+        request::transform_anthropic_messages_request(
+            request,
+            context,
+            headers,
+            &request::BEDROCK_INVOKE_REQUEST_SETTINGS,
+        )
     }
 
-    /// Port of Python's `native_output_fallback_litellm_params`.
     fn native_output_fallback(
         &self,
         request: &MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Option<MessagesTransformContext> {
-        let native = context.thinking.capabilities.bedrock.native_output;
-        let Ok(Value::Object(params)) = serde_json::to_value(&request.params) else {
-            return None;
-        };
-        if !bedrock_native_output_retry_requested(&params, native) {
-            return None;
-        }
-        let output_format = requested_output_format(&params)?;
-        bedrock_native_output_format(output_format, native)
-            .ok()
-            .flatten()
-            .map(|_| without_native_output(context))
+        native_output_fallback_litellm_params(request, context)
     }
 
-    /// Port of Python's `should_retry_anthropic_messages_without_native_output`.
     fn retries_without_native_output(
         &self,
         status: u16,
@@ -291,19 +359,28 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         request_body: &Value,
         model: &str,
     ) -> bool {
-        let retries = sent_output_config_format(request_body)
-            && is_bedrock_native_output_rejection(status, error_text);
-        if retries {
-            let opt_out_advice = if error_text.contains(NATIVE_OUTPUT_UNSUPPORTED) {
-                " Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the rejected call."
-            } else {
-                ""
-            };
-            litellm_tracing::warn!(
-                "Bedrock rejected native structured output for model={model}, so litellm sent the request again without it.{opt_out_advice}"
-            );
+        should_retry_anthropic_messages_without_native_output(
+            status,
+            error_text,
+            request_body,
+            model,
+        )
+    }
+
+    /// Port of Python's `transform_anthropic_messages_response`, which reports a guardrail block as
+    /// a refusal.
+    fn transform_anthropic_messages_response(
+        &self,
+        _model: &str,
+        response: MessagesResponse,
+    ) -> Result<MessagesResponse, Error> {
+        if !guardrail_blocked(&response) {
+            return Ok(response);
         }
-        retries
+        Ok(MessagesResponse {
+            stop_reason: Some(StopReason::Refusal.to_string()),
+            ..response
+        })
     }
 
     fn wire_body(&self, body: Value) -> Value {
@@ -347,12 +424,20 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
             headers,
             auth: AuthScheme::AwsSigV4 {
                 region: resolve_bedrock_region(
-                    get_aws_region_from_model_arn(model).as_deref(),
+                    region_from_model(model).as_deref(),
                     params,
                     env_lookup,
                 ),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(params, env_lookup)),
+                credentials: Box::new(
+                    AwsCredentialSource::from_params(params, env_lookup).with_session_attribution(
+                        litellm_params
+                            .extra
+                            .get(crate::bedrock::session_identity::REQUIRE_SESSION_ATTRIBUTION)
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                    ),
+                ),
                 caller_headers: CallerSigningHeaders::Botocore,
             },
         })
@@ -621,28 +706,34 @@ mod tests {
     }
 
     #[rstest]
-    #[case::region_segment_stays_in_the_path(
+    #[case::region_segment_leaves_the_path(
         "bedrock/invoke/us-west-2/anthropic.claude-3-5-sonnet-20240620-v1:0",
         None,
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us-west-2/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
         "us-west-2"
     )]
-    #[case::region_segment_does_not_pick_the_region(
+    #[case::region_segment_picks_the_region(
         "invoke/eu-central-1/anthropic.claude-3-5-sonnet-20240620-v1:0",
         None,
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/eu-central-1/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
-        "us-west-2"
+        "https://bedrock-runtime.eu-central-1.amazonaws.com/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+        "eu-central-1"
     )]
-    #[case::params_region_hosts_a_region_segment(
+    #[case::gov_cloud_region_segment_without_a_route(
+        "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        None,
+        "https://bedrock-runtime.us-gov-west-1.amazonaws.com/model/anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
+        "us-gov-west-1"
+    )]
+    #[case::params_region_beats_a_region_segment(
         "invoke/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         Some("us-east-1"),
-        "https://bedrock-runtime.us-east-1.amazonaws.com/model/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
         "us-east-1"
     )]
     #[case::arn_after_a_region_segment_picks_the_region(
         "invoke/us-west-2/arn:aws:bedrock:eu-west-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         None,
-        "https://bedrock-runtime.eu-west-1.amazonaws.com/model/us-west-2/arn:aws:bedrock:eu-west-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
+        "https://bedrock-runtime.eu-west-1.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aeu-west-1%3A123456789012%3Ainference-profile%2Fus.anthropic.claude-sonnet-4-5-20250929-v1%3A0/invoke",
         "eu-west-1"
     )]
     #[case::arn_after_any_segment_picks_the_region(
@@ -672,13 +763,13 @@ mod tests {
     #[case::nova_spec_is_removed_and_the_id_encoded(
         "invoke/us-west-2/nova/anthropic.claude-3",
         None,
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us-west-2%2Fanthropic.claude-3/invoke",
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3/invoke",
         "us-west-2"
     )]
     #[case::one_inner_invoke_segment_is_removed(
         "invoke/us-west-2/invoke/anthropic.claude-3",
         None,
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us-west-2/anthropic.claude-3/invoke",
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3/invoke",
         "us-west-2"
     )]
     fn url_and_signing_region_match_python_for_every_model_shape(

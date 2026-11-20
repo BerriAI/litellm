@@ -87,11 +87,14 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     s3_media_uris,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    FinishEvidence,
+    finish_evidence_of,
     finite_cost,
     get_or_create_metadata_bucket,
     has_attributes,
     independent_snapshot,
     is_expected_client_error,
+    map_finish_reason,
     proxy_request_headers,
     redact_nested_match_and_regex_keys,
     require_attributes,
@@ -108,6 +111,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     guardrail_entries,
     guardrail_information_cost,
+    object_items,
     object_mapping,
 )
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -119,6 +123,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
     served_output_texts,
 )
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
@@ -175,9 +180,9 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+from litellm.proxy.hooks.model_capacity_native import NativeDynamicRateLimiter
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,
+    ParallelRequestLimiterHook,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
@@ -365,6 +370,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
+    Choices,
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
@@ -500,7 +506,7 @@ async def _record_streaming_client_disconnect_if_needed(
     return True
 
 
-def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
+def _deferred_stream_logging_is_armed(request_data: Mapping[str, object]) -> bool:
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if logging_obj is None:
         return False
@@ -588,6 +594,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         )
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
+    chunk_source: Final[object] = chunks
     if not isinstance(chunks, list) or not chunks:
         return False
     verbose_proxy_logger.debug(
@@ -616,7 +623,46 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     partial_usage: Final = getattr(partial_response, "usage", None)
     if isinstance(partial_usage, Usage):
         backfill_missing_cache_usage_fields(partial_usage)
+    if isinstance(partial_response, ModelResponse):
+        partial_response.choices = list(
+            _choices_without_unobserved_finish_reasons(
+                partial_response.choices,
+                ChunkProcessor.choice_indices_with_observed_finish_reason(object_items(chunk_source)),
+                finish_evidence_of(response),
+            )
+        )
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
+
+
+def _choices_without_unobserved_finish_reasons(
+    choices: Sequence[Choices], observed_indices: frozenset[int], evidence: FinishEvidence
+) -> tuple[Choices, ...]:
+    """Finish reasons the stream recorded per choice off the provider's frames decide every choice: the
+    terminal chunk the stream emits can carry another choice's index, so the assembled chunks cannot."""
+    if evidence.by_choice:
+        return tuple(
+            _with_received_finish_reason(choice, _indexed_finish_reason(choice.index, len(choices), evidence.by_choice))
+            for choice in choices
+        )
+    single_choice_reason: Final = evidence.unindexed if len(choices) == 1 else None
+    return tuple(
+        choice if choice.index in observed_indices else _with_received_finish_reason(choice, single_choice_reason)
+        for choice in choices
+    )
+
+
+def _indexed_finish_reason(choice_index: int, choice_count: int, by_choice: Mapping[int, str]) -> str | None:
+    if choice_count == 1 and len(by_choice) == 1:
+        return next(iter(by_choice.values()))
+    return by_choice.get(choice_index)
+
+
+def _with_received_finish_reason(choice: Choices, received_finish_reason: str | None) -> Choices:
+    if received_finish_reason is None:
+        return choice.model_copy(update={"finish_reason": "finish_reason_unspecified"})
+    finish_reason: Final = map_finish_reason(received_finish_reason)
+    ends_a_tool_call_turn: Final = finish_reason == "stop" and bool(choice.message.tool_calls)
+    return choice.model_copy(update={"finish_reason": "tool_calls" if ends_a_tool_call_turn else finish_reason})
 
 
 async def _bill_in_flight_round_on_disconnect(request_data: Mapping[str, object]) -> None:
@@ -1776,7 +1822,7 @@ def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Rout
     return resolve_ttft_keepalive_interval(deployments, litellm.sse_keepalive_ping_interval_seconds)
 
 
-async def _aclose_late_response(produced: object) -> None:
+async def aclose_streaming_response(produced: object) -> None:
     """Run the cleanup Starlette would have run, for a response it never called.
 
     Closing an already-closed async generator is a no-op, so this is safe to call
@@ -1799,6 +1845,31 @@ async def _aclose_late_response(produced: object) -> None:
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
 
 
+async def _abandon_late_producer(produce_task: "asyncio.Future[_LateResponseT]") -> None:
+    if not produce_task.done():
+        produce_task.cancel()
+        with anyio.CancelScope(shield=True):
+            with contextlib.suppress(BaseException):
+                await produce_task
+    elif not produce_task.cancelled():
+        # The upstream may have answered while nobody was draining this
+        # relay, e.g. the client vanished first. Nothing else holds that
+        # response, so its stream only gets closed here.
+        with anyio.CancelScope(shield=True):
+            with contextlib.suppress(BaseException):
+                await aclose_streaming_response(produce_task.result())
+
+
+def _abandoned_producer_failure(produce_task: "asyncio.Future[_LateResponseT]") -> Exception | None:
+    answered: Final = not produce_task.cancelled() and produce_task.exception() is None
+    if answered:
+        return None
+    failure: Final = None if produce_task.cancelled() else produce_task.exception()
+    if isinstance(failure, Exception):
+        return failure
+    return HTTPException(status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL)
+
+
 async def _relay_late_response(produced: object, framing: LateSseFraming) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
@@ -1815,7 +1886,7 @@ async def _relay_late_response(produced: object, framing: LateSseFraming) -> Asy
         # Starlette never called this response, so the cleanup its __call__ would
         # have run has to happen here or the upstream LLM connection leaks.
         with anyio.CancelScope(shield=True):
-            await _aclose_late_response(produced)
+            await aclose_streaming_response(produced)
 
 
 async def _late_block_or_failure(
@@ -1887,7 +1958,11 @@ async def open_sse_before_first_byte(
     # Share admission state with stream cleanup before the producer copies this context.
     get_or_create_request_stash()
     produce_task: Final = asyncio.ensure_future(produce_response)
-    await asyncio.wait((produce_task,), timeout=interval)
+    try:
+        await asyncio.wait((produce_task,), timeout=interval)
+    except BaseException:
+        await _abandon_late_producer(produce_task)
+        raise
     if produce_task.done():
         # Fast path: the upstream answered inside one interval, so nothing was
         # written early and this is byte-identical to not being wrapped at all.
@@ -1898,6 +1973,14 @@ async def open_sse_before_first_byte(
             while not produce_task.done():
                 yield SSE_COMMENT_PING_BYTES
                 await asyncio.wait((produce_task,), timeout=interval)
+        except BaseException:
+            await _abandon_late_producer(produce_task)
+            failure: Final = _abandoned_producer_failure(produce_task)
+            if failure is not None:
+                with anyio.CancelScope(shield=True):
+                    await _sanitized_late_failure(failure, on_late_failure)
+            raise
+        try:
             try:
                 produced: Final = produce_task.result()
             except Exception as exc:  # noqa: BLE001  # the status line is already sent; surface it as a frame
@@ -1919,18 +2002,7 @@ async def open_sse_before_first_byte(
             async for chunk in _relay_late_response(produced, late_framing):
                 yield chunk
         finally:
-            if not produce_task.done():
-                produce_task.cancel()
-                with anyio.CancelScope(shield=True):
-                    with contextlib.suppress(BaseException):
-                        await produce_task
-            elif not produce_task.cancelled():
-                # The upstream may have answered while nobody was draining this
-                # relay, e.g. the client vanished first. Nothing else holds that
-                # response, so its stream only gets closed here.
-                with anyio.CancelScope(shield=True):
-                    with contextlib.suppress(BaseException):
-                        await _aclose_late_response(produce_task.result())
+            await _abandon_late_producer(produce_task)
 
     verbose_proxy_logger.info(
         "no upstream response after %ss, opening the SSE response early and sending keepalives", interval
@@ -2565,11 +2637,11 @@ async def _release_pre_call_hold(
     ``post_call_failure_hook``. The dynamic rate limiter admits through its own inner limiter, so its team-share
     reservation is released alongside the registered limiter's slot and tokens."""
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    dynamic_limiters: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
-        PROXY_DynamicRateLimitHandlerV3
+    natives: Final = dict.fromkeys(
+        callback for callback in litellm.callbacks if isinstance(callback, NativeDynamicRateLimiter)
     )
-    for holder in (limiter, *dynamic_limiters):
-        if not isinstance(holder, (PROXY_MaxParallelRequestsHandler_v3, PROXY_DynamicRateLimitHandlerV3)):
+    for holder in (limiter, *natives):
+        if not isinstance(holder, ParallelRequestLimiterHook | NativeDynamicRateLimiter):
             continue
         await holder.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the limiter hooks take the proxy's bare request dict
             request_data=dict(request_data), original_exception=refusal, user_api_key_dict=user_api_key_dict
@@ -2733,11 +2805,41 @@ def _hold_stream_failures(logging_obj: LiteLLMLoggingObj | None) -> None:
         logging_obj.hold_stream_failures()
 
 
-async def _release_held_stream_failure(logging_obj: LiteLLMLoggingObj | None) -> None:
+@dataclass(slots=True)
+class _DetachedStreamFailureHook:
+    request_fields: Mapping[str, object]
+    route_type: str | None
+    user_api_key_dict: UserAPIKeyAuth
+    proxy_logging_obj: ProxyLogging
+
+    def refresh_request_fields(self, request_data: Mapping[str, object]) -> None:
+        self.request_fields = without(request_data, "litellm_logging_obj")
+
+    async def __call__(self, failed_logging_obj: LiteLLMLoggingObj, exc: Exception) -> None:
+        if not failed_logging_obj.claim_stream_failure_report():
+            return
+        try:
+            await self.proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=self.user_api_key_dict,
+                original_exception=exc,
+                request_data={**self.request_fields, "litellm_logging_obj": failed_logging_obj},
+                dispatched_call_type=self.route_type,
+            )
+        except HTTPException:
+            return
+
+
+async def _release_held_stream_failure(
+    logging_obj: LiteLLMLoggingObj | None, request_data: Mapping[str, object]
+) -> None:
     """Report the detached-stream failure held while the client stream ran, if the stream did not
     report one itself."""
     if logging_obj is None:
         return
+    hook: Final = logging_obj.on_detached_stream_failure
+    if isinstance(hook, _DetachedStreamFailureHook):
+        # Hand off the latest request fields before the upstream drain can report on its own.
+        hook.refresh_request_fields(request_data)
     held: Final = logging_obj.release_held_stream_failure()
     if held is None:
         return
@@ -2780,7 +2882,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
-        response_headers: httpx.Headers | dict | None,
+        response_headers: httpx.Headers | Mapping[str, str] | None,
         custom_headers: Mapping[str, str],
     ) -> dict:
         """
@@ -3401,14 +3503,7 @@ class ProxyBaseLLMRequestProcessing:
                 original_model,
                 fallback_models,
             )
-            raw_router_settings: Final = _DECODED_JSON.validate_python(
-                _REQUEST_FIELDS.validate_python(rate_limited_data).get("router_settings_override")
-            )
-            group_alias: Final = _DECODED_JSON.validate_python(
-                _REQUEST_FIELDS.validate_python(raw_router_settings).get("model_group_alias")
-                if isinstance(raw_router_settings, Mapping)
-                else None
-            )
+            group_alias: Final = router_settings.get("model_group_alias") if router_settings is not None else None
             await _release_pre_call_hold(
                 proxy_logging_obj, _REQUEST_FIELDS.validate_python(rate_limited_data), original_exc, user_api_key_dict
             )
@@ -3891,23 +3986,26 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
             )
             llm_call_task: Final = asyncio.create_task(with_proxy_compaction_executor(llm_call, request))
-            tasks.append(llm_call_task)
-
-            llm_responses: Final = asyncio.gather(
-                *tasks
-            )  # run the moderation check in parallel to the actual llm api call
-
             try:
-                if general_settings.get("cancel_on_disconnect", False):
-                    responses = await await_llm_call_cancelling_on_disconnect(request, llm_responses)
-                else:
-                    responses = await llm_responses
-            except asyncio.CancelledError:
-                if _total_timeout_expired():
-                    await _cost_a_call_answered_past_its_total_timeout(llm_call_task, logging_obj)
-                raise
+                tasks.append(llm_call_task)
+                llm_responses: Final = asyncio.gather(*tasks)
+                try:
+                    try:
+                        if general_settings.get("cancel_on_disconnect", False):
+                            responses = await await_llm_call_cancelling_on_disconnect(request, llm_responses)
+                        else:
+                            responses = await llm_responses
+                    except asyncio.CancelledError:
+                        if _total_timeout_expired():
+                            await _cost_a_call_answered_past_its_total_timeout(llm_call_task, logging_obj)
+                        raise
+                finally:
+                    del llm_responses
+            finally:
+                del llm_call_task
         finally:
             await _cancel_pending_gather_tasks(tasks)
+            del tasks
 
         response = responses[1]
 
@@ -4461,32 +4559,16 @@ class ProxyBaseLLMRequestProcessing:
     ) -> None:
         """Let a stream that fails after the client left still reach ``post_call_failure_hook``.
 
-        The client-facing generator reports a mid-stream failure itself, but once
-        the client disconnects that generator is gone and the detached upstream
-        drain is the only code that sees the provider error. It fires this closure
-        so the failed spend is still written and the budget reservation released;
-        a replacement error the hook raises has no client left to reach.
+        Once the client generator is gone, the upstream drain reports provider
+        errors so failed spend is still written and budget reservations are released.
         """
-        # The closure lives on the logging object until the logging object dies, so it must not
-        # hold the logging object, or a request stays alive until a full GC pass (#51277). The
-        # caller passes the logging object in when it fires.
-        request_data: Final = without(self._request_fields(), "litellm_logging_obj")
-        route_type: Final = self.route_type
-
-        async def _on_detached_stream_failure(failed_logging_obj: LiteLLMLoggingObj, exc: Exception) -> None:
-            if not failed_logging_obj.claim_stream_failure_report():
-                return
-            try:
-                await proxy_logging_obj.post_call_failure_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    original_exception=exc,
-                    request_data={**request_data, "litellm_logging_obj": failed_logging_obj},
-                    dispatched_call_type=route_type,
-                )
-            except HTTPException:
-                return
-
-        logging_obj.on_detached_stream_failure = _on_detached_stream_failure
+        # The hook lives on the logging object and must not hold it in return (#51277).
+        logging_obj.on_detached_stream_failure = _DetachedStreamFailureHook(
+            request_fields=without(self._request_fields(), "litellm_logging_obj"),
+            route_type=self.route_type,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     def _is_streaming_response(self, response: object) -> bool:
         """
@@ -5635,7 +5717,10 @@ class ProxyBaseLLMRequestProcessing:
             yield seal + error_frame if seal else error_frame
         finally:
             try:
-                await _release_held_stream_failure(timing_sink)
+                await _release_held_stream_failure(
+                    timing_sink,
+                    request_data,  # pyright: ignore[reportUnknownArgumentType]  # legacy proxy request dict
+                )
             finally:
                 await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
                     request=request,

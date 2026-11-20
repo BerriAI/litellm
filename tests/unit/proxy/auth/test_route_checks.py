@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_UserTable,
     LiteLLMRoutes,
@@ -231,6 +232,24 @@ def test_latest_release_info_read_open_to_non_admin_roles(role):  # test-quality
         route="/get/latest_release_info",
         request=request,
         valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_reference_exchange_rates_read_open_to_non_admin_roles(role: str) -> None:  # test-quality-ok: allowed path returns None, not raising is the observable
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_email="test@example.com", user_role=role),
+        _user_role=role,
+        route="/get/reference_exchange_rates",
+        request=MagicMock(spec=Request),
+        valid_token=UserAPIKeyAuth(user_id="test_user", user_role=role),
         request_data={},
     )
 
@@ -782,19 +801,20 @@ def test_virtual_key_management_routes_allows_spend_logs_v2():
     assert result is True
 
 
-def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
-    """AI API virtual keys should not gain spend-log access."""
+@pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])
+def test_route_restricted_virtual_key_still_reaches_its_own_spend_logs(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
-    valid_token = UserAPIKeyAuth(
-        user_id="test_user",
-        allowed_routes=["llm_api_routes"],
-    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token) is True
+    assert RouteChecks.key_allowed_routes_grant(route=route, valid_token=valid_token) is False
+
+
+@pytest.mark.parametrize("route", ["/spend/logs/ui", "/global/spend/logs", "/key/list"])
+def test_route_restricted_virtual_key_is_denied_other_spend_and_management_routes(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
     with pytest.raises(HTTPException) as exc_info:
-        RouteChecks.is_virtual_key_allowed_to_call_route(
-            route="/spend/logs/v2",
-            valid_token=valid_token,
-        )
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
 
     assert exc_info.value.status_code == 403
     assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
@@ -1481,15 +1501,6 @@ _AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
 }
 
 
-def _jwt_handler_with_team_allowed_routes(team_allowed_routes: list[str]):
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-
-    jwt_handler: Final = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes)
-    return jwt_handler
-
-
 def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes: list[str]) -> None:
     with (
         patch(
@@ -1498,8 +1509,8 @@ def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes:
         ),
         patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
         patch(
-            "litellm.proxy.proxy_server.jwt_handler",
-            _jwt_handler_with_team_allowed_routes(team_allowed_routes),
+            "litellm.proxy.proxy_server.litellm_jwtauth",
+            LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes),
         ),
     ):
         RouteChecks.non_proxy_admin_allowed_routes_check(
@@ -4568,7 +4579,7 @@ def test_team_service_account_key_allowed_key_management_routes(route):
     assert result is None
 
 
-@pytest.mark.parametrize("route", ["/team/new", "/spend/logs", "/key/delete", "/key/regenerate"])
+@pytest.mark.parametrize("route", ["/team/new", "/spend/logs/ui", "/key/delete", "/key/regenerate"])
 def test_team_service_account_key_rejected_outside_generate_and_update(route):
     """The service account carve-out covers only /key/generate and /key/update; other
     key-management routes lack team scoping for a userless caller and stay denied."""

@@ -29,13 +29,16 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
+    PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.tool_fields import (
     declared_function_name,
@@ -79,6 +82,7 @@ from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxPartType,
     LogprobsResult,
+    PromptFeedback,
     RequestBody,
     ToolConfig,
     Tools,
@@ -253,6 +257,19 @@ def _warn_gemini_sampling_params_deprecated(model: str) -> None:
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
+
+
+def _prompt_block_fields(feedback: PromptFeedback) -> Mapping[str, str]:
+    return MappingProxyType({"block_reason": feedback["blockReason"]})
+
+
+def _names_its_finish(candidate: Candidates) -> bool:
+    return (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
+
+
+def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
+    reason: Final = candidate.get("finishReason")
+    return MappingProxyType({"native_finish_reason": reason}) if reason is not None else None
 
 
 def _served_model_name(model_version: object) -> str | None:
@@ -820,6 +837,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     """
 
     _route: ClassVar[str] = "vertex_ai"
+    _removes_undeclared_thinking_levels: ClassVar[bool] = False
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -1632,10 +1650,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _supports_minimal_thinking_level(model: str) -> bool:
-        lowered: Final = model.lower()
-        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in lowered
-        return is_gemini3_or_newer_flash and not is_explicitly_disabled_factory(
-            model=model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
+        providers: Final = ("gemini", "vertex_ai")
+        key: Final = "supports_minimal_reasoning_effort"
+        declared_by_model_map: Final = any(
+            supports_factory(model=model, custom_llm_provider=provider, key=key) for provider in providers
+        )
+        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in model.lower()
+        return (declared_by_model_map or is_gemini3_or_newer_flash) and not any(
+            is_explicitly_disabled_factory(model=model, custom_llm_provider=provider, key=key) for provider in providers
         )
 
     @staticmethod
@@ -1910,6 +1932,37 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["include_server_side_tool_invocations"] = True
                 return
 
+    def _drops_logprobs(self, model: str, drop_params: bool, allowed_openai_params: Sequence[str]) -> bool:
+        if not drops_unsupported_params(drop_params) or {"logprobs", "top_logprobs"} & set(allowed_openai_params):
+            return False
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
+        return rows.get(f"{self._route}/{model.split('/')[-1]}", {}).get("supports_logprobs") is False
+
+    def _without_undeclared_thinking_level(
+        self,
+        thinking_config: GeminiThinkingConfig,
+        *,
+        model: str,
+        drop_params: bool,
+        allowed_openai_params: Sequence[str],
+    ) -> GeminiThinkingConfig:
+        level: Final = thinking_config.get("thinkingLevel")
+        if not self._removes_undeclared_thinking_levels or level is None:
+            return thinking_config
+        if not drops_unsupported_params(drop_params) or "reasoning_effort" in allowed_openai_params:
+            return thinking_config
+        declared: Final = declared_reasoning_efforts_for_model(model.split("/")[-1], self._route)
+        if declared is None or level in declared:
+            return thinking_config
+        warn_dropped_reasoning(
+            "reasoning_effort",
+            level,
+            model,
+            "Google AI Studio does not accept this thinking level for it, so Google's default applies.",
+            drop_params_gated=True,
+        )
+        return {"includeThoughts": VertexGeminiConfig._include_thoughts(thinking_config.get("includeThoughts"))}
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -1918,14 +1971,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         drop_params: bool,
         allow_integer_enums: bool = True,
         allow_parameters_json_schema: bool = True,
+        *,
+        allowed_openai_params: Sequence[str] = (),
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
             non_default_params, model=model, route=self._route, drop_params=drop_params
         )
         self._apply_include_server_side_tool_invocations(request_params, optional_params)
         supports_sampling_params: Final = self.supports_sampling_params(model)
+        drops_logprobs: Final = self._drops_logprobs(model, drop_params, allowed_openai_params)
         for param, value in request_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
+                continue
+            if param in ("logprobs", "top_logprobs") and drops_logprobs:
                 continue
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -2022,8 +2080,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_name="reasoning_effort",
                         param_description="thinking_budget",
                     )
-                    optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort(
-                        effort=effort_value, model=model, reasoning_effort=value
+                    optional_params["thinkingConfig"] = self._without_undeclared_thinking_level(
+                        VertexGeminiConfig._map_reasoning_effort(
+                            effort=effort_value, model=model, reasoning_effort=value
+                        ),
+                        model=model,
+                        drop_params=drop_params,
+                        allowed_openai_params=allowed_openai_params,
                     )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
@@ -2460,14 +2523,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
         return ChoiceLogprobs(content=logprobs_list)
 
-    def _handle_blocked_response(
+    def _content_filter_response(
         self,
         model_response: ModelResponse,
         completion_response: GenerateContentResponseBody,
+        provider_specific_fields: Mapping[str, str],
     ) -> ModelResponse:
-        # If set, the prompt was blocked and no candidates are returned. Rephrase your prompt
-        model_response.choices[0].finish_reason = "content_filter"
-
         chat_completion_message: Final[ChatCompletionResponseMessage] = {
             "role": "assistant",
             "content": None,
@@ -2479,50 +2540,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             message=chat_completion_message,
             logprobs=None,
             enhancements=None,
+            provider_specific_fields=dict(provider_specific_fields),
         )
 
         model_response.choices = [choice]
 
-        ## GET USAGE ##
-        usage: Final = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
-            completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
-        )
-
-        setattr(model_response, "usage", usage)
-
-        return model_response
-
-    def _handle_content_policy_violation(
-        self,
-        model_response: ModelResponse,
-        completion_response: GenerateContentResponseBody,
-    ) -> ModelResponse:
-        ## CONTENT POLICY VIOLATION ERROR
-        model_response.choices[0].finish_reason = "content_filter"
-
-        _chat_completion_message: Final = {
-            "role": "assistant",
-            "content": None,
-        }
-
-        choice: Final = litellm.Choices(
-            finish_reason="content_filter",
-            index=0,
-            message=_chat_completion_message,
-            logprobs=None,
-            enhancements=None,
-        )
-
-        model_response.choices = [choice]
-
-        ## GET USAGE ##
-        usage: Final = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
-            completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
-        )
+        usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
 
         setattr(model_response, "usage", usage)
 
@@ -2814,7 +2837,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ModelResponseStream with content_filter finish_reason if blocked, None otherwise.
 
         Note:
-            This is consistent with non-streaming _handle_blocked_response() behavior.
+            This is consistent with non-streaming _content_filter_response() behavior.
             Candidate-level content filtering (SAFETY, RECITATION, etc.) is handled
             separately via _process_candidates() → _check_finish_reason().
         """
@@ -2829,13 +2852,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 prompt_feedback.get("blockReasonMessage"),
             )
 
-            # Create a content_filter response (consistent with non-streaming _handle_blocked_response)
+            # Create a content_filter response (consistent with non-streaming _content_filter_response)
             choice: Final = StreamingChoices(
                 finish_reason="content_filter",
                 index=0,
                 delta=Delta(content=None, role="assistant"),
                 logprobs=None,
                 enhancements=None,
+                provider_specific_fields=dict(_prompt_block_fields(prompt_feedback)),
             )
 
             model_response: Final = ModelResponseStream(choices=[choice], id=response_id, model=model)
@@ -2898,6 +2922,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         annotations: Final = chat_completion_message.get("annotations")
         provider_specific_fields: Final = chat_completion_message.get("provider_specific_fields")
+        finish_fields: Final = _candidate_finish_fields(candidate) if _names_its_finish(candidate) else None
         # create a streaming choice object
         choice: Final = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -2916,6 +2941,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ),
             logprobs=chat_completion_logprobs,
             enhancements=None,
+            **({"provider_specific_fields": dict(finish_fields)} if finish_fields is not None else {}),
         )
         return choice
 
@@ -3251,17 +3277,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
-                native_finish_reason = candidate.get("finishReason")
                 choice = litellm.Choices(
                     finish_reason=VertexGeminiConfig._check_finish_reason(
-                        chat_completion_message, native_finish_reason
+                        chat_completion_message, candidate.get("finishReason")
                     ),
                     index=candidate.get("index", idx),
                     message=chat_completion_message,
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
                     provider_specific_fields=(
-                        {"native_finish_reason": native_finish_reason} if native_finish_reason is not None else None
+                        dict(finish_fields)
+                        if (finish_fields := _candidate_finish_fields(candidate)) is not None
+                        else None
                     ),
                 )
                 model_response.choices.append(choice)
@@ -3347,18 +3374,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         ## CHECK IF RESPONSE FLAGGED
         if "promptFeedback" in completion_response and "blockReason" in completion_response["promptFeedback"]:
-            return self._handle_blocked_response(
+            return self._content_filter_response(
                 model_response=model_response,
                 completion_response=completion_response,
+                provider_specific_fields=_prompt_block_fields(completion_response["promptFeedback"]),
             )
 
         _candidates: Final = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
             content_policy_violations: Final = VertexGeminiConfig().get_flagged_finish_reasons()
-            if "finishReason" in _candidates[0] and _candidates[0]["finishReason"] in content_policy_violations:
-                return self._handle_content_policy_violation(
+            flagged_fields: Final = _candidate_finish_fields(_candidates[0])
+            if flagged_fields is not None and flagged_fields["native_finish_reason"] in content_policy_violations:
+                return self._content_filter_response(
                     model_response=model_response,
                     completion_response=completion_response,
+                    provider_specific_fields=flagged_fields,
                 )
 
         model_response.choices = []
@@ -4213,6 +4243,24 @@ def _transform_long_decode_hops(
     return merged if marked is merged_usage else merged.model_copy(update={"usage": marked})
 
 
+def _provider_finish_reasons(
+    candidates: Sequence[Candidates], choices: Sequence["StreamingChoices"], blocked_indices: frozenset[int]
+) -> tuple[tuple[int, str], ...]:
+    """Every streamed choice carries a finish_reason, "stop" when the candidate sent none or Google's
+    FINISH_REASON_UNSPECIFIED, so only a candidate that named how it ended, or a blocked prompt, is evidence of it."""
+    finished: Final = frozenset(
+        candidate.get("index", position)
+        for position, candidate in enumerate(candidates)
+        if _names_its_finish(candidate)
+    )
+    finished_or_blocked: Final = finished | blocked_indices
+    return tuple(
+        (choice.index, choice.finish_reason)
+        for choice in choices
+        if choice.index in finished_or_blocked and choice.finish_reason
+    )
+
+
 class ModelResponseIterator:
     def __init__(
         self,
@@ -4459,6 +4507,15 @@ class ModelResponseIterator:
             setattr(model_response, "usage", usage)
             self._plan_resume(processed_chunk, model_response)
 
+            provider_finish_reasons: Final = _provider_finish_reasons(
+                _candidates or (),
+                model_response.choices,
+                frozenset(choice.index for choice in blocked_response.choices)
+                if blocked_response is not None
+                else frozenset(),
+            )
+            if provider_finish_reasons:
+                set_hidden_param(model_response, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, provider_finish_reasons)
             model_response.hidden_params["is_finished"] = False
             return model_response
 
@@ -4498,6 +4555,8 @@ class ModelResponseIterator:
         for choice in model_response.choices:
             delta_fields: Mapping[str, object] = choice.delta.provider_specific_fields or {}
             choice.finish_reason = None
+            if hasattr(choice, "provider_specific_fields"):
+                delattr(choice, "provider_specific_fields")
             choice.delta.provider_specific_fields = {
                 key: value for key, value in delta_fields.items() if key != "continuation_token"
             } or None

@@ -2,12 +2,15 @@ use std::collections::VecDeque;
 
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
-use litellm_llms_types::providers::bedrock::INVOCATION_METRICS_KEY;
+use litellm_llms_types::{
+    formats::messages::StopReason, providers::bedrock::INVOCATION_METRICS_KEY,
+};
 use litellm_python_compat::{Value, json, repr, truthy::truthy};
 
 use crate::{
     Error, ErrorDetail,
     base_llm::messages::streaming::{ByteStream, FrameStream},
+    bedrock::common_utils::guardrail::InvokeStreamGuardrail,
 };
 
 use crate::bedrock::chat::invoke_handler::{BedrockStreamRaise, aiter_bytes, raised};
@@ -64,6 +67,22 @@ fn dict_or_empty(value: Option<&Value>) -> Fields {
         Some(Value::Dict(fields)) => fields.clone(),
         _ => Fields::new(),
     }
+}
+
+/// Port of Python's `_refused`: a `message_delta` whose reply a guardrail blocked stops on
+/// `refusal`.
+fn refused(mut chunk: Fields) -> Fields {
+    if !is_type(&chunk, "message_delta") {
+        return chunk;
+    }
+    let mut delta = dict_or_empty(get(&chunk, "delta"));
+    set(
+        &mut delta,
+        "stop_reason",
+        Value::Str(StopReason::Refusal.to_string()),
+    );
+    set(&mut chunk, "delta", Value::Dict(delta));
+    chunk
 }
 
 /// `AmazonAnthropicClaudeMessagesStreamDecoder._chunk_parser`: Bedrock's invocation metrics
@@ -189,10 +208,16 @@ fn sse_frame(chunk: Fields) -> Result<Bytes, Error> {
     )))
 }
 
+/// Port of Python's `AmazonAnthropicClaudeMessagesStreamDecoder` hold: from the first
+/// `message_delta` on, chunks wait in `tail` until the stream ends or fails, since Bedrock reports
+/// a guardrail block only on a later event, and the held `message_delta` then stops on `refusal`.
 struct Relay<S> {
     chunks: S,
+    guardrail: InvokeStreamGuardrail,
+    tail: Vec<Fields>,
     promoter: UsagePromoter,
     queued: VecDeque<Bytes>,
+    failed: Option<Error>,
     finished: bool,
 }
 
@@ -204,32 +229,61 @@ impl<S: Stream<Item = Result<Value, Error>> + Unpin> Relay<S> {
         Ok(())
     }
 
-    async fn advance(&mut self) -> Result<(), Error> {
-        match self.chunks.next().await {
-            Some(chunk) => {
-                let chunk = chunk_parser(chunk?)?;
-                let promoted = self.promoter.feed(chunk);
-                self.queue(promoted)
-            }
-            None => {
-                self.finished = true;
-                let flushed = self.promoter.finish();
-                self.queue(flushed)
-            }
+    fn promote(&mut self, chunks: impl IntoIterator<Item = Fields>) -> Result<(), Error> {
+        for chunk in chunks {
+            let promoted = self.promoter.feed(chunk);
+            self.queue(promoted)?;
         }
+        Ok(())
+    }
+
+    fn release_tail(&mut self) -> Result<(), Error> {
+        let tail = std::mem::take(&mut self.tail);
+        if self.guardrail.blocked() {
+            return self.promote(tail.into_iter().map(refused));
+        }
+        self.promote(tail)
+    }
+
+    fn relay(&mut self, chunk: Value) -> Result<(), Error> {
+        self.guardrail = std::mem::take(&mut self.guardrail).with_event(&chunk);
+        let parsed = chunk_parser(chunk)?;
+        if self.tail.is_empty() && !is_type(&parsed, "message_delta") {
+            return self.promote([parsed]);
+        }
+        self.tail.push(parsed);
+        Ok(())
+    }
+
+    async fn advance(&mut self) -> Result<(), Error> {
+        let Some(chunk) = self.chunks.next().await else {
+            self.finished = true;
+            self.release_tail()?;
+            let flushed = self.promoter.finish();
+            return self.queue(flushed);
+        };
+        if let Err(error) = chunk.and_then(|chunk| self.relay(chunk)) {
+            self.failed = Some(error);
+            return self.release_tail();
+        }
+        Ok(())
     }
 }
 
 /// Bedrock InvokeModel's event stream as the SSE frames Python's Bedrock Messages stream yields:
-/// each decoded chunk re-serialized with `json.dumps`, with usage promoted onto `message_delta`.
+/// each decoded chunk re-serialized with `json.dumps`, with usage promoted onto `message_delta`
+/// and a guardrail block reported as a `refusal` stop.
 pub fn get_async_streaming_response_iterator(
     bytes: ByteStream,
     headers: Vec<(String, String)>,
 ) -> FrameStream {
     let relay = Relay {
         chunks: Box::pin(aiter_bytes(bytes, headers)),
+        guardrail: InvokeStreamGuardrail::default(),
+        tail: Vec::new(),
         promoter: UsagePromoter::default(),
         queued: VecDeque::new(),
+        failed: None,
         finished: false,
     };
     stream::unfold(Some(relay), |relay| async move {
@@ -237,6 +291,9 @@ pub fn get_async_streaming_response_iterator(
         loop {
             if let Some(frame) = relay.queued.pop_front() {
                 return Some((Ok(frame), Some(relay)));
+            }
+            if let Some(error) = relay.failed.take() {
+                return Some((Err(error), None));
             }
             if relay.finished {
                 return None;
@@ -422,6 +479,92 @@ mod tests {
         assert_eq!(
             relayed(&[error]).await.unwrap(),
             "event: error\ndata: {\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"busy\"}}\n\n"
+        );
+    }
+
+    const GUARDRAILED_EVENTS: [&str; 5] = [
+        r#"{"type": "message_start", "message": {"id": "bedrock-guardrails-19a36670", "type": "message", "role": "assistant", "content": [], "model": "claude-haiku-5-5", "stop_reason": null, "usage": {"input_tokens": 0, "output_tokens": 0}}}"#,
+        r#"{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}"#,
+        r#"{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Sorry, the model cannot answer this question."}}"#,
+        r#"{"type": "content_block_stop", "index": 0}"#,
+        r#"{"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": null}}"#,
+    ];
+    const INTERVENED: &str = r#", "amazon-bedrock-guardrailAction": "INTERVENED""#;
+    const MODEL_RAN_METRICS: &str = r#", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 11, "outputTokenCount": 7, "invocationLatency": 412, "firstByteLatency": 380}"#;
+    const MASKED_TRACE: &str = r#", "amazon-bedrock-trace": {"guardrail": {"input": {"6hbgpnnqoeb1": {"sensitiveInformationPolicy": {"piiEntities": [{"type": "US_SOCIAL_SECURITY_NUMBER", "match": "123-45-6789", "action": "ANONYMIZED", "detected": true}]}}}}}"#;
+    const BLOCKED_AND_MASKED_TRACE: &str = r#", "amazon-bedrock-trace": {"guardrail": {"input": {"6hbgpnnqoeb1": {"wordPolicy": {"customWords": [{"match": "hexblade", "action": "BLOCKED", "detected": true}]}, "sensitiveInformationPolicy": {"piiEntities": [{"type": "US_SOCIAL_SECURITY_NUMBER", "match": "123-45-6789", "action": "ANONYMIZED", "detected": true}]}}}}}"#;
+
+    fn sse_events(relayed: &str) -> Vec<serde_json::Value> {
+        relayed
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect()
+    }
+
+    #[rstest]
+    #[case::blocked(&[INTERVENED], "refusal")]
+    #[case::masked(&[INTERVENED, MODEL_RAN_METRICS], "end_turn")]
+    #[case::masked_per_trace(&[INTERVENED, MASKED_TRACE], "end_turn")]
+    #[case::blocked_and_masked_per_trace(&[INTERVENED, MODEL_RAN_METRICS, BLOCKED_AND_MASKED_TRACE], "refusal")]
+    #[case::guardrail_passed(&[r#", "amazon-bedrock-guardrailAction": "NONE""#, MODEL_RAN_METRICS], "end_turn")]
+    #[case::no_guardrail(&[], "end_turn")]
+    #[tokio::test]
+    async fn a_guardrail_block_on_message_stop_turns_the_held_delta_into_a_refusal(
+        #[case] guardrail_fields: &[&str],
+        #[case] expected_stop_reason: &str,
+    ) {
+        let message_stop = format!(r#"{{"type": "message_stop"{}}}"#, guardrail_fields.concat());
+        let chunks: Vec<&str> = GUARDRAILED_EVENTS
+            .into_iter()
+            .chain([message_stop.as_str()])
+            .collect();
+
+        let events = sse_events(&relayed(&chunks).await.unwrap());
+
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["type"] == "message_delta")
+                .map(|event| event["delta"].clone())
+                .collect::<Vec<_>>(),
+            vec![serde_json::json!({"stop_reason": expected_stop_reason, "stop_sequence": null})]
+        );
+        assert_eq!(
+            events[events.len() - 2..]
+                .iter()
+                .map(|event| event["type"].clone())
+                .collect::<Vec<_>>(),
+            vec!["message_delta", "message_stop"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_stream_releases_the_held_tail_before_its_error() {
+        let message_stop = format!(r#"{{"type": "message_stop"{INTERVENED}}}"#);
+        let chunks = [GUARDRAILED_EVENTS[4], message_stop.as_str(), "[1]"];
+
+        let items: Vec<Result<Bytes, Error>> =
+            get_async_streaming_response_iterator(in_pieces(&chunks), Vec::new())
+                .collect()
+                .await;
+
+        let (error, frames) = items.split_last().unwrap();
+        let frames: String = frames
+            .iter()
+            .map(|frame| String::from_utf8(frame.as_ref().unwrap().to_vec()).unwrap())
+            .collect();
+        assert_eq!(
+            frames,
+            format!(
+                "event: message_delta\ndata: {{\"type\": \"message_delta\", \"delta\": {{\"stop_reason\": \"refusal\", \"stop_sequence\": null}}}}\n\nevent: message_stop\ndata: {message_stop_dumped}\n\n",
+                message_stop_dumped =
+                    r#"{"type": "message_stop", "amazon-bedrock-guardrailAction": "INTERVENED"}"#
+            )
+        );
+        assert_eq!(
+            litellm_error::find::<BedrockStreamRaise>(error.as_ref().unwrap_err()),
+            Some(&BedrockStreamRaise::NotAnObject("[1]".into()))
         );
     }
 

@@ -8,18 +8,21 @@ methods; richer repositories live in their own modules.
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from enum import Enum
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
 from pydantic import TypeAdapter
+from typing_extensions import assert_never
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.models.access_group import LiteLLM_AccessGroupTable
+from litellm.repositories import rust_database
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
+from litellm.rust_bridge._native import RustSpendLogRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
@@ -160,8 +163,32 @@ def _delivery_id(row: Mapping[str, object]) -> str:
     return str(row["accounting_delivery_id"]) if not _settles_once(row) else str(row["request_id"])
 
 
+class SpendLogOwner(str, Enum):
+    """Whose spend a window sum adds up, named by the budget window counter label."""
+
+    KEY = "Key"
+    TEAM = "Team"
+    USER = "User"
+
+
 class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs"]):
     table_name = "litellm_spendlogs"
+
+    async def window_spend(self, owner: SpendLogOwner, owner_id: str, since: datetime) -> float:
+        """The spend ``owner_id`` logged at or after ``since``, zero when it logged none. Like the Prisma read it
+        replaces, a naive ``since`` is UTC and the bound is cut to the millisecond."""
+        repository: Final = rust_database.required_repository(RustSpendLogRepository)
+        utc: Final = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since.astimezone(timezone.utc)
+        bound: Final = utc.replace(microsecond=utc.microsecond // 1000 * 1000)
+        match owner:
+            case SpendLogOwner.KEY:
+                return await repository.key_window_spend(owner_id, bound)
+            case SpendLogOwner.TEAM:
+                return await repository.team_window_spend(owner_id, bound)
+            case SpendLogOwner.USER:
+                return await repository.user_window_spend(owner_id, bound)
+            case _:
+                assert_never(owner)
 
     async def insert_with_deliveries(
         self, rows: Sequence[Mapping[str, object]], *, write_spend_logs: bool = True
@@ -259,14 +286,6 @@ class ClaudeCodePluginRepository(PrismaTableRepository["prisma_models.LiteLLM_Cl
     table_name = "litellm_claudecodeplugintable"
 
 
-class TeamMembershipRepository(PrismaTableRepository["prisma_models.LiteLLM_TeamMembership"]):
-    table_name = "litellm_teammembership"
-
-
-class EndUserRepository(PrismaTableRepository["prisma_models.LiteLLM_EndUserTable"]):
-    table_name = "litellm_endusertable"
-
-
 class ManagedVectorStoresRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedVectorStoresTable"]):
     table_name = "litellm_managedvectorstorestable"
 
@@ -283,20 +302,8 @@ class PromptRepository(PrismaTableRepository["prisma_models.LiteLLM_PromptTable"
     table_name = "litellm_prompttable"
 
 
-class TagRepository(PrismaTableRepository["prisma_models.LiteLLM_TagTable"]):
-    table_name = "litellm_tagtable"
-
-
-class ModelAccessGroupBudgetRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelAccessGroupBudgetTable"]):
-    table_name = "litellm_modelaccessgroupbudgettable"
-
-
 class InvitationLinkRepository(PrismaTableRepository["prisma_models.LiteLLM_InvitationLink"]):
     table_name = "litellm_invitationlink"
-
-
-class JWTKeyMappingRepository(PrismaTableRepository["prisma_models.LiteLLM_JWTKeyMapping"]):
-    table_name = "litellm_jwtkeymapping"
 
 
 class MemoryRepository(PrismaTableRepository["prisma_models.LiteLLM_MemoryTable"]):
@@ -329,14 +336,6 @@ class WorkflowRunRepository(PrismaTableRepository["prisma_models.LiteLLM_Workflo
 
 class ModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelTable"]):
     table_name = "litellm_modeltable"
-
-
-class AccessGroupRepository(PrismaTableRepository["prisma_models.LiteLLM_AccessGroupTable"]):
-    table_name = "litellm_accessgrouptable"
-
-    async def find_by_name(self, name: str) -> LiteLLM_AccessGroupTable | None:
-        row: Final = await self.table.find_unique(where={"access_group_name": name})
-        return LiteLLM_AccessGroupTable.model_validate(row, from_attributes=True) if row is not None else None
 
 
 class SSOConfigRepository(PrismaTableRepository["prisma_models.LiteLLM_SSOConfig"]):
