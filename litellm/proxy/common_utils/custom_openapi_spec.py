@@ -417,13 +417,10 @@ class CustomOpenAPISpec:
             return openapi_schema
 
     @staticmethod
-    def add_config_yaml_schema(openapi_schema: JsonObject, description: str) -> JsonObject:
+    def add_config_yaml_schema(openapi_schema: JsonObject, description: str) -> None:
         from litellm.proxy._types import ConfigYAML
 
-        schema: Final = CustomOpenAPISpec.get_pydantic_schema(ConfigYAML)
-        if schema is None:
-            return openapi_schema
-        CustomOpenAPISpec.add_schema_to_components(openapi_schema, "ConfigYAML", schema)
+        _ = CustomOpenAPISpec.add_request_schema(openapi_schema, ConfigYAML, "ConfigYAML", (), "config.yaml")
         paths: Final = CustomOpenAPISpec._as_object(openapi_schema.setdefault("paths", {}))
         path_item: Final = CustomOpenAPISpec._as_object(paths.setdefault("/config/yaml", {}))
         _ = path_item.setdefault(
@@ -438,11 +435,16 @@ class CustomOpenAPISpec:
                     "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConfigYAML"}}},
                 },
                 "responses": {
-                    "200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}
+                    "200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}},
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}
+                        },
+                    },
                 },
             },
         )
-        return openapi_schema
 
     @staticmethod
     def add_llm_api_request_schema_body(

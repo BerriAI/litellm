@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -2006,6 +2007,9 @@ def test_openapi_documents_config_yaml_schema_and_keeps_config_update_hidden(app
     assert "#/components/schemas/ConfigGeneralSettings" in general_settings_refs
     assert "ConfigGeneralSettings" in schema["components"]["schemas"]
     assert "/config/update" not in schema["paths"]
+    referenced: Final = set(re.findall(r'"#/components/schemas/([^"]+)"', json.dumps([operation, config_yaml_schema])))
+    assert referenced
+    assert referenced <= set(schema["components"]["schemas"])
 
 
 def test_openapi_config_yaml_schema_keeps_router_model_info_component_name(app, client, monkeypatch):
