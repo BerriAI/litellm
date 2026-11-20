@@ -841,6 +841,57 @@ async def test_pre_call_hook_redacts_credentials_inside_decisions_json_input():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_redacts_secret_keys_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the key usage."},
+                    {"type": "input_json", "data": {"usage": {AWS_KEY: {"calls": 3}}}},
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {"usage": {"[REDACTED]": {"calls": 3}}}
+    assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_redacts_keyed_secrets_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the service config."},
+                    {
+                        "type": "input_json",
+                        "data": {"db_password": "correcthorsebattery", "clients": [{"api_key": "zq8Rt2xLp0Vw7Ny"}], "replicas": 2},
+                    },
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {
+        "db_password": "[REDACTED]",
+        "clients": [{"api_key": "[REDACTED]"}],
+        "replicas": 2,
+    }
+    assert _recorded(data)["masked_entity_count"] == {"Credential Keyword": 2}
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook_clean_request_records_allow():
     """A request with no secrets must be distinguishable from a redacted one."""
     guardrail = _guardrail()

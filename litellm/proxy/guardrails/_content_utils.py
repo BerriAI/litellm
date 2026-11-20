@@ -96,17 +96,36 @@ def _is_json_part(part: Mapping[str, object]) -> bool:
     return part.get("type") == "input_json" and "data" in part
 
 
-def _json_has_text(value: object) -> bool:
+def iter_json_fields(value: object) -> Iterator[tuple[str | None, str]]:
+    pending: Final[list[tuple[object, str | None]]] = [(value, None)]  # mutable-ok: owned DFS stack avoids recursion
+    while pending:
+        current, key = pending.pop()
+        if isinstance(current, str):
+            if current:
+                yield key, current
+            continue
+        fields = _text_object(current)
+        if fields is not None:
+            pending.extend((child, child_key) for child_key, child in reversed(tuple(fields.items())))
+            continue
+        pending.extend((child, key) for child in reversed(_object_list(current) or ()))
+
+
+def iter_json_keys(value: object) -> Iterator[str]:
     pending: Final[list[object]] = [value]  # mutable-ok: owned DFS stack avoids recursion
     while pending:
         current = pending.pop()
-        if isinstance(current, str):
-            if current:
-                return True
-            continue
         fields = _text_object(current)
-        pending.extend(fields.values() if fields is not None else _object_list(current) or ())
-    return False
+        if fields is not None:
+            yield from (key for key in fields if key)
+            pending.extend(reversed(tuple(fields.values())))
+            continue
+        pending.extend(reversed(_object_list(current) or ()))
+
+
+def _json_has_text(value: object, *, with_keys: bool) -> bool:
+    has_value: Final = next(iter_json_fields(value), None) is not None
+    return has_value or (with_keys and next(iter_json_keys(value), None) is not None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +134,7 @@ class _JsonFrame:
     write: Callable[[object], None]
 
 
-def _map_json_text(value: object, visit: Callable[[str], str]) -> object:
+def map_json_text(value: object, visit: Callable[[str], str], *, rewrite_keys: bool = False) -> object:
     root: Final[list[object]] = [None]  # mutable-ok: one owned root slot receives the iterative result
     pending: Final[list[_JsonFrame]] = [_JsonFrame(value, partial(root.__setitem__, 0))]  # mutable-ok: owned DFS stack
     while pending:
@@ -126,11 +145,10 @@ def _map_json_text(value: object, visit: Callable[[str], str]) -> object:
             continue
         fields = _text_object(current)
         if fields is not None:
-            mapped: dict[str, object] = {key: None for key in fields}  # mutable-ok: owned output slots
+            renamed = tuple((visit(key) if rewrite_keys and key else key, child) for key, child in fields.items())
+            mapped: dict[str, object] = {key: None for key, _ in renamed}  # mutable-ok: owned output slots
             frame.write(mapped)
-            pending.extend(
-                _JsonFrame(child, partial(mapped.__setitem__, key)) for key, child in reversed(tuple(fields.items()))
-            )
+            pending.extend(_JsonFrame(child, partial(mapped.__setitem__, key)) for key, child in reversed(renamed))
             continue
         children = _object_list(current)
         if children is None:
@@ -225,7 +243,11 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
-def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
+def walk_user_text(
+    data: dict[str, object],
+    visit: Callable[[str], str],
+    visit_json: Callable[[object], object] | None = None,
+) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
     Mutates ``data["messages"]`` and ``data["input"]``. Returns the number
@@ -252,9 +274,19 @@ def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
                 elif fields is not None and (text := _part_text(fields)) is not None:
                     visited += 1
                     new_parts.append({**fields, "text": visit(text)})
-                elif fields is not None and _is_json_part(fields) and _json_has_text(fields["data"]):
+                elif (
+                    fields is not None
+                    and _is_json_part(fields)
+                    and _json_has_text(fields["data"], with_keys=visit_json is not None)
+                ):
                     visited += 1
-                    new_parts.append({**fields, "data": _map_json_text(fields["data"], visit)})
+                    payload = fields["data"]
+                    new_parts.append(
+                        {
+                            **fields,
+                            "data": visit_json(payload) if visit_json is not None else map_json_text(payload, visit),
+                        }
+                    )
                 else:
                     new_parts.append(part)
             return new_parts

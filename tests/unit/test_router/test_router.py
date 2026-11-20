@@ -330,8 +330,13 @@ _PNG_RECEIPT: Final = (
 
 @pytest.mark.parametrize(
     ("image_url", "answering_url"),
-    [(_GIF_RECEIPT, "https://api.openai.com/v1/decisions"), (_PNG_RECEIPT, "https://api.typesafe.ai/v1/systemone")],
-    ids=["gif-the-leg-drops", "png-the-leg-keeps"],
+    [
+        (_GIF_RECEIPT, "https://api.openai.com/v1/decisions"),
+        (_PNG_RECEIPT, "https://api.typesafe.ai/v1/systemone"),
+        ("https://example.com/receipt.gif", "https://api.openai.com/v1/decisions"),
+        ("data:image/png;base64,", "https://api.openai.com/v1/decisions"),
+    ],
+    ids=["gif-the-leg-drops", "png-the-leg-keeps", "remote-url-of-unknown-type", "malformed-data-url"],
 )
 @pytest.mark.asyncio
 async def test_decisions_with_json_and_an_image_count_only_the_image_types_a_leg_keeps(

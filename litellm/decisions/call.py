@@ -291,7 +291,7 @@ def deployment_refuses_json_input(
     extra_headers: Final = _EXTRA_HEADERS_ADAPTER.validate_python(call_kwargs.get("extra_headers"))
     headers: Final = _outbound_headers(extra_headers, custom_llm_provider, call_kwargs)
     return _leaves_no_input(
-        _with_supported_image_types(_supported_input(decision_input, provider_config, headers), provider_config)
+        _with_images_surely_kept(_supported_input(decision_input, provider_config, headers), provider_config)
     )
 
 
@@ -666,13 +666,19 @@ def _has_media_type_in(media_types: frozenset[str], image: DecisionsImage) -> bo
     return media_type is None or media_type in media_types
 
 
-def _with_supported_image_types(
+def _is_surely_kept_image(media_types: frozenset[str] | None, image: DecisionsImage) -> bool:
+    if not _is_well_formed_image(image):
+        return False
+    if media_types is None:
+        return True
+    media_type: Final = image_media_type(image)
+    return media_type is not None and media_type in media_types
+
+
+def _with_images_surely_kept(
     decision_input: DecisionsIRState | DecisionsIRMessages, provider_config: BaseDecisionsConfig
 ) -> DecisionsIRState | DecisionsIRMessages:
-    media_types: Final = provider_config.image_media_types
-    if media_types is None:
-        return decision_input
-    return with_images_where(decision_input, partial(_has_media_type_in, media_types))
+    return with_images_where(decision_input, partial(_is_surely_kept_image, provider_config.image_media_types))
 
 
 def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
