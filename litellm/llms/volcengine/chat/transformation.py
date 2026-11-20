@@ -1,7 +1,12 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
+
+_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class VolcEngineChatConfig(OpenAILikeChatConfig):
@@ -67,41 +72,49 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             "max_retries",
             "extra_headers",
             "thinking",
+            "reasoning_effort",
         ]  # works across all models
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
-    ) -> dict:
-        optional_params = super().map_openai_params(
-            non_default_params,
-            optional_params,
-            model,
-            drop_params,
-            replace_max_completion_tokens_with_max_tokens,
+    ) -> dict[str, object]:  # mutable-ok: provider config overrides return mutable SDK parameter dictionaries
+        mapped: Final = _PARAMS.validate_python(
+            super().map_openai_params(
+                dict(non_default_params),
+                dict(optional_params),
+                model,
+                drop_params,
+                replace_max_completion_tokens_with_max_tokens,
+            )
         )
 
-        if "thinking" in optional_params:
-            """
-            The `thinking` parameters of VolcEngine model has different default values.
-            See the docs for details.
-            Refrence: https://www.volcengine.com/docs/82379/1449737#0002
-            """
-            thinking_value: Final = optional_params.pop("thinking")
-
-            # Handle using thinking params case - add to extra_body if value is legal
-            if (
-                thinking_value is not None
-                and isinstance(thinking_value, dict)
-                and thinking_value.get("type", None) in ["enabled", "disabled", "auto"]  # legal values, see docs
-            ):
-                # Add thinking parameter to extra_body for all legal cases
-                optional_params.setdefault("extra_body", {})["thinking"] = thinking_value
-            else:
-                # Skip adding thinking parameter when it's not set or has invalid value
-                pass
-        return optional_params
+        thinking: Final = as_str_mapping(mapped.get("thinking"))
+        thinking_type: Final = thinking.get("type") if thinking is not None else None
+        effort: Final = mapped.get("reasoning_effort")
+        resolved_thinking: Final = (
+            thinking
+            if thinking_type in ("enabled", "disabled", "auto")
+            else {"type": "disabled"}
+            if effort == "none"
+            else None
+        )
+        excluded: Final = (
+            frozenset(("thinking", "reasoning_effort"))
+            if thinking_type == "disabled" or effort == "none"
+            else frozenset(("thinking",))
+        )
+        forwarded: Final = {key: value for key, value in mapped.items() if key not in excluded}
+        if resolved_thinking is None:
+            return forwarded
+        return {
+            **forwarded,
+            "extra_body": {
+                **(as_str_mapping(mapped.get("extra_body")) or {}),
+                "thinking": resolved_thinking,
+            },
+        }

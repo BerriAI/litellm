@@ -107,44 +107,26 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         return {**optional_params, **deepseek_reasoning_params(thinking_value, reasoning_effort)}
 
     def _fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
-        """
-        DeepSeek thinking mode requires `reasoning_content` to be passed back on
-        every assistant message in multi-turn conversations. If it is missing,
-        the API returns:
-          "The reasoning_content in the thinking mode must be passed back to the API."
+        return [self._restore_stored_reasoning(message) for message in messages]
 
-        For each assistant message that is missing `reasoning_content`:
-          1. Promote it from `provider_specific_fields["reasoning_content"]` if present
-             (LiteLLM stores provider-specific response fields there).
-          2. Otherwise inject a single space — the minimum value the API accepts.
-        """
-        result: Final[list[AllMessageValues]] = []
-        for msg in messages:
-            if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
-                patched = dict(cast(dict, msg))
-                provider_fields = patched.get("provider_specific_fields") or {}
-                stored = provider_fields.get("reasoning_content")
-                if stored:
-                    patched["reasoning_content"] = stored
-                    cleaned = dict(provider_fields)
-                    cleaned.pop("reasoning_content", None)
-                    patched["provider_specific_fields"] = cleaned
-                else:
-                    litellm.verbose_logger.warning(
-                        "DeepSeek thinking mode: assistant message is missing "
-                        "`reasoning_content` and none was saved in "
-                        "`provider_specific_fields`. A single-space placeholder "
-                        "is being injected to satisfy API validation, but the "
-                        "model will receive a blank reasoning chain for this turn, "
-                        "which may silently degrade multi-turn response quality. "
-                        "Preserve `reasoning_content` from the original assistant "
-                        "response when building multi-turn conversation history."
-                    )
-                    patched["reasoning_content"] = " "
-                result.append(cast(AllMessageValues, patched))
-            else:
-                result.append(msg)
-        return result
+    @staticmethod
+    def _restore_stored_reasoning(message: AllMessageValues) -> AllMessageValues:
+        if message.get("role") != "assistant" or message.get("reasoning_content"):
+            return message
+        provider_fields: Final = as_str_mapping(message.get("provider_specific_fields"))
+        stored: Final = provider_fields.get("reasoning_content") if provider_fields is not None else None
+        if not isinstance(stored, str) or not stored or provider_fields is None:
+            return message
+        return cast(  # cast-ok: the assistant message keeps its schema while restoring stored reasoning
+            AllMessageValues,
+            {
+                **message,
+                "reasoning_content": stored,
+                "provider_specific_fields": {
+                    key: value for key, value in provider_fields.items() if key != "reasoning_content"
+                },
+            },
+        )
 
     @overload
     def _transform_messages(
