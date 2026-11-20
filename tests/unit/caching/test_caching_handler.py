@@ -599,6 +599,8 @@ async def test_a_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypat
             logged_cache_hits.append(kwargs.get("cache_hit"))
 
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "chat-only", "custom_handler": ChatOnlyProvider()}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [Recorder()])
@@ -614,6 +616,65 @@ async def test_a_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypat
         await GLOBAL_LOGGING_WORKER.flush()
 
     assert logged_cache_hits[1:] == [True], logged_cache_hits
+
+
+def test_a_sync_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm import CustomLLM
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class ChatOnlyProvider(CustomLLM):
+        def completion(self, *args: object, **kwargs: object) -> ModelResponse:
+            return ModelResponse(
+                choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+                usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            )
+
+    logged_cache_hits: Final[list[object]] = []
+
+    class Recorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged_cache_hits.append(kwargs.get("cache_hit"))
+
+    class ConcurrentLoggingExecutor:
+        def __init__(self) -> None:
+            self.jobs: Final[list[Callable[[], object]]] = []
+
+        def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
+            self.jobs.append(lambda: fn(*args, **kwargs))
+
+        def run_queued_jobs_at_once(self) -> None:
+            start: Final = threading.Barrier(len(self.jobs))
+            workers: Final = tuple(threading.Thread(target=lambda job=job: (start.wait(), job())) for job in self.jobs)
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join()
+            self.jobs.clear()
+
+    logging_executor: Final = ConcurrentLoggingExecutor()
+    monkeypatch.setattr(litellm.utils, "executor", logging_executor)
+    monkeypatch.setattr(litellm.litellm_core_utils.litellm_logging, "executor", logging_executor)
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "chat-only", "custom_handler": ChatOnlyProvider()}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [Recorder()])
+    monkeypatch.setattr(
+        litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=[CallTypes.completion.value])
+    )
+    large_image_prompt: Final = "describe data:image/png;base64," + "A" * (2 * 1024 * 1024)
+
+    responses(model="chat-only/model", input=large_image_prompt)
+    logging_executor.run_queued_jobs_at_once()
+    logged_cache_hits.clear()
+
+    responses(model="chat-only/model", input=large_image_prompt)
+    logging_executor.run_queued_jobs_at_once()
+
+    assert logged_cache_hits == [True], logged_cache_hits
 
 
 @pytest.mark.parametrize(
