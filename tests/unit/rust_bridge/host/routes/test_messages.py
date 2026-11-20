@@ -4129,6 +4129,19 @@ def test_settings_hand_the_route_the_deployment_facts_its_logging_would_price_wi
     assert settings["pricing"] == expected
 
 
+def test_the_route_prices_at_the_routed_deployments_vertex_location_before_the_logger_holds_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_location", "global")
+    logger: Final = _priced_logger({})
+    request: Final = {**_CALL, "vertex_location": "us-east5", "model": "vertex_ai/claude-opus-5-5"}
+
+    priced_at: Final = messages_host.settings({"litellm_logging_obj": logger}, request)["pricing"]
+
+    assert isinstance(priced_at, dict)
+    assert priced_at["vertex_location"] == "us-east5"
+
+
 @pytest.mark.parametrize("deployment_location", ["us-east5", None])
 def test_the_route_prices_at_the_vertex_location_its_logging_would_price_at(
     monkeypatch: pytest.MonkeyPatch, deployment_location: str | None

@@ -1657,7 +1657,7 @@ def _pricing_identity(request: Mapping[str, object], logger: object) -> PricingI
         vertex_location=resolve_vertex_location_for_cost(
             custom_llm_provider=provider,
             litellm_params=litellm_params,
-            optional_params=None,
+            optional_params=request,
             model=model,
         ),
         data_residency=data_residency if isinstance(data_residency, str) else None,
