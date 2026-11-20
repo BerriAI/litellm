@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { editedModelInfoPricing, parseModelExtraParams } from "../../utils/modelEditParams";
 
@@ -15,6 +15,10 @@ export const useModelInfoEdits = <T extends { model_info: unknown }>(
 ) => {
   const [saved, setSaved] = useState<SavedModelInfo | null>(null);
   const shownAtEditStart = useRef<Record<string, unknown>>({});
+  const latestFetchedAt = useRef(fetchedAt);
+  useEffect(() => {
+    latestFetchedAt.current = fetchedAt;
+  }, [fetchedAt]);
   const modelData =
     fetchedModel && saved !== null && saved.fetchedAt === fetchedAt
       ? { ...fetchedModel, model_info: saved.value as T["model_info"] }
@@ -37,6 +41,6 @@ export const useModelInfoEdits = <T extends { model_info: unknown }>(
         editedParams,
         loadedModel?.litellm_params ?? {},
       ),
-    rememberSaved: (value: Record<string, unknown>) => setSaved({ fetchedAt, value }),
+    rememberSaved: (value: Record<string, unknown>) => setSaved({ fetchedAt: latestFetchedAt.current, value }),
   };
 };
