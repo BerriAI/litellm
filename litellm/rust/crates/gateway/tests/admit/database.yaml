@@ -1,7 +1,7 @@
 # A database alone keeps a request native: the master key is checked before any key is read. With
 # one the proxy looks up the end user a body names in `metadata.user_id` and applies that end
-# user's block, budget and rate limits, whoever the caller is. The native app reads no end user,
-# so that body goes to Python.
+# user's block, budget and rate limits, whoever the caller is. The native app applies none of
+# them, so it reads the end user's row and answers only when there is none or it holds none.
 config:
   model_list:
     - model_name: claude
@@ -13,18 +13,52 @@ config:
   environment_variables:
     DATABASE_URL: postgresql://user:pass@localhost:5432/litellm
 
+end_users:
+  customer-tracked: {spend: 4.2}
+  customer-blocked: {blocked: true}
+  customer-budgeted: {budget_id: budget-1}
+
 requests:
   - name: plain
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: rust
 
-  - name: a body naming an end user
+  - name: a body naming an end user the proxy holds no row for
     headers: {authorization: Bearer gateway-key}
-    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: customer-1}}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: customer-unknown}}
+    expect: rust
+
+  - name: a body naming an end user whose row only tracks its spend
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: customer-tracked}}
+    expect: rust
+
+  - name: a body naming a blocked end user
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: customer-blocked}}
     expect: python
     reason: body
     over: end_user
+
+  - name: a body naming an end user under a budget
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: customer-budgeted}}
+    expect: python
+    reason: body
+    over: end_user
+
+  - name: a body naming a blocked end user between the spaces the proxy drops
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: " customer-blocked\n"}}
+    expect: python
+    reason: body
+    over: end_user
+
+  - name: a body whose end user is only spaces
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: "  "}}
+    expect: rust
 
   - name: a body with no end user in its metadata
     headers: {authorization: Bearer gateway-key}

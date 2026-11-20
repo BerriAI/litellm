@@ -3,7 +3,8 @@
 //!
 //! [`Admit`] holds what the native app was built from, and each request is put to the three stages
 //! of checks in `checks`. This is the only part that does IO: it authenticates the caller before
-//! the `CALLER` stage and reads the body with `body` before the `BODY` stage.
+//! the `CALLER` stage, reads the body with `body` before the `BODY` stage, and reads the end user
+//! the body names once every check has passed.
 
 mod body;
 mod checks;
@@ -21,8 +22,9 @@ use litellm_router_core::registry::DeploymentFilter;
 use serde_json::{Map, Value};
 
 use crate::{
-    AppState, Gateway,
+    AppState, EndUserLookup, Gateway,
     callbacks::parallel_request_limiter::{self, KeyLimiter},
+    end_users,
 };
 pub use checks::Reason;
 use checks::{Authenticated, Fields};
@@ -69,6 +71,9 @@ pub struct Admit {
     environment: Environment,
     /// Whether the proxy has a database, where it looks up the end user a request names.
     database: bool,
+    /// The end users of that database. `None` when the native app built no pool for it, which
+    /// leaves every body that names an end user to Python.
+    end_users: Option<Arc<dyn EndUserLookup>>,
     /// The variable that has the proxy serve models and settings from its database on top of the
     /// config. `general_settings.store_model_in_db` is a setting of the config itself.
     stored_models: Option<Box<str>>,
@@ -147,6 +152,7 @@ impl Admit {
                 .environment
                 .get(STORE_MODEL_IN_DB)
                 .map(|_| STORE_MODEL_IN_DB.into()),
+            end_users: state.end_users.clone(),
             auth: state.auth(config),
             aliased,
             inference: Some(state.inference.clone()),
@@ -168,6 +174,7 @@ impl Admit {
             config: config.clone(),
             environment: Environment::default(),
             database: false,
+            end_users: None,
             stored_models: None,
             deployed,
             aliased: Vec::new(),
@@ -210,6 +217,19 @@ impl Admit {
             .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
     }
 
+    /// With a database the proxy applies the end user a body names to any caller: its block, its
+    /// budget, its limits, its region and its models. The native app applies none of them, so that
+    /// body is only kept when the end user's row holds none, or there is no row.
+    async fn end_user(&self, fields: &Fields) -> Option<Reason> {
+        let end_user_id = checks::end_user(fields).filter(|_| self.database)?;
+        let held = match &self.end_users {
+            Some(end_users) => end_users::unhonored(end_users.as_ref(), end_user_id).await?,
+            None => end_users::UNREAD,
+        };
+        tracing::debug!(held, "an end user holds what the native app does not honor");
+        Some(Reason::new(Refused::Body, "end_user"))
+    }
+
     /// The body is read only for a request that passes every other check, and parsed once: an
     /// admitted request carries it parsed, as the [`JsonObject`] the route takes. A refused request
     /// keeps the bytes the client sent and carries nothing more.
@@ -245,6 +265,9 @@ impl Admit {
             return Err(refused(parts, body, reason));
         }
         if let Some(reason) = self.token_estimate(&authenticated, parts.uri.path(), &mut fields) {
+            return Err(refused(parts, body, reason));
+        }
+        if let Some(reason) = self.end_user(&fields).await {
             return Err(refused(parts, body, reason));
         }
         parts.extensions.insert(JsonObject(fields));
@@ -352,6 +375,14 @@ mod tests {
         assert_eq!(refused, over.map(|over| (Refused::Credential, over.into())));
     }
 
+    async fn refusal(admit: Arc<Admit>, request: Request) -> Option<Refused> {
+        admit
+            .admit(request)
+            .await
+            .err()
+            .map(|(_, reason)| reason.why)
+    }
+
     fn messages(headers: &[(&str, &str)], model: &str) -> Request {
         headers
             .iter()
@@ -362,6 +393,58 @@ mod tests {
                 r#"{{"model":"{model}","max_tokens":8,"messages":[]}}"#
             )))
             .unwrap()
+    }
+
+    /// A database that answers for no end user.
+    struct Unreachable;
+
+    impl EndUserLookup for Unreachable {
+        fn find<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> futures_util::future::BoxFuture<
+            'a,
+            Result<Option<litellm_repositories::EndUserRecord>, litellm_error::Source>,
+        > {
+            Box::pin(async {
+                Err(litellm_error::Source::new(std::io::Error::other(
+                    "database down",
+                )))
+            })
+        }
+    }
+
+    fn unreachable() -> Option<Arc<dyn EndUserLookup>> {
+        Some(Arc::new(Unreachable))
+    }
+
+    #[rstest]
+    #[case::the_proxy_does_not_have(false, unreachable(), None)]
+    #[case::that_cannot_be_read(true, unreachable(), Some(Refused::Body))]
+    #[case::the_native_app_built_no_pool_for(true, None, Some(Refused::Body))]
+    #[tokio::test]
+    async fn an_end_user_is_left_to_python_by_a_database_its_row_cannot_be_read_from(
+        #[case] database: bool,
+        #[case] end_users: Option<Arc<dyn EndUserLookup>>,
+        #[case] why: Option<Refused>,
+    ) {
+        let config = Config::from_yaml(CONFIG).unwrap();
+        let admit = Arc::new(Admit {
+            database,
+            end_users,
+            ..Admit::over(
+                &config,
+                vec![("claude".to_owned(), Ok(LlmProviders::Anthropic))],
+            )
+        });
+        let request = Request::post("/v1/messages")
+            .header(MASTER_KEY.0, MASTER_KEY.1)
+            .body(Body::from(
+                r#"{"model":"claude","max_tokens":8,"messages":[],"metadata":{"user_id":"customer"}}"#,
+            ))
+            .unwrap();
+
+        assert_eq!(refusal(admit, request).await, why);
     }
 
     #[rstest]

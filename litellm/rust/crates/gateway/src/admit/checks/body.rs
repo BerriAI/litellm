@@ -1,6 +1,7 @@
 //! What a Messages request carries in its body.
 
 use litellm_llms_types::formats::messages::MessagesOptionalParams;
+use litellm_python_compat::unicode::isspace;
 use serde_json::{Map, Value};
 
 use super::{Admit, Reason, Refused};
@@ -10,9 +11,8 @@ const HOSTED_TOOLS: [&str; 2] = ["mcp", "advisor_20260301"];
 
 /// A key the Messages request type does not name is sent on to the provider by the native route,
 /// and the proxy reads its own (`user`, `tags`, `timeout`, `fallbacks`). The rest are Messages
-/// params the proxy acts on before the provider sees them. With a database it also looks up the
-/// end user `metadata.user_id` names, whose block, budget and limits the native app does not read.
-pub(super) fn fields(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
+/// params the proxy acts on before the provider sees them.
+pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let sent = |key: &str| fields.get(key).filter(|value| !value.is_null());
     let is_read = |key: &str| {
         REQUIRED.contains(&key) || MessagesOptionalParams::fields().any(|name| name == key)
@@ -35,10 +35,6 @@ pub(super) fn fields(admit: &Admit, fields: &Map<String, Value>) -> Option<Reaso
             sent("metadata").is_some_and(|metadata| !is_a_user_id(metadata)),
         ),
         ("hosted_tool", names_a_hosted_tool(fields)),
-        (
-            "end_user",
-            admit.database && sent("metadata").is_some_and(names_an_end_user),
-        ),
     ]
     .into_iter()
     .find(|(_, found)| *found)
@@ -56,11 +52,16 @@ fn names_a_hosted_tool(fields: &Map<String, Value>) -> bool {
         .any(|kind| HOSTED_TOOLS.contains(&kind))
 }
 
-fn names_an_end_user(metadata: &Value) -> bool {
-    metadata
-        .get("user_id")
-        .and_then(Value::as_str)
-        .is_some_and(|user_id| !user_id.is_empty())
+/// The end user the proxy looks up for a body `fields` kept: `metadata.user_id` without the
+/// whitespace Python's `str.strip` drops. Every other place the proxy reads one from is a key or
+/// a header that already sends the request to Python.
+pub(in crate::admit) fn end_user(fields: &Map<String, Value>) -> Option<&str> {
+    let named = fields
+        .get("metadata")?
+        .get("user_id")?
+        .as_str()?
+        .trim_matches(isspace);
+    (!named.is_empty()).then_some(named)
 }
 
 /// Any other `metadata` is in a shape the proxy rewrites before the provider sees it.
@@ -122,6 +123,26 @@ mod tests {
     )]
     fn a_body_with_something_the_proxy_reads_is_named(#[case] rest: &str, #[case] over: &str) {
         assert_eq!(asking(rest).as_deref(), Some(over));
+    }
+
+    #[rstest]
+    #[case::as_sent(r#"{"user_id":"customer-1"}"#, Some("customer-1"))]
+    #[case::between_whitespace_only_python_strips(
+        r#"{"user_id":"\u001c customer-1\u001f"}"#,
+        Some("customer-1")
+    )]
+    #[case::of_whitespace(r#"{"user_id":" \u001d"}"#, None)]
+    #[case::empty(r#"{"user_id":""}"#, None)]
+    #[case::not_named("{}", None)]
+    #[case::no_metadata("null", None)]
+    fn the_end_user_is_the_user_id_as_python_strips_it(
+        #[case] metadata: &str,
+        #[case] named: Option<&str>,
+    ) {
+        let sent: Map<String, Value> =
+            serde_json::from_str(&format!(r#"{{"metadata":{metadata}}}"#)).unwrap();
+
+        assert_eq!(end_user(&sent), named);
     }
 
     #[rstest]

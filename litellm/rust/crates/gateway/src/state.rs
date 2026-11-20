@@ -10,11 +10,11 @@ use litellm_redis_store::{
     Remote,
     auth_cache::{AuthCache, Settings},
 };
-use litellm_repositories::KeyRepository;
+use litellm_repositories::{EndUserRepository, KeyRepository};
 
 use crate::{
-    Error, Gateway, Inference, KeyLimiter, RedisClients, Resources, db, host::auth::authenticator,
-    license::build_license,
+    EndUserLookup, Error, Gateway, Inference, KeyLimiter, RedisClients, Resources, db,
+    host::auth::authenticator, license::build_license,
 };
 
 #[derive(Clone)]
@@ -25,6 +25,8 @@ pub struct AppState {
     /// Verifies the master key and the virtual keys of the proxy's database. `None` without a
     /// database.
     pub keys: Option<Arc<dyn Authenticator>>,
+    /// The end users of the proxy's database. `None` without a database.
+    pub end_users: Option<Arc<dyn EndUserLookup>>,
     pub entitlements: Arc<Entitlements>,
     /// The proxy's `parallel_request_limiter_v3`, which the inference routes' callback stage runs
     /// and the limit check before the body asks.
@@ -49,23 +51,27 @@ impl AppState {
             gateway: inference,
             key_limiter,
         } = crate::build_inference(config, environment, resources, &redis).await?;
-        let (database, keys) = db::connect(config, &resources.secrets)
+        let (database, stores) = db::connect(config, &resources.secrets)
             .await?
             .map(|(pools, repositories)| {
                 let keys = authenticator(
                     config,
-                    Arc::new(KeyRepository::new(repositories)),
+                    Arc::new(KeyRepository::new(repositories.clone())),
                     auth_cache(config, &redis),
                 );
-                (pools, keys)
+                let end_users: Arc<dyn EndUserLookup> =
+                    Arc::new(EndUserRepository::new(repositories));
+                (pools, (keys, end_users))
             })
             .unzip();
+        let (keys, end_users) = stores.unzip();
         let entitlements = Arc::new(build_license(config, environment, resources).await);
         Ok(Self {
             inference,
             redis,
             database,
             keys,
+            end_users,
             entitlements,
             key_limiter,
             environment: resources.environment.clone(),

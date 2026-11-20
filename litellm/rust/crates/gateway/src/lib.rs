@@ -2,6 +2,7 @@ mod admit;
 mod boot;
 mod callbacks;
 mod db;
+mod end_users;
 mod error;
 mod health;
 pub mod host;
@@ -18,6 +19,7 @@ pub use callbacks::{
     Callbacks, Registered,
     parallel_request_limiter::{self, KeyLimiter},
 };
+pub use end_users::EndUserLookup;
 pub use error::Error;
 use latest_aliases::LatestAliases;
 pub use redis::RedisClients;

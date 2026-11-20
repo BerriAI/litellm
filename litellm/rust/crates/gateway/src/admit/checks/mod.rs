@@ -19,6 +19,7 @@ use axum::http::request::Parts;
 use litellm_gateway_auth::AuthenticatedRequest;
 use serde_json::{Map, Value};
 
+pub(super) use body::end_user;
 pub(super) use model::alias;
 
 use super::{Admit, Refused};

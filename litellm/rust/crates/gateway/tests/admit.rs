@@ -8,8 +8,12 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use axum::{body::Body, extract::Request, http::Method};
 use litellm_config::{Config, Environment};
-use litellm_gateway::host::auth::{KeyRows, authenticator};
-use litellm_repositories::KeyView;
+use litellm_error::Source;
+use litellm_gateway::{
+    EndUserLookup,
+    host::auth::{KeyRows, authenticator},
+};
+use litellm_repositories::{EndUserRecord, KeyView};
 use rstest::rstest;
 use serde::Deserialize;
 
@@ -22,7 +26,46 @@ struct Scenario {
     /// The `tpm_limit` of each key that holds one.
     #[serde(default)]
     tpm_limits: BTreeMap<String, i64>,
+    /// The end users the database holds a row for, each with the columns it fills.
+    end_users: Option<BTreeMap<String, Row>>,
     requests: Vec<Sent>,
+}
+
+/// What one `LiteLLM_EndUserTable` row holds beyond the end user's id.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Row {
+    #[serde(default)]
+    spend: f64,
+    #[serde(default)]
+    blocked: bool,
+    budget_id: Option<String>,
+}
+
+/// Each end user with the row the scenario gives it, and no row for any other.
+struct Rows(BTreeMap<String, Row>);
+
+impl EndUserLookup for Rows {
+    fn find<'a>(
+        &'a self,
+        end_user_id: &'a str,
+    ) -> futures_util::future::BoxFuture<'a, Result<Option<EndUserRecord>, Source>> {
+        Box::pin(async move {
+            Ok(self.0.get(end_user_id).map(|row| EndUserRecord {
+                user_id: end_user_id.to_owned(),
+                alias: None,
+                spend: row.spend,
+                allowed_model_region: None,
+                default_model: None,
+                models: vec![],
+                budget_id: row.budget_id.clone(),
+                litellm_budget_table: None,
+                object_permission_id: None,
+                object_permission: None,
+                blocked: row.blocked,
+            }))
+        })
+    }
 }
 
 /// The database holding each key of the scenario, a plain row with the model list and the token
@@ -106,6 +149,7 @@ impl Sent {
 #[case::unread_fallbacks("unread_fallbacks")]
 #[case::drop_params_set("drop_params_set")]
 #[case::database("database")]
+#[case::end_user_default_budget("end_user_default_budget")]
 #[case::store_model_in_db("store_model_in_db")]
 #[case::router_settings_by_group("router_settings_by_group")]
 #[case::groups_and_fallbacks("groups_and_fallbacks")]
@@ -139,6 +183,13 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
             )),
             ..state
         },
+    };
+    let state = match scenario.end_users {
+        Some(end_users) => litellm_gateway::AppState {
+            end_users: Some(Arc::new(Rows(end_users))),
+            ..state
+        },
+        None => state,
     };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,

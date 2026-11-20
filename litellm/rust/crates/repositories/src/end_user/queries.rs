@@ -11,7 +11,7 @@ use crate::{RawJson, budget::Budget};
 /// Every scalar column of one `LiteLLM_ObjectPermissionTable` row
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Deserialize, Serialize)]
-pub(super) struct ObjectPermission {
+pub struct ObjectPermission {
     pub object_permission_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<Vec<String>>,
@@ -41,17 +41,17 @@ pub(super) struct ObjectPermission {
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Serialize)]
 pub struct EndUserRecord {
-    pub(super) user_id: String,
-    pub(super) alias: Option<String>,
-    pub(super) spend: f64,
-    pub(super) allowed_model_region: Option<String>,
-    pub(super) default_model: Option<String>,
-    pub(super) models: Vec<String>,
-    pub(super) budget_id: Option<String>,
-    pub(super) litellm_budget_table: Option<Json<Budget>>,
-    pub(super) object_permission_id: Option<String>,
-    pub(super) object_permission: Option<Json<ObjectPermission>>,
-    pub(super) blocked: bool,
+    pub user_id: String,
+    pub alias: Option<String>,
+    pub spend: f64,
+    pub allowed_model_region: Option<String>,
+    pub default_model: Option<String>,
+    pub models: Vec<String>,
+    pub budget_id: Option<String>,
+    pub litellm_budget_table: Option<Json<Budget>>,
+    pub object_permission_id: Option<String>,
+    pub object_permission: Option<Json<ObjectPermission>>,
+    pub blocked: bool,
 }
 
 /// The end user `end_user_id` with its linked budget and object permission, or `None` when no row exists

@@ -95,6 +95,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
                 keys: None,
+                end_users: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
             },

@@ -1,0 +1,24 @@
+# A default end-user budget reaches an end user the proxy holds no restricting row for, which the
+# read of that row cannot see, so the setting sends every request to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  litellm_settings:
+    max_end_user_budget_id: default-budget
+  general_settings:
+    master_key: gateway-key
+  environment_variables:
+    DATABASE_URL: postgresql://user:pass@localhost:5432/litellm
+
+end_users: {}
+
+requests:
+  - name: a body naming an end user the proxy holds no row for
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: customer-unknown}}
+    expect: python
+    reason: settings
+    over: litellm_settings.max_end_user_budget_id
