@@ -335,5 +335,14 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "morse": {
+    "base_url": "https://inference.trymorse.ai/v1",
+    "api_key_env": "MORSE_API_KEY",
+    "api_base_env": "MORSE_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    }
   }
 }

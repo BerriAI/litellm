@@ -2928,6 +2928,10 @@ def _complete_custom_openai(
         raise litellm.AuthenticationError(
             message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
         )
+    if custom_llm_provider == "morse" and not api_key:
+        raise litellm.AuthenticationError(
+            message="Set MORSE_API_KEY or pass api_key", llm_provider="morse", model=model
+        )
     organization = (
         organization
         or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
