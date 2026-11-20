@@ -2669,6 +2669,81 @@ async def test_prepare_key_update_data_restarts_a_resubmitted_window_whose_perio
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("writer", ["ordinary", "project", "soft_budget", "regeneration"])
+@pytest.mark.parametrize("current_cap,expected_reset", [
+    (10.0, "2030-01-03T00:00:00+00:00"),
+    (30.0, "2030-01-02T00:00:00+00:00"),
+    (None, "2030-01-02T00:00:00+00:00"),
+])
+async def test_key_window_writers_keep_committed_resets_without_merging_admin_edits(
+    writer: str, current_cap: float | None, expected_reset: str,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_row, _update_key_row_with_soft_budget, _write_key_update,
+    )
+    from litellm.proxy.utils import PrismaClient
+
+    original: Final = {"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2030-01-02T00:00:00+00:00"}
+    existing: Final = LiteLLM_VerificationToken(token="window-key", budget_limits=[original])
+    proposed: Final = [{**original, "max_budget": 50.0}, {
+        "budget_duration": "1mo", "max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00",
+    }]
+    database: Final = MagicMock()
+    database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
+    tx: Final = database.tx.return_value.__aenter__.return_value
+    tx.query_raw = AsyncMock(return_value=[{"budget_limits": [{
+        **original, "max_budget": current_cap, "reset_at": "2030-01-03T00:00:00+00:00",
+    }]}])
+    tx.litellm_verificationtoken.update = AsyncMock(return_value=existing)
+    tx.litellm_verificationtoken.update_many = AsyncMock(return_value=1)
+    tx.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
+    tx.litellm_budgettable.create = AsyncMock(return_value=SimpleNamespace(budget_id="window-budget"))
+    payload: Final = {"budget_limits": json.dumps(proposed)}
+
+    if writer == "ordinary":
+        await _update_key_row(database, existing.token, payload, existing)
+    elif writer == "project":
+        await _update_key_row_assigning_project(database, existing.token, {**payload, "project_id": "p"}, existing)
+    elif writer == "soft_budget":
+        await _update_key_row_with_soft_budget(
+            database, existing.token, UpdateKeyRequest(key=existing.token, soft_budget=5.0), payload, existing, "admin",
+        )
+    else:
+        await _write_key_update(database, existing.token, {**payload, "token": "rotated"}, existing)
+
+    write: Final = tx.litellm_verificationtoken.update_many if writer == "project" else tx.litellm_verificationtoken.update
+    assert json.loads(write.call_args.kwargs["data"]["budget_limits"]) == [
+        {**proposed[0], "reset_at": expected_reset}, proposed[1],
+    ]
+    assert tx.query_raw.await_count == 1
+    assert database.tx.return_value.__aexit__.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested", [None, [], [{"budget_duration": "1mo", "max_budget": 200.0}]])
+@pytest.mark.parametrize("missing_field", [None, "budget_duration", "max_budget"])
+async def test_key_window_rebase_does_not_restore_removed_durations(
+    requested: list[dict[str, object]] | None, missing_field: str | None,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import _update_key_row
+    from litellm.proxy.utils import PrismaClient
+
+    existing: Final = _key_with_weekly_window(datetime(2030, 1, 2, tzinfo=timezone.utc))
+    database: Final = MagicMock()
+    database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
+    tx: Final = database.tx.return_value.__aenter__.return_value
+    current: Final = {
+        name: value for name, value in {
+            "budget_duration": "7d", "max_budget": 50.0, "reset_at": "2030-01-09T00:00:00+00:00",
+        }.items() if name != missing_field
+    }
+    tx.query_raw = AsyncMock(return_value=[{"budget_limits": [current]}])
+    tx.litellm_verificationtoken.update = AsyncMock(return_value=existing)
+    await _update_key_row(database, existing.token, {"budget_limits": json.dumps(requested)}, existing)
+    assert json.loads(tx.litellm_verificationtoken.update.call_args.kwargs["data"]["budget_limits"]) == requested
+
+
+@pytest.mark.asyncio
 async def test_prepare_key_update_data_disable_global_guardrails_false_no_premium(
     monkeypatch,
 ):
@@ -8923,6 +8998,13 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
         return_value=updated_key
     )
+    transaction: Final = mock_prisma_client.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": [
+        {"budget_duration": "1d", "max_budget": 75.0, "reset_at": "2020-01-01T00:00:00+00:00"},
+        {"budget_duration": "1mo", "max_budget": 200.0, "reset_at": "2020-02-01T00:00:00+00:00"},
+        {"max_budget": 20.0, "reset_at": "2020-01-01T00:00:00+00:00"},
+    ]}])
+    transaction.litellm_verificationtoken.update = AsyncMock(return_value=updated_key)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr(
@@ -8991,15 +9073,38 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     # get_budget_reset_time("1d") call would give) is the wrong value here --
     # it would put window_start at the start of the day already in progress,
     # which still covers that spend.
-    assert mock_prisma_client.db.litellm_verificationtoken.update.call_count == 2
-    window_update_call = mock_prisma_client.db.litellm_verificationtoken.update.call_args_list[1]
+    assert mock_prisma_client.db.litellm_verificationtoken.update.call_count == 1
+    window_update_call = transaction.litellm_verificationtoken.update.call_args
     assert window_update_call.kwargs["where"] == {"token": hashed_key}
     persisted_windows = json.loads(window_update_call.kwargs["data"]["budget_limits"])
-    assert len(persisted_windows) == 1
+    assert len(persisted_windows) == 3
     assert persisted_windows[0]["budget_duration"] == "1d"
-    assert persisted_windows[0]["max_budget"] == 50.0
+    assert persisted_windows[0]["max_budget"] == 75.0
+    assert persisted_windows[1]["max_budget"] == 200.0
+    assert persisted_windows[2] == {"max_budget": 20.0, "reset_at": "2020-01-01T00:00:00+00:00"}
+    assert spend.memory[f"spend:key:{hashed_key}:window:1mo"] == 0.0
     persisted_reset_at = datetime.fromisoformat(persisted_windows[0]["reset_at"])
     assert before_call + timedelta(days=1) <= persisted_reset_at <= after_call + timedelta(days=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_windows", [None, [], [{"budget_duration": "1d", "max_budget": 50.0}]])
+async def test_manual_window_reset_never_publishes_before_commit(
+    monkeypatch: pytest.MonkeyPatch, current_windows: list[dict[str, object]] | None,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import _reset_key_budget_windows
+
+    database: Final = MagicMock()
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": current_windows}])
+    transaction.litellm_verificationtoken.update = AsyncMock()
+    database.tx.return_value.__aexit__.side_effect = RuntimeError("commit failed")
+    spend: Final = FakeSpendCounters()
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await _reset_key_budget_windows(database, "window-key")
+    assert spend.commands == []
+    assert transaction.litellm_verificationtoken.update.await_count == int(bool(current_windows))
 
 
 @pytest.mark.asyncio
