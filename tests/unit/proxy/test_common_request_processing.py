@@ -46,7 +46,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
-from litellm.litellm_core_utils.core_helpers import FinishEvidence
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -6759,6 +6759,41 @@ class TestStreamingClientDisconnectLogging:
         assert recorded is True
         assert request_data["metadata"]["client_disconnected"] is True
         assert request_data["litellm_params"]["metadata"]["client_disconnected"] is True
+
+    @pytest.mark.parametrize(
+        "logged_litellm_params",
+        [
+            {"metadata": {"tags": ["chat"]}},
+            {"metadata": {"user_api_key": "hashed"}, "litellm_metadata": {"tags": ["responses"]}},
+            {"metadata": {"tags": ["chat"]}, "litellm_metadata": {}},
+        ],
+        ids=["chat_route_metadata", "responses_route_litellm_metadata", "empty_litellm_metadata"],
+    )
+    @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_reaches_the_metadata_the_spend_log_reads(
+        self, logged_litellm_params: dict[str, dict[str, object]]
+    ):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": copy.deepcopy(logged_litellm_params)}
+        tags_before = get_litellm_metadata_from_kwargs(logging_obj.model_call_details).get("tags")
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            **copy.deepcopy(logged_litellm_params),
+            "litellm_params": copy.deepcopy(logged_litellm_params),
+        }
+
+        recorded = await _record_streaming_client_disconnect_if_needed(None, request_data, client_disconnected=True)
+
+        logged = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
+        assert recorded is True
+        assert logged["client_disconnected"] is True
+        assert logged["error_information"]["error_class"] == "ClientDisconnected"
+        assert logged.get("tags") == tags_before
+        assert get_litellm_metadata_from_kwargs(request_data)["error_information"]["error_code"] == "499"
 
     @pytest.mark.asyncio
     async def test_apply_client_disconnect_metadata_none_returns_early(self):
