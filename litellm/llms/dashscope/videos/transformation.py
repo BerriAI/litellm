@@ -631,7 +631,6 @@ class DashScopeVideoConfig(BaseVideoConfig):
         auth_headers: Final[dict[str, str]] = {  # mutable-ok: httpx request headers are a mutable dict
             "Authorization": f"Bearer {resolved_api_key}",
             "Content-Type": "application/json",
-            "X-DashScope-Async": "enable",
         }
         headers.update(auth_headers)
         return headers
@@ -653,6 +652,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[dict[str, object], RequestFiles, str]:  # mutable-ok: BaseVideoConfig contract
+        headers["X-DashScope-Async"] = "enable"
         reference_field, reference_value = self._reference_input(model, video_create_optional_request_params)
         passthrough_input: Final = tuple(
             (key, video_create_optional_request_params[key])
