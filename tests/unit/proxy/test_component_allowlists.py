@@ -67,6 +67,7 @@ from litellm.runtime.backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
+from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
@@ -343,6 +344,22 @@ def test_gateway_serves_the_eu_jev_decision_route_and_no_other_eu_jev_path(path:
         return None
 
     assert _is_gateway_route(Route(path, endpoint, methods=["POST"])) is served
+
+
+_OPENAI_ROUTES_ONLY_THE_BACKEND_SERVES: Final = frozenset(
+    {"/utils/model_info", "/utils/token_counter", "/utils/transform_request"}
+)
+_GATEWAY_OPENAI_PATHS: Final = frozenset(LiteLLMRoutes.openai_routes.value) - _OPENAI_ROUTES_ONLY_THE_BACKEND_SERVES
+_REGISTERED_GATEWAY_OPENAI_ROUTES: Final = tuple(
+    route for route in app.router.routes if isinstance(route, Route) and route.path in _GATEWAY_OPENAI_PATHS
+)
+
+
+@pytest.mark.parametrize(
+    "route", _REGISTERED_GATEWAY_OPENAI_ROUTES, ids=lambda route: f"{sorted(route.methods or ())} {route.path}"
+)
+def test_gateway_serves_every_registered_openai_route(route: Route) -> None:
+    assert _is_gateway_route(route)
 
 
 def test_every_app_mount_is_assigned_to_a_component():
