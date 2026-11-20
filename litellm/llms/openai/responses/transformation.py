@@ -517,6 +517,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         if (
             self.custom_llm_provider == LlmProviders.OPENAI
+            and (drop_params or litellm.drop_params)
+            and params.get("temperature") not in (None, 1)
+            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
+        ):
+            params.pop("temperature")
+
+        if (
+            self.custom_llm_provider == LlmProviders.OPENAI
             and self._requests_reasoning_effort(params.get("reasoning"))
             and not self._supports_reasoning_param(model=model)
         ):
