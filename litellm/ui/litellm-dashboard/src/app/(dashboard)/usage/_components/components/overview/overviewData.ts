@@ -52,6 +52,7 @@ export const providerSpendRows = (results: readonly DailyData[]) => {
     provider: key,
     ...row,
     subscription_covered: covered.has(key),
+    provider_name: covered.get(key) ?? key,
   }));
 };
 

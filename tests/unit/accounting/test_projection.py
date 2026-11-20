@@ -187,6 +187,57 @@ async def test_daily_projection_matches_legacy_writer(
 
 
 @pytest.mark.parametrize(
+    ("claude_subscription_usage", "expected_provider"),
+    [
+        ({"is_overage": False, "status": "allowed", "overage_status": None}, "anthropic:subscription"),
+        ({"is_overage": True, "status": "rejected", "overage_status": "allowed"}, "anthropic"),
+        (None, "anthropic"),
+    ],
+    ids=["allowance", "overage", "api_key"],
+)
+@pytest.mark.asyncio
+async def test_ledger_and_legacy_writer_bucket_a_claude_allowance_request_under_the_same_provider(
+    claude_subscription_usage: dict[str, object] | None, expected_provider: str
+) -> None:
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-4-5",
+            "custom_llm_provider": "anthropic",
+            "call_type": "acompletion",
+            "litellm_call_id": "claude-request",
+            "litellm_params": {
+                "metadata": {"user_api_key": "key", "user_api_key_user_id": "user", "status": "success"}
+            },
+        },
+        response_obj=ModelResponse(
+            id="claude-request", model="claude-sonnet-4-5", usage=Usage(prompt_tokens=10, completion_tokens=5)
+        ),
+        start_time=_NOW,
+        end_time=_NOW,
+    )
+    metadata: Final = {
+        **_FIELDS.validate_json(payload["metadata"]),
+        "claude_subscription_usage": claude_subscription_usage,
+    }
+    row: Final[SpendLogsPayload] = {**payload, "metadata": json.dumps(metadata)}
+    legacy: Final = await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
+        row, PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj), "user"
+    )
+    accounting: Final = build_accounting_payload(
+        row,
+        entities={"api_key": row["api_key"], "user": row["user"]},
+        model_access_groups=(),
+        windows=(),
+        router=lambda: None,
+    )
+    restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
+    stored_daily: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
+    assert legacy is not None
+    assert legacy["custom_llm_provider"] == expected_provider
+    assert dict(stored_daily.key)["custom_llm_provider"] == expected_provider
+
+
+@pytest.mark.parametrize(
     ("call_type", "route", "endpoint"),
     [
         ("acompletion", "/v1beta/models/projection-test:generateContent", "/models/{model}:generateContent"),

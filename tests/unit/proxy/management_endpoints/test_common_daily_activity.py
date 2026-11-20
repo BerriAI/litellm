@@ -3083,6 +3083,71 @@ def test_per_row_provider_marker_keeps_existing_provider_metadata():
     assert breakdown.providers["chatgpt"].metadata == {"region": "us", "subscription_covered": True}
 
 
+def test_per_row_provider_bucket_separates_client_subscription_requests_from_metered_usage():
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    update_breakdown_metrics(
+        breakdown, _provider_record("anthropic", model="claude-sonnet-4-5", spend=0.35), {}, {}, {}
+    )
+    update_breakdown_metrics(
+        breakdown, _provider_record("anthropic:subscription", model="claude-sonnet-4-5", spend=0.0), {}, {}, {}
+    )
+    update_breakdown_metrics(
+        breakdown, _provider_record("anthropic:subscription", model="claude-sonnet-4-5", spend=0.0), {}, {}, {}
+    )
+
+    assert breakdown.providers["anthropic:subscription"].metadata == {
+        "subscription_covered": True,
+        "custom_llm_provider": "anthropic",
+    }
+    assert "subscription_covered" not in breakdown.providers["anthropic"].metadata
+    assert breakdown.providers["anthropic"].metrics.api_requests == 1
+    assert breakdown.providers["anthropic"].metrics.spend == 0.35
+    assert breakdown.providers["anthropic:subscription"].metrics.api_requests == 2
+
+
+def test_per_row_provider_bucket_marks_github_copilot_as_subscription_covered():
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    update_breakdown_metrics(breakdown, _provider_record("github_copilot", model="gpt-4o", spend=0.0), {}, {}, {})
+
+    assert breakdown.providers["github_copilot"].metadata == {"subscription_covered": True}
+
+
+def test_grouping_sets_provider_bucket_separates_client_subscription_requests_from_metered_usage():
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_PROVIDER,
+        _GROUP_DATE_PROVIDER_API_KEY,
+        _GROUP_GRAND_TOTAL,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="anthropic", spend=0.35),
+        _grouping_row(_GROUP_DATE_PROVIDER_API_KEY, custom_llm_provider="anthropic", api_key="real-key", spend=0.35),
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="anthropic:subscription", spend=0.0),
+        _grouping_row(
+            _GROUP_DATE_PROVIDER_API_KEY, custom_llm_provider="anthropic:subscription", api_key="real-key", spend=0.0
+        ),
+        _grouping_row(_GROUP_GRAND_TOTAL, spend=0.35),
+    ]
+
+    providers = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})["results"][
+        0
+    ].breakdown.providers
+
+    assert providers["anthropic:subscription"].metadata == {
+        "subscription_covered": True,
+        "custom_llm_provider": "anthropic",
+    }
+    assert "real-key" in providers["anthropic:subscription"].api_key_breakdown
+    assert "subscription_covered" not in providers["anthropic"].metadata
+
+
 @pytest.mark.parametrize("provider_row_first", [True, False])
 def test_grouping_sets_provider_bucket_marks_subscription_backed_providers_in_any_row_order(provider_row_first):
     from litellm.proxy.management_endpoints.common_daily_activity import (

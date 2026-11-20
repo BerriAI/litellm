@@ -934,6 +934,8 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
 )
 
 SUBSCRIPTION_BACKED_PROVIDERS: Final = frozenset({"chatgpt"})
+SUBSCRIPTION_COVERED_PROVIDERS: Final = SUBSCRIPTION_BACKED_PROVIDERS | frozenset({"github_copilot"})
+SUBSCRIPTION_BUCKET_SUFFIX: Final = ":subscription"
 A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
 A2A_COMPLETION_BRIDGE_WORKING_MESSAGE: Final = "Processing request..."
 

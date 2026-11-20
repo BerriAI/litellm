@@ -286,6 +286,38 @@ describe("SpendByProvider", () => {
     expect(screen.getByText("Included in subscription").closest("td")).not.toHaveTextContent("$");
   });
 
+  it("shows a client subscription bucket under the real provider name and badge next to metered usage of that provider", () => {
+    const rows = [
+      {
+        provider: "anthropic",
+        spend: 0.35,
+        requests: 2,
+        successful_requests: 2,
+        failed_requests: 0,
+        tokens: 58270,
+        subscription_covered: false,
+        provider_name: "anthropic",
+      },
+      {
+        provider: "anthropic:subscription",
+        spend: 0,
+        requests: 1,
+        successful_requests: 1,
+        failed_requests: 0,
+        tokens: 17095,
+        subscription_covered: true,
+        provider_name: "anthropic",
+      },
+    ];
+    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={rows} />);
+    expect(screen.queryByText("anthropic:subscription")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("provider-logo-anthropic")).toHaveLength(2);
+    expect(screen.getByText("Included in subscription").closest("tr")).toHaveTextContent("17,095");
+    const meteredRow = screen.getByText("58,270").closest("tr");
+    expect(meteredRow).toHaveTextContent("$0.35");
+    expect(meteredRow).not.toHaveTextContent("Included in subscription");
+  });
+
   it("should include all providers with spend greater than zero by default", () => {
     const providerSpendWithMixed = [
       {

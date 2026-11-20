@@ -22,6 +22,7 @@ from litellm.proxy.route_llm_request import spend_endpoint
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.proxy.spend_tracking.customer_cache_cost import recorded_customer_cache_cost
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
+from litellm.proxy.spend_tracking.subscription_coverage import daily_spend_provider
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 _FIELDS: Final = TypeAdapter(dict[str, object])
@@ -49,6 +50,10 @@ def _fields(value: object) -> Mapping[str, object]:
 
 def _text(value: object) -> str:
     return "" if value is None else str(value)
+
+
+def _optional_text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _number(value: object) -> int | float:
@@ -219,7 +224,7 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
         ("date", date),
         ("api_key", _text(row.get("api_key"))),
         ("model", _text(row.get("model"))),
-        ("custom_llm_provider", _text(row.get("custom_llm_provider"))),
+        ("custom_llm_provider", _text(daily_spend_provider(_optional_text(row.get("custom_llm_provider")), metadata))),
         ("mcp_namespaced_tool_name", _text(row.get("mcp_namespaced_tool_name"))),
         ("endpoint", _text(endpoint)),
     )
