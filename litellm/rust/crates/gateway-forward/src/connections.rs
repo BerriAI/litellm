@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tokio_util::{
     sync::{CancellationToken, DropGuard},
     task::TaskTracker,
@@ -24,10 +26,6 @@ impl Connections {
         });
     }
 
-    pub fn begin_shutdown(&self) {
-        self.draining.cancel();
-    }
-
     pub async fn draining(&self) {
         self.draining.cancelled().await;
     }
@@ -43,15 +41,24 @@ impl Connections {
         }
     }
 
-    pub fn close(&self) {
-        self.closed.cancel();
-    }
-
     pub fn close_on_drop(&self) -> DropGuard {
         self.closed.clone().drop_guard()
     }
 
-    pub async fn wait(&self) {
+    /// Lets open requests and WebSockets finish for up to `drain`, then closes whatever is left.
+    pub async fn shut_down(&self, drain: Duration) {
+        self.draining.cancel();
+        if tokio::time::timeout(drain, self.wait()).await.is_err() {
+            tracing::warn!(
+                ?drain,
+                "closing connections still open after the shutdown drain"
+            );
+        }
+        self.closed.cancel();
+        self.wait().await;
+    }
+
+    async fn wait(&self) {
         self.tasks.close();
         self.tasks.wait().await;
     }

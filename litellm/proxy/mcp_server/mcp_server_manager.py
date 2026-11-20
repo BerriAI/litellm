@@ -29,7 +29,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache, partial
 from itertools import chain, groupby
 from types import EllipsisType, MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import ParseResult, urlparse
 
 import anyio
@@ -169,6 +169,7 @@ from litellm.proxy.mcp_server.result_conversion import (
     WireCompat,
     complete_call_tool_result,
     handler_outcome,
+    is_url_elicitation_required,
     to_gateway_tool,
 )
 from litellm.proxy.mcp_server.sampling_handler import (
@@ -1706,6 +1707,24 @@ def _upstream_failure_suffix(exc: BaseException) -> str:
     return f"\n  upstream exchange: {detail}" if detail else ""
 
 
+async def _note_scope_refusal(
+    server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None, error: BaseException
+) -> None:
+    """Note a provider's scope refusal on the caller's grant, so her next connect goes back to the provider."""
+    from litellm.proxy.mcp_server.db import record_oauth_scope_refusal  # noqa: PLC0415  # circular import
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import
+
+    managed_per_user: Final = server.is_gateway_managed_oauth2 and server.needs_user_oauth_token
+    refused_scope: Final = upstream_insufficient_scope(error) if managed_per_user else None
+    user_id: Final = user_api_key_auth.user_id if user_api_key_auth is not None else None
+    if refused_scope is None or not user_id or prisma_client is None:
+        return
+    try:
+        await record_oauth_scope_refusal(prisma_client, user_id, server.server_id, refused_scope)
+    except Exception as exc:  # noqa: BLE001  # the challenge still goes out when the note cannot be written
+        verbose_logger.warning("Failed to note an MCP scope refusal (%s)", type(exc).__name__)
+
+
 def _obo_retry_applies(server: MCPServer, subject_token: str | None) -> bool:
     """Whether an upstream 401/403 should invalidate the minted credential and retry once.
 
@@ -1998,6 +2017,24 @@ def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
 
 class _InternalNetworkSettings(Protocol):
     def get(self, key: Literal["mcp_internal_ip_ranges"], /) -> list[str] | None: ...
+
+
+_Gathered: Final = TypeVar("_Gathered")
+
+
+async def _gather_before_relaying_url_elicitation(tasks: Sequence[asyncio.Task[_Gathered]]) -> Sequence[_Gathered]:
+    try:
+        return await asyncio.gather(*tasks)
+    except Exception as error:
+        if not is_url_elicitation_required(error):
+            raise
+        settled: Final = await asyncio.gather(*tasks, return_exceptions=True)
+        rejection: Final = next(
+            (outcome for outcome in settled if isinstance(outcome, BaseException) and outcome is not error), None
+        )
+        if rejection is None:
+            raise
+        raise rejection from None
 
 
 class MCPServerManager:
@@ -4746,6 +4783,7 @@ class MCPServerManager:
             # Pass-through 401 must surface to single-server routes so the
             # client triggers the upstream OAuth flow. The multi-server
             # aggregator catches this explicitly to keep absorbing.
+            await _note_scope_refusal(server, user_api_key_auth, upstream_auth_error)
             if server.is_dcr_bridge and upstream_auth_error.www_authenticate is not None:
                 raise MCPUpstreamAuthError(
                     status_code=upstream_auth_error.status_code,
@@ -4776,6 +4814,7 @@ class MCPServerManager:
             verbose_logger.warning(
                 "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, _upstream_failure_suffix(e)
             )
+            await _note_scope_refusal(server, user_api_key_auth, e)
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
     def _admin_tools_list_ttl(self, server: MCPServer) -> int | None:
@@ -6791,6 +6830,8 @@ class MCPServerManager:
                     persistent_session=persistent_session,
                 )
         except Exception as exc:
+            if is_url_elicitation_required(exc):
+                raise
             auth_failure: Final = _extract_upstream_auth_failure(exc)
             if auth_failure is None and not isinstance(exc, UpstreamSessionClosedError):
                 return MCPClient.error_tool_result(exc)
@@ -7030,8 +7071,11 @@ class MCPServerManager:
                             persistent_session=persistent_session,
                         )
                     except Exception as e:
+                        if is_url_elicitation_required(e):
+                            raise
                         required_scope: Final = upstream_insufficient_scope(e) if managed_per_user else None
                         if required_scope is not None:
+                            await _note_scope_refusal(mcp_server, user_api_key_auth, e)
                             raise MCPUpstreamAuthError(
                                 status_code=403,
                                 www_authenticate=None,
@@ -7066,7 +7110,9 @@ class MCPServerManager:
 
         _timeout: Final = mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
         try:
-            mcp_responses: Final = await asyncio.wait_for(asyncio.gather(*tasks), timeout=_timeout)
+            mcp_responses: Final = await asyncio.wait_for(
+                _gather_before_relaying_url_elicitation(tasks), timeout=_timeout
+            )
         except asyncio.TimeoutError:
             raise HTTPException(
                 status_code=504,

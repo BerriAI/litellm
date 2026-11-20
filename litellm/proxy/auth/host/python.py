@@ -44,6 +44,7 @@ from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, res
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     TeamNotFoundError,
+    TeamReadFailed,
     can_team_access_model,
     delete_cache_key_object,
     get_default_end_user_budget,
@@ -58,6 +59,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object_by_alias,
     get_user_object,
     get_user_role,
+    read_team,
     resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_object_prefetch import prefetch_identity_keys
@@ -98,6 +100,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.rust_bridge._native import RustIdentity
@@ -264,7 +267,7 @@ class PythonAuthHost:
         await prefetch_identity_keys(
             identity_cache_keys(token or "", end_user_id=end_user_id, key_is_resolved=token is None),
             user_api_key_cache=self.user_api_key_cache,
-            before_read=arm_routing_cooldowns,
+            before_read=self._arm_routing_cooldowns,
         )
 
     async def end_user(self, end_user_id: str | None) -> EndUserRow:
@@ -403,7 +406,15 @@ class PythonAuthHost:
             end_user_id=end_user.end_user_id,
             user_api_key_cache=self.user_api_key_cache,
             prisma_client=self.prisma_client,
+            requested_model=self._requested_model(),
         )
+
+    def _requested_model(self) -> str | None:
+        model: Final = None if self.http is None else self.http.request_data.get("model")
+        return model if isinstance(model, str) else None
+
+    def _arm_routing_cooldowns(self) -> None:
+        arm_routing_cooldowns(self._requested_model())
 
     async def key_owner(self, user_id: str) -> LiteLLM_UserTable | None:
         """Raises when the owner cannot be read; the core treats that as no owner."""
@@ -542,7 +553,7 @@ class PythonAuthHost:
         self, team_id: str, *, upsert: bool = False, check_db_only: bool = False
     ) -> FoundTeam | TeamMissing:
         try:
-            team: Final = await get_team_object(
+            read: Final = await read_team(
                 team_id=team_id,
                 prisma_client=self.prisma_client,
                 user_api_key_cache=self.user_api_key_cache,
@@ -553,9 +564,11 @@ class PythonAuthHost:
             )
         except TeamNotFoundError:
             return TeamMissing.ABSENT
-        except HTTPException:
-            return TeamMissing.UNREADABLE
-        return team_facts(team)
+        if not isinstance(read, TeamReadFailed):
+            return team_facts(read)
+        if PrismaDBExceptionHandler.is_database_connection_error(read.error):
+            raise read.error
+        return TeamMissing.UNREADABLE
 
     async def team(self, team_id: str, upsert: bool) -> FoundTeam | TeamMissing:
         return await self._team(team_id, upsert=upsert)

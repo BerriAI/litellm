@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     import httpx
     from aiohttp import ClientSession
     from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+    from opentelemetry.trace import Span
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -394,6 +395,7 @@ class CallState:
     preset_cache_key: str | None = None
     cache_key: str | None = None
     stream_response: "Mapping[str, ModelResponse] | None" = None
+    parent_otel_span: "Span | None" = None
     context_compaction_state: "CompactionState | None" = field(default=None, metadata=wire("_context_compaction_state"))
     prompt_management_applied: PromptManagement | None = field(
         default=None, metadata=wire(PROMPT_MANAGEMENT_APPLIED_FIELD)

@@ -11,10 +11,19 @@ from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.rust_bridge._native import (
     RustAuthOutcome,
     RustDenial,
 )
+
+
+class NoMatchingJWTPublicKeyError(Exception):
+    pass
+
+
+class IdJagIsNotABearerTokenError(Exception):
+    pass
 
 
 def _invalid_virtual_key(status: int, detail: str) -> HTTPException:
@@ -51,6 +60,12 @@ def denial_error(denial: RustDenial) -> Exception:
             )
         case RustDenial.TeamNotFound(team_id=team_id):
             return TeamNotFoundError(team_id=team_id)
+        case RustDenial.KeyNotFound(hash=hashed_token):
+            return KeyNotFoundError(hashed_token)
+        case RustDenial.NoMatchingJwtPublicKey(message=message):
+            return NoMatchingJWTPublicKeyError(message)
+        case RustDenial.IdJagNotBearer(message=message):
+            return IdJagIsNotABearerTokenError(message)
         case unknown:
             raise RuntimeError(f"rust auth returned a denial this host does not know: {unknown!r}")
 
