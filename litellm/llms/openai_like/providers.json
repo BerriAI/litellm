@@ -192,6 +192,12 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   },
+  "ezkielyna": {
+    "base_url": "https://api.ezkielyna.store/v1",
+    "api_key_env": "EZKIELYNA_API_KEY",
+    "api_base_env": "EZKIELYNA_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
   "meta": {
     "base_url": "https://api.meta.ai/v1",
     "api_key_env": "META_API_KEY",
