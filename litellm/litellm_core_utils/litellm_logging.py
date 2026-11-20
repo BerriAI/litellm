@@ -4942,8 +4942,6 @@ class Logging(LiteLLMLoggingBaseClass):
         ):  # prevent double logging (non-streaming)
             return
 
-        self.mark_logging_complete(event_type="async_success")
-
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(result, LiteLLMBatch):
             if self._is_batch_poll_without_logging(result):
