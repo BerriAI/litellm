@@ -105,6 +105,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _UNTRUSTED_ROOT_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     ROUTER_RESERVED_METADATA_FIELDS,
     add_guardrails_from_policy_engine,
+    client_pricing_fields_stripped_for,
     is_chat_completions_body,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -124,6 +125,8 @@ from litellm.responses.streaming_iterator import (
     GuardedResponsesWsFrame,
     ResponsesWsFrameGuard,
     ResponsesWsFrameRejection,
+    responses_ws_error_frame,
+    responses_ws_error_type,
     spawn_logging_task,
     turn_refusal_frame,
 )
@@ -1893,11 +1896,12 @@ async def _responses_input_tokens(
         )
 
     request_fields: Final = _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data)
+    left_out_fields: Final = counted_fields.keys() | client_pricing_fields_stripped_for(user_api_key_dict)
     try:
         responses_request: Final = await _with_managed_file_id_mapping(
             _with_authorized_previous_response(
                 {
-                    **{name: value for name, value in request_fields.items() if name not in counted_fields},
+                    **{name: value for name, value in request_fields.items() if name not in left_out_fields},
                     **token_fields,
                 },
                 response_id_security,
@@ -1971,6 +1975,7 @@ async def cancel_response(
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
+        polling_cache_ttl,
         proxy_config,
         proxy_logging_obj,
         read_request_body,
@@ -1991,7 +1996,7 @@ async def cancel_response(
         if not redis_usage_cache:
             raise HTTPException(status_code=500, detail="Redis cache not configured.")
 
-        polling_handler: Final = ResponsePollingHandler(redis_cache=redis_usage_cache)
+        polling_handler: Final = ResponsePollingHandler(redis_cache=redis_usage_cache, ttl=polling_cache_ttl)
 
         # Get current state to verify it exists
         state: Final = await polling_handler.get_state(response_id)
@@ -2089,29 +2094,15 @@ async def _read_ws_model_from_first_frame(
         first_event: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(first_message)))
     except json.JSONDecodeError:
         await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": "First message is not valid JSON.",
-                    },
-                }
-            )
+            responses_ws_error_frame(400, "invalid_request_error", "First message is not valid JSON.")
         )
         await websocket.close(code=1008, reason="Invalid JSON in first message")
         return None
 
     if first_event is None or first_event.get("type") != "response.create":
         await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": "First message must be a response.create JSON object.",
-                    },
-                }
+            responses_ws_error_frame(
+                400, "invalid_request_error", "First message must be a response.create JSON object."
             )
         )
         await websocket.close(code=1008, reason="Invalid first message")
@@ -2120,14 +2111,10 @@ async def _read_ws_model_from_first_frame(
     model: Final = query_model or _extract_model_from_first_ws_event(first_event)
     if not model:
         await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": "No model provided. Supply ?model=<model> in the URL or include 'model' in the first response.create event.",
-                    },
-                }
+            responses_ws_error_frame(
+                400,
+                "invalid_request_error",
+                "No model provided. Supply ?model=<model> in the URL or include 'model' in the first response.create event.",
             )
         )
         await websocket.close(code=1008, reason="No model provided")
@@ -2173,21 +2160,10 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
 
 def _responses_ws_failure_frame(failure: Exception) -> str:
     if isinstance(failure, EndpointNotSupportedByModelError):
-        return json.dumps(
-            {
-                "type": "error",
-                "status": 400,
-                "error": {"type": "invalid_request_error", "message": failure.message.split("\n\n", 1)[0]},
-            }
-        )
+        return responses_ws_error_frame(400, "invalid_request_error", failure.message.split("\n\n", 1)[0])
     proxy_exception: Final = handle_exception_on_proxy(failure)
     status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
-    error_type: Final = (
-        "rate_limit_exceeded" if status == 429 else "invalid_request_error" if 400 <= status < 500 else "server_error"
-    )
-    return json.dumps(
-        {"type": "error", "status": status, "error": {"type": error_type, "message": proxy_exception.message}}
-    )
+    return responses_ws_error_frame(status, responses_ws_error_type(status), proxy_exception.message)
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
@@ -2371,7 +2347,11 @@ def _responses_ws_frame_guard(
     ) -> ResponsesWsFrameRejection:
         await _bill_rejected_frame(rejected_frame_auth, exception, data)
         proxy_exception: Final = proxy_exception_from_route_error(exception)
-        return ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields)
+        # a passthrough block is a 200 on HTTP, and an error frame must never invite a retry of the blocked turn
+        status_code: Final = (
+            400 if isinstance(exception, ModifyResponseException) else error_status_code(proxy_exception, 500)
+        )
+        return ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields, status_code)
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         started_at: Final = datetime.now()  # noqa: DTZ005  # the request pipeline logs naive local start times
@@ -2833,16 +2813,9 @@ async def _responses_websocket_session(
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:
+            open_status: Final = error_status_code(e, 500)
             await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "error": {
-                            "type": "invalid_request_error",
-                            "message": str(e),
-                        },
-                    }
-                )
+                responses_ws_error_frame(open_status, responses_ws_error_type(open_status), str(e))
             )
         except (WebSocketDisconnect, RuntimeError, OSError):
             pass

@@ -2635,3 +2635,19 @@ async def test_soniox_realtime_health_check_fails_when_soniox_closes_without_fin
             await realtime_main.realtime_health_check(
                 model="stt-rt-v5", custom_llm_provider="soniox", api_key="soniox-key", api_base=f"ws://127.0.0.1:{port}"
             )
+
+
+def test_session_metadata_keeps_the_proxy_caller_identity_for_bedrock_session_tags() -> None:
+    request_data: Final = {
+        "metadata": {
+            "user_api_key_alias": "realtime-caller",
+            "user_api_key_team_alias": "team-a",
+            "user_api_key_metadata": {"disable_global_guardrails": True},
+            "other": "dropped",
+        },
+        "litellm_metadata": {"user_api_key_alias": "internal"},
+    }
+    assert realtime_main._build_litellm_metadata(request_data) == {
+        "user_api_key_alias": "internal",
+        "user_api_key_team_alias": "team-a",
+    }

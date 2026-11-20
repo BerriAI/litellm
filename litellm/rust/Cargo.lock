@@ -1370,6 +1370,8 @@ dependencies = [
  "compression-core",
  "flate2",
  "memchr",
+ "zstd",
+ "zstd-safe",
 ]
 
 [[package]]
@@ -3220,6 +3222,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "windows-link",
 ]
 
 [[package]]
@@ -3492,6 +3495,7 @@ dependencies = [
  "azure_identity",
  "futures-util",
  "litellm-auth-types",
+ "litellm-env",
  "litellm-error",
  "litellm-http",
  "litellm-python-compat",
@@ -3522,18 +3526,33 @@ dependencies = [
  "gcp_auth",
  "google-cloud-auth",
  "http 1.4.2",
+ "litellm-auth-aws",
  "litellm-auth-types",
+ "litellm-env",
  "litellm-error",
+ "litellm-http",
+ "litellm-python-compat",
  "litellm-secret-value",
+ "litellm-tracing",
  "moka",
+ "percent-encoding",
+ "rcgen",
+ "reqwest",
+ "rsa",
  "rstest",
  "rustls 0.23.42",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "shlex",
+ "strum",
  "tempfile",
+ "thiserror 2.0.21",
  "time",
  "tokio",
+ "tokio-rustls 0.26.4",
+ "tracing",
+ "url",
  "veil",
 ]
 
@@ -3848,6 +3867,8 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
+ "envy",
+ "litellm-env",
  "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
@@ -3858,6 +3879,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml_ng",
+ "struct-field-names-as-array",
  "strum",
  "thiserror 2.0.21",
  "veil",
@@ -3928,16 +3950,35 @@ dependencies = [
 name = "litellm-db"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "futures-util",
  "litellm-circuit-breaker",
  "litellm-error",
  "litellm-secret-value",
- "macro_rules_attribute",
+ "rstest",
+ "serde",
+ "sqlx",
+ "strum",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "litellm-db-resolve"
+version = "0.1.0"
+dependencies = [
+ "litellm-config",
+ "litellm-db",
+ "litellm-env",
+ "litellm-http",
+ "litellm-python-compat",
+ "litellm-secret-value",
+ "litellm-secrets",
+ "percent-encoding",
  "rstest",
  "serde",
  "serde_json",
- "sqlx",
+ "shlex",
  "strum",
  "thiserror 2.0.21",
  "tokio",
@@ -4000,11 +4041,15 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "envy",
+ "flate2",
  "futures-util",
  "http-body-util",
+ "hyper-util",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-config-load",
+ "litellm-db",
+ "litellm-db-resolve",
  "litellm-env",
  "litellm-error",
  "litellm-gateway-auth",
@@ -4012,6 +4057,7 @@ dependencies = [
  "litellm-gateway-inference",
  "litellm-http",
  "litellm-inference",
+ "litellm-license",
  "litellm-llms",
  "litellm-model-catalog",
  "litellm-python-compat",
@@ -4027,14 +4073,16 @@ dependencies = [
  "rustls 0.23.42",
  "serde",
  "serde_json",
+ "strum",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tower",
+ "tower-http",
  "tracing",
  "uuid",
- "veil",
  "wiremock",
+ "zstd",
 ]
 
 [[package]]
@@ -4096,6 +4144,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "tower",
+ "tower-http",
  "tower-service",
  "tracing",
 ]
@@ -4131,6 +4181,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "strum",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
@@ -4298,6 +4349,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-auth-gcp",
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
@@ -4428,6 +4480,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-license"
+version = "0.1.0"
+dependencies = [
+ "backon",
+ "base64 0.22.1",
+ "jiff",
+ "litellm-error",
+ "litellm-http",
+ "rand 0.8.7",
+ "rsa",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
@@ -4482,6 +4557,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "struct-field-names-as-array",
  "strum",
 ]
 
@@ -4536,11 +4612,11 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "aws-credential-types",
  "aws-sdk-secretsmanager",
  "azure_core",
  "bytes",
+ "chrono",
  "criterion",
  "fancy-regex 0.19.2",
  "futures-util",
@@ -4550,6 +4626,7 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-azure",
+ "litellm-auth-gcp",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks",
@@ -4564,6 +4641,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-coroutine",
  "litellm-db",
+ "litellm-db-resolve",
  "litellm-env",
  "litellm-error",
  "litellm-gateway-auth-core",
@@ -4586,6 +4664,7 @@ dependencies = [
  "litellm-redis-resolve",
  "litellm-redis-store",
  "litellm-redis-types",
+ "litellm-repositories",
  "litellm-router-core",
  "litellm-router-types",
  "litellm-secret-value",
@@ -4621,6 +4700,7 @@ dependencies = [
 name = "litellm-python-compat"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "criterion",
  "hex",
  "num-bigint 0.4.8",
@@ -4631,6 +4711,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "thiserror 2.0.21",
+ "unicode-general-category",
 ]
 
 [[package]]
@@ -4690,16 +4771,23 @@ dependencies = [
 name = "litellm-redis-resolve"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
+ "litellm-config",
+ "litellm-env",
+ "litellm-http",
  "litellm-python-compat",
  "litellm-redis-types",
  "litellm-secret-value",
+ "litellm-secrets",
  "rstest",
  "serde",
  "serde_json",
  "strum",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
  "url",
+ "veil",
 ]
 
 [[package]]
@@ -4747,6 +4835,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-repositories"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "litellm-db",
+ "litellm-error",
+ "litellm-python-compat",
+ "macro_rules_attribute",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "veil",
+]
+
+[[package]]
 name = "litellm-router"
 version = "0.1.0"
 dependencies = [
@@ -4766,7 +4872,6 @@ name = "litellm-router-core"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
- "async-trait",
  "jiff",
  "litellm-cache",
  "litellm-python-compat",
@@ -4794,6 +4899,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "strum",
 ]
 
 [[package]]
@@ -5016,6 +5122,15 @@ dependencies = [
  "tokio",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-standard-logging"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5988,6 +6103,7 @@ version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b"
 dependencies = [
+ "chrono",
  "indexmap 2.14.0",
  "libc",
  "once_cell",
@@ -6522,6 +6638,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",
+ "sha2 0.10.9",
  "signature",
  "spki",
  "subtle",
@@ -7487,6 +7604,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "struct-field-names-as-array"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22ba4bae771f9cc992c4f403636c54d2ef13acde6367583e99d06bb336674dd9"
+dependencies = [
+ "struct-field-names-as-array-derive",
+]
+
+[[package]]
+name = "struct-field-names-as-array-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2dbf8b57f3ce20e4bb171a11822b283bdfab6c4bb0fe64fa729f045f23a0938"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "structmeta"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8067,7 +8204,9 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -9054,4 +9193,32 @@ dependencies = [
  "crc32fast",
  "log",
  "simd-adler32",
+]
+
+[[package]]
+name = "zstd"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad5020ab8f27bfc0024ad0a07aed6bf022a16208f479686fbed4fdd0c85eb0b3"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "8.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a9ea9cc2576c2fcc104e9cec04f46e3ede564f4fbc206831e4ef7e859a4140d"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.3+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f729a06d0257428fd9d997ac8db7e1407bd0262ab016b085b36bc52957c0052d"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
