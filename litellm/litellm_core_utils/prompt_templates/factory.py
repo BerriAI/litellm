@@ -57,6 +57,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     OpenAIMessageContentListBlock,
 )
+from litellm.types.llms.vertex_ai import BlobType
 from litellm.types.llms.vertex_ai import FunctionCall as VertexFunctionCall
 from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionResponse
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
@@ -1499,6 +1500,32 @@ def _contains_part_reference(payload: JsonValue) -> bool:
     return any(_is_part_reference(node) for node in itertools.chain.from_iterable(levels))
 
 
+def _gemini_tool_result_video_url(content: object) -> str | None:
+    fields: Final = as_str_mapping(content)
+    if fields is None or fields.get("type") != "video_url":
+        return None
+    video_url: Final = fields.get("video_url")
+    url: Final = video_url if isinstance(video_url, str) else (as_str_mapping(video_url) or {}).get("url")
+    return url if isinstance(url, str) and url else None
+
+
+def _gemini_tool_result_video_blob(video_url: str) -> BlobType | None:
+    from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
+
+    if gemini_fetches_url_itself(video_url):
+        raise BadRequestError(
+            message="Gemini tool results require inline media data. Use a data URL for this video.",
+            model="",
+            llm_provider="gemini",
+        )
+    try:
+        video: Final = convert_to_anthropic_image_obj(video_url, format=None)
+    except litellm.ImageFetchError as exc:
+        verbose_logger.warning("Failed to process video in tool response: %s", exc)
+        return None
+    return BlobType(data=video["data"], mime_type=video["media_type"])
+
+
 def convert_to_gemini_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     last_message_with_tool_calls: dict | None,
@@ -1530,8 +1557,6 @@ def convert_to_gemini_tool_call_result(
         ]
     }
     """
-    from litellm.types.llms.vertex_ai import BlobType
-
     content_str: str = ""
     inline_data_list: Final[list[BlobType]] = []
 
@@ -1612,6 +1637,10 @@ def convert_to_gemini_tool_call_result(
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process file in tool response: %s", e)
+                elif (video_url := _gemini_tool_result_video_url(content)) is not None and (
+                    video_blob := _gemini_tool_result_video_blob(video_url)
+                ) is not None:
+                    inline_data_list.append(video_blob)
     name: str | None = message.get("name", "")
 
     # Recover name from last message with tool calls

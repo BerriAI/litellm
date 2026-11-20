@@ -1822,6 +1822,44 @@ def test_convert_gemini_tool_call_result_with_image_url():
     assert len(inline_parts) == 1
 
 
+_FIND_CLIP_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "find_clip", "arguments": "{}"}}],
+}
+
+
+def _find_clip_result(video_url: str) -> dict:
+    return {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": {"url": video_url}}],
+    }
+
+
+def test_gemini_tool_result_video_url_reaches_gemini_as_inline_video() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result("data:video/mp4;base64,AAAAGGZ0eXA="), _FIND_CLIP_CALL
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_youtube_video_is_a_bad_request_instead_of_a_page_download() -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError, match="require inline media data"):
+        convert_to_gemini_tool_call_result(
+            _find_clip_result("https://www.youtube.com/watch?v=aqz-KE-bpKQ"), _FIND_CLIP_CALL
+        )
+
+
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
     Test that Anthropic-native image blocks in tool_result list content are

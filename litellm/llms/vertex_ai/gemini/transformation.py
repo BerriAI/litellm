@@ -16,7 +16,7 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
@@ -60,11 +60,12 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
-    GEMINI_FILES_API_URI_PREFIX,
     check_text_in_content,
+    gemini_fetches_url_itself,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
+    youtube_video_mime_type,
 )
 
 # VertexBase is imported only for type checking to avoid introducing a
@@ -275,6 +276,12 @@ def _image_url_payload_may_need_sync_gcs_metadata_fetch(
     return _gs_uri_requires_content_type_metadata(url)
 
 
+def _message_fields(message: object) -> Mapping[str, object] | None:
+    if isinstance(message, BaseModel):
+        return as_str_mapping(message.model_dump(exclude_none=False))
+    return as_str_mapping(message)
+
+
 def _openai_messages_may_need_sync_gcs_metadata_fetch(
     messages: list[AllMessageValues],
 ) -> bool:
@@ -287,32 +294,30 @@ def _openai_messages_may_need_sync_gcs_metadata_fetch(
     transform via ``asyncify``.
     """
     for raw in messages:
-        msg: Any = raw
-        if not isinstance(msg, dict) and hasattr(msg, "model_dump"):
-            msg = msg.model_dump(exclude_none=False)
-        if not isinstance(msg, dict):
+        message_fields = _message_fields(raw)
+        if message_fields is None:
             continue
-        images_field = msg.get("images")
-        if isinstance(images_field, list):
-            for image_item in images_field:
-                if not isinstance(image_item, dict):
-                    continue
-                if _image_url_payload_may_need_sync_gcs_metadata_fetch(image_item.get("image_url")):
-                    return True
+        for image_item in as_object_list(message_fields.get("images")) or ():
+            image_fields = as_str_mapping(image_item)
+            if image_fields is not None and _image_url_payload_may_need_sync_gcs_metadata_fetch(
+                image_fields.get("image_url")
+            ):
+                return True
 
-        content = msg.get("content")
-        if not isinstance(content, list):
+        content = as_object_list(message_fields.get("content"))
+        if content is None:
             continue
         for item in content:
-            if not isinstance(item, dict):
+            fields = as_str_mapping(item)
+            if fields is None:
                 continue
-            itype = item.get("type")
-            if itype == "image_url":
-                if _image_url_payload_may_need_sync_gcs_metadata_fetch(item.get("image_url")):
+            itype = fields.get("type")
+            if itype in ("image_url", "video_url"):
+                if _image_url_payload_may_need_sync_gcs_metadata_fetch(fields.get(itype)):
                     return True
             elif itype == "file":
-                file_obj = item.get("file")
-                if not isinstance(file_obj, dict):
+                file_obj = as_str_mapping(fields.get("file"))
+                if file_obj is None:
                     continue
                 fmt = file_obj.get("format") or file_obj.get("mime_type") or file_obj.get("content_type")
                 passed = file_obj.get("file_id") or file_obj.get("file_data")
@@ -559,13 +564,13 @@ def _process_gemini_media(
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
-        elif image_url.startswith(GEMINI_FILES_API_URI_PREFIX):
-            # Gemini Files API URIs — the file is already uploaded to Google's
-            # servers; pass the URI through as file_data without fetching it.
-            # These URLs return 403 when accessed directly, so we must not try
-            # to resolve their MIME type via HTTP.
-            if format:
-                file_data = FileDataType(mime_type=format, file_uri=image_url)
+        elif gemini_fetches_url_itself(image_url):
+            # Gemini fetches Files API URIs and YouTube links itself. Fetching them here
+            # gets a 403 (Files API) or a YouTube HTML page, so pass the URI through.
+            # Vertex rejects a fileData without mimeType, so YouTube links default to video/mp4.
+            uri_mime_type: Final = format or youtube_video_mime_type(image_url)
+            if uri_mime_type:
+                file_data = FileDataType(mime_type=uri_mime_type, file_uri=image_url)
             else:
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
@@ -583,6 +588,40 @@ def _process_gemini_media(
         raise Exception(f"Invalid image received - {image_url}")
     except Exception as e:
         raise e
+
+
+def _str_field(fields: Mapping[str, object], *keys: str) -> str | None:
+    value: Final = next((fields[key] for key in keys if fields.get(key)), None)
+    return value if isinstance(value, str) else None
+
+
+def _process_gemini_video_url(
+    video_url: object,
+    model: str | None,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    drop_params: bool,
+) -> PartType | None:
+    video_fields: Final = as_str_mapping(video_url) or {}
+    url: Final = video_url if isinstance(video_url, str) else _str_field(video_fields, "url")
+    if not url and drop_params:
+        return None
+    if not url:
+        raise litellm.BadRequestError(
+            message="Invalid message content: element type is 'video_url' but it has no 'url'",
+            model=model,
+            llm_provider="vertex_ai",
+        )
+    return _process_gemini_media(
+        image_url=url,
+        format=_str_field(video_fields, "format", "mime_type", "content_type"),
+        media_resolution_enum=_convert_detail_to_media_resolution_enum(_str_field(video_fields, "detail")),
+        model=model,
+        video_metadata=as_str_mapping(video_fields.get("video_metadata")),
+        vertex_project=vertex_project,
+        vertex_credentials=vertex_credentials,
+    )
 
 
 def snake_to_camel(snake_str: str) -> str:
@@ -781,6 +820,17 @@ def gemini_convert_messages_with_history(
                                 vertex_credentials=vertex_credentials,
                             )
                             _parts.append(_part)
+                        elif element["type"] == "video_url":
+                            if (
+                                video_part := _process_gemini_video_url(
+                                    element.get("video_url"),
+                                    model,
+                                    vertex_project,
+                                    vertex_credentials,
+                                    drop_params=drop_params,
+                                )
+                            ) is not None:
+                                _parts.append(video_part)
                         elif element["type"] == "input_audio":
                             audio_element = cast(ChatCompletionAudioObject, element)
                             audio_data = audio_element["input_audio"].get("data")
@@ -1320,11 +1370,11 @@ def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:
 
 
 def _ai_studio_inlines(media: RemoteMedia) -> bool:
-    return not media.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+    return not gemini_fetches_url_itself(media.url)
 
 
 def _vertex_inlines(media: RemoteMedia) -> bool:
-    if media.url.startswith(GEMINI_FILES_API_URI_PREFIX):
+    if gemini_fetches_url_itself(media.url):
         return False
     return media.url.startswith("http://") or (
         _explicit_mime_type(media.fields) is None and get_image_mime_type_from_url(media.url) is None
