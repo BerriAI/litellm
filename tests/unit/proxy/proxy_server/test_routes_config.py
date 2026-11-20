@@ -1983,3 +1983,26 @@ def test_config_yaml_invalid_method(client):
     # Method-not-allowed responses still return a JSON-ish body via the
     # FastAPI default handler — assert the body is not the success payload.
     assert response.content != b'{"hello":"world"}'
+
+
+def test_openapi_documents_config_yaml_schema_and_keeps_config_update_hidden(app, client, monkeypatch):
+    from litellm.proxy._types import ConfigYAML
+
+    monkeypatch.setattr(app, "openapi_schema", None)
+    response: Final = client.get("/openapi.json")
+    assert response.status_code == 200
+    schema: Final = response.json()
+
+    operation: Final = schema["paths"]["/config/yaml"]["get"]
+    assert operation["tags"] == ["config.yaml"]
+    assert operation["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ConfigYAML"
+    }
+    config_yaml_schema: Final = schema["components"]["schemas"]["ConfigYAML"]
+    assert set(config_yaml_schema["properties"]) == set(ConfigYAML.model_fields)
+    general_settings_refs: Final = {
+        option.get("$ref") for option in config_yaml_schema["properties"]["general_settings"]["anyOf"]
+    }
+    assert "#/components/schemas/ConfigGeneralSettings" in general_settings_refs
+    assert "ConfigGeneralSettings" in schema["components"]["schemas"]
+    assert "/config/update" not in schema["paths"]
