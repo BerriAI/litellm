@@ -2323,8 +2323,12 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
                 },
             },
         ),
+        (
+            {"type": "object", "properties": {"code": {"type": "string", "const": 7}}},
+            {"type": "object", "properties": {"code": {"type": "string"}}},
+        ),
     ],
-    ids=["items", "any-of-branch", "ref-to-defs"],
+    ids=["items", "any-of-branch", "ref-to-defs", "const-the-type-cannot-hold"],
 )
 def test_build_vertex_schema_pins_a_nested_const_as_a_one_value_enum(
     parameters: dict[str, JsonValue], expected: dict[str, JsonValue]
@@ -2384,8 +2388,24 @@ def test_build_json_schema_pins_a_const_in_every_subschema_keyword(
         ({"const": {"kind": "bank"}}, {"const": {"kind": "bank"}}),
         ({"const": ["bank"]}, {"const": ["bank"]}),
         ({"const": "bank", "type": ["string", "null"]}, {"type": ["string", "null"], "enum": ["bank"]}),
+        ({"const": 7, "type": "number"}, {"type": "number", "enum": [7]}),
+        ({"const": "bank", "type": "STRING"}, {"type": "STRING", "enum": ["bank"]}),
+        ({"const": 7, "type": "string"}, {"const": 7, "type": "string"}),
+        ({"const": "7", "type": ["integer", "null"]}, {"const": "7", "type": ["integer", "null"]}),
     ],
-    ids=["default", "examples", "property-named-const", "null-const", "object-const", "array-const", "typed-const"],
+    ids=[
+        "default",
+        "examples",
+        "property-named-const",
+        "null-const",
+        "object-const",
+        "array-const",
+        "typed-const",
+        "integer-const-under-number",
+        "upper-case-type",
+        "const-the-type-cannot-hold",
+        "const-no-listed-type-holds",
+    ],
 )
 def test_build_json_schema_pins_only_scalar_consts_in_subschemas_and_keeps_the_caller_type(
     other: JsonValue, expected_other: JsonValue
