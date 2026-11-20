@@ -293,11 +293,12 @@ async def test_concurrent_requests_share_a_failed_jwks_fetch_and_the_next_one_fe
 async def test_a_jwks_5xx_with_nothing_cached_is_denied_as_unreachable_and_backs_off() -> None:
     jwks: Final = _Jwks(status=503)
     cache: Final = UserApiKeyCache()
+    jwks_cache: Final = DualCache()
     token: Final = _token({"sub": "admin-1", "scope": "litellm_proxy_admin"})
 
     outcomes: Final = (
-        await _authorize(token, "/key/generate", cache, jwks),
-        await _authorize(token, "/key/generate", cache, jwks),
+        await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache),
+        await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache),
     )
 
     assert all(
