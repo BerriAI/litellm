@@ -193,7 +193,32 @@ def _tokenizer_and_served_models(deployment: object) -> tuple[str, str]:
     return deployment_openai_model(deployment) or served, served
 
 
-def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "") -> int:
+_RESPONSES_INPUT_ITEMS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _responses_input_messages(input_value: object) -> tuple[object, ...]:
+    if input_value is None or isinstance(input_value, str):
+        return ()
+    with contextlib.suppress(ValidationError):
+        if _RESPONSES_INPUT_ITEMS.validate_python(input_value):
+            return _responses_items_as_messages(input_value)
+    return ()
+
+
+def _responses_items_as_messages(items: object) -> tuple[object, ...]:
+    from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+
+    converted: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # its input type is untyped
+        input=items,  # pyright: ignore[reportArgumentType]  # Responses items as the request carries them
+        responses_api_request={},
+        only_since_compaction=True,
+    )
+    return tuple(
+        message if isinstance(message, dict) else message.model_dump(exclude_none=True) for message in converted
+    )
+
+
+def _estimate_input_tokens(request_kwargs: Mapping[str, Any] | None, model: str = "") -> int:
     if not request_kwargs:
         return 0
     messages: Final = request_kwargs.get("messages")
@@ -205,6 +230,9 @@ def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "
     # tokenizer when available, reducing the reservation over/under-estimate window
     # between pre-call and post-call reconcile.
     with contextlib.suppress(Exception):
+        input_messages: Final = _responses_input_messages(input_text)
+        if input_messages:
+            return max(0, int(token_counter(model=model, messages=input_messages)))
         return max(0, int(token_counter(model=model, messages=messages, text=prompt or input_text)))
     return 0
 
@@ -652,7 +680,7 @@ async def async_io_token_pre_call_check(
     if request is not None and request.opens_responses_socket:
         _stash_reservation_in_metadata(
             request,
-            await async_admit_io_token_turn(usage, deployment, get_utc_datetime()),
+            await async_admit_io_token_turn(usage, deployment, get_utc_datetime(), request_kwargs),
         )
         return deployment
     _model, served_model = _tokenizer_and_served_models(deployment)
@@ -749,11 +777,27 @@ async def _raise_if_at_limit(usage: RouterUsage, counter: UsageCounter, limit: i
         raise _rate_limit_error(limit_label, limit, count)
 
 
+async def _raise_if_turn_input_passes_itpm(
+    usage: RouterUsage,
+    counter: UsageCounter,
+    limit: int,
+    deployment: Mapping[str, object],
+    turn_params: Mapping[str, object] | None,
+) -> None:
+    tokenizer_model, _ = _tokenizer_and_served_models(deployment)
+    estimated_input: Final = await offload_token_count(_estimate_input_tokens)(turn_params, model=tokenizer_model)
+    count: Final = await usage.shared_or_local(counter)
+    with_turn: Final = (count or 0) + _reservation_value(estimated_input, limit)
+    if with_turn > limit:
+        raise _rate_limit_error("ITPM", limit, with_turn)
+
+
 @with_service_target(ROUTER_USAGE_TARGET)
 async def async_admit_io_token_turn(
     usage: RouterUsage,
     deployment: Mapping[str, object],
     now: datetime,
+    turn_params: Mapping[str, object] | None,
 ) -> Mapping[str, object]:
     configured: Final = dict(deployment)
     itpm_limit, otpm_limit = get_deployment_io_token_limits(configured)
@@ -763,7 +807,8 @@ async def async_admit_io_token_turn(
     if counters is None:
         return MappingProxyType({})
     itpm_counter, otpm_counter = counters
-    await _raise_if_at_limit(usage, itpm_counter, itpm_limit, "ITPM")
+    if itpm_limit is not None:
+        await _raise_if_turn_input_passes_itpm(usage, itpm_counter, itpm_limit, configured, turn_params)
     await _raise_if_at_limit(usage, otpm_counter, otpm_limit, "OTPM")
     return _reservation(
         0, 0, itpm_counter if itpm_limit is not None else None, otpm_counter if otpm_limit is not None else None

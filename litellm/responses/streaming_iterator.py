@@ -2147,18 +2147,22 @@ _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR: Final = 1024
 _FRAME_CHARS_PER_TOKEN_ESTIMATE: Final = 4
 
 
-def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple[int, int | None]:
-    """Extract a rough input-token count and any explicit max_output_tokens
-    from a ``response.create`` frame, handling both wire shapes:
-      flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}
-      nested: {"type": "response.create", "response": {"input": ..., "max_output_tokens": ...}}
+def _response_create_params(msg_obj: Mapping[str, object]) -> Mapping[str, object]:
+    """The request params of a ``response.create`` frame, in either wire shape:
+    flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}
+    nested: {"type": "response.create", "response": {"input": ..., "max_output_tokens": ...}}
     """
     nested: Final = msg_obj.get("response")
-    params: Final[Mapping[str, object]] = (
+    return (
         nested
         if _is_json_object(nested) and nested
         else MappingProxyType({k: v for k, v in msg_obj.items() if k != "type"})
     )
+
+
+def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple[int, int | None]:
+    """Extract a rough input-token count and any explicit max_output_tokens from a ``response.create`` frame."""
+    params: Final = _response_create_params(msg_obj)
     text_parts: Final[list[str]] = []  # mutable-ok: local accumulator built in one pass, not shared
     pending: Final[list[object]] = [  # mutable-ok: explicit worklist avoids recursion
         params.get("input"),
@@ -2222,7 +2226,7 @@ class _RefusedTurn:
     rejection: Exception
 
 
-ResponsesWsTurnAdmission: TypeAlias = Callable[[], Awaitable[Mapping[str, object]]]
+ResponsesWsTurnAdmission: TypeAlias = Callable[[Mapping[str, object]], Awaitable[Mapping[str, object]]]
 
 
 def with_token_limit_checks(
@@ -2234,12 +2238,12 @@ def with_token_limit_checks(
     if not token_limit_callbacks or user_api_key_dict is None:
         return turn_admission
 
-    async def admit() -> Mapping[str, object]:
+    async def admit(turn_params: Mapping[str, object]) -> Mapping[str, object]:
         for callback in token_limit_callbacks:
             await callback.enforce_token_limits_for_frame(
                 user_api_key_dict=user_api_key_dict, requested_model=requested_model
             )
-        return MappingProxyType({}) if turn_admission is None else await turn_admission()
+        return MappingProxyType({}) if turn_admission is None else await turn_admission(turn_params)
 
     return admit
 
@@ -2251,7 +2255,7 @@ async def _admit_frame_turn(
     if turn_admission is None or frame is None or frame.get("type") != "response.create":
         return _AdmittedTurn()
     try:
-        return _AdmittedTurn(await turn_admission())
+        return _AdmittedTurn(await turn_admission(_response_create_params(frame)))
     except RateLimitError as refusal:
         return _RefusedTurn(refusal)
     except Exception as e:

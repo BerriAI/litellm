@@ -48,8 +48,9 @@ from litellm.llms.volcengine.responses.transformation import (
     VolcEngineResponsesAPIConfig,
 )
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
-from litellm.redis.stores.connection import connect
+from litellm.redis.stores.connection import RedisStores, connect
 from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
+from litellm.router_python_host import PythonHost
 from litellm.types.utils import GenericStreamingChunk
 
 if TYPE_CHECKING:
@@ -1825,7 +1826,7 @@ async def _socket_opened_on(usage: RouterUsageStore) -> Mapping[str, object]:
 
     usage.increment_local(CounterIncrement(_OPENED_ON, _OTHER_USAGE, 60))
     usage.increment_local(CounterIncrement(_TURNED_ON, _OTHER_USAGE, 60))
-    return await async_admit_io_token_turn(usage, _WS_DEPLOYMENT, _OPENED_AT)
+    return await async_admit_io_token_turn(usage, _WS_DEPLOYMENT, _OPENED_AT, {"input": "one"})
 
 
 def _turns_finish_at(monkeypatch: pytest.MonkeyPatch, finished_at: datetime) -> None:
@@ -2028,6 +2029,63 @@ async def _relay_turns_to(
 
 def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
     return [(frame.get("status"), frame["error"]) for frame in websocket.sent if frame.get("type") == "error"]
+
+
+_ITPM_350_DEPLOYMENT: Final = {
+    "litellm_params": {"model": "openai/gpt-5-mini", "itpm": 350},
+    "model_info": {"id": "ws-dep"},
+}
+_ITPM_350_USED: Final = 310
+_INPUT_PAST_THE_ITPM_HEADROOM: Final = "Write one plain sentence about how the ocean tides follow the moon. " * 4
+_LATER_TURN_SHAPES: Final = pytest.mark.parametrize(
+    "later_turn",
+    [
+        json.dumps({"type": "response.create", "input": _INPUT_PAST_THE_ITPM_HEADROOM}),
+        json.dumps({"type": "response.create", "response": {"input": _INPUT_PAST_THE_ITPM_HEADROOM}}),
+    ],
+    ids=["flat", "nested"],
+)
+
+
+def _itpm_used_on(usage: RouterUsageStore, minutes: tuple[str, ...]) -> None:
+    for minute in minutes:
+        usage.increment_local(
+            CounterIncrement(
+                UsageCounter("global_router", "ws-dep", "openai/gpt-5-mini", minute, "itpm"), _ITPM_350_USED, 60
+            )
+        )
+
+
+async def _http_itpm_refusal(usage: RouterUsageStore, request_input: str) -> str:
+    from litellm.exceptions import RateLimitError
+    from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+        async_io_token_pre_call_check,  # pyright: ignore[reportUnknownVariableType]  # takes an untyped deployment dict
+        set_io_token_rate_limit_request_kwargs,
+    )
+
+    set_io_token_rate_limit_request_kwargs(
+        {"input": request_input, "metadata": {}}, opens_responses_socket=False, metadata_channel="metadata"
+    )
+    with pytest.raises(RateLimitError) as refusal:
+        await async_io_token_pre_call_check(usage, dict(_ITPM_350_DEPLOYMENT))
+    return str(refusal.value)
+
+
+class _HostCountingIn(PythonHost):
+    def __init__(self, usage: RouterUsageStore) -> None:
+        super().__init__()
+        self._usage: Final = usage
+
+    def router_usage(self, redis: RedisStores) -> RouterUsageStore:
+        return self._usage
+
+
+class _SilentProviderResponsesSocket(_ProviderResponsesSocket):
+    """A provider's native Responses socket that takes every frame and never answers."""
+
+    async def recv(self, decode: bool = False) -> str:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
 
 
 class _BackendSending:
@@ -2284,7 +2342,7 @@ class TestWebSocketTurnAdmission:
 
         _turns_finish_at(monkeypatch, _OPENED_AT)
         usage: Final = _memory_usage()
-        opened_with: Final = await async_admit_io_token_turn(usage, _ITPM_DEPLOYMENT, _OPENED_AT)
+        opened_with: Final = await async_admit_io_token_turn(usage, _ITPM_DEPLOYMENT, _OPENED_AT, {"input": "one"})
         first, _, _ = _turn_frames()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
@@ -2403,6 +2461,74 @@ class TestWebSocketTurnAdmission:
             )
 
         assert [frame.get("metadata") for frame in provider.sent] == [client_metadata, client_metadata]
+
+    @pytest.mark.asyncio
+    @_LATER_TURN_SHAPES
+    async def test_native_relay_refuses_a_later_turn_whose_input_would_pass_the_itpm_limit_like_http(
+        self, monkeypatch: pytest.MonkeyPatch, later_turn: str
+    ) -> None:
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        from litellm import Router
+        from litellm.router import router_arguments
+        from litellm.router_config import build_router_config
+        from litellm.utils import get_utc_datetime
+
+        monkeypatch.setenv("LITELLM_RUST", "false")
+        usage: Final = _memory_usage()
+        router: Final = Router.from_config(
+            build_router_config(
+                router_arguments(
+                    model_list=[
+                        {
+                            "model_name": "ws-io",
+                            "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "itpm": 350},
+                            "model_info": {"id": "ws-dep"},
+                        }
+                    ],
+                    optional_pre_call_checks=["enforce_model_rate_limits"],
+                )
+            ),
+            _HostCountingIn(usage),
+        )
+        now: Final = get_utc_datetime()
+        _itpm_used_on(usage, (now.strftime("%H-%M"), (now + timedelta(minutes=1)).strftime("%H-%M")))
+        http_refusal: Final = await asyncio.create_task(_http_itpm_refusal(usage, _INPUT_PAST_THE_ITPM_HEADROOM))
+        provider: Final = _SilentProviderResponsesSocket()
+        client: Final = _ClientSocket(later_turn)
+        first, _, _ = _turn_frames()
+
+        with patch("websockets.connect", provider.connect):
+            await router._aresponses_websocket(model="ws-io", websocket=client, first_message=first, input="one")
+
+        assert _errors(client) == [(429, {"type": "rate_limit_exceeded", "message": http_refusal})]
+        assert [frame.get("input") for frame in provider.sent] == ["one"]
+
+    @pytest.mark.asyncio
+    @_LATER_TURN_SHAPES
+    async def test_managed_relay_refuses_a_later_turn_whose_input_would_pass_the_itpm_limit_like_http(
+        self, monkeypatch: pytest.MonkeyPatch, later_turn: str
+    ) -> None:
+        from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
+
+        _turns_finish_at(monkeypatch, _OPENED_AT)
+        usage: Final = _memory_usage()
+        _itpm_used_on(usage, ("12-34", "12-35"))
+        http_refusal: Final = await asyncio.create_task(_http_itpm_refusal(usage, _INPUT_PAST_THE_ITPM_HEADROOM))
+        first, _, _ = _turn_frames()
+
+        websocket: Final = await _run_managed_relay(
+            monkeypatch,
+            _TwoOutputTokenTurns(),
+            _rate_limit_check(usage),
+            (first, later_turn),
+            partial(async_admit_io_token_turn, usage, _ITPM_350_DEPLOYMENT, _TURNED_AT),
+            await async_admit_io_token_turn(usage, _ITPM_350_DEPLOYMENT, _OPENED_AT, {"input": "one"}),
+        )
+
+        assert _errors(websocket) == [(429, {"type": "rate_limit_exceeded", "message": http_refusal})]
+        assert [frame["type"] for frame in websocket.sent].count("response.completed") == 1
 
     @pytest.mark.asyncio
     async def test_managed_relay_skips_a_later_turn_the_deployment_refuses(self, monkeypatch: pytest.MonkeyPatch):

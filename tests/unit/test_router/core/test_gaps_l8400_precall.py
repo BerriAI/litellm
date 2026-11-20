@@ -5,7 +5,7 @@ Gaps in the routing-strategy pre-call checks and the Responses-websocket turn ad
 takes part in those checks through ``pre_call_check`` / ``async_pre_call_check``.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
@@ -127,7 +127,7 @@ class TestResponsesWebsocketTurnAdmission:
         return EndpointHost()
 
     @staticmethod
-    async def open_socket(core: RouterCore, host: EndpointHost) -> Callable[[], object]:
+    async def open_socket(core: RouterCore, host: EndpointHost) -> Callable[[Mapping[str, object]], object]:
         await core.call("_aresponses_websocket", {"model": "g"})
         (call,) = host.calls_to("_aresponses_websocket")
         admission: Final = call.kwargs["turn_admission"]
@@ -142,7 +142,7 @@ class TestResponsesWebsocketTurnAdmission:
         gate: Final = gated(host)
         admit: Final = await self.open_socket(core, host)
 
-        admitted: Final = [dict(await admit()) for _ in range(3)]  # pyright: ignore[reportGeneralTypeIssues]
+        admitted: Final = [dict(await admit({})) for _ in range(3)]  # pyright: ignore[reportGeneralTypeIssues]
 
         assert admitted == [{}, {}, {}]
         assert gate.seen == [("async", "a")] * 4  # the socket opening, then each turn
@@ -157,7 +157,7 @@ class TestResponsesWebsocketTurnAdmission:
         gate.error = rate_limit(message="turn refused")
 
         with pytest.raises(litellm.RateLimitError, match="turn refused"):
-            await admit()  # pyright: ignore[reportGeneralTypeIssues]
+            await admit({})  # pyright: ignore[reportGeneralTypeIssues]
 
     @pytest.mark.asyncio
     async def test_usage_based_routing_admits_turns_until_the_deployment_rpm_is_used_up(
@@ -168,9 +168,9 @@ class TestResponsesWebsocketTurnAdmission:
         core: Final = make_core(model_list=[deployment("g", "a", rpm=5)], routing_strategy="usage-based-routing-v2")
         admit: Final = await self.open_socket(core, host)
 
-        admitted: Final = [dict(await admit()) for _ in range(3)]  # pyright: ignore[reportGeneralTypeIssues]
+        admitted: Final = [dict(await admit({})) for _ in range(3)]  # pyright: ignore[reportGeneralTypeIssues]
         with pytest.raises(litellm.RateLimitError) as refused:
-            await admit()  # pyright: ignore[reportGeneralTypeIssues]
+            await admit({})  # pyright: ignore[reportGeneralTypeIssues]
 
         assert admitted == [{}, {}, {}]
         assert str(refused.value).startswith(
