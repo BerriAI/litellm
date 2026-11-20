@@ -37,15 +37,24 @@ from litellm.integrations.otel.model.metadata import LLMCallEvent
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.types.utils import CaptureMessageContent
 
-_KNOWN_AGENTS: Final[tuple[tuple[str, str], ...]] = (
-    ("claude-cli", "claude-code"),
-    ("claude-code", "claude-code"),
-    ("codex", "codex"),
+
+@dataclass(frozen=True, slots=True)
+class _Harness:
+    """A coding agent Lens knows: one row here is all a new one needs."""
+
+    name: str
+    integration: str
+    user_agent_markers: tuple[str, ...] = ()
+
+
+_HARNESSES: Final = (
+    _Harness(name="claude-code", integration="claude-code", user_agent_markers=("claude-cli", "claude-code")),
+    _Harness(name="codex", integration="openai-codex", user_agent_markers=("codex",)),
+    _Harness(name="opencode", integration="opencode"),
+    _Harness(name="pi", integration="pi"),
 )
-
-
 _INTEGRATIONS: Final[Mapping[str, str]] = MappingProxyType(
-    {"claude-code": "claude-code", "codex": "openai-codex", "opencode": "opencode", "pi": "pi"}
+    {harness.name: harness.integration for harness in _HARNESSES}
 )
 _PI_SYSTEM_PROMPT: Final = "operating inside pi, a coding agent harness"
 _LEADING_SETUP_BLOCK: Final = re.compile(r"\s*<([A-Za-z][\w-]*)>.*?</\1>", re.DOTALL)
@@ -56,7 +65,10 @@ def agent_name(user_agent: str | None) -> str | None:
     if not user_agent:
         return None
     lowered: Final = user_agent.strip().lower()
-    known: Final = next((name for marker, name in _KNOWN_AGENTS if marker in lowered), None)
+    known: Final = next(
+        (harness.name for harness in _HARNESSES if any(marker in lowered for marker in harness.user_agent_markers)),
+        None,
+    )
     return known or lowered.split("/")[0].split(" ")[0] or None
 
 
