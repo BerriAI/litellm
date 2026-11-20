@@ -6,10 +6,10 @@ frames_spec = [
     ("base", "49b2058c1a7", "01_authorize_page", "1. MCP client opens the proxy's authorize page"),
     ("base", "49b2058c1a7", "02_api_key_entered", "2. User types their API key and submits"),
     ("base", "49b2058c1a7", "03_callback_failed", "3. Token request lands on another worker: 400 invalid_grant"),
-    ("base", "49b2058c1a7", "04_callback_tally", "4. Six connects, 2 failed with invalid_grant"),
-    ("head", "7b8bbf183f9", "01_authorize_page", "1. Same authorize page"),
-    ("head", "7b8bbf183f9", "02_api_key_entered", "2. Same key form"),
-    ("head", "7b8bbf183f9", "04_callback_tally", "3. Six connects, every token request 200"),
+    ("base", "49b2058c1a7", "04_callback_tally", "4. Six connects, 5 failed with invalid_grant"),
+    ("head", "848a89e51c8", "01_authorize_page", "1. Same authorize page"),
+    ("head", "848a89e51c8", "02_api_key_entered", "2. Same key form"),
+    ("head", "848a89e51c8", "04_callback_tally", "3. Six connects, every token request 200"),
 ]
 frames = []
 for side, sha, step, caption in frames_spec:
