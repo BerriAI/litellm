@@ -38,7 +38,7 @@ def _extract_from_regex(duration: str) -> tuple[int, str]:
     return value, unit
 
 
-def get_last_day_of_month(year, month):
+def get_last_day_of_month(year: int, month: int) -> int:
     # Handle December case
     if month == 12:
         return 31
@@ -329,9 +329,7 @@ def _handle_hour_reset(current_time: datetime, base_midnight: datetime, value: i
 
     # Handle overnight case
     if next_hour >= 24:
-        next_hour = next_hour % 24
-        next_day: Final = base_midnight + timedelta(days=1)
-        return next_day.replace(hour=next_hour)
+        return base_midnight + timedelta(hours=next_hour)
 
     return current_time.replace(hour=next_hour, minute=0, second=0, microsecond=0)
 
@@ -363,9 +361,7 @@ def _handle_minute_reset(current_time: datetime, base_midnight: datetime, value:
 
     # Handle overnight case
     if next_hour >= 24:
-        next_hour = next_hour % 24
-        next_day: Final = base_midnight + timedelta(days=1)
-        return next_day.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
+        return base_midnight + timedelta(hours=next_hour, minutes=next_minute)
 
     return current_time.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
 
@@ -402,9 +398,7 @@ def _handle_second_reset(current_time: datetime, base_midnight: datetime, value:
 
     # Handle overnight case
     if next_hour >= 24:
-        next_hour = next_hour % 24
-        next_day: Final = base_midnight + timedelta(days=1)
-        return next_day.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
+        return base_midnight + timedelta(hours=next_hour, minutes=next_minute, seconds=next_second)
 
     return current_time.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
 

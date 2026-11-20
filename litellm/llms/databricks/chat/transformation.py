@@ -477,6 +477,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         use_ai_gateway: Final = self.uses_ai_gateway(model)
         return join_api_base(self._get_api_base(api_base, use_ai_gateway=use_ai_gateway), "chat/completions")
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body
+
     def get_supported_openai_params(self, model: str | None = None) -> list[str]:
         return [
             "stream",

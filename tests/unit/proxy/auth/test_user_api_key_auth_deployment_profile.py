@@ -25,12 +25,10 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_TeamTable,
     ProxyException,
-    TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key
-from litellm.proxy.management_endpoints import team_endpoints
 from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_through
 from tests.unit.proxy.auth._user_table import UserTable, user_store_over
 from tests.unit.proxy.rust_auth_stores import (
@@ -236,18 +234,11 @@ async def _reply(call: Call, failure_hook: AsyncMock) -> Served | Refused:
 
 async def _outcome(monkeypatch: pytest.MonkeyPatch, call: Call) -> Outcome:
     users: Final = UserTable() if call.database_up else _UnreachableUsers()
-    added: Final[list[tuple[str, str]]] = []  # mutable-ok: records the team members auth adds
     failure_hook: Final = AsyncMock(return_value=None)
-
-    async def add_member(data: TeamMemberAddRequest, **_: object) -> None:
-        assert not isinstance(data.member, list)
-        added.append((data.team_id, str(data.member.user_id)))
-
-    install_rust_auth_stores(monkeypatch, _stores(users, call.database_up))
+    stores: Final = install_rust_auth_stores(monkeypatch, _stores(users, call.database_up))
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", JWKS_URL)
     monkeypatch.delenv("JWT_ISSUER", raising=False)
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
-    monkeypatch.setattr(team_endpoints, "team_member_add", add_member)
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_failure_hook", failure_hook)
     for name, value in {
         "prisma_client": _prisma(users, call.database_up),
@@ -269,7 +260,8 @@ async def _outcome(monkeypatch: pytest.MonkeyPatch, call: Call) -> Outcome:
         reply: Final = await _reply(call, failure_hook)
     finally:
         await pass_through.initialize_pass_through_endpoints([])
-    return Outcome(reply, created=tuple(row.user_id for row in users.rows), added=tuple(added))
+    added: Final = tuple((team_id, user_id) for user_id, team_id, _ in stores.team_membership.adds)
+    return Outcome(reply, created=tuple(row.user_id for row in users.rows), added=added)
 
 
 def _joined(team_id: str) -> Outcome:
