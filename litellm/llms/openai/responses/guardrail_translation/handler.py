@@ -1345,7 +1345,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             history_tool_calls: Final = [
                 _scanned_tool_call(item, item_idx)
                 for item_idx, item in enumerate(input_data)
-                if isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
+                if item.get("type") in _TOOL_CALL_ITEM_TYPES
             ]
             if history_tool_calls:
                 extracted.inputs["tool_calls"] = history_tool_calls

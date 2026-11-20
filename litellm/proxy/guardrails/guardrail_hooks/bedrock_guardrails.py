@@ -267,8 +267,18 @@ def _allowed_dynamic_body_params(params: Mapping[str, object]) -> Mapping[str, o
     return {key: value for key, value in params.items() if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST}
 
 
+def _request_messages(
+    request_data: Mapping[str, object],
+) -> "list[AllMessageValues] | None":  # mutable-ok: the type make_bedrock_api_request takes
+    return cast(  # cast-ok: chat messages of the request body
+        "list[AllMessageValues] | None", request_data.get("messages")
+    )
+
+
 def _tool_call_field(value: object, name: str) -> object:
-    return value.get(name) if isinstance(value, Mapping) else getattr(value, name, None)
+    if isinstance(value, Mapping):
+        return cast("Mapping[str, object]", value).get(name)  # cast-ok: a tool call mapping is keyed by field name
+    return getattr(value, name, None)
 
 
 def _json_escapes_survive(text: str) -> bool:
@@ -1001,7 +1011,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
         response: litellm.ModelResponse | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         logging_event_type: GuardrailEventHooks | None = None,
     ) -> BedrockGuardrailResponse:
         """Dispatch to the configured Bedrock guardrail API.
@@ -3018,7 +3028,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[object],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Process streaming response chunks.
@@ -3100,22 +3110,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # produces.
             try:
                 await self._scan_tool_calls_as_text(
-                    inputs={
-                        "tool_calls": list(
-                            chain.from_iterable(
-                                choice.message.tool_calls or []
-                                for choice in assembled_model_response.choices
-                                if isinstance(choice, Choices)
-                            )
+                    tool_calls=list(
+                        chain.from_iterable(
+                            choice.message.tool_calls or [] for choice in assembled_model_response.choices
                         )
-                    },
+                    ),
                     request_data=request_data,
                     input_type="response",
                 )
                 output_guardrail_response = await self.make_bedrock_api_request(
                     source="OUTPUT",
                     response=assembled_model_response,
-                    messages=request_data.get("messages"),
+                    messages=_request_messages(request_data),
                     request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
@@ -3446,8 +3452,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def _scan_tool_calls_as_text(
         self,
-        inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        tool_calls: Sequence[object],
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         input_type: Literal["request", "response"],
     ) -> None:
         """Scan tool-call names and arguments as text, raising when Bedrock blocks them.
@@ -3456,7 +3462,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         if self.scan_tool_calls_as_text is not True or effective_scan_only_tool_results_for_guardrail(self):
             return
-        scanned_texts: Final = [_tool_call_as_text(tool_call) for tool_call in inputs.get("tool_calls") or []]
+        scanned_texts: Final = [_tool_call_as_text(tool_call) for tool_call in tool_calls]
         if None in scanned_texts:
             raise HTTPException(
                 status_code=400,
@@ -3477,7 +3483,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         for idx, text in enumerate(tool_call_texts)
                     ]
                 ),
-                messages=request_data.get("messages"),
+                messages=_request_messages(request_data),
                 request_data=request_data,
                 logging_event_type=GuardrailEventHooks.post_call,
             )
@@ -3492,7 +3498,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> "GenericGuardrailAPIInputs":
@@ -3520,7 +3526,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         try:
             verbose_proxy_logger.debug("Bedrock Guardrail: Applying guardrail to %s text(s)", len(texts))
 
-            await self._scan_tool_calls_as_text(inputs=inputs, request_data=request_data, input_type=input_type)
+            await self._scan_tool_calls_as_text(
+                tool_calls=inputs.get("tool_calls") or [], request_data=request_data, input_type=input_type
+            )
 
             if input_type == "request":
                 incremental_result: Final = await self._apply_incremental_request_scan(
@@ -3575,7 +3583,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     bedrock_response = await self.make_bedrock_api_request(
                         source="OUTPUT",
                         response=synthetic_response,
-                        messages=request_data.get("messages"),
+                        messages=_request_messages(request_data),
                         request_data=request_data,
                         logging_event_type=_log_hook,
                     )
