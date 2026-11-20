@@ -634,7 +634,7 @@ def _aws_signing_overrides(
     return MappingProxyType(
         {
             key: litellm_params[key]
-            for key in AWS_CREDENTIAL_KWARGS_KEYS
+            for key in (*AWS_CREDENTIAL_KWARGS_KEYS, "metadata", "litellm_metadata")
             if optional_params.get(key) is None and litellm_params.get(key) is not None
         }
     )
@@ -6939,15 +6939,7 @@ class BaseLLMHTTPHandler:
                         session_configuration_request=None,
                     )
                     if synthetic_session is not None:
-                        synthetic_session_str: Final = json.dumps(synthetic_session)
-                        # Record before sending so the synthetic session.created is
-                        # captured in the session log alongside provider-driven
-                        # events; without this it would be silently absent from
-                        # success_handler / async_success_handler payloads.
-                        realtime_streaming.store_message(synthetic_session_str)
-                        await websocket.send_text(synthetic_session_str)
-                        realtime_streaming.session_created_sent_to_client = True
-                        verbose_logger.debug("Sent synthetic session.created to client to unblock connection")
+                        await realtime_streaming.send_synthetic_session_created(synthetic_session)
 
                 await realtime_streaming.bidirectional_forward()
 

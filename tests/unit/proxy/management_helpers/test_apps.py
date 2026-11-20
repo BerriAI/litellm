@@ -393,17 +393,29 @@ async def test_shared_profile_edits_are_inherited_without_pooling_app_spend(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("assignment", ("default", "customer", "app"))
+@pytest.mark.parametrize("assignment", ("default", "customer", "app", "member-default", "customer-members", "member"))
 async def test_profiles_in_use_by_apps_cannot_be_removed(
     app_store: tuple[AppDatabase, AppStore, App], assignment: str
 ) -> None:
     database, store, app = app_store
-    scope: Final = BudgetGroupScope.APP if assignment == "app" else BudgetGroupScope.ORGANIZATION
+    scope: Final = (
+        BudgetGroupScope.APP_MEMBER
+        if assignment in ("member-default", "customer-members", "member")
+        else BudgetGroupScope.APP
+        if assignment == "app"
+        else BudgetGroupScope.ORGANIZATION
+    )
     group: Final = await profile(store, "Standard", 10, scope)
     if assignment == "app":
         await store.patch(app.app_id, AppPatch(budget_id=group), "admin")
     elif assignment == "default":
         await store.patch(app.app_id, AppPatch(default_tier_budget_id=group), "admin")
+    elif assignment == "member-default":
+        await store.patch(app.app_id, AppPatch(default_customer_member_budget_id=group), "admin")
+    elif assignment == "customer-members":
+        await store.put_organization(app.app_id, "org", AppOrganizationPut(customer_member_budget_id=group), "admin")
+    elif assignment == "member":
+        await store.put_member(app.app_id, "member", AppMemberPut(budget_id=group), "admin")
     else:
         await store.put_organization(app.app_id, "org", AppOrganizationPut(tier_budget_id=group), "admin")
     groups: Final = await store.customers.get_budget_groups(None, scope=scope)
@@ -456,6 +468,7 @@ async def test_app_presets_stay_linked_until_customized_without_changing_other_a
     await store.patch(second.app_id, AppPatch(budget_id=None), "admin")
     assert await store.budget(group) == expected
 
+
 @pytest.mark.asyncio
 async def test_member_override_is_scoped_and_can_return_to_the_org_default(
     app_store: tuple[AppDatabase, AppStore, App],
@@ -499,9 +512,7 @@ async def test_arbitrary_budget_rows_are_not_profiles(
         app.app_id, "org", AppOrganizationPut(tier_budget_id=private_budget), "admin"
     )
     default: Final = await store.patch(app.app_id, AppPatch(default_tier_budget_id=private_budget), "admin")
-    created: Final = await store.create(
-        AppCreate(resource_id="search", default_tier_budget_id=private_budget), "admin"
-    )
+    created: Final = await store.create(AppCreate(resource_id="search", default_tier_budget_id=private_budget), "admin")
     assert isinstance(assigned, AppFailure) and assigned.status == 422
     assert isinstance(default, AppFailure) and default.status == 422
     assert isinstance(created, AppFailure) and created.status == 422
@@ -643,7 +654,9 @@ async def test_should_reject_budget_changes_when_the_app_binding_is_unavailable(
         )
     results: Final = (
         await store.patch(app.app_id, AppPatch(budget=Budget(max_budget=7)), "admin"),
-        await store.put_organization(app.app_id, "org", AppOrganizationPut(budget_override=Budget(max_budget=3)), "admin"),
+        await store.put_organization(
+            app.app_id, "org", AppOrganizationPut(budget_override=Budget(max_budget=3)), "admin"
+        ),
         await store.put_member(app.app_id, "member", AppMemberPut(budget_override=Budget(max_budget=1)), "admin"),
     )
     assert all(isinstance(result, AppFailure) and result.status == status for result in results)
@@ -697,9 +710,7 @@ async def test_should_skip_a_key_rotated_during_identity_backfill(monkeypatch: p
     update_many: Final = database.litellm_verificationtoken.update_many
 
     async def rotate_before_backfill(where: Mapping[str, object], data: Mapping[str, object]) -> int:
-        await database.litellm_verificationtoken.update(
-            where={"token": "token-a"}, data={"token": "rotated-token"}
-        )
+        await database.litellm_verificationtoken.update(where={"token": "token-a"}, data={"token": "rotated-token"})
         return await update_many(where=where, data=data)
 
     with monkeypatch.context() as backfill:

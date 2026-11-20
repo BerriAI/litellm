@@ -1885,9 +1885,7 @@ class ResetBudgetJob:
         budget_duration: Final = window["budget_duration"]
         annual: Final = isinstance(budget_duration, str) and is_annual_budget_duration(budget_duration)
         saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
-        reset_at: Final = _as_utc(saved_reset_at) if annual else saved_reset_at.replace(tzinfo=None)
-        cutoff: Final = _as_utc(now) if annual else now
-        if reset_at > cutoff:
+        if _as_utc(saved_reset_at) > _as_utc(now):
             return False
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_store)
         try:
