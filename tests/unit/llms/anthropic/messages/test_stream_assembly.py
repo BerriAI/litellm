@@ -7,6 +7,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_message_delta_fields,
     anthropic_sse_error_events,
     assemble_anthropic_sse_stream,
+    collapse_pure_text_chunks,
     has_unreadable_json_event,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
@@ -379,3 +380,24 @@ def test_assembly_through_an_upstream_error_reads_past_the_error_frame(error_fra
     chunks: Final = (*ANTHROPIC_STREAM[:4], error_frame)
 
     assert assemble_anthropic_sse_stream(chunks, through_upstream_error=True) is not None
+
+
+def test_collapsing_a_text_run_rejects_a_delta_whose_text_is_not_a_string():
+    chunks: Final = (
+        _frame(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _frame(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+        ),
+        _frame(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": 7}},
+        ),
+        _frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
+    )
+
+    with pytest.raises(TypeError, match="sequence item 1: expected str instance, int found"):
+        collapse_pure_text_chunks(chunks)

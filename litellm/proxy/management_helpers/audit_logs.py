@@ -4,9 +4,11 @@ Functions to create audit logs for LiteLLM Proxy
 
 import asyncio
 import json
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
+
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -18,11 +20,40 @@ from litellm.proxy._types import (
     LitellmTableNames,
     UserAPIKeyAuth,
 )
-from litellm.repositories.table_repositories import AuditLogRepository
+from litellm.repositories.table_repositories import AuditLogRepository, NewAuditLog
 from litellm.types.utils import StandardAuditLogPayload
 
-_audit_log_callback_cache: Final[dict[str, CustomLogger]] = {}
+if TYPE_CHECKING:
+    from litellm.integrations.s3_v2 import S3Logger
+
+_audit_log_callback_cache: Final[dict[str, "CustomLogger | S3Logger"]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
+_AUDIT_JSON: Final = TypeAdapter(JsonValue)
+
+
+class _AuditValues(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    updated_values: str | None = None
+
+
+def with_audit_actor(record: LiteLLM_AuditLogs, auth: UserAPIKeyAuth) -> LiteLLM_AuditLogs:
+    if auth.impersonated_by is None:
+        return record
+    updated_values: Final = _AuditValues.model_validate(record).updated_values
+    values: Final = _AUDIT_JSON.validate_json(updated_values) if updated_values is not None else {}
+    return record.model_copy(
+        update={
+            "changed_by": auth.user_id,
+            "changed_by_api_key": auth.token,
+            "updated_values": json.dumps(
+                {
+                    **(values if isinstance(values, dict) else {"value": values}),
+                    "_litellm_impersonation": {"impersonated_by": auth.impersonated_by, "subject": auth.user_id},
+                }
+            ),
+        }
+    )
 
 
 def is_audit_logging_enabled(store_audit_logs: bool | None = None) -> bool:
@@ -62,7 +93,7 @@ def get_audit_log_changed_by(
     return user_api_key_dict.user_id or litellm_proxy_admin_name
 
 
-def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
+def _resolve_audit_log_callback(name: str) -> "CustomLogger | S3Logger | None":
     """Resolve a string callback name to a CustomLogger instance, with caching.
 
     For "s3_v2" with `litellm.s3_audit_callback_params` set, constructs a
@@ -72,11 +103,12 @@ def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
     if name in _audit_log_callback_cache:
         return _audit_log_callback_cache[name]
 
-    instance: CustomLogger | None
-    if name == "s3_v2" and getattr(litellm, "s3_audit_callback_params", None) is not None:
-        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+    instance: CustomLogger | S3Logger | None
+    audit_params: Final[Mapping[str, object] | None] = getattr(litellm, "s3_audit_callback_params", None)
+    if name == "s3_v2" and audit_params is not None:
+        from litellm.integrations import s3_v2
 
-        instance = S3V2Logger(s3_callback_params_override=litellm.s3_audit_callback_params)
+        instance = s3_v2.S3Logger(s3_callback_params_override=audit_params)
     else:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
@@ -196,14 +228,14 @@ async def _dispatch_audit_log_to_callbacks(
 
     for callback in litellm.audit_log_callbacks:
         try:
-            resolved: CustomLogger | None = callback if isinstance(callback, CustomLogger) else None
+            resolved: CustomLogger | S3Logger | None = callback if isinstance(callback, CustomLogger) else None
             if isinstance(callback, str):
                 resolved = _resolve_audit_log_callback(callback)
                 if resolved is None:
                     verbose_proxy_logger.warning("Could not resolve audit log callback: %s", callback)
                     continue
 
-            if isinstance(resolved, CustomLogger):
+            if resolved is not None:
                 track_audit_task(
                     asyncio.create_task(
                         resolved.async_log_audit_log_event(payload),
@@ -245,16 +277,19 @@ async def create_object_audit_log(
     )
 
     await create_audit_log_for_update(
-        request_data=LiteLLM_AuditLogs(
-            id=str(uuid.uuid4()),
-            updated_at=datetime.now(timezone.utc),
-            changed_by=_changed_by,
-            changed_by_api_key=user_api_key_dict.api_key,
-            table_name=table_name,
-            object_id=object_id,
-            action=action,
-            updated_values=after_value,
-            before_value=before_value,
+        request_data=with_audit_actor(
+            LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=_changed_by,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=table_name,
+                object_id=object_id,
+                action=action,
+                updated_values=after_value,
+                before_value=before_value,
+            ),
+            user_api_key_dict,
         )
     )
 
@@ -272,6 +307,52 @@ def _json_encoded(request_data: LiteLLM_AuditLogs) -> LiteLLM_AuditLogs:
     return request_data.model_copy(
         update={field: json.dumps(value) for field, value in values if isinstance(value, dict)}
     )
+
+
+class _AuditLogColumns(BaseModel):
+    """An audit log's columns read off `LiteLLM_AuditLogs`, whose actor and two values are loosely typed."""
+
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    id: str
+    updated_at: datetime
+    changed_by: str | None = None
+    changed_by_api_key: str | None = None
+    action: str
+    table_name: LitellmTableNames
+    object_id: str
+    before_value: object = None
+    updated_values: object = None
+
+
+def _json_text(column: str, value: object) -> str | None:
+    """The column's value as the JSON text the database parses. Only text is accepted, as it was by Prisma."""
+    if value is None or isinstance(value, str):
+        return value
+    raise TypeError(f"audit log {column} must be JSON text, got {type(value).__name__}")
+
+
+def _audit_log_row(encoded: LiteLLM_AuditLogs) -> NewAuditLog:
+    columns: Final = _AuditLogColumns.model_validate(encoded)
+    return NewAuditLog(
+        id=columns.id,
+        updated_at=columns.updated_at,
+        changed_by=columns.changed_by,
+        changed_by_api_key=columns.changed_by_api_key,
+        action=columns.action,
+        table_name=columns.table_name.value,
+        object_id=columns.object_id,
+        before_value=_json_text("before_value", columns.before_value),
+        updated_values=_json_text("updated_values", columns.updated_values),
+    )
+
+
+async def _insert_audit_log(prisma_client: object, encoded: LiteLLM_AuditLogs) -> None:
+    await AuditLogRepository(prisma_client).insert(_audit_log_row(encoded))
+
+
+async def _insert_audit_log_batch(prisma_client: object, encoded: Sequence[LiteLLM_AuditLogs]) -> None:
+    await AuditLogRepository(prisma_client).insert_many(tuple(_audit_log_row(row) for row in encoded))
 
 
 async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
@@ -299,7 +380,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     await track_audit_task(
         asyncio.create_task(
             _insert_audit_logs(
-                AuditLogRepository(prisma_client).table.create(data={**encoded.model_dump(exclude_none=True)}),
+                _insert_audit_log(prisma_client, encoded),
                 "audit log",
             ),
             name=_audit_task_name(encoded, "the database"),
@@ -328,9 +409,7 @@ async def create_audit_logs_for_updates(rows: Sequence[LiteLLM_AuditLogs]) -> No
     await track_audit_task(
         asyncio.create_task(
             _insert_audit_logs(
-                AuditLogRepository(prisma_client).table.create_many(
-                    data=tuple(row.model_dump(exclude_none=True) for row in encoded)
-                ),
+                _insert_audit_log_batch(prisma_client, encoded),
                 f"{len(encoded)} audit logs",
             ),
             name=f"{len(encoded)} audit logs to the database",

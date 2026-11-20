@@ -11,14 +11,12 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-
 import litellm
-from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
 
 
 @pytest.mark.asyncio
 async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
-    failing_deployment_id = "deployment-rate-limited"
+    deployment_ids = {"mock-api-key-1": "deployment-a", "mock-api-key-2": "deployment-b"}
 
     router = litellm.Router(
         model_list=[
@@ -28,7 +26,7 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
                     "model": "openai/gpt-5.1-codex",
                     "api_key": "mock-api-key-1",
                 },
-                "model_info": {"id": failing_deployment_id},
+                "model_info": {"id": "deployment-a"},
             },
             {
                 "model_name": "openai.gpt-5.1-codex",
@@ -36,7 +34,7 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
                     "model": "openai/gpt-5.1-codex",
                     "api_key": "mock-api-key-2",
                 },
-                "model_info": {"id": "deployment-healthy"},
+                "model_info": {"id": "deployment-b"},
             },
         ],
         num_retries=0,
@@ -53,22 +51,16 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
         ),
     )
 
-    def pin_to_failing_deployment(seq):
-        for d in seq:
-            if d["model_info"]["id"] == failing_deployment_id:
-                return d
-        return seq[0]
+    called_api_keys = []
 
-    with (
-        patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-            new_callable=AsyncMock,
-            side_effect=rate_limit_error,
-        ),
-        patch(
-            "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=pin_to_failing_deployment,
-        ),
+    async def fail_and_record(*args, **kwargs):
+        called_api_keys.append(kwargs["litellm_params"].api_key)
+        raise rate_limit_error
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new_callable=AsyncMock,
+        side_effect=fail_and_record,
     ):
         with pytest.raises(litellm.RateLimitError):
             await router.aresponses(
@@ -76,10 +68,15 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
                 input="hi",
             )
 
-    cooldown_ids = await async_get_cooldown_deployments(
-        ctx=router._core_ctx, parent_otel_span=None
-    )
-    assert failing_deployment_id in cooldown_ids, (
-        f"Responses API failure callback did not register cooldown for "
-        f"{failing_deployment_id!r}; cooldown set was {cooldown_ids}"
+    # num_retries=0: exactly one deployment took the request and failed.
+    (called_api_key,) = called_api_keys
+    failed_id = deployment_ids[called_api_key]
+    cooldown_ids = [
+        model_id
+        for model_id, _ in await router.cooldown_cache.async_get_active_cooldowns(
+            model_ids=list(deployment_ids.values()), parent_otel_span=None
+        )
+    ]
+    assert cooldown_ids == [failed_id], (
+        f"Responses API failure callback did not register cooldown for {failed_id!r}; cooldown set was {cooldown_ids}"
     )
