@@ -73,7 +73,8 @@ def _language_code(model: str, language: object) -> str:
 
 def _language_hint(fields: Mapping[str, object]) -> object:
     native: Final = fields.get("language_code")
-    return fields.get("language") if native is None or native == "" else native
+    native_unset: Final = native is None or (isinstance(native, str) and not native.strip())
+    return fields.get("language") if native_unset else native
 
 
 def _form_value(value: object) -> str:
