@@ -42346,6 +42346,25 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "inferenceapis/moonshotai/Kimi-K2.6": {
+        "input_cost_per_token": 9.8e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.55e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "inferenceapis/moonshotai/Kimi-K2.7-Code": {
         "cache_read_input_token_cost": 1.8e-07,
         "input_cost_per_token": 8.9e-07,
@@ -42366,6 +42385,48 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": false
+    },
+    "inferenceapis/moonshotai/Kimi-K3.1-Pro": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 2.6e-06,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.3e-05,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "inferenceapis/nvidia/NVIDIA-Nemotron-3.5-Super-VL": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 6.5e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "inferenceapis/openai/gpt-oss-120b": {
         "input_cost_per_token": 2e-07,
@@ -42404,6 +42465,27 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": false
+    },
+    "inferenceapis/MiniMaxAI/MiniMax-M3.1-Flash": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 7.8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "inferenceapis/Qwen/Qwen3-VL-235B-A22B-Instruct": {
         "input_cost_per_token": 2.6e-07,
