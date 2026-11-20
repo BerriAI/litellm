@@ -253,24 +253,19 @@ def _conversation(messages: object) -> tuple[_Item, ...]:
     return tuple(item for item in (_parsed(_Item, entry) for entry in raw) if item is not None)
 
 
+def _role_texts(messages: object, roles: frozenset[str]) -> tuple[str, ...]:
+    spoken: Final = tuple(item for item in _conversation(messages) if item.role in roles)
+    return tuple(chain.from_iterable(_texts(item.content) for item in spoken))
+
+
 def user_task(messages: object) -> str | None:
     """What the user typed: the first user text that is more than an agent's setup blocks."""
-    typed: Final = (
-        _without_setup_blocks(text)
-        for item in _conversation(messages)
-        if item.role == "user"
-        for text in _texts(item.content)
-    )
+    typed: Final = (_without_setup_blocks(text) for text in _role_texts(messages, frozenset({"user"})))
     return next((task[:_TASK_CHARS] for task in typed if task), None)
 
 
 def _system_prompt(messages: object) -> str:
-    return "\n".join(
-        text
-        for item in _conversation(messages)
-        if item.role in ("system", "developer")
-        for text in _texts(item.content)
-    )
+    return "\n".join(_role_texts(messages, frozenset({"system", "developer"})))
 
 
 def _agent(user_agent: str | None, system_prompt: str) -> str | None:
