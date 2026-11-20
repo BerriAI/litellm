@@ -1459,16 +1459,18 @@ async def get_response_input_items(
         version,
     )
 
-    data: Final[dict[str, object]] = await read_request_body(request=request)
-    data["response_id"] = response_id
-    body_extra_query: Final = data.get("extra_query")
+    body: Final[dict[str, object]] = await read_request_body(request=request)
+    body_extra_query: Final = body.get("extra_query")
     input_items_extra_query: Final = (
         None
         if isinstance(body_extra_query, str | list | int | float)
         else _extra_query_with_query_params(body_extra_query, request, _INPUT_ITEMS_QUERY_PARAMS)
     )
-    if input_items_extra_query is not None:
-        data["extra_query"] = input_items_extra_query
+    data: Final = {
+        **body,
+        "response_id": response_id,
+        **({} if input_items_extra_query is None else {"extra_query": input_items_extra_query}),
+    }
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
