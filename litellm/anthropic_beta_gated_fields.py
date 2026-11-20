@@ -36,6 +36,7 @@ SYSTEM_CLEAR_AT: Final = "messages[].system.clear_at"
 SYSTEM_OUTPUT_CONFIG: Final = "messages[].system.output_config"
 SYSTEM_TOOL_CHANGES: Final = "messages[].system.content[].tool_addition|tool_removal"
 SYSTEM_MESSAGE_EMPTIED: Final = "messages[].system (emptied by the strip)"
+SAFEGUARDS: Final = "safeguards"
 
 _TOOL_CHANGE_BLOCK_TYPES: Final = frozenset({"tool_addition", "tool_removal"})
 

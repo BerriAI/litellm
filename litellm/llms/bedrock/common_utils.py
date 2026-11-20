@@ -36,7 +36,12 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, lax_bool, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    drops_unsupported_params,
+    lax_bool,
+    require_attributes,
+)
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_property_count,
@@ -1816,6 +1821,36 @@ def bedrock_supports_per_turn_control(model: str, model_info: Mapping[str, objec
     if isinstance(deployment_flag, bool):
         return deployment_flag
     return AnthropicModelInfo.supports_model_capability(model, "supports_per_turn_control", "bedrock")
+
+
+def bedrock_supports_safeguards(model: str, model_info: Mapping[str, object] | None) -> bool:
+    deployment_flag: Final = (model_info or {}).get("supports_safeguards")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return "claude" not in model.lower() or AnthropicModelInfo.supports_model_capability(
+        model, "supports_safeguards", "bedrock"
+    )
+
+
+def log_dropped_safeguards(model: str, provider: str) -> None:
+    verbose_logger.warning(
+        "Dropped safeguards and the %s beta for model=%s provider=%s because drop_params is on and Bedrock would "
+        "reject safeguards on this request, since the model map does not flag supports_safeguards for the model or "
+        "this route does not send that beta. On Bedrock Invoke a deployment forwards it with model_info "
+        "supports_safeguards true.",
+        ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
+        model,
+        provider,
+    )
+
+
+def drops_safeguards_bedrock_rejects(
+    model: str, model_info: Mapping[str, object] | None, drop_params: object, provider: str, *, sends_beta: bool
+) -> bool:
+    if not drops_unsupported_params(drop_params) or (sends_beta and bedrock_supports_safeguards(model, model_info)):
+        return False
+    log_dropped_safeguards(model, provider)
+    return True
 
 
 def supports_bedrock_prompt_cache_ttl(model: str) -> bool:

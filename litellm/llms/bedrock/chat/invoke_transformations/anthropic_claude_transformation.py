@@ -5,7 +5,7 @@ import httpx
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
+from litellm.anthropic_beta_gated_fields import SAFEGUARDS, strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
@@ -38,6 +38,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     deployment_model_info,
+    drops_safeguards_bedrock_rejects,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
@@ -66,6 +67,7 @@ else:
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 def _anthropic_config_max_tokens() -> int | None:
@@ -260,10 +262,25 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
+        typed_litellm_params: Final = _LITELLM_PARAMS.validate_python(litellm_params)
+        upstream_params: Final = (
+            {key: value for key, value in params.items() if key != SAFEGUARDS}
+            if SAFEGUARDS in params
+            and drops_safeguards_bedrock_rejects(
+                bedrock_capability_model(strip_bedrock_routing_prefix(model), typed_litellm_params.get("base_model")),
+                deployment_model_info(typed_litellm_params),
+                typed_litellm_params.get("drop_params"),
+                "bedrock_invoke",
+                sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+                in get_anthropic_beta_from_headers(headers),
+            )
+            else params
+        )
         _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -272,7 +289,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         beta_list: Final = self._compute_bedrock_invoke_beta_headers(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             headers=headers,
             thinking=_anthropic_request.get("thinking"),
             history_holds_tool_search=replays_tool_search(

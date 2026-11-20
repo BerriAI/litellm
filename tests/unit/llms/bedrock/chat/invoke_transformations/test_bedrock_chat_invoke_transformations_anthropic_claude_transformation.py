@@ -2492,3 +2492,67 @@ def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding}
     assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]
+
+
+_DANGEROUS_TOOL_USE_BETA: Final = "dangerous-tool-use-2026-09-03"
+_OPUS_4_1: Final = "us.anthropic.claude-opus-4-1-20250805-v1:0"
+_SONNET_4_5: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+_PROFILE_ARN: Final = "invoke/anthropic/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "client_betas", "global_drop_params", "forwarded"),
+    [
+        pytest.param(_OPUS_4_1, {"drop_params": True}, True, False, False, id="old_model_drop_params"),
+        pytest.param(_OPUS_4_1, {}, True, True, False, id="old_model_global_drop_params"),
+        pytest.param(_OPUS_4_1, {}, True, False, True, id="old_model_without_drop_params"),
+        pytest.param(
+            _OPUS_4_1,
+            {"drop_params": True, "model_info": {"supports_safeguards": True}},
+            True,
+            False,
+            True,
+            id="old_model_deployment_opts_in",
+        ),
+        pytest.param(
+            _PROFILE_ARN,
+            {"drop_params": True, "base_model": _OPUS_4_1},
+            True,
+            False,
+            False,
+            id="profile_arn_of_old_model",
+        ),
+        pytest.param(_SONNET_4_5, {"drop_params": True}, True, False, True, id="flagged_model_drop_params"),
+        pytest.param(
+            _SONNET_4_5,
+            {"drop_params": True, "model_info": {"supports_safeguards": False}},
+            True,
+            False,
+            False,
+            id="flagged_model_deployment_opts_out",
+        ),
+        pytest.param(_SONNET_4_5, {"drop_params": True}, False, False, False, id="flagged_model_without_the_beta"),
+    ],
+)
+def test_bedrock_chat_invoke_drops_safeguards_and_beta_under_drop_params_when_bedrock_would_reject_them(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    litellm_params: dict[str, object],
+    client_betas: bool,
+    global_drop_params: bool,
+    forwarded: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    safeguards: Final = [{"type": "dangerous_tool_use"}]
+    result: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"max_tokens": 64, "safeguards": safeguards},
+        litellm_params=litellm_params,
+        headers={"anthropic-beta": _DANGEROUS_TOOL_USE_BETA} if client_betas else {},
+    )
+
+    assert result.get("safeguards") == (safeguards if forwarded else None)
+    assert (_DANGEROUS_TOOL_USE_BETA in result.get("anthropic_beta", [])) is forwarded
+    assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]

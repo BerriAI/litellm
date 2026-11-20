@@ -12910,3 +12910,73 @@ def test_modify_params_keeps_adaptive_thinking_when_tool_call_history_has_no_thi
     )
 
     assert request.get("additionalModelRequestFields", {}).get("thinking") == sent_thinking
+
+
+_SONNET_4_5_PROFILE: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+@pytest.mark.parametrize(
+    ("model", "client_beta_header", "drop_params", "global_drop_params", "forwarded"),
+    [
+        (_SONNET_4_5_PROFILE, None, True, False, False),
+        (_SONNET_4_5_PROFILE, None, False, True, False),
+        (_SONNET_4_5_PROFILE, None, False, False, True),
+        (_SONNET_4_5_PROFILE, "dangerous-tool-use-2026-09-03", True, False, True),
+        ("us.anthropic.claude-opus-4-1-20250805-v1:0", "dangerous-tool-use-2026-09-03", True, False, False),
+        ("us.anthropic.claude-opus-4-1-20250805-v1:0", "dangerous-tool-use-2026-09-03", False, False, True),
+    ],
+    ids=[
+        "no_beta_deployment_drop_params",
+        "no_beta_global_drop_params",
+        "no_beta_without_drop_params",
+        "client_beta_on_flagged_model",
+        "client_beta_on_old_model",
+        "client_beta_on_old_model_without_drop_params",
+    ],
+)
+def test_converse_drops_safeguards_under_drop_params_unless_the_beta_rides_along_on_a_model_that_takes_it(
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    model: str,
+    client_beta_header: str | None,
+    drop_params: bool,
+    global_drop_params: bool,
+    forwarded: bool,
+) -> None:
+    """On 2026-11-20 Converse answered 400 "safeguards: Extra inputs are not permitted" on Sonnet 4.5 without the
+    dangerous-tool-use beta, which the bedrock_converse row never adds, 200 with a client-sent beta, and 400 on Opus
+    4.1 even with the beta."""
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    safeguards: Final = [{"type": "dangerous_tool_use"}]
+
+    request: Final = AmazonConverseConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"safeguards": safeguards},
+        litellm_params={"drop_params": drop_params},
+        headers={} if client_beta_header is None else {"anthropic-beta": client_beta_header},
+    )
+
+    fields: Final = request.get("additionalModelRequestFields", {})
+    assert (fields.get("safeguards") == safeguards) is forwarded
+    assert ("dangerous-tool-use-2026-09-03" in fields.get("anthropic_beta", [])) is (
+        forwarded and client_beta_header is not None
+    )
+    assert request["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
+
+
+def test_converse_safeguards_drop_keeps_the_other_betas_the_client_sent(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+
+    request: Final = AmazonConverseConfig().transform_request(
+        model="us.anthropic.claude-opus-4-1-20250805-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"safeguards": [{"type": "dangerous_tool_use"}]},
+        litellm_params={"drop_params": True},
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"},
+    )
+
+    assert request["additionalModelRequestFields"] == {"anthropic_beta": ["interleaved-thinking-2025-05-14"]}

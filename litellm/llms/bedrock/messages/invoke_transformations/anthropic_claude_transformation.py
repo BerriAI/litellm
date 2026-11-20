@@ -6,7 +6,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_native_request
+from litellm.anthropic_beta_gated_fields import SAFEGUARDS, log_beta_gated_strips, strip_beta_gated_native_request
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -40,6 +40,7 @@ from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
+    drops_safeguards_bedrock_rejects,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
@@ -68,6 +69,7 @@ else:
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _MESSAGE_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -702,18 +704,31 @@ class AmazonAnthropicClaudeMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
+        params: Final = _OPTIONAL_PARAMS.validate_python(anthropic_messages_optional_request_params)
+        upstream_params: Final = (
+            {key: value for key, value in params.items() if key != SAFEGUARDS}
+            if SAFEGUARDS in params
+            and drops_safeguards_bedrock_rejects(
+                model,
+                _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
+                getattr(litellm_params, "drop_params", None),
+                "bedrock_invoke",
+                sends_beta=True,
+            )
+            else params
+        )
+        requested_thinking: Final = upstream_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)
         drop_params: Final = getattr(litellm_params, "drop_params", None) is True
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=upstream_params,
         )
         anthropic_messages_request = AnthropicMessagesConfig.transform_anthropic_messages_request(
             self=self,
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -792,7 +807,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         filtered_betas: Final = self._get_bedrock_invoke_anthropic_beta_headers(
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=upstream_params,
             headers=headers,
             anthropic_messages_request=anthropic_messages_request,
             injected_thinking_for_clear_thinking=injected_thinking_for_clear_thinking,

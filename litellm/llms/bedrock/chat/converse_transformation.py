@@ -17,7 +17,12 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_gated_fields import active_beta_values, log_beta_gated_strips, strip_beta_gated_thinking
+from litellm.anthropic_beta_gated_fields import (
+    SAFEGUARDS,
+    active_beta_values,
+    log_beta_gated_strips,
+    strip_beta_gated_thinking,
+)
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -88,6 +93,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     deployment_model_info,
+    drops_safeguards_bedrock_rejects,
     requests_output_config_format,
 )
 from litellm.llms.bedrock.request_metadata import (
@@ -98,7 +104,7 @@ from litellm.llms.bedrock.request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -2554,6 +2560,17 @@ class AmazonConverseConfig(BaseConfig):
         if gated_thinking.stripped:
             log_beta_gated_strips(gated_thinking.stripped, model=model, provider="bedrock_converse")
             additional_request_params["thinking"] = gated_thinking.thinking
+        sent_betas: Final = active_beta_values({}, body_betas)  # pyright: ignore[reportUnknownArgumentType]  # same bare dict
+        safeguards_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+        if SAFEGUARDS in additional_request_params and drops_safeguards_bedrock_rejects(
+            model, model_info, drop_params, "bedrock_converse", sends_beta=safeguards_beta in sent_betas
+        ):
+            del additional_request_params[SAFEGUARDS]
+            kept_betas: Final = sorted(sent_betas - {safeguards_beta})
+            if kept_betas:
+                additional_request_params["anthropic_beta"] = kept_betas
+            elif "anthropic_beta" in additional_request_params:
+                del additional_request_params["anthropic_beta"]
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
         cache_injection_points: Final = additional_request_params.pop("cache_control_injection_points", None)
