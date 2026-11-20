@@ -1298,6 +1298,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
 _GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS: Final = frozenset({
     "uniqueItems",
+    "pattern",
     "exclusiveMinimum",
     "exclusiveMaximum",
     "multipleOf",
@@ -1313,7 +1314,7 @@ _GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS: Final = frozenset({
 def _remove_unsupported_gemini_schema_keywords(schema: object) -> object:
     """Recursively remove JSON Schema keywords unsupported by Gemini function declarations.
 
-    Keywords such as uniqueItems, exclusiveMinimum, etc. are valid JSON Schema but
+    Keywords such as uniqueItems, pattern, exclusiveMinimum, etc. are valid JSON Schema but
     rejected by Gemini function declarations with a 400 Bad Request.
     """
     if isinstance(schema, dict):
