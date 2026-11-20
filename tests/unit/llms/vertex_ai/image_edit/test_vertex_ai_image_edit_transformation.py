@@ -856,6 +856,9 @@ def _sent_gemini_edit_generation_config(**params: object) -> Mapping[str, object
         ),
         ({"size": "1536x1024", "aspect_ratio": "9:16", "image_size": "2K"}, {"aspectRatio": "9:16", "imageSize": "2K"}),
         ({"imageConfig": {"aspectRatio": "1:1"}, "aspect_ratio": "9:16"}, {"aspectRatio": "9:16"}),
+        ({"aspectRatio": "16:9", "aspect_ratio": "9:16"}, {"aspectRatio": "16:9"}),
+        ({"imageConfig": {"aspect_ratio": "9:16", "image_size": "4K"}}, {"aspectRatio": "9:16", "imageSize": "4K"}),
+        ({"size": "3072x2048", "imageConfig": {"aspect_ratio": "9:16"}}, {"aspectRatio": "9:16", "imageSize": "2K"}),
     ),
 )
 def test_vertex_gemini_edit_forwards_image_controls(
@@ -867,15 +870,24 @@ def test_vertex_gemini_edit_forwards_image_controls(
     }
 
 
+@pytest.mark.parametrize("drop_params", (True, "true"))
 @pytest.mark.parametrize(
     ("param", "value"),
-    (("size", "not-a-size"), ("size", "1024x"), ("imageConfig", "banana"), ("imageConfig", "[1]")),
+    (
+        ("size", "not-a-size"),
+        ("size", "1024x"),
+        ("imageConfig", "banana"),
+        ("imageConfig", "[1]"),
+        ("output_compression", 50),
+    ),
 )
-def test_vertex_gemini_edit_rejects_an_unmappable_control_unless_dropping_params(param: str, value: object) -> None:
+def test_vertex_gemini_edit_rejects_an_unmappable_control_unless_dropping_params(
+    param: str, value: object, drop_params: object
+) -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match=f"`{param}`"):
         _sent_gemini_edit_request(**{param: value})
 
-    assert _sent_gemini_edit_generation_config(**{param: value}, drop_params=True) == {
+    assert _sent_gemini_edit_generation_config(**{param: value}, drop_params=drop_params) == {
         "responseModalities": ["IMAGE"]
     }
 

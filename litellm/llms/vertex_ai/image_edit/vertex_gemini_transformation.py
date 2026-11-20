@@ -37,6 +37,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_OPENAI_ONLY_PARAMS: Final = ("output_compression",)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -63,7 +64,16 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     Uses generateContent API for Gemini models on Vertex AI
     """
 
-    SUPPORTED_PARAMS: list[str] = ["n", "size", "imageConfig", "aspectRatio", "aspect_ratio", "imageSize", "image_size"]
+    SUPPORTED_PARAMS: list[str] = [
+        "n",
+        "size",
+        "imageConfig",
+        "aspectRatio",
+        "aspect_ratio",
+        "imageSize",
+        "image_size",
+        *_OPENAI_ONLY_PARAMS,
+    ]
 
     def __init__(self) -> None:
         BaseImageEditConfig.__init__(self)
@@ -79,7 +89,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         drop_params: bool,
     ) -> dict[str, object]:
         params: Final[Mapping[str, object]] = image_edit_optional_params
-        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params)
+        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params, _OPENAI_ONLY_PARAMS)
         if isinstance(image_params, UnsupportedImageParam):
             raise_unsupported_image_param(image_params, model)
         return {**({"n": params["n"]} if "n" in params else {}), **image_params}

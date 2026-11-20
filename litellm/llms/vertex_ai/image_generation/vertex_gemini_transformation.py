@@ -91,11 +91,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         drop_params: bool,
     ) -> dict:
         requested: Final = _JSON_OBJECT.validate_python(non_default_params)
-        unsupported_param: Final = next((param for param in _OPENAI_ONLY_PARAMS if param in requested), None)
-        if unsupported_param is not None and not drop_params:
-            raise_unsupported_image_param(UnsupportedImageParam(unsupported_param, "is not supported"), model)
         params: Final = {key: value for key, value in requested.items() if key not in optional_params}
-        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params)
+        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params, _OPENAI_ONLY_PARAMS)
         if isinstance(image_params, UnsupportedImageParam):
             raise_unsupported_image_param(image_params, model)
         return map_gemini_image_tools_params(

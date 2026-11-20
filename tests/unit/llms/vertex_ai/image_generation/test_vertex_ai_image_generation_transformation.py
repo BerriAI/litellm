@@ -1324,6 +1324,16 @@ def test_vertex_gemini_generation_reads_an_image_config_sent_as_a_json_string() 
     }
 
 
+@pytest.mark.parametrize("image_config", ({"aspectRatio": "9:16"}, {"aspect_ratio": "9:16"}))
+def test_vertex_gemini_generation_image_config_overrides_the_size_in_either_key_spelling(
+    image_config: Mapping[str, object],
+) -> None:
+    assert _sent_gemini_generation_config(imageConfig=image_config, size="3072x2048") == {
+        "responseModalities": ["IMAGE"],
+        "imageConfig": {"aspectRatio": "9:16", "imageSize": "2K"},
+    }
+
+
 @pytest.mark.parametrize(("param", "value"), (("background", "transparent"), ("moderation", "low"), ("output_compression", 50)))
 def test_vertex_gemini_generation_rejects_openai_only_params_unless_dropping_params(param: str, value: object) -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match=f"`{param}`"):

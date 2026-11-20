@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, NoReturn
@@ -30,11 +30,26 @@ def raise_unsupported_image_param(rejection: UnsupportedImageParam, model: str) 
     )
 
 
+def _camel_case(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
+def _camel_case_keys(config: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{_camel_case(key): value for key, value in config.items() if "_" in key},
+        **{key: value for key, value in config.items() if "_" not in key},
+    }
+
+
 def _image_config_object(value: object) -> Mapping[str, object] | None:
     try:
-        return _JSON_OBJECT.validate_json(value) if isinstance(value, str) else _JSON_OBJECT.validate_python(value)
+        config: Final = (
+            _JSON_OBJECT.validate_json(value) if isinstance(value, str) else _JSON_OBJECT.validate_python(value)
+        )
     except ValidationError:
         return None
+    return _camel_case_keys(config)
 
 
 def _size_image_config(size: object, model: str) -> Mapping[str, object] | None:
@@ -50,8 +65,11 @@ def _flat_image_settings(params: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def map_vertex_gemini_image_params(
-    params: Mapping[str, object], model: str, drop_params: bool
+    params: Mapping[str, object], model: str, drop_params: bool, unsupported_params: Collection[str]
 ) -> Mapping[str, object] | UnsupportedImageParam:
+    unsupported_param: Final = next((param for param in unsupported_params if param in params), None)
+    if unsupported_param is not None and not drop_params:
+        return UnsupportedImageParam(unsupported_param, "is not supported")
     image_config: Final = _image_config_object(params["imageConfig"]) if "imageConfig" in params else _EMPTY
     size_config: Final = _size_image_config(params["size"], model) if "size" in params else _EMPTY
     if image_config is None and not drop_params:
