@@ -15,6 +15,7 @@ mod test_support;
 pub use admit::{Admit, Reason, Refused};
 pub use callbacks::{
     Callbacks, Registered, Unregistrable,
+    model_capacity::{self, ModelCapacity},
     parallel_request_limiter::{self, KeyLimiter},
 };
 pub use error::Error;
@@ -37,6 +38,7 @@ use litellm_http::{
     media::PublicDnsResolver,
 };
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
+use litellm_redis_store::{Remote, active_teams::ActiveTeams};
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
 /// The config at `path`, its `os.environ/` references read from the process environment.
@@ -67,9 +69,14 @@ pub struct Inference {
     pub key_limiter: Arc<KeyLimiter>,
 }
 
-/// The inference routes of `config` with the callbacks the gateway runs around their calls. The
-/// keys' limits are counted in `redis`'s coordination client when there is one, and in this
-/// process's memory otherwise.
+/// Whether a license is set at all is all the proxy asks before it honors a reserved priority.
+const LICENSE: &str = "LITELLM_LICENSE";
+
+/// The inference routes of `config` with the callbacks the gateway runs around their calls, in
+/// the order the proxy registers them: the config's `callbacks`, of which only the dynamic rate
+/// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
+/// capacity are counted in `redis`'s coordination client when there is one, and in this process's
+/// memory otherwise.
 pub async fn build_inference(
     config: &Config,
     environment: &Environment,
@@ -81,8 +88,22 @@ pub async fn build_inference(
     let (router, shaping) = boot::router(config, &catalog).await?;
     let limits = parallel_request_limiter::Settings::read(config, environment);
     let counters = parallel_request_limiter::counters(redis.coordination.clone());
-    let key_limiter = KeyLimiter::new(limits, counters, router.clone());
-    let callbacks = Callbacks::new(vec![key_limiter.registered()])?;
+    let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
+    let licensed = resources.environment.get(LICENSE).is_some();
+    let model_capacity = model_capacity::Settings::read(config, limits, licensed).map(|read| {
+        let active = ActiveTeams::new(redis.coordination.clone().map(|client| Remote {
+            client,
+            default_ttl: parallel_request_limiter::REDIS_DEFAULT_TTL,
+        }));
+        ModelCapacity::new(read, counters, active, router.clone())
+    });
+    let callbacks = Callbacks::new(
+        model_capacity
+            .iter()
+            .map(|capacity| capacity.registered())
+            .chain([key_limiter.registered()])
+            .collect(),
+    )?;
     let gateway = Gateway::new(
         resources.core.clone(),
         resources.http.clone(),

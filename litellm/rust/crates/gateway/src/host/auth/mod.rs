@@ -664,6 +664,7 @@ mod tests {
     #[case::metadata_beside_a_model_limit(json!({"metadata": {"model_rpm_limit": {"claude": 2}, "tags": ["a"]}}))]
     #[case::a_model_limit_that_is_no_whole_number(json!({"metadata": {"model_tpm_limit": {"claude": "100"}}}))]
     #[case::model_limits_that_are_no_map(json!({"metadata": {"model_rpm_limit": 5}}))]
+    #[case::a_priority_that_is_no_text(json!({"metadata": {"priority": 5}}))]
     #[case::max_budget(json!({"max_budget": 5.0}))]
     #[case::budget_duration(json!({"budget_duration": "30d"}))]
     #[case::budget_reset_at(json!({"budget_reset_at": "1970-01-01T00:00:09"}))]
@@ -711,6 +712,18 @@ mod tests {
             panic!("the key authenticated as the master key");
         };
         assert_eq!(key.key.row.limits(), &limits);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_keys_metadata_priority_is_the_class_it_is_counted_under() {
+        let caller = authenticate_holding(json!({"metadata": {"priority": "prod"}}))
+            .await
+            .unwrap();
+
+        let Caller::Key(key) = &*caller else {
+            panic!("the key authenticated as the master key");
+        };
+        assert_eq!(key.key.row.priority().map(|class| &**class), Some("prod"));
     }
 
     #[rstest]

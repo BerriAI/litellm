@@ -36,6 +36,33 @@ fn total(deployments: &[Arc<Deployment>], kind: Kind) -> Option<Number> {
         .reduce(|sum, limit| sum + limit)
 }
 
+/// What a model group's deployments are configured to serve a minute, added up over the group.
+/// A limit no deployment sets is `None`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupLimits {
+    pub tpm: Option<i64>,
+    pub rpm: Option<i64>,
+}
+
+/// The limits of the model group `name` in `router`, by the name a request asks for it under.
+/// `None` when `name` is no model group.
+pub fn group_limits(router: &litellm_router_core::Router, name: &str) -> Option<GroupLimits> {
+    let deployments = router.registry().group(name)?;
+    Some(GroupLimits {
+        tpm: whole(&deployments, Kind::Tpm),
+        rpm: whole(&deployments, Kind::Rpm),
+    })
+}
+
+/// The group's limit as the whole number the dynamic rate limiter divides among priorities. A
+/// fractional total is no limit to it.
+fn whole(deployments: &[Arc<Deployment>], kind: Kind) -> Option<i64> {
+    match total(deployments, kind)? {
+        Number::Int(limit) => Some(limit),
+        Number::Float(_) => None,
+    }
+}
+
 /// `_usage_total`: the counts that are `int`s, summed, `None` when there is none.
 fn used(counts: &[Option<Number>]) -> Option<i64> {
     counts
