@@ -11,6 +11,7 @@ import os
 import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from pathlib import Path
 from types import EllipsisType, SimpleNamespace
@@ -49,6 +50,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import MCP_METADATA_TIMEOUT, MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.mcp_client.client import MCPClient, PersistentMCPSession
 from litellm.proxy import proxy_server
@@ -91,6 +93,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     resolve_openapi_tool_auth,
     should_strip_caller_authorization,
 )
+from litellm.proxy.mcp_server.outbound_credentials.client_credentials import TokenEndpointDenied
 from litellm.proxy.mcp_server.tool_outcome import TextResult
 from litellm.proxy.mcp_server.upstream import resolve_upstream_auth
 from litellm.proxy.utils import ProxyLogging
@@ -99,6 +102,14 @@ from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPOAuthMetadata, MCPServer, PinnedMCPTool
+from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+    BOT_PROFILE,
+    AnalyticsUpstream,
+    BotTokenEndpoint,
+    granting,
+    profile_aware_manager,
+    profiled_analytics_server,
+)
 
 _TSessionResult = TypeVar("_TSessionResult")
 
@@ -10775,10 +10786,10 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         manager = MCPServerManager()
         assert manager._upstream_initialize_instructions_by_server_id.get("nonexistent") is None
 
-    def test_remember_stores_stripped_value(self):
+    def test_remember_stores_stripped_value(self) -> None:
         """_remember_upstream_initialize_instructions stores a stripped string."""
         manager = MCPServerManager()
-        fake_server = MagicMock(server_id="srv")
+        fake_server: Final = MagicMock(server_id="srv", auth_profile_id=None)
         fake_client = MagicMock(_last_initialize_instructions="  hello \n")
         manager._remember_upstream_initialize_instructions(fake_server, fake_client)
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") == "hello"
@@ -17413,6 +17424,23 @@ async def test_tools_list_cache_outlives_an_instructions_clear_and_a_hit_puts_th
 
 
 @pytest.mark.asyncio
+async def test_a_listing_through_a_callers_auth_profile_never_fills_the_shared_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    plain: Final = _discovery_server()
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+
+    with _mcp_upstream(_declaring_instructions(upstream, lambda request: "notes for the bot profile")):
+        await _list_discovery_tools(manager, server=plain.model_copy(update={"auth_profile_id": "discovery-bots"}))
+
+    assert operations._merge_gateway_initialize_instructions([plain]) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("server", "cached_ttl_ms"),
     (
@@ -23524,3 +23552,391 @@ async def test_debug_dump_of_the_registry_never_prints_a_profile_secret(
     dump: Final = next(message for message in caplog.messages if "Loaded MCP Servers" in message)
     assert "bot-secret" not in dump
     assert "news-bot-token" not in dump
+
+
+def _tool_call_logging_obj() -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="MCP: analytics-get_issue",
+        messages=[],
+        stream=False,
+        call_type="call_mcp_tool",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="profile-call",
+        function_id="profile-call",
+    )
+    logging_obj.model_call_details["mcp_tool_call_metadata"] = {"name": "get_issue", "mcp_server_name": "analytics"}
+    return logging_obj
+
+
+BOT_KEY: Final = UserAPIKeyAuth(api_key="hashed-bot-key", team_id="payments")
+
+
+@pytest.mark.asyncio
+async def test_granted_caller_calls_an_authorization_code_server_with_its_profile_app_token() -> None:
+    upstream: Final = AnalyticsUpstream()
+    token_endpoint: Final = BotTokenEndpoint()
+    manager: Final = profile_aware_manager(profiled_analytics_server(), upstream, token_endpoint, "ana-bots")
+    logging_obj: Final = _tool_call_logging_obj()
+
+    result: Final = await manager.call_tool(
+        server_name="analytics",
+        name="get_issue",
+        arguments={"issueKey": "PAY-142"},
+        user_api_key_auth=BOT_KEY,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert not result.is_error, result
+    assert upstream.calls("tools/call") == ("Bearer bot-app-token-1",), upstream.requests
+    assert token_endpoint.client_ids == ("bot-app",)
+    assert logging_obj.model_call_details["mcp_tool_call_metadata"] == {
+        "name": "get_issue",
+        "mcp_server_name": "analytics",
+        "mcp_auth_profile": "ana-bots",
+        "mcp_auth_mode": MCPAuth.oauth2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_profiled_call_records_the_auth_mode_of_the_profile_it_used() -> None:
+    upstream: Final = AnalyticsUpstream()
+    static: Final = MCPAuthProfile(id="ana-static", auth_type=MCPAuth.bearer_token, authentication_token="bot-token")
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(additional_auth=(static,)), upstream, BotTokenEndpoint(), "ana-static"
+    )
+    logging_obj: Final = _tool_call_logging_obj()
+    logging_obj.model_call_details["mcp_tool_call_metadata"] = {
+        "name": "get_issue",
+        "mcp_server_name": "analytics",
+        "mcp_auth_mode": MCPAuth.oauth2,
+    }
+
+    await manager.call_tool(
+        server_name="analytics",
+        name="get_issue",
+        arguments={},
+        user_api_key_auth=BOT_KEY,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert upstream.calls("tools/call") == ("Bearer bot-token",)
+    assert logging_obj.model_call_details["mcp_tool_call_metadata"] == {
+        "name": "get_issue",
+        "mcp_server_name": "analytics",
+        "mcp_auth_mode": MCPAuth.bearer_token,
+        "mcp_auth_profile": "ana-static",
+    }
+
+
+@pytest.mark.asyncio
+async def test_caller_without_a_grant_keeps_the_sign_in_challenge_and_an_unchanged_spend_record() -> None:
+    upstream: Final = AnalyticsUpstream()
+    token_endpoint: Final = BotTokenEndpoint()
+    manager: Final = profile_aware_manager(profiled_analytics_server(), upstream, token_endpoint)
+    logging_obj: Final = _tool_call_logging_obj()
+
+    with pytest.raises(HTTPException) as challenge:
+        await manager.call_tool(
+            server_name="analytics",
+            name="get_issue",
+            arguments={"issueKey": "PAY-142"},
+            user_api_key_auth=BOT_KEY,
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert (challenge.value.status_code, challenge.value.headers) == (
+        401,
+        {"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/analytics"'},
+    )
+    assert (upstream.calls("tools/call"), token_endpoint.client_ids) == ((), ())
+    assert logging_obj.model_call_details["mcp_tool_call_metadata"] == {
+        "name": "get_issue",
+        "mcp_server_name": "analytics",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("denied", "expected_status"),
+    [
+        (TokenEndpointDenied(status_code=401, detail="invalid_client"), 500),
+        (TokenEndpointDenied(status_code=503, detail="unavailable"), 503),
+    ],
+)
+async def test_a_failing_profile_reports_its_own_error_and_never_falls_back_to_the_default(
+    denied: TokenEndpointDenied, expected_status: int
+) -> None:
+    upstream: Final = AnalyticsUpstream()
+    token_endpoint: Final = BotTokenEndpoint(outcome=denied)
+    manager: Final = profile_aware_manager(profiled_analytics_server(), upstream, token_endpoint, "ana-bots")
+
+    with pytest.raises(HTTPException) as failure:
+        await manager.call_tool(server_name="analytics", name="get_issue", arguments={}, user_api_key_auth=BOT_KEY)
+
+    assert failure.value.status_code == expected_status, failure.value.detail
+    assert failure.value.headers is None, "a profile failure must not send the default profile's sign-in challenge"
+    assert token_endpoint.client_ids == ("bot-app",)
+    assert upstream.calls("tools/call") == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("grants", "server", "detail"),
+    [
+        pytest.param(
+            ("new-bots",), profiled_analytics_server(), "new-bots are not loaded on this worker", id="unloaded"
+        ),
+        pytest.param(
+            ("ana-bots", "ANA-static"),
+            profiled_analytics_server(
+                additional_auth=(
+                    BOT_PROFILE,
+                    MCPAuthProfile(id="ana-static", auth_type="bearer_token", authentication_token="static"),
+                )
+            ),
+            "several auth profiles of MCP server 'analytics': ana-bots, ana-static",
+            id="two-of-one-server",
+        ),
+    ],
+)
+async def test_a_grant_this_worker_cannot_resolve_to_one_profile_is_503_and_never_the_default(
+    grants: tuple[str, ...], server: MCPServer, detail: str
+) -> None:
+    upstream: Final = AnalyticsUpstream()
+    token_endpoint: Final = BotTokenEndpoint()
+    manager: Final = profile_aware_manager(server, upstream, token_endpoint, *grants)
+
+    with pytest.raises(HTTPException) as failure:
+        await manager.call_tool(server_name="analytics", name="get_issue", arguments={}, user_api_key_auth=BOT_KEY)
+
+    assert failure.value.status_code == 503
+    assert detail in str(failure.value.detail)
+    assert (upstream.requests, token_endpoint.client_ids) == ((), ())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_owners", "refused"),
+    [
+        pytest.param({"ana-bots": "analytics"}, True, id="this-servers-new-profile"),
+        pytest.param({"ana-bots": None}, False, id="stored-nowhere"),
+        pytest.param(None, True, id="profile-table-unreadable"),
+        pytest.param({"ana-bots": "github"}, False, id="another-servers-profile"),
+    ],
+)
+async def test_a_grant_this_worker_has_not_loaded_is_refused_only_when_this_server_stores_it(
+    stored_owners: Mapping[str, str | None] | None, refused: bool
+) -> None:
+    server: Final = profiled_analytics_server(
+        additional_auth=None, auth_type=MCPAuth.bearer_token, authentication_token="default-token"
+    )
+    upstream: Final = AnalyticsUpstream()
+    asked: Final[list[AbstractSet[str]]] = []  # mutable-ok: records the profile table reads
+
+    async def owners(profile_ids: AbstractSet[str]) -> Mapping[str, str | None] | None:
+        asked.append(profile_ids)
+        return stored_owners
+
+    manager: Final = profile_aware_manager(server, upstream, BotTokenEndpoint(), "ANA-Bots", owners=owners)
+
+    if refused:
+        with pytest.raises(HTTPException) as failure:
+            await manager.call_tool(server_name="analytics", name="get_issue", arguments={}, user_api_key_auth=BOT_KEY)
+        assert failure.value.status_code == 503
+        assert "ANA-Bots are not loaded on this worker" in str(failure.value.detail)
+    else:
+        await manager.call_tool(server_name="analytics", name="get_issue", arguments={}, user_api_key_auth=BOT_KEY)
+
+    assert asked == [frozenset({"ana-bots"})]
+    assert upstream.calls("tools/call") == (() if refused else ("Bearer default-token",))
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_401_on_a_profile_token_refetches_the_profile_app_once() -> None:
+    upstream: Final = AnalyticsUpstream(rejected_tokens=frozenset({"Bearer bot-app-token-1"}))
+    token_endpoint: Final = BotTokenEndpoint()
+    manager: Final = profile_aware_manager(profiled_analytics_server(), upstream, token_endpoint, "ana-bots")
+
+    result: Final = await manager.call_tool(
+        server_name="analytics", name="get_issue", arguments={}, user_api_key_auth=BOT_KEY
+    )
+
+    assert not result.is_error, result
+    assert token_endpoint.client_ids == ("bot-app", "bot-app")
+    assert upstream.calls("tools/call") == ("Bearer bot-app-token-2",), upstream.requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller_credential",
+    [
+        {"mcp_auth_header": "Bearer caller-supplied"},
+        {"oauth2_headers": {"Authorization": "Bearer caller-supplied"}},
+    ],
+)
+@pytest.mark.parametrize(
+    ("grant", "expected_upstream_authorization"),
+    [("ana-bots", "Bearer bot-app-token-1"), ("ana-static", "Bearer static-bot-token")],
+)
+async def test_a_caller_supplied_credential_never_replaces_the_granted_profile(
+    caller_credential: dict[str, object], grant: str, expected_upstream_authorization: str
+) -> None:
+    upstream: Final = AnalyticsUpstream()
+    static_profile: Final = MCPAuthProfile(
+        id="ana-static", auth_type=MCPAuth.bearer_token, authentication_token="static-bot-token"
+    )
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(delegate_auth_to_upstream=True, additional_auth=(BOT_PROFILE, static_profile)),
+        upstream,
+        BotTokenEndpoint(),
+        grant,
+    )
+
+    await manager.call_tool(
+        server_name="analytics",
+        name="get_issue",
+        arguments={},
+        user_api_key_auth=BOT_KEY,
+        raw_headers={"authorization": "Bearer caller-supplied", "x-litellm-api-key": "sk-bot"},
+        **caller_credential,
+    )
+
+    assert upstream.calls("tools/call") == (expected_upstream_authorization,), upstream.requests
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_grant_keeps_the_default_on_a_server_without_profiles_and_fails_a_profiled_one() -> None:
+    async def unreadable_grants(user_api_key_auth: UserAPIKeyAuth | None) -> tuple[tuple[str, ...], ...]:
+        raise ConnectionError("database is restarting")
+
+    upstream: Final = AnalyticsUpstream()
+    plain: Final = profiled_analytics_server(
+        additional_auth=None, auth_type=MCPAuth.bearer_token, authentication_token="default-token"
+    )
+    manager: Final = MCPServerManager(
+        upstream_transport=httpx2.MockTransport(upstream.respond), auth_profile_grants=unreadable_grants
+    )
+    manager.registry[plain.server_id] = plain
+    manager.tool_name_to_mcp_server_name_mapping["analytics-get_issue"] = plain.server_id
+
+    await manager.call_tool(server_name="analytics", name="get_issue", arguments={}, user_api_key_auth=BOT_KEY)
+    with pytest.raises(HTTPException) as failure:
+        await manager.effective_server_for(profiled_analytics_server(), BOT_KEY)
+
+    assert failure.value.status_code == 503
+
+    assert upstream.calls("tools/call") == ("Bearer default-token",)
+
+
+@pytest.mark.asyncio
+async def test_one_request_reads_the_callers_grants_once_for_every_server_it_resolves() -> None:
+    reads: Final[list[UserAPIKeyAuth | None]] = []  # mutable-ok: records the grant reads
+
+    async def counted_grants(user_api_key_auth: UserAPIKeyAuth | None) -> tuple[tuple[str, ...], ...]:
+        reads.append(user_api_key_auth)
+        return ()
+
+    manager: Final = MCPServerManager(auth_profile_grants=counted_grants)
+    servers: Final = tuple(
+        profiled_analytics_server(server_id=name, name=name, additional_auth=None) for name in ("a", "b", "c")
+    )
+
+    resolved: Final = [await manager.effective_server_for(server, BOT_KEY) for server in servers]
+
+    assert (resolved, len(reads)) == (list(servers), 1)
+
+
+@pytest.mark.asyncio
+async def test_a_new_request_reads_the_grants_again() -> None:
+    reads: Final[list[UserAPIKeyAuth | None]] = []  # mutable-ok: records the grant reads
+
+    async def counted_grants(user_api_key_auth: UserAPIKeyAuth | None) -> tuple[tuple[str, ...], ...]:
+        reads.append(user_api_key_auth)
+        return ()
+
+    manager: Final = MCPServerManager(auth_profile_grants=counted_grants)
+    server: Final = profiled_analytics_server(additional_auth=None)
+
+    for _ in range(2):
+        await asyncio.create_task(manager.effective_server_for(server, BOT_KEY))
+
+    assert len(reads) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grants", [(), ("gh-bots",)], ids=["no-grant", "another-servers-loaded-profile"])
+async def test_a_caller_without_an_unloaded_grant_gets_the_server_as_is_without_a_profile_table_read(
+    grants: tuple[str, ...],
+) -> None:
+    asked: Final[list[AbstractSet[str]]] = []  # mutable-ok: records the profile table reads
+
+    async def owners(profile_ids: AbstractSet[str]) -> Mapping[str, str | None] | None:
+        asked.append(profile_ids)
+        return None
+
+    server: Final = profiled_analytics_server(additional_auth=None)
+    github: Final = profiled_analytics_server(
+        server_id="github", name="github", additional_auth=(BOT_PROFILE.model_copy(update={"id": "gh-bots"}),)
+    )
+    manager: Final = MCPServerManager(auth_profile_grants=granting(*grants), auth_profile_owners=owners)
+    manager.registry[github.server_id] = github
+
+    assert await manager.effective_server_for(server, BOT_KEY) is server
+    assert asked == []
+
+
+@pytest.mark.asyncio
+async def test_oauth_discovery_keeps_the_selected_profile() -> None:
+    server: Final = profiled_analytics_server(authorization_url=None, token_url=None)
+    manager: Final = profile_aware_manager(server, AnalyticsUpstream(), BotTokenEndpoint(), "ana-bots")
+    effective: Final = await manager.effective_server_for(server, BOT_KEY)
+
+    assert await manager.ensure_oauth_metadata_discovered(effective) is effective
+
+
+@pytest.mark.asyncio
+async def test_a_forwarded_caller_authorization_never_replaces_a_granted_static_profile() -> None:
+    upstream: Final = AnalyticsUpstream()
+    static_profile: Final = MCPAuthProfile(
+        id="ana-static", auth_type=MCPAuth.bearer_token, authentication_token="static-bot-token"
+    )
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(extra_headers=["Authorization"], additional_auth=(static_profile,)),
+        upstream,
+        BotTokenEndpoint(),
+        "ana-static",
+    )
+
+    await manager.call_tool(
+        server_name="analytics",
+        name="get_issue",
+        arguments={},
+        user_api_key_auth=BOT_KEY,
+        raw_headers={"authorization": "Bearer caller-supplied", "x-litellm-api-key": "sk-bot"},
+    )
+
+    assert upstream.calls("tools/call") == ("Bearer static-bot-token",), upstream.requests
+
+
+@pytest.mark.asyncio
+async def test_a_forwarded_caller_authorization_never_rides_beside_a_profile_on_a_custom_header() -> None:
+    upstream: Final = AnalyticsUpstream()
+    key_profile: Final = MCPAuthProfile(id="ana-key", auth_type=MCPAuth.api_key, authentication_token="bot-api-key")
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(
+            extra_headers=["Authorization"], upstream_token_header="X-Api-Key", additional_auth=(key_profile,)
+        ),
+        upstream,
+        BotTokenEndpoint(),
+        "ana-key",
+    )
+
+    await manager.call_tool(
+        server_name="analytics",
+        name="get_issue",
+        arguments={},
+        user_api_key_auth=BOT_KEY,
+        raw_headers={"authorization": "Bearer caller-supplied", "x-litellm-api-key": "sk-bot"},
+    )
+
+    assert upstream.calls("tools/call") == ("",), upstream.requests

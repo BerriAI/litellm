@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import pytest
@@ -15,7 +15,7 @@ from litellm.proxy.mcp_server.auth_profiles import (
     UnsupportedOAuth2Flow,
     UnsupportedProfileHost,
 )
-from litellm.proxy.mcp_server.auth_profile_db import SubmittedProfiles, startup_profile_refusal
+from litellm.proxy.mcp_server.auth_profile_db import StoredProfileOwners, SubmittedProfiles, startup_profile_refusal
 from litellm.proxy.mcp_server.db import McpIdentifierConflict, create_mcp_server_if_identifier_free, update_mcp_server
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.types.mcp import MCPTransport
@@ -1049,3 +1049,80 @@ async def test_a_put_turning_a_profiled_server_into_stdio_is_refused(monkeypatch
 
     assert refused == UnsupportedProfileHost("analytics", "stdio")
     assert ([dict(row) for row in store.servers], store.profiles) == before
+
+
+class _Clock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _counting_profile_reads(store: FakeMcpPrisma) -> list[int]:
+    reads: Final[list[int]] = []  # mutable-ok: records the profile table reads
+    find_many: Final = store.db.litellm_mcpauthprofiletable.find_many
+
+    async def counted(where: Mapping[str, object]) -> Sequence[object]:
+        rows: Final = await find_many(where=where)
+        reads.append(len(rows))
+        return rows
+
+    store.db.litellm_mcpauthprofiletable.find_many = counted
+    return reads
+
+
+@pytest.mark.asyncio
+async def test_stored_profile_owners_reads_an_id_once_per_few_seconds_and_names_its_server() -> None:
+    store: Final = FakeMcpPrisma()
+    await _create(store, _new_server("analytics", _bot("Ana-Bots")), "admin")
+    reads: Final = _counting_profile_reads(store)
+    clock: Final = _Clock(100.0)
+    owners: Final = StoredProfileOwners(lambda: store, clock=clock)
+
+    first: Final = await owners(frozenset({"ana-bots", "gone"}))
+    cached: Final = await owners(frozenset({"ana-bots"}))
+    reads_while_fresh: Final = len(reads)
+    clock.now = 106.0
+    reread: Final = await owners(frozenset({"ana-bots"}))
+
+    assert (first, cached, reread) == (
+        {"ana-bots": "analytics", "gone": None},
+        {"ana-bots": "analytics"},
+        {"ana-bots": "analytics"},
+    )
+    assert (reads_while_fresh, len(reads)) == (1, 2)
+
+
+@pytest.mark.asyncio
+async def test_a_profile_created_right_after_an_owner_miss_is_found_on_the_next_lookup() -> None:
+    store: Final = FakeMcpPrisma()
+    owners: Final = StoredProfileOwners(lambda: store, clock=_Clock(100.0))
+
+    before: Final = await owners(frozenset({"ana-bots"}))
+    await _create(store, _new_server("analytics", _bot("ana-bots")), "admin")
+    after: Final = await owners(frozenset({"ana-bots"}))
+
+    assert (before, after) == ({"ana-bots": None}, {"ana-bots": "analytics"})
+
+
+@pytest.mark.asyncio
+async def test_stored_profile_owners_answer_none_without_a_readable_profile_table() -> None:
+    store: Final = FakeMcpPrisma()
+
+    async def unreadable(where: Mapping[str, object]) -> Sequence[object]:
+        raise ConnectionError("database is restarting")
+
+    store.db.litellm_mcpauthprofiletable.find_many = unreadable
+
+    assert await StoredProfileOwners(lambda: store)(frozenset({"ana-bots"})) is None
+    assert await StoredProfileOwners(lambda: None)(frozenset({"ana-bots"})) is None
+
+
+@pytest.mark.asyncio
+async def test_stored_profile_owners_read_the_writer() -> None:
+    store: Final = FakeMcpPrisma()
+    await _create(store, _new_server("analytics", _bot("ana-bots")), "admin")
+    store.lag_profile_reads()
+
+    assert await StoredProfileOwners(lambda: store)(frozenset({"ana-bots"})) == {"ana-bots": "analytics"}

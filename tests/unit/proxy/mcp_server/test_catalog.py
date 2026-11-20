@@ -1140,3 +1140,30 @@ async def test_a_reload_after_a_failed_profile_read_restores_the_profiles(monkey
 
     assert first is None
     assert tuple(profile.id for profile in manager.registry["analytics"].additional_auth or ()) == ("ana-bots",)
+
+
+@pytest.mark.asyncio
+async def test_the_loaded_profile_ids_are_read_from_the_snapshot_and_follow_a_new_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager: Final = MCPServerManager()
+    bots: Final = MCPAuthProfile(id="Bots", auth_type="bearer_token", authentication_token="t")
+    manager.config_mcp_servers["docs"] = _plain_server(additional_auth=(bots,))
+
+    async with manager.catalog.operation() as snapshot:
+        assert manager.loaded_auth_profile_ids() is snapshot.auth_profile_ids
+        assert snapshot.auth_profile_ids == frozenset({"bots"})
+
+    added: Final = MCPAuthProfile(id="wiki-bots", auth_type="bearer_token", authentication_token="t")
+    manager.config_mcp_servers["wiki"] = MCPServer(
+        server_id="wiki",
+        name="wiki",
+        transport=MCPTransport.http,
+        url="https://wiki.example/mcp",
+        additional_auth=(added,),
+    )
+    async with manager.catalog.operation():
+        assert manager.loaded_auth_profile_ids() == frozenset({"bots", "wiki-bots"})

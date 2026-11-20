@@ -107,6 +107,15 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401 
     _is_mcp_admitted_user_subject,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_mcp_admitted_user_subject,
 )
+from litellm.proxy.mcp_server.auth_profile_db import StoredProfileOwners
+from litellm.proxy.mcp_server.auth_profile_selection import (
+    AuthProfileGrantSource,
+    AuthProfileOwnerSource,
+    effective_server_for,
+    no_auth_profile_grants,
+    record_auth_profile,
+    without_profile_credential_headers,
+)
 from litellm.proxy.mcp_server.auth_profiles import (
     ValidatedProfiles,
     describe_refusal,
@@ -114,7 +123,12 @@ from litellm.proxy.mcp_server.auth_profiles import (
     profile_missing_credential,
     validate_auth_profiles,
 )
-from litellm.proxy.mcp_server.catalog import _configuration_identity, _DiscoveryCache, _DiscoveryKey
+from litellm.proxy.mcp_server.catalog import (
+    _configuration_identity,
+    _DiscoveryCache,
+    _DiscoveryKey,
+    auth_profile_ids_of,
+)
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
@@ -2204,7 +2218,11 @@ class MCPServerManager:
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
-    ):
+        auth_profile_grants: AuthProfileGrantSource = no_auth_profile_grants,
+        auth_profile_owners: AuthProfileOwnerSource | None = None,
+    ) -> None:
+        self._auth_profile_grants = auth_profile_grants
+        self._auth_profile_owners = auth_profile_owners or StoredProfileOwners()
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
         )
@@ -2549,6 +2567,23 @@ class MCPServerManager:
             if should_defer != has_slot:
                 self._set_oauth_discovery_deferred(server.server_id, should_defer)
 
+    @property
+    def auth_profile_grants(self) -> AuthProfileGrantSource:
+        return self._auth_profile_grants
+
+    @property
+    def auth_profile_owners(self) -> AuthProfileOwnerSource:
+        return self._auth_profile_owners
+
+    def loaded_auth_profile_ids(self) -> frozenset[str]:
+        snapshot: Final = self.catalog.current()
+        if snapshot is not None:
+            return snapshot.auth_profile_ids
+        return auth_profile_ids_of(self.get_registry().values())
+
+    async def effective_server_for(self, server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None) -> MCPServer:
+        return await effective_server_for(server, user_api_key_auth, self)
+
     async def ensure_oauth_metadata_discovered(
         self,
         server: MCPServer,
@@ -2556,6 +2591,9 @@ class MCPServerManager:
         needed_endpoint: Callable[[MCPServer], str | None] | None = None,
         _retry_stale: bool = True,
     ) -> MCPServer:
+        if server.auth_profile_id is not None:
+            self.catalog.assert_current(server)
+            return server
         return await self.catalog.resolve_oauth_metadata(
             server,
             lambda selected: self._ensure_oauth_metadata_discovered(
@@ -2648,7 +2686,7 @@ class MCPServerManager:
 
     def _remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient) -> None:
         raw: Final[str | None] = getattr(client, "_last_initialize_instructions", None)
-        if raw and str(raw).strip():
+        if raw and str(raw).strip() and server.auth_profile_id is None:
             self._upstream_initialize_instructions_by_server_id[server.server_id] = str(raw).strip()
 
     async def ensure_upstream_initialize_instructions_cached(self, server: MCPServer) -> None:
@@ -2676,6 +2714,8 @@ class MCPServerManager:
             return
         if server.requires_per_user_auth:
             return
+        if server.auth_profile_id is not None:
+            return  # the cache is shared by every caller, so it is never filled with one caller's profile
         if self._references_per_user_env_var(server):
             return
         if (
@@ -4588,7 +4628,7 @@ class MCPServerManager:
             provider=cred_provider or self._cred_provider,
             root_path=get_request_root_path(),
             mcp_auth_header=mcp_auth_header,
-            extra_headers=extra_headers,
+            extra_headers=without_profile_credential_headers(resolved_server, extra_headers),
             stdio_env=stdio_env,
             subject_token=subject_token,
             user_api_key_auth=user_api_key_auth,
@@ -4908,7 +4948,11 @@ class MCPServerManager:
         return listing.page_to_serve()
 
     def _remember_instructions_if_missing(self, server: MCPServer, seen_by_this_caller: str | None) -> None:
-        if seen_by_this_caller and not self._upstream_initialize_instructions_by_server_id.get(server.server_id):
+        if (
+            seen_by_this_caller
+            and server.auth_profile_id is None
+            and not self._upstream_initialize_instructions_by_server_id.get(server.server_id)
+        ):
             self._upstream_initialize_instructions_by_server_id[server.server_id] = seen_by_this_caller
 
     async def _cached_or_upstream_tools(
@@ -7455,7 +7499,10 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         start_time: Final = datetime.datetime.now()
-        mcp_server: Final = self._resolve_mcp_server_for_tool_call(server_name, name)
+        mcp_server: Final = await self.effective_server_for(
+            self._resolve_mcp_server_for_tool_call(server_name, name), user_api_key_auth
+        )
+        record_auth_profile(litellm_logging_obj, mcp_server)
         effective_guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
             guardrail_auth=guardrail_auth,
             user_api_key_auth=user_api_key_auth,

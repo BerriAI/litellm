@@ -365,6 +365,7 @@ class MCPServer(LiteLLMBaseModel):
     allow_sampling: bool = False
     allow_elicitation: bool = False
     additional_auth: tuple[MCPAuthProfile, ...] | None = None
+    auth_profile_id: str | None = Field(default=None, exclude=True)
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @model_serializer(mode="wrap")

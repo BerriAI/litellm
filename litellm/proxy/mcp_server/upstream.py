@@ -126,7 +126,7 @@ async def resolve_upstream_auth(
             if not has_header(extra_headers, header_name):
                 record_auth_resolution(server.server_id, credential.source)
                 return auth, extra_headers
-            if isinstance(
+            if server.auth_profile_id is not None or isinstance(
                 spec.config,
                 (TokenExchangeConfig, AuthorizationCodeConfig, IdJagConfig, ClientCredentialsConfig),
             ):
@@ -194,6 +194,17 @@ def _stdio_config(server: MCPServer, stdio_env: dict[str, str] | None) -> MCPStd
     )
 
 
+def _profile_without_credential(server: MCPServer, spec: ServerSpec | None) -> bool:
+    if server.auth_profile_id is None:
+        return False
+    if spec is None:
+        return True
+    config: Final = spec.config
+    return isinstance(config, ClientCredentialsConfig) and not (
+        config.client_id and config.client_secret and config.token_url
+    )
+
+
 async def prepare_upstream_client(
     server: MCPServer,
     *,
@@ -212,10 +223,15 @@ async def prepare_upstream_client(
 ) -> MCPClient:
     transport: Final[MCPTransportType] = server.transport or MCPTransport.sse
     server_spec: Final = None if transport == MCPTransport.stdio else to_server_spec_fail_closed(server)
+    if _profile_without_credential(server, server_spec):
+        raise_public(  # a profile is the whole credential, never filled from a caller header
+            CredError.of_upstream_unavailable(f"MCP auth profile '{server.auth_profile_id}' has no credential")
+        )
     spec: Final = (
         None
         if server_spec is not None
         and mcp_auth_header
+        and server.auth_profile_id is None
         and not isinstance(
             server_spec.config, (AuthorizationCodeConfig, IdJagConfig, PassthroughConfig, TokenExchangeConfig)
         )

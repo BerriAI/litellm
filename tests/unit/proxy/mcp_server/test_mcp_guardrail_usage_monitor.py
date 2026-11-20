@@ -22,6 +22,7 @@ import pytest
 
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.mcp_server import mcp_server_manager as MOD
+from litellm.proxy.mcp_server.auth_profile_selection import no_auth_profile_grants
 
 
 class _FakeLoggingObj:
@@ -49,6 +50,7 @@ def _bare_manager() -> MOD.MCPServerManager:
     """
     mgr = MOD.MCPServerManager.__new__(MOD.MCPServerManager)
     mgr._listed_tools_by_server_id = {}
+    mgr._auth_profile_grants = no_auth_profile_grants
     mgr.check_allowed_or_banned_tools = lambda name, server: True
     mgr.validate_allowed_params = lambda tool_name, arguments, server: None
 

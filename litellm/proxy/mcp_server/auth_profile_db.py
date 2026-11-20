@@ -1,6 +1,9 @@
 import json
-from collections.abc import Iterable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
@@ -246,6 +249,54 @@ async def stored_profiles_by_server(
         server_id: tuple(auth_profile_from_row(row.model_dump()) for row in rows if row.server_id == server_id)
         for server_id in {row.server_id for row in rows}
     }
+
+
+_OWNER_TTL_SECONDS: Final = 5.0
+
+
+def _proxy_prisma_client() -> object | None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    return prisma_client
+
+
+class StoredProfileOwners:
+    def __init__(
+        self,
+        prisma_client: Callable[[], object | None] = _proxy_prisma_client,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._prisma_client = prisma_client
+        self._clock = clock
+        self._owners: Mapping[str, tuple[float, str | None]] = MappingProxyType({})
+
+    async def __call__(self, profile_ids: AbstractSet[str]) -> Mapping[str, str | None] | None:
+        now: Final = self._clock()
+        live: Final = {profile_id: entry for profile_id, entry in self._owners.items() if entry[0] > now}
+        missing: Final = sorted(profile_ids - live.keys())
+        stored: Final[Mapping[str, str] | None] = (
+            await self._stored_owners(missing) if missing else MappingProxyType({})
+        )
+        if stored is None:
+            return None
+        self._owners = MappingProxyType(
+            {**live, **{profile_id: (now + _OWNER_TTL_SECONDS, owner) for profile_id, owner in stored.items()}}
+        )
+        return {profile_id: self._owners.get(profile_id, (now, None))[1] for profile_id in profile_ids}
+
+    async def _stored_owners(self, profile_ids: Sequence[str]) -> Mapping[str, str] | None:
+        prisma_client: Final = self._prisma_client()
+        if prisma_client is None:
+            return None
+        try:
+            rows: Final = await MCPAuthProfileRepository(prisma_client, use_writer=True).table.find_many(
+                # bounded-ok: the ids one caller's grants name
+                where={"profile_id_normalized": {"in": list(profile_ids)}}
+            )
+        except Exception as error:  # noqa: BLE001  # an unreadable table refuses the grant instead of failing the call
+            verbose_proxy_logger.warning("could not look up the owners of MCP auth profiles %s: %s", profile_ids, error)
+            return None
+        return {row.profile_id_normalized: row.server_id for row in rows}
 
 
 async def with_stored_profiles(

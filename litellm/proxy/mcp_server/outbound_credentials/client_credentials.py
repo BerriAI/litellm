@@ -175,7 +175,7 @@ class ClientCredentialsTokenSource:
     """Cached M2M access tokens, one per ``(client identity, server)``.
 
     ``get`` serves from the cache while the entry's TTL (derived from ``expires_in`` minus
-    ``expiry_skew_seconds``) holds, fetching under a per-server lock so concurrent misses
+    ``expiry_skew_seconds``) holds, fetching under a per-(server, client identity) lock so concurrent misses
     produce one grant. ``refetch`` is the 401-recovery path: it drops the failed token and
     mints a fresh one, unless a concurrent caller already replaced it.
     """
@@ -198,17 +198,13 @@ class ClientCredentialsTokenSource:
         self._min_cache_seconds = min_cache_seconds
         self._max_locks = max_locks
         self._clock = clock
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: dict[tuple[str, str], asyncio.Lock] = {}  # mutable-ok: bounded single-flight lock table
 
-    def _lock(self, server_id: str) -> asyncio.Lock:
-        """Per-server single-flight lock, bounded so ephemeral server ids (e.g. the REST tools
-        preview mints a fresh id per call) cannot grow the dict for the life of the process.
-        Evicting the oldest entry while a task still holds it only means a concurrent caller for
-        that server may run its own grant — single-flight is an optimization, not correctness.
-        """
-        if server_id not in self._locks and len(self._locks) >= self._max_locks:
-            self._locks.pop(next(iter(self._locks)), None)
-        return self._locks.setdefault(server_id, asyncio.Lock())
+    def _lock(self, server_id: str, identity_key: str) -> asyncio.Lock:
+        key: Final = (server_id, identity_key)
+        if key not in self._locks and len(self._locks) >= self._max_locks:
+            self._locks.pop(next(iter(self._locks)), None)  # evicting a held lock only costs a duplicate grant
+        return self._locks.setdefault(key, asyncio.Lock())
 
     async def get(self, server_id: str, config: ClientCredentialsConfig) -> Result[OAuthToken, CredError]:
         match _prepare_grant(config):
@@ -218,7 +214,7 @@ class ClientCredentialsTokenSource:
                 cached = await self._backend.get(grant.identity_key, server_id)
                 if cached is not None:
                     return Ok(cached)
-                async with self._lock(server_id):
+                async with self._lock(server_id, grant.identity_key):
                     cached = await self._backend.get(grant.identity_key, server_id)
                     if cached is not None:
                         return Ok(cached)
@@ -236,7 +232,7 @@ class ClientCredentialsTokenSource:
             case Error(_):
                 return None
             case Ok(grant):
-                async with self._lock(server_id):
+                async with self._lock(server_id, grant.identity_key):
                     cached: Final = await self._backend.get(grant.identity_key, server_id)
                     if cached is not None and cached.access_token != failed_access_token:
                         return cached.access_token

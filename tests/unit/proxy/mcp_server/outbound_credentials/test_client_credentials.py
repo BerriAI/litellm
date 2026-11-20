@@ -5,6 +5,8 @@ rotation-aware cache keying, expires_in-driven expiry, error classification, and
 401 -> discard -> refetch -> retry-once recovery in ``ClientCredentialsBearerAuth``.
 """
 
+from typing import Final
+
 import httpx
 import httpx2
 import pytest
@@ -219,6 +221,33 @@ async def test_lock_dict_is_bounded_for_ephemeral_server_ids():
         result = await source.get(f"ephemeral-{index}", _config())
         assert isinstance(result, Ok)
     assert len(source._locks) <= 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)  # hang guard only: a shared lock deadlocks the fast grant behind the held slow one
+async def test_a_slow_grant_for_one_client_does_not_hold_another_client_on_the_same_server() -> None:
+    import asyncio
+
+    slow_client_release: Final = asyncio.Event()
+    slow_client_posted: Final = asyncio.Event()
+
+    async def post(url: str, form: "dict[str, str]", headers: "dict[str, str]") -> TokenEndpointOutcome:
+        if form["client_id"] == "slow-app":
+            slow_client_posted.set()
+            await slow_client_release.wait()
+        return _success(f"{form['client_id']}-token")
+
+    source: Final = ClientCredentialsTokenSource(post)
+    slow: Final = asyncio.ensure_future(source.get("shared-server", _config(client_id="slow-app")))
+    await slow_client_posted.wait()
+    fast: Final = await source.get("shared-server", _config(client_id="fast-app"))
+    slow_still_held: Final = not slow.done()
+    slow_client_release.set()
+    slow_result: Final = await slow
+
+    assert slow_still_held
+    assert isinstance(fast, Ok) and fast.ok.access_token == "fast-app-token"
+    assert isinstance(slow_result, Ok) and slow_result.ok.access_token == "slow-app-token"
 
 
 @pytest.mark.asyncio

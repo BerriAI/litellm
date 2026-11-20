@@ -8,7 +8,7 @@ import hashlib
 import json
 import time
 from collections import UserDict
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, MutableMapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -60,6 +60,11 @@ class CatalogSnapshot:
     identity: str
     tools: Mapping[str, MCPTool]
     routing: MutableMapping[str, str]
+    auth_profile_ids: frozenset[str]
+
+
+def auth_profile_ids_of(servers: Iterable[MCPServer]) -> frozenset[str]:
+    return frozenset(profile.id.lower() for profile in chain.from_iterable(s.additional_auth or () for s in servers))
 
 
 def _configuration_identity(server: MCPServer) -> str:
@@ -108,6 +113,7 @@ def _snapshot(manager: MCPServerManager, database_identity: str) -> CatalogSnaps
         hashlib.sha256(serialized.encode()).hexdigest(),
         MappingProxyType(dict(global_mcp_tool_registry.published_tools)),
         dict(manager.published_tool_routes),
+        auth_profile_ids_of(detached.values()),
     )
 
 
