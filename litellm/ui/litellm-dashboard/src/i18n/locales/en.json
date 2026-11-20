@@ -18005,6 +18005,11 @@
         "helpV2": "Use the judge when the selected tier or a lower tier has a success probability within this margin of the success threshold, or no tier meets the threshold",
         "helpV1": "A score further than this from every tier boundary routes on the scorer's own tier. A score closer than this, or a request with no heuristic signal, goes to the judge"
       },
+      "maxOutputTokens": {
+        "label": "Classifier max output tokens",
+        "placeholder": "Use deployment or provider default",
+        "help": "Enter a positive whole number to limit the classifier response only. Leave blank to use the model deployment limit, or the provider default if none is set. Allow room for reasoning tokens."
+      },
       "timeout": {
         "label": "Timeout (ms)",
         "help": "How long the classifier call has before it fails and the fallback below takes over."
