@@ -379,3 +379,78 @@ class TestOCIEmbedConfig:
             litellm_params={},
         )
         assert "eu-frankfurt-1" in url
+
+
+def _transform(raw_response: httpx.Response) -> EmbeddingResponse:
+    return OCIEmbedConfig().transform_embedding_response(
+        model="cohere.embed-v3.0",
+        raw_response=raw_response,
+        model_response=EmbeddingResponse(),
+        logging_obj=MagicMock(),
+        api_key=None,
+        request_data={},
+        optional_params={},
+        litellm_params={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("token_fields", "expected_prompt_tokens", "expected_total_tokens"),
+    [
+        ({"inputTextTokenCounts": [5, 6]}, 11, 11),
+        ({"usage": {"promptTokens": 3, "totalTokens": 4}}, 3, 4),
+        ({"inputTextTokenCounts": [5, 6], "usage": {"promptTokens": 3, "totalTokens": 4}}, 11, 11),
+        ({}, 0, 0),
+    ],
+)
+def test_transform_embedding_response_reads_usage_from_whichever_token_field_is_present(
+    token_fields: dict[str, object], expected_prompt_tokens: int, expected_total_tokens: int
+):
+    response = _transform(
+        httpx.Response(
+            200,
+            json={
+                "embeddings": [[0.1, 1], [0.5]],
+                "modelId": "cohere.embed-v3.0",
+                "modelVersion": "3.0",
+                "unknown": "ignored",
+                **token_fields,
+            },
+        )
+    )
+
+    assert response.model_dump() == {
+        "model": "cohere.embed-v3.0",
+        "data": [
+            {"object": "embedding", "index": 0, "embedding": [0.1, 1.0]},
+            {"object": "embedding", "index": 1, "embedding": [0.5]},
+        ],
+        "object": "list",
+        "usage": {
+            "completion_tokens": 0,
+            "prompt_tokens": expected_prompt_tokens,
+            "total_tokens": expected_total_tokens,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+
+
+@pytest.mark.parametrize("body", [b"null", b"7", b'["leaked payload text"]', b'"leaked payload text"'])
+def test_transform_embedding_response_body_that_is_not_an_object_is_a_schema_error(body: bytes):
+    with pytest.raises(OCIError) as exc_info:
+        _transform(httpx.Response(200, content=body))
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.message.startswith("OCI embed response does not match expected schema: ")
+    assert "leaked payload text" not in exc_info.value.message
+
+
+def test_transform_embedding_response_object_missing_required_fields_names_them():
+    with pytest.raises(OCIError) as exc_info:
+        _transform(httpx.Response(200, json={"embeddings": [[0.1]]}))
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.message.startswith("OCI embed response does not match expected schema: ")
+    assert "modelId" in exc_info.value.message
+    assert "modelVersion" in exc_info.value.message

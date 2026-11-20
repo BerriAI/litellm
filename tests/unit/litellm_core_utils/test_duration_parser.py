@@ -1,12 +1,20 @@
 import unittest
 from datetime import datetime, time, timezone
+from typing import Final
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
+
+import pytest
 
 import litellm.litellm_core_utils.duration_parser as duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
+    duration_in_seconds_from,
+    get_annual_budget_window_start,
+    get_budget_window_end,
+    get_budget_window_start,
     get_next_standardized_reset_time,
+    is_annual_budget_duration,
 )
 
 
@@ -23,9 +31,7 @@ class TestStandardizedResetTime(unittest.TestCase):
 
         # Weekly reset (7d) - should reset on next Monday
         wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)  # A Wednesday
-        weekly_expected = datetime(
-            2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc
-        )  # Next Monday
+        weekly_expected = datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc)  # Next Monday
         weekly_result = get_next_standardized_reset_time("7d", wednesday, "UTC")
         self.assertEqual(weekly_result, weekly_expected)
 
@@ -105,17 +111,13 @@ class TestStandardizedResetTime(unittest.TestCase):
         # Europe/London (UTC+1): 11:30 PM, so next 15m reset is 11:45 PM
         london = ZoneInfo("Europe/London")
         london_expected = datetime(2023, 5, 15, 23, 45, 0, tzinfo=london)
-        london_result = get_next_standardized_reset_time(
-            "15m", base_time, "Europe/London"
-        )
+        london_result = get_next_standardized_reset_time("15m", base_time, "Europe/London")
         self.assertEqual(london_result, london_expected)
 
         # Test Bangkok timezone (UTC+7): 5:30 AM next day, so next reset is midnight the day after
         bangkok = ZoneInfo("Asia/Bangkok")
         bangkok_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=bangkok)
-        bangkok_result = get_next_standardized_reset_time(
-            "1d", base_time, "Asia/Bangkok"
-        )
+        bangkok_result = get_next_standardized_reset_time("1d", base_time, "Asia/Bangkok")
         self.assertEqual(bangkok_result, bangkok_expected)
 
     def test_edge_cases(self):
@@ -137,16 +139,12 @@ class TestStandardizedResetTime(unittest.TestCase):
 
         # 30m near midnight - should roll over to next day
         midnight_minute_expected = datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc)
-        midnight_minute_result = get_next_standardized_reset_time(
-            "30m", near_midnight, "UTC"
-        )
+        midnight_minute_result = get_next_standardized_reset_time("30m", near_midnight, "UTC")
         self.assertEqual(midnight_minute_result, midnight_minute_expected)
 
         # Invalid timezone - should fall back to UTC
         invalid_tz_expected = datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc)
-        invalid_tz_result = get_next_standardized_reset_time(
-            "1d", on_hour, "NonExistentTimeZone"
-        )
+        invalid_tz_result = get_next_standardized_reset_time("1d", on_hour, "NonExistentTimeZone")
         self.assertEqual(invalid_tz_result, invalid_tz_expected)
 
     def test_iana_timezones_previously_unsupported(self):
@@ -164,17 +162,13 @@ class TestStandardizedResetTime(unittest.TestCase):
         sydney = ZoneInfo("Australia/Sydney")
         # At 15:00 UTC it's 01:00 AEST May 16 → next midnight is May 17 00:00 AEST
         sydney_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=sydney)
-        sydney_result = get_next_standardized_reset_time(
-            "1d", base_time, "Australia/Sydney"
-        )
+        sydney_result = get_next_standardized_reset_time("1d", base_time, "Australia/Sydney")
         self.assertEqual(sydney_result, sydney_expected)
 
         # America/Chicago (UTC-5): at 15:00 UTC it's 10:00 CDT → next midnight is May 16 00:00 CDT
         chicago = ZoneInfo("America/Chicago")
         chicago_expected = datetime(2023, 5, 16, 0, 0, 0, tzinfo=chicago)
-        chicago_result = get_next_standardized_reset_time(
-            "1d", base_time, "America/Chicago"
-        )
+        chicago_result = get_next_standardized_reset_time("1d", base_time, "America/Chicago")
         self.assertEqual(chicago_result, chicago_expected)
 
     def test_dst_fall_back(self):
@@ -204,112 +198,192 @@ class TestStandardizedResetTime(unittest.TestCase):
         self.assertEqual(result, expected)
 
 
+@pytest.mark.parametrize(
+    "now, zone, reset_time, expected",
+    [
+        (
+            datetime(2026, 11, 12, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2027, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2028, 2, 29, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2029, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2028, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 8, tzinfo=timezone.utc),
+            "UTC",
+            time(12),
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
+            "UTC",
+            time(12),
+            datetime(2028, 1, 1, 12, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 2, tzinfo=timezone.utc),
+            "America/New_York",
+            time(0),
+            datetime(2027, 1, 1, tzinfo=ZoneInfo("America/New_York")),
+        ),
+    ],
+)
+def test_annual_reset_and_window_start(now: datetime, zone: str, reset_time: time, expected: datetime) -> None:
+    reset: Final = get_next_standardized_reset_time("12mo", now, zone, reset_time)
+    assert reset == expected
+    assert get_budget_window_start("12mo", reset) == expected.replace(year=expected.year - 1)
+
+
+@pytest.mark.parametrize(
+    "long_spelling,short_form",
+    [
+        ("12months", "12mo"),
+        ("12mos", "12mo"),
+        ("1month", "1mo"),
+        ("7days", "7d"),
+        ("2weeks", "2w"),
+        ("1hour", "1h"),
+        ("5min", "5m"),
+        ("30sec", "30s"),
+    ],
+)
+def test_long_unit_spelling_resets_on_the_schedule_it_is_charged_for(long_spelling: str, short_form: str) -> None:
+    now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
+    assert duration_in_seconds_from(now, long_spelling) == duration_in_seconds_from(now, short_form)
+    reset: Final = get_next_standardized_reset_time(long_spelling, now, "UTC")
+    assert reset == get_next_standardized_reset_time(short_form, now, "UTC")
+    assert get_budget_window_start(long_spelling, reset) == get_budget_window_start(short_form, reset)
+    assert is_annual_budget_duration(long_spelling) == is_annual_budget_duration(short_form)
+
+
+def test_long_month_spelling_without_a_calendar_schedule_keeps_its_nightly_reset() -> None:
+    now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="1 month or 12 month"):
+        get_next_standardized_reset_time("3mo", now, "UTC")
+    reset: Final = get_next_standardized_reset_time("3months", now, "UTC")
+    assert reset == datetime(2026, 11, 14, tzinfo=timezone.utc)
+    assert get_budget_window_start("3months", reset) == datetime(2026, 11, 13, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "zone,reset_at,expected",
+    (
+        ("UTC", "2029-01-01T00:00:00+00:00", "2028-01-01T00:00:00+00:00"),
+        ("UTC", "2101-01-01T00:00:00+00:00", "2100-01-01T00:00:00+00:00"),
+        ("America/New_York", "2029-01-01T00:00:00-05:00", "2028-01-01T05:00:00+00:00"),
+        ("Asia/Kathmandu", "2029-01-01T12:30:00+05:45", "2028-01-01T06:45:00+00:00"),
+        ("Pacific/Apia", "2012-01-01T00:00:00+14:00", "2011-01-01T10:00:00+00:00"),
+    ),
+)
+@pytest.mark.parametrize("storage", ("offset", "utc", "naive_utc"))
+def test_annual_window_survives_timestamp_storage(zone: str, reset_at: str, expected: str, storage: str) -> None:
+    reset: Final = datetime.fromisoformat(reset_at)
+    stored: Final = {
+        "offset": reset,
+        "utc": reset.astimezone(timezone.utc),
+        "naive_utc": reset.astimezone(timezone.utc).replace(tzinfo=None),
+    }[storage]
+
+    assert get_annual_budget_window_start(stored, zone) == datetime.fromisoformat(expected)
+
+
+@pytest.mark.parametrize("microsecond", (0, 123000, 123456, 123999, 999999))
+@pytest.mark.parametrize("duration", ("1s", "1h", "1d", "1w", "30d", "1mo", "12mo"))
+def test_calendar_window_start_matches_database_millisecond_precision(duration: str, microsecond: int) -> None:
+    reset: Final = datetime(2026, 11, 15, 5, 48, 2, microsecond, tzinfo=timezone.utc)
+    expected: Final = get_budget_window_start(duration, reset.replace(microsecond=0)).replace(
+        microsecond=microsecond // 1000 * 1000
+    )
+    assert get_budget_window_start(duration, reset) == expected
+
+
 class TestResetTimeOfDay(unittest.TestCase):
     """A configurable reset_time_of_day shifts day/week/month resets off midnight."""
 
     def test_daily_reset_before_offset_is_today(self):
         now = datetime(2023, 5, 15, 8, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 15, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_daily_reset_after_offset_is_tomorrow(self):
         now = datetime(2023, 5, 15, 14, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 16, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_daily_reset_exactly_at_offset_rolls_forward(self):
         now = datetime(2023, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 16, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_daily_reset_with_seconds_offset(self):
         now = datetime(2023, 5, 15, 8, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "UTC", reset_time_of_day=time(9, 30, 15)
-        )
+        result = get_next_standardized_reset_time("1d", now, "UTC", reset_time_of_day=time(9, 30, 15))
         self.assertEqual(result, datetime(2023, 5, 15, 9, 30, 15, tzinfo=timezone.utc))
 
     def test_offset_applies_in_configured_timezone(self):
         # 2023-05-15 22:30 UTC == 2023-05-16 01:30 in Jerusalem (IDT, UTC+3),
         # so the next noon-Jerusalem reset is 2023-05-16 12:00 IDT.
         now = datetime(2023, 5, 15, 22, 30, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "Asia/Jerusalem", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1d", now, "Asia/Jerusalem", reset_time_of_day=time(12, 0))
         jerusalem = result.astimezone(ZoneInfo("Asia/Jerusalem"))
-        self.assertEqual(
-            (jerusalem.year, jerusalem.month, jerusalem.day), (2023, 5, 16)
-        )
+        self.assertEqual((jerusalem.year, jerusalem.month, jerusalem.day), (2023, 5, 16))
         self.assertEqual(jerusalem.hour, 12)
         self.assertEqual(jerusalem.minute, 0)
 
     def test_weekly_reset_lands_on_monday_at_offset(self):
         wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "7d", wednesday, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("7d", wednesday, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 22, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_weekly_reset_today_is_monday_before_offset_is_today(self):
         monday_morning = datetime(2023, 5, 22, 9, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "7d", monday_morning, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("7d", monday_morning, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 22, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_weekly_reset_today_is_monday_after_offset_is_next_week(self):
         monday_afternoon = datetime(2023, 5, 22, 15, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "7d", monday_afternoon, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("7d", monday_afternoon, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 29, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_monthly_30d_lands_on_first_at_offset(self):
         now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "30d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("30d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 6, 1, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_monthly_1mo_today_is_first_before_offset_is_today(self):
         now = datetime(2023, 5, 1, 9, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1mo", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1mo", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 1, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_monthly_year_rollover_at_offset(self):
         now = datetime(2023, 12, 15, 9, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1mo", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1mo", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_custom_day_reset_applies_offset(self):
         now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "3d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("3d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 18, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_sub_day_durations_ignore_offset(self):
         base = datetime(2023, 5, 15, 15, 20, 30, tzinfo=timezone.utc)
         self.assertEqual(
-            get_next_standardized_reset_time(
-                "2h", base, "UTC", reset_time_of_day=time(12, 0)
-            ),
+            get_next_standardized_reset_time("2h", base, "UTC", reset_time_of_day=time(12, 0)),
             datetime(2023, 5, 15, 16, 0, 0, tzinfo=timezone.utc),
         )
         self.assertEqual(
-            get_next_standardized_reset_time(
-                "30m", base, "UTC", reset_time_of_day=time(12, 0)
-            ),
+            get_next_standardized_reset_time("30m", base, "UTC", reset_time_of_day=time(12, 0)),
             datetime(2023, 5, 15, 15, 30, 0, tzinfo=timezone.utc),
         )
 
@@ -383,6 +457,98 @@ class TestWordFormBudgetDurations(unittest.TestCase):
         self.assertEqual(result, datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc))
         mock_warning.assert_called_once()
         self.assertIn("garbage", mock_warning.call_args.args)
+
+
+class TestGetBudgetWindowStart(unittest.TestCase):
+    def test_window_start_is_the_previous_reset_on_the_same_schedule(self):
+        created_at: Final = datetime(2024, 10, 1, 0, 30, tzinfo=timezone.utc)
+        durations: Final = "1d 24h daily 7d weekly 2w 10d 30d monthly 1mo 4h 5h 30m 45s 1hr fortnightly".split()
+        for duration in durations:
+            with self.subTest(duration=duration):
+                reset_at = get_next_standardized_reset_time(duration, created_at, "UTC")
+                window_start = get_budget_window_start(duration, reset_at)
+                self.assertLessEqual(window_start, created_at)
+                self.assertEqual(get_next_standardized_reset_time(duration, window_start, "UTC"), reset_at)
+
+    def test_thirty_days_spans_the_calendar_month_it_resets_on(self):
+        self.assertEqual(
+            get_budget_window_start("30d", datetime(2024, 3, 1, tzinfo=timezone.utc)),
+            datetime(2024, 2, 1, tzinfo=timezone.utc),
+        )
+
+    def test_months_clamp_to_the_shorter_month(self):
+        self.assertEqual(
+            get_budget_window_start("1mo", datetime(2024, 3, 31, tzinfo=timezone.utc)),
+            datetime(2024, 2, 29, tzinfo=timezone.utc),
+        )
+
+    def test_unrecognized_duration_is_the_one_day_window_the_scheduler_falls_back_to(self):
+        self.assertEqual(
+            get_budget_window_start("1y", datetime(2024, 1, 16, tzinfo=timezone.utc)),
+            datetime(2024, 1, 15, tzinfo=timezone.utc),
+        )
+
+
+@pytest.mark.parametrize(
+    ("duration", "zone", "current_time", "expected"),
+    (
+        ("48h", "UTC", "2024-01-30T00:00:00+00:00", "2024-02-01T00:00:00+00:00"),
+        ("2400h", "UTC", "2024-01-30T00:00:00+00:00", "2024-05-09T00:00:00+00:00"),
+        ("49h", "UTC", "2024-01-30T14:15:30+00:00", "2024-02-01T01:00:00+00:00"),
+        ("2885m", "UTC", "2024-01-30T14:15:30+00:00", "2024-02-01T14:05:00+00:00"),
+        ("172805s", "Asia/Kolkata", "2024-01-30T08:45:30+00:00", "2024-02-01T08:45:05+00:00"),
+    ),
+)
+def test_reset_rollover_keeps_all_elapsed_days(duration: str, zone: str, current_time: str, expected: str) -> None:
+    reset_at: Final = get_next_standardized_reset_time(duration, datetime.fromisoformat(current_time), zone)
+
+    assert reset_at.astimezone(timezone.utc) == datetime.fromisoformat(expected)
+
+
+@pytest.mark.parametrize("duration", ("1d", "24h", "7d", "2w", "30d", "monthly", "1mo", "12mo", "5h", "45s"))
+@pytest.mark.parametrize("zone", ("UTC", "America/Los_Angeles", "Asia/Kolkata"))
+def test_committed_window_end_preserves_its_calendar_and_reset_time(duration: str, zone: str) -> None:
+    for month in (3, 4, 11, 12):
+        reset: Final = datetime(2026, month, 1, 2, 30, tzinfo=ZoneInfo(zone))
+        start: Final = get_budget_window_start(duration, reset).astimezone(timezone.utc).replace(tzinfo=None)
+        assert get_budget_window_end(duration, start, zone) == reset.astimezone(timezone.utc)
+
+
+def test_month_end_uses_a_configured_reset_only_when_it_belongs_to_the_committed_window() -> None:
+    reset: Final = datetime(2026, 3, 31, tzinfo=timezone.utc)
+    assert get_budget_window_end("1mo", datetime(2026, 2, 28), reset_at=reset) == reset
+    assert get_budget_window_end("1mo", datetime(2026, 1, 31), reset_at=reset) == datetime(
+        2026, 2, 28, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.parametrize(
+    "start,duration,days",
+    [
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), "1mo", 31),
+        (datetime(2026, 2, 10, 12, tzinfo=timezone.utc), "1mo", 28),
+        (datetime(2026, 1, 31, 12, tzinfo=timezone.utc), "1mo", 28),
+        (datetime(2028, 1, 31, 12, tzinfo=timezone.utc), "1mo", 29),
+        (datetime(2026, 12, 15, 12, tzinfo=timezone.utc), "1mo", 31),
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), "2mo", 59),
+    ],
+    ids=["january", "february", "clamped_to_february", "leap_february", "across_new_year", "two_months"],
+)
+def test_a_month_lasts_as_long_as_the_month_it_starts_in(start, duration, days):
+    assert duration_in_seconds_from(start, duration) == days * 86400
+
+
+@pytest.mark.parametrize("duration", ["45s", "30m", "1h", "1d", "7d", "2w", "30d", "daily", "monthly"])
+def test_fixed_length_units_do_not_depend_on_the_start(duration):
+    assert duration_in_seconds_from(datetime(2026, 2, 10, 12, tzinfo=timezone.utc), duration) == duration_in_seconds(
+        duration
+    )
+
+
+def test_a_month_starting_now_matches_duration_in_seconds():
+    now: Final = datetime(2026, 1, 31, 9, 30, 0, 250000, tzinfo=timezone.utc).astimezone()
+    with patch.object(duration_parser.time_module, "time", return_value=now.timestamp()):
+        assert duration_in_seconds("1mo") == duration_in_seconds_from(now, "1mo")
 
 
 if __name__ == "__main__":

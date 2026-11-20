@@ -26,11 +26,11 @@ def test_openai_embedding_passes_shared_session():
     Verify shared_session flows through the complete call chain.
 
     Full chain: litellm.embedding() -> OpenAI.embedding() -> _get_openai_client()
-                -> AsyncHTTPHandler -> _create_async_transport() -> _create_aiohttp_transport()
+                -> AsyncHTTPHandler -> create_async_transport() -> create_aiohttp_transport()
     """
     import litellm
-    from litellm.llms.openai.openai import OpenAIChatCompletion
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.openai.openai import OpenAIChatCompletion
 
     # Step 1: litellm.embedding() extracts and passes shared_session
     main_source = inspect.getsource(litellm.embedding)
@@ -46,16 +46,14 @@ def test_openai_embedding_passes_shared_session():
     client_source = inspect.getsource(OpenAIChatCompletion._get_openai_client)
     assert "shared_session" in client_source
 
-    # Step 4: AsyncHTTPHandler.create_client passes it to _create_async_transport
+    # Step 4: AsyncHTTPHandler.create_client passes it to create_async_transport
     create_client_source = inspect.getsource(AsyncHTTPHandler.create_client)
     assert "shared_session=shared_session" in create_client_source
 
-    # Step 5: _create_async_transport passes it to _create_aiohttp_transport
-    async_transport_source = inspect.getsource(AsyncHTTPHandler._create_async_transport)
+    # Step 5: create_async_transport passes it to create_aiohttp_transport
+    async_transport_source = inspect.getsource(AsyncHTTPHandler.create_async_transport)
     assert "shared_session=shared_session" in async_transport_source
 
-    # Step 6: _create_aiohttp_transport uses it
-    aiohttp_transport_source = inspect.getsource(
-        AsyncHTTPHandler._create_aiohttp_transport
-    )
+    # Step 6: create_aiohttp_transport uses it
+    aiohttp_transport_source = inspect.getsource(AsyncHTTPHandler.create_aiohttp_transport)
     assert "shared_session" in aiohttp_transport_source

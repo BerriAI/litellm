@@ -67,10 +67,10 @@ def _filters_field(where: Mapping[str, object], field: str) -> bool:
 
 
 def _chunk_filter(field: str, chunk: tuple[Hashable, ...], where: Mapping[str, object] | None) -> Mapping[str, object]:
-    membership: Final = {field: {"in": list(chunk)}}  # mutable-ok: the dict and list a hand-written filter sends
+    membership: Final = {field: {"in": list(chunk)}}
     if where is None:
         return membership
-    return {"AND": (dict(where), membership)}  # mutable-ok: prisma's query builder only accepts dict filters
+    return {"AND": (dict(where), membership)}
 
 
 async def _each_chunk(
@@ -127,7 +127,7 @@ async def update_many_in(
         raise ChunkedFieldWriteError(
             f"`data` writes `{field}`, the chunked field; a row it moves can match a later chunk"
         )
-    payload: Final = dict(data)  # mutable-ok: prisma's query builder only accepts dict payloads
+    payload: Final = dict(data)
     return sum(
         await _each_chunk(field, values, where, lambda chunk: table.update_many(data=payload, where=chunk), chunk_size)
     )

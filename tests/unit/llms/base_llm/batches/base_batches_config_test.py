@@ -11,8 +11,8 @@ e.g. every `transform_retrieve_batch_response` returns a real `LiteLLMBatch`
 with `object == "batch"`, a valid status, and an int `created_at`.
 
 This module is intentionally NOT named `test_*`: it holds no standalone tests
-and must not be collected on its own. It mirrors the established repo pattern in
-`tests/llm_translation/base_*_unit_tests.py`.
+and must not be collected on its own. Provider tests import and subclass this
+contract suite from their own unit-test files.
 
 Providers that do NOT implement BaseBatchesConfig (e.g. vertex_ai, whose
 transformation is a standalone class with a different shape) cannot use this and

@@ -12,6 +12,7 @@ across pods or stop races; the hook reads active jobs through a short-TTL cache.
 import asyncio
 import hashlib
 import json
+import os
 import random
 import traceback
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -20,9 +21,10 @@ from datetime import datetime, timezone
 from itertools import groupby
 from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator, model_validator
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -38,10 +40,15 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
-from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
-from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
+from litellm.redis.stores.spend_counters import (
+    shadow_eval_counter,
+)
+from litellm.secret_managers.main import str_to_bool
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.management_endpoints.auto_router_endpoints import SHADOW_EVAL_RUBRIC_VERSION, ShadowEvalDirection
+from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.proxy.db.shadow_eval_funnel import ShadowEvalFunnelStage
@@ -111,7 +118,7 @@ def _chat_request_from_anthropic_messages(
     because the logged optional_params switch dialect per provider path (the bridge's
     inner completion rewrites them to chat shape mid-flight); the adapter translates
     them alongside the messages, and sampling params copy through untranslated."""
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 
@@ -201,7 +208,7 @@ def _chat_final_text(response_obj: object) -> str:
     if read is None:
         return ""
     prose: Final = extract_text_from_content(read("content"))
-    if not (read("tool_calls") or read("function_call")):
+    if not _tool_calls_list(read):
         return prose
     serialized: Final = _serialize_tool_calls(read)
     return f"{prose} {serialized}".strip() if prose else serialized
@@ -217,8 +224,9 @@ _RESPONSES_TOOL_CALL_TYPES: Final = frozenset(("function_call", "custom_tool_cal
 
 
 def _tool_calls_list(read: Callable[[str], object]) -> tuple[object, ...]:
-    calls: Final = read("tool_calls")
-    listed: Final = tuple(calls) if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
+    listed: Final = tool_calls_with_server_tool_calls(
+        {"tool_calls": read("tool_calls"), "provider_specific_fields": read("provider_specific_fields")}
+    )
     single: Final = read("function_call")
     return listed if listed else ((single,) if single is not None else ())
 
@@ -357,11 +365,7 @@ class GuardrailRequestSnapshot:
         if fingerprint is None:
             return None
         return GuardrailRequestSnapshot(
-            body=MappingProxyType(
-                _CHAT_REQUEST_ADAPTER.validate_python(
-                    independent_snapshot(dict(body))  # mutable-ok: snapshot helper requires a plain dictionary
-                )
-            ),
+            body=MappingProxyType(_CHAT_REQUEST_ADAPTER.validate_python(independent_snapshot(dict(body)))),
             fingerprint=fingerprint,
         )
 
@@ -471,7 +475,7 @@ Return ONLY valid JSON in this exact format, no other text:
 }"""
 
 
-class PairwiseVerdict(BaseModel):
+class PairwiseVerdict(LiteLLMBaseModel):
     """The judge's blind A/B verdict: the response_format schema sent with the judge call
     and the validation contract on its reply. Both fields are required and preference is
     closed over the prompt's labels, so a malformed or truncated reply is an
@@ -482,6 +486,76 @@ class PairwiseVerdict(BaseModel):
 
 
 PAIRWISE_JUDGE_RESPONSE_FORMAT: Final = type_to_response_format_param(PairwiseVerdict)
+
+_RUBRIC_JUDGE_SYSTEM_PROMPT_TEMPLATE: Final = """You are an impartial quality judge grading two responses to the same conversation
+against an operator's rubric.
+
+The responses are labeled A and B in random order. You do not know which system produced which.
+
+A response may be prose, or a tool call shown as `[tool call] name(arguments)` if the
+assistant chose to act instead of answering directly. A tool call is not a defect: judge
+whether calling that tool was the right response to the conversation, the same as you
+would judge prose.
+
+Rubric:
+<rubric>
+{rubric}
+</rubric>
+
+Grade each response on its own against the rubric with an integer from 1 to 5:
+1 = fails the rubric's criteria
+2 = meets few of the criteria
+3 = meets about half of the criteria
+4 = meets most of the criteria
+5 = fully meets the criteria
+
+Then say which response is better overall. Equal grades may still have a better response.
+
+Return ONLY valid JSON in this exact format, no other text:
+{{
+  "preference": "A" | "B" | "tie",
+  "confidence": <0.0 to 1.0>,
+  "grade_a": <integer 1 to 5>,
+  "grade_b": <integer 1 to 5>
+}}"""
+
+
+def rubric_judge_system_prompt(rubric: str) -> str:
+    return _RUBRIC_JUDGE_SYSTEM_PROMPT_TEMPLATE.format(rubric=rubric)
+
+
+class RubricVerdict(LiteLLMBaseModel):
+    """The rubric judge's blind verdict: the pairwise preference plus one grade per label.
+    A grade is exactly a JSON integer from 1 to 5; booleans, floats, strings, null, and
+    out-of-range values invalidate the whole verdict rather than being coerced."""
+
+    model_config = ConfigDict(frozen=True)
+
+    preference: Literal["A", "B", "tie"]
+    confidence: float
+    grade_a: Literal[1, 2, 3, 4, 5]
+    grade_b: Literal[1, 2, 3, 4, 5]
+
+    @field_validator("grade_a", "grade_b", mode="before")
+    @classmethod
+    def _exact_integer(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("grade must be a JSON integer")
+        return value
+
+
+RUBRIC_JUDGE_RESPONSE_FORMAT: Final = _CHAT_REQUEST_ADAPTER.validate_python(
+    type_to_response_format_param(RubricVerdict)
+)
+
+SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR: Final = "LITELLM_SHADOW_EVAL_RUBRIC_ENABLED"
+
+
+def is_shadow_eval_rubric_enabled() -> bool:
+    """Whether this process may start and sample rubric shadow evals. Off by default: a
+    worker without rubric support would sample a rubric job as a plain preference job, so
+    operators turn this on only once every worker sharing the database runs rubric support."""
+    return str_to_bool(os.environ.get(SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR)) is True
 
 
 def _sample_hits(request_id: str, job_id: str, percentage: float) -> bool:
@@ -514,6 +588,30 @@ def _judge_reply_shape(response: object) -> str:
     return f"finish_reason={_chat_finish_reason(response)}, content={body}, model={served}"
 
 
+def _legacy_judge_call_failure(e: Exception) -> str:
+    return f"judge call failed: {e}"
+
+
+def _rubric_judge_call_failure(e: Exception) -> str:
+    """Provider errors can echo the request or response, which carry the rubric and the
+    sampled turns, so a rubric row keeps only the exception type and HTTP status."""
+    status: Final = getattr(e, "status_code", None)
+    detail: Final = f"type={type(e).__name__}" + (f", status={status}" if isinstance(status, int) else "")
+    return f"rubric judge call failed; {detail}"
+
+
+def _invalid_verdict_detail(e: Exception) -> str:
+    """Which verdict fields failed and how, from validation metadata alone, so the row
+    never carries the judge's reply text."""
+    if not isinstance(e, ValidationError):
+        return f"invalid=verdict:{type(e).__name__}"
+    fields: Final = ",".join(
+        f"{'.'.join(str(part) for part in error['loc']) or 'verdict'}:{error['type']}"
+        for error in e.errors(include_url=False, include_context=False, include_input=False)
+    )
+    return f"invalid={fields}"
+
+
 def _call_cost(response: object) -> float:
     """Price one eval-arm call with the figure the spend pipeline bills: the router client
     stamps _hidden_params.response_cost from the deployment's own pricing, which the public
@@ -533,6 +631,10 @@ def _price_map_cost(response: object) -> float:
         return litellm.completion_cost(completion_response=response) or 0.0
     except Exception:  # noqa: BLE001  # unmapped model: the attempt still counts, cost stays 0
         return 0.0
+
+
+def _coin_flip() -> bool:
+    return random.random() < 0.5
 
 
 def _unmask_preference(raw_preference: str, real_is_a: bool) -> str:
@@ -590,7 +692,7 @@ def _leg_eval_spend(sums: Mapping[str, object]) -> float:
 
 
 def _job_spend_counter_key(job_id: str) -> str:
-    return f"spend:shadow_eval:{job_id}"
+    return shadow_eval_counter(job_id)
 
 
 async def _job_spend_from_counter(counter_key: str, fallback_spend: float, max_budget: float) -> float:
@@ -634,13 +736,13 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     """
     try:
         from litellm.exceptions import BudgetExceededError
-        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.auth_checks import (
-            _team_max_budget_check,
-            _virtual_key_max_budget_check,
             get_team_object,
+            team_max_budget_check,
+            virtual_key_max_budget_check,
         )
         from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+        from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     except ImportError:
         return False
 
@@ -648,7 +750,7 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     if not isinstance(auth, UserAPIKeyAuth):
         return False
     try:
-        await _virtual_key_max_budget_check(valid_token=auth, proxy_logging_obj=proxy_logging_obj)
+        await virtual_key_max_budget_check(valid_token=auth, proxy_logging_obj=proxy_logging_obj)
         if auth.team_id:
             team: Final = await get_team_object(
                 team_id=auth.team_id,
@@ -656,7 +758,7 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
                 user_api_key_cache=user_api_key_cache,
                 check_cache_only=True,
             )
-            await _team_max_budget_check(team_object=team, valid_token=auth, proxy_logging_obj=proxy_logging_obj)
+            await team_max_budget_check(team_object=team, valid_token=auth, proxy_logging_obj=proxy_logging_obj)
     except BudgetExceededError:
         return True
     except Exception as e:  # noqa: BLE001  # advisory gate: a failed read must not block sampling
@@ -735,7 +837,24 @@ class _JudgeVerdict:
     cost: float
 
 
-class ActiveShadowEvalJob(BaseModel):
+@dataclass(frozen=True, slots=True)
+class _RubricJudgeVerdict:
+    """A parsed rubric verdict, preference and grades unmasked back to real/shadow."""
+
+    preference: str
+    confidence: float
+    cost: float
+    real_grade: int
+    shadow_grade: int
+
+
+@dataclass(frozen=True, slots=True)
+class _JudgeReply:
+    response: ModelResponse
+    real_is_a: bool
+
+
+class ActiveShadowEvalJob(LiteLLMBaseModel):
     """One active job as the sampling path needs it, validated straight off the untyped
     job row: immutable config plus the attempt count as of the cache fill (the turn
     budget's staleness is bounded by the cache TTL). Every way a row can be unsamplable
@@ -749,13 +868,26 @@ class ActiveShadowEvalJob(BaseModel):
     models: frozenset[str] = frozenset()
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
+    skip_same_model: bool = False
     shadow_percentage: float
     judge_model: str
     max_turns: int
     max_budget: float | None = None
     ends_at: datetime
+    rubric: str | None = None
+    rubric_version: int | None = None
     attempts: int = 0
     spend: float = 0.0
+
+    @model_validator(mode="after")
+    def _rubric_runs_under_a_known_contract(self) -> "ActiveShadowEvalJob":
+        """A rubric row this worker cannot grade under the contract it was created with
+        fails closed rather than sampling as a preference-only job."""
+        if self.rubric is None and self.rubric_version is None:
+            return self
+        if self.rubric is None or self.rubric_version != SHADOW_EVAL_RUBRIC_VERSION:
+            raise ValueError("a rubric job needs its rubric and a grading version this worker implements")
+        return self
 
     @field_validator("ends_at")
     @classmethod
@@ -792,9 +924,7 @@ class ActiveShadowEvalJob(BaseModel):
 def _canonical_group(router: "Router | None", model_group: str) -> str:
     """A model group in the one spelling both a job's scope and a request's model compare
     under: an alias resolves to its target so the two never fail to match on spelling."""
-    return (
-        resolve_model_group_alias(router.model_group_alias, model_group) if router is not None else None
-    ) or model_group
+    return (router.registry().resolve(model_group, kind="alias") if router is not None else None) or model_group
 
 
 def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_group: str) -> bool:
@@ -802,6 +932,84 @@ def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_gro
     the router's alias map at match time, so a re-pointed alias applies to the next request
     rather than after the jobs cache rolls."""
     return not job.models or any(_canonical_group(router, name) == model_group for name in job.models)
+
+
+def _served_group(
+    router: "Router | None",
+    job: "ActiveShadowEvalJob",
+    request_metadata: Mapping[str, object],
+    model_group: str,
+) -> str | None:
+    """The canonical group that answered the caller, or None when the request does not say.
+    A fallback hop restamps model_group with its own target while routed_model keeps the
+    router's first pick, so routed_model is only trusted while model_group is still the
+    router's own name and no hop ran."""
+    if not model_group:
+        return None
+    if model_group != _canonical_group(router, job.router_name):
+        return model_group
+    if request_metadata.get("attempted_fallbacks"):
+        return None
+    routed: Final = _routing_decision(request_metadata).get("routed_model")
+    return _canonical_group(router, routed) if isinstance(routed, str) and routed else None
+
+
+def _baseline_served_it(
+    router: "Router | None",
+    job: "ActiveShadowEvalJob",
+    request_metadata: Mapping[str, object],
+    model_group: str,
+) -> bool:
+    if not job.skip_same_model or job.baseline_model is None:
+        return False
+    served: Final = _served_group(router, job, request_metadata, model_group)
+    return served is not None and served == _canonical_group(router, job.baseline_model)
+
+
+class _ShadowEvalJobRow(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def target_type(self) -> str: ...
+
+    @property
+    def target_id(self) -> str: ...
+
+
+class _AttemptCount(TypedDict):
+    _all: ReadOnly[int]
+
+
+class _AttemptGroup(TypedDict):
+    job_id: ReadOnly[str]
+    _count: ReadOnly[_AttemptCount]
+    _sum: ReadOnly[Mapping[str, object] | None]
+
+
+class _ShadowEvalJobTable(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_ShadowEvalJobRow]: ...
+
+
+class _ShadowEvalAttemptTable(Protocol):
+    async def group_by(
+        self,
+        *,
+        by: Sequence[str],
+        count: bool,
+        sum: Mapping[str, bool],
+        where: Mapping[str, object],
+    ) -> Sequence[_AttemptGroup]: ...
+
+    async def create(self, *, data: Mapping[str, object]) -> object: ...
+
+
+def _shadow_eval_job_table(prisma: "PrismaClient") -> _ShadowEvalJobTable:
+    return prisma.db.litellm_shadowevaljob
+
+
+def _shadow_eval_attempt_table(prisma: "PrismaClient") -> _ShadowEvalAttemptTable:
+    return prisma.db.litellm_shadowevalattempt
 
 
 def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowEvalJob | None:
@@ -813,7 +1021,7 @@ def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowE
     except ValidationError as e:
         verbose_logger.debug("shadow_eval: skipping unsamplable job row: %s", e)
         return None
-    return job.model_copy(update={"attempts": attempts, "spend": spend})  # mutable-ok: pydantic update payload
+    return job.model_copy(update={"attempts": attempts, "spend": spend})
 
 
 _jobs_cache: Final = InMemoryCache(max_size_in_memory=4, default_ttl=_JOBS_CACHE_TTL_SECONDS)
@@ -837,6 +1045,8 @@ class ShadowEvalLogger(CustomLogger):
         job_spend_reader: Callable[[str, float, float], Awaitable[float]] | None = None,
         job_spend_writer: Callable[[str, float], Awaitable[None]] | None = None,
         funnel_recorder: Callable[[str, "ShadowEvalFunnelStage"], None] | None = None,
+        real_is_a_draw: Callable[[], bool] | None = None,
+        rubric_enabled: Callable[[], bool] | None = None,
     ) -> None:
         """Providers are callables so the proxy's lazily-initialized globals are resolved
         at call time, not at logger construction. The spend reader and writer wrap the
@@ -847,6 +1057,8 @@ class ShadowEvalLogger(CustomLogger):
         self._read_job_spend = job_spend_reader or _job_spend_from_counter
         self._write_job_spend = job_spend_writer or _add_job_spend_to_counter
         self._record_funnel = funnel_recorder or _record_funnel_event
+        self._draw_real_is_a = real_is_a_draw or _coin_flip
+        self._rubric_enabled = rubric_enabled or is_shadow_eval_rubric_enabled
         self._inflight_shadow_tasks: int = 0
         # Starts per job since the last cache fill, never decremented within a
         # generation; the refill absorbs written rows and resets.
@@ -863,23 +1075,23 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return _EMPTY_JOBS
         try:
-            records: Final = await prisma.db.litellm_shadowevaljob.find_many(
-                where={  # mutable-ok: Prisma filter
+            records: Final = await _shadow_eval_job_table(prisma).find_many(
+                where={
                     "stopped_at": None,
-                    "ends_at": {"gt": datetime.now(timezone.utc)},  # mutable-ok: Prisma filter
+                    "ends_at": {"gt": datetime.now(timezone.utc)},
                 },
             )
             grouped: Final = (
-                await prisma.db.litellm_shadowevalattempt.group_by(
+                await _shadow_eval_attempt_table(prisma).group_by(
                     by=["job_id"],
                     count=True,
                     sum={"judge_cost": True, "shadow_cost": True, "shadow_classifier_cost": True},
-                    where={"job_id": {"in": [str(record.id) for record in records]}},  # mutable-ok: Prisma filter
+                    where={"job_id": {"in": [str(record.id) for record in records]}},
                 )
                 if records
                 else ()
             )
-            attempt_stats: Final = {  # mutable-ok: frozen snapshot of the grouped read
+            attempt_stats: Final = {
                 str(row["job_id"]): (
                     int(row["_count"]["_all"]),
                     _leg_eval_spend(row["_sum"] or _EMPTY_METADATA),
@@ -897,7 +1109,10 @@ class ShadowEvalLogger(CustomLogger):
                 )
             )
             jobs: Final = MappingProxyType(
-                {target: tuple(job for _, job in group) for target, group in groupby(by_target, key=itemgetter(0))}
+                {
+                    target: tuple(job for _, job in group)
+                    for target, group in groupby(by_target, key=lambda entry: entry[0])
+                }
             )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
             self._job_starts = {}
@@ -924,9 +1139,11 @@ class ShadowEvalLogger(CustomLogger):
         eligible: list[ActiveShadowEvalJob] = []  # mutable-ok: bucketed per-job admission
         now: Final = datetime.now(timezone.utc)
         router: Final = self._router_provider()
+        rubric_enabled: Final = self._rubric_enabled()
         for job in active_jobs:
             if (
-                now >= job.ends_at
+                (job.rubric is not None and not rubric_enabled)
+                or now >= job.ends_at
                 or job.attempts + self._job_starts.get(job.id, 0) >= job.max_turns
                 or (job.max_budget is not None and job.spend >= job.max_budget)
                 or not _direction_admits(request_metadata, job)
@@ -935,6 +1152,9 @@ class ShadowEvalLogger(CustomLogger):
                 continue
             if not _sample_hits(request_id, job.id, job.shadow_percentage):
                 self._record_funnel(job.id, "not_sampled")
+                continue
+            if _baseline_served_it(router, job, request_metadata, model_group):
+                self._record_funnel(job.id, "same_model")
                 continue
             eligible.append(job)
         return tuple(eligible)
@@ -952,13 +1172,13 @@ class ShadowEvalLogger(CustomLogger):
             payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")  # pyright: ignore[reportAssignmentType]  # untyped callback kwargs
             if payload is None:
                 return
-            raw_meta: Final = get_litellm_metadata_from_kwargs(dict(kwargs))  # mutable-ok: helper needs dict
+            raw_meta: Final = get_litellm_metadata_from_kwargs(dict(kwargs))
             request_metadata: Final = raw_meta if isinstance(raw_meta, Mapping) else _EMPTY_METADATA
             if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
                 return  # internal sub-call (our own shadow/judge, a classifier), not user traffic
             # redaction rewrites logged content before callbacks run, so this hook
             # only ever sees placeholders for a redacted request
-            if should_redact_message_logging(dict(kwargs)):  # mutable-ok: predicate takes a plain dict
+            if should_redact_message_logging(dict(kwargs)):
                 return
             metadata: Final = payload.get("metadata") or _EMPTY_METADATA
             # Each identity the request resolved to is a candidate target; JWT-auth
@@ -999,7 +1219,7 @@ class ShadowEvalLogger(CustomLogger):
             sample: Final = _judgeable_sample(
                 ops,
                 sample_kwargs,
-                MappingProxyType(dict(payload.get("model_parameters") or {})),  # mutable-ok: frozen snapshot
+                MappingProxyType(dict(payload.get("model_parameters") or {})),
                 response_obj,
             )
             if sample is None:
@@ -1062,7 +1282,7 @@ class ShadowEvalLogger(CustomLogger):
         decline to spend on an admitted sample (no DB to record into, an over-budget key,
         an unverifiable or exhausted eval budget) count the REQUEST withheld before any
         arm runs, so funnel counters stay per-request and a leg's eligible traffic still
-        reconciles as not_sampled + unjudgeable + shed + withheld + sampled requests,
+        reconciles as not_sampled + same_model + unjudgeable + shed + withheld + sampled requests,
         where each sampled request writes one attempt row per arm. A budget crossed
         mid-loop lets the remaining arms overshoot by one round, the same class of
         overshoot as the samples already in flight when the cap is crossed. The prisma
@@ -1158,13 +1378,25 @@ class ShadowEvalLogger(CustomLogger):
             return
         # From here the shadow call has billed, so every exit records its cost.
         try:
-            verdict: Final = await self._call_judge(
-                judge_model=job.judge_model,
-                messages=messages,
-                real_text=real_text,
-                shadow_text=shadow.text,
-                tools=shadow_params.get("tools"),
-                parent_metadata=parent_metadata,
+            verdict: Final = (
+                await self._call_judge(
+                    judge_model=job.judge_model,
+                    messages=messages,
+                    real_text=real_text,
+                    shadow_text=shadow.text,
+                    tools=shadow_params.get("tools"),
+                    parent_metadata=parent_metadata,
+                )
+                if job.rubric is None
+                else await self._call_rubric_judge(
+                    judge_model=job.judge_model,
+                    rubric=job.rubric,
+                    messages=messages,
+                    real_text=real_text,
+                    shadow_text=shadow.text,
+                    tools=shadow_params.get("tools"),
+                    parent_metadata=parent_metadata,
+                )
             )
             if isinstance(verdict, _CallFailure):
                 await self._record_attempt(
@@ -1194,6 +1426,9 @@ class ShadowEvalLogger(CustomLogger):
                 shadow=shadow,
                 real_model=real_model,
                 confidence=verdict.confidence,
+                grades=(
+                    (verdict.real_grade, verdict.shadow_grade) if isinstance(verdict, _RubricJudgeVerdict) else None
+                ),
                 judge_cost=verdict.cost,
                 shadow_cost=shadow.cost,
                 shadow_classifier_cost=shadow.classifier_cost,
@@ -1238,6 +1473,7 @@ class ShadowEvalLogger(CustomLogger):
         shadow_cost: float = 0.0,
         shadow_classifier_cost: float = 0.0,
         error: str | None = None,
+        grades: tuple[int, int] | None = None,
     ) -> None:
         eval_spend: Final = judge_cost + shadow_cost + shadow_classifier_cost
         if eval_spend > 0:
@@ -1245,8 +1481,8 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return
         try:
-            await prisma.db.litellm_shadowevalattempt.create(
-                data={  # mutable-ok: Prisma payload
+            await _shadow_eval_attempt_table(prisma).create(
+                data={
                     "job_id": job.id,
                     "request_id": request_id,
                     "router_name": router_name,
@@ -1262,6 +1498,7 @@ class ShadowEvalLogger(CustomLogger):
                     "real_classifier_cost": real_classifier_cost,
                     "real_cache_hit": real_cache_hit,
                     "error": error[:_MAX_ERROR_CHARS] if error else None,
+                    **({"real_grade": grades[0], "shadow_grade": grades[1]} if grades is not None else {}),
                 }
             )
         except Exception as e:  # noqa: BLE001  # a lost row degrades sample size, nothing can disagree with it
@@ -1287,12 +1524,10 @@ class ShadowEvalLogger(CustomLogger):
         try:
             response: Final = await router.acompletion(
                 model=target_model,
-                messages=[  # mutable-ok: provider transforms rewrite messages in place, so the router gets its own copy
-                    dict(m) for m in messages
-                ],  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
+                messages=[dict(m) for m in messages],  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
                 metadata=shadow_metadata,
                 num_retries=0,
-                fallbacks=[],  # mutable-ok: SDK kwarg; a failed shadow is a recorded error, never a spend multiplier
+                fallbacks=[],
                 **shadow_params,
             )
         except Exception as e:  # noqa: BLE001  # provider errors become error rows, not crashes
@@ -1319,19 +1554,22 @@ class ShadowEvalLogger(CustomLogger):
             classifier_cost=_decision_classifier_cost(shadow_metadata),
         )
 
-    async def _call_judge(
+    async def _judge_reply(
         self,
         judge_model: str,
+        system_prompt: str,
+        response_format: Mapping[str, object] | None,
         messages: Sequence[Mapping[str, object]],
         real_text: str,
         shadow_text: str,
         tools: object,
         parent_metadata: Mapping[str, object],
-    ) -> "_JudgeVerdict | _CallFailure":
-        """Blind pairwise judge with A/B labels randomized to cancel position bias. Both
+        call_failure: Callable[[Exception], str],
+    ) -> "_JudgeReply | _CallFailure":
+        """One blind judge call with A/B labels randomized to cancel position bias. Both
         arms were offered the same tools, so the judge is shown their definitions too: a
         tool call is only assessable against what else was available to call instead."""
-        real_is_a: Final = random.random() < 0.5
+        real_is_a: Final = self._draw_real_is_a()
         response_a: Final = real_text if real_is_a else shadow_text
         response_b: Final = shadow_text if real_is_a else real_text
 
@@ -1341,8 +1579,8 @@ class ShadowEvalLogger(CustomLogger):
             if m.get("content") is not None
         )
         judge_metadata: Final = sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_JUDGE_CALL_ORIGIN)
-        judge_messages: Final = [  # mutable-ok: SDK takes a list
-            {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT},  # mutable-ok: SDK message
+        judge_messages: Final = [
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": _judge_user_prompt(conversation, response_a, response_b, _tool_definitions_text(tools)),
@@ -1356,12 +1594,37 @@ class ShadowEvalLogger(CustomLogger):
                 team_id=_forwarded_team_id(parent_metadata),
                 temperature=0,
                 max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
-                response_format=PAIRWISE_JUDGE_RESPONSE_FORMAT,
+                response_format=response_format,
                 metadata=judge_metadata,
             )
         except Exception as e:  # noqa: BLE001  # judge outages become error rows, not crashes
             verbose_logger.debug("shadow_eval: judge call failed: %s", e)
-            return _CallFailure(f"judge call failed: {e}")
+            return _CallFailure(call_failure(e))
+        return _JudgeReply(response=response, real_is_a=real_is_a)
+
+    async def _call_judge(
+        self,
+        judge_model: str,
+        messages: Sequence[Mapping[str, object]],
+        real_text: str,
+        shadow_text: str,
+        tools: object,
+        parent_metadata: Mapping[str, object],
+    ) -> "_JudgeVerdict | _CallFailure":
+        reply: Final = await self._judge_reply(
+            judge_model,
+            PAIRWISE_JUDGE_SYSTEM_PROMPT,
+            PAIRWISE_JUDGE_RESPONSE_FORMAT,
+            messages,
+            real_text,
+            shadow_text,
+            tools,
+            parent_metadata,
+            _legacy_judge_call_failure,
+        )
+        if isinstance(reply, _CallFailure):
+            return reply
+        response: Final = reply.response
         try:
             raw: Final = response["choices"][0]["message"]["content"] or ""
             verdict: Final = PairwiseVerdict.model_validate(parse_json_verdict(raw))
@@ -1371,9 +1634,54 @@ class ShadowEvalLogger(CustomLogger):
                 f"unparseable judge verdict: {e}; {_judge_reply_shape(response)}", cost=_call_cost(response)
             )
         return _JudgeVerdict(
-            preference=_unmask_preference(verdict.preference, real_is_a),
+            preference=_unmask_preference(verdict.preference, reply.real_is_a),
             confidence=max(0.0, min(1.0, verdict.confidence)),
             cost=_call_cost(response),
+        )
+
+    async def _call_rubric_judge(
+        self,
+        judge_model: str,
+        rubric: str,
+        messages: Sequence[Mapping[str, object]],
+        real_text: str,
+        shadow_text: str,
+        tools: object,
+        parent_metadata: Mapping[str, object],
+    ) -> "_RubricJudgeVerdict | _CallFailure":
+        """The pairwise judge plus a grade per response. The whole verdict validates before
+        anything counts, so a malformed grade is an error row carrying the judge's cost,
+        never a preference-only or defaulted verdict. Errors name the invalid fields and the
+        reply's shape, never the reply or the rubric."""
+        reply: Final = await self._judge_reply(
+            judge_model,
+            rubric_judge_system_prompt(rubric),
+            RUBRIC_JUDGE_RESPONSE_FORMAT,
+            messages,
+            real_text,
+            shadow_text,
+            tools,
+            parent_metadata,
+            _rubric_judge_call_failure,
+        )
+        if isinstance(reply, _CallFailure):
+            return reply
+        response: Final = reply.response
+        try:
+            raw: Final = response["choices"][0]["message"]["content"] or ""
+            verdict: Final = RubricVerdict.model_validate(parse_json_verdict(raw))
+        except Exception as e:  # noqa: BLE001  # malformed verdicts become error rows
+            verbose_logger.debug("shadow_eval: unparseable rubric verdict: %s", type(e).__name__)
+            return _CallFailure(
+                f"unparseable rubric verdict; {_invalid_verdict_detail(e)}, {_judge_reply_shape(response)}",
+                cost=_call_cost(response),
+            )
+        return _RubricJudgeVerdict(
+            preference=_unmask_preference(verdict.preference, reply.real_is_a),
+            confidence=max(0.0, min(1.0, verdict.confidence)),
+            cost=_call_cost(response),
+            real_grade=verdict.grade_a if reply.real_is_a else verdict.grade_b,
+            shadow_grade=verdict.grade_b if reply.real_is_a else verdict.grade_a,
         )
 
 

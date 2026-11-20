@@ -27,8 +27,8 @@ class ManagedBatchRepository(PrismaTableRepository["prisma_models.LiteLLM_Manage
         self, batch: LiteLLMBatch, unchanged: Mapping[str, object], updated_by: str | None
     ) -> bool:
         updated_rows: Final = await self.table.update_many(
-            where={"unified_object_id": batch.id, **unchanged},  # mutable-ok: prisma filters are plain dicts
-            data={  # mutable-ok: prisma payloads are plain dicts
+            where={"unified_object_id": batch.id, **unchanged},
+            data={
                 "file_object": batch.model_dump_json(),
                 "status": batch.status,
                 "updated_by": updated_by,
@@ -38,11 +38,9 @@ class ManagedBatchRepository(PrismaTableRepository["prisma_models.LiteLLM_Manage
 
     async def touch(self, unified_batch_id: str, updated_by: str | None) -> None:
         await self.table.update_many(
-            where={"unified_object_id": unified_batch_id},  # mutable-ok: prisma filters are plain dicts
-            data={"updated_by": updated_by},  # mutable-ok: prisma payloads are plain dicts
+            where={"unified_object_id": unified_batch_id},
+            data={"updated_by": updated_by},
         )
 
     async def _find_row(self, unified_batch_id: str) -> "prisma_models.LiteLLM_ManagedObjectTable | None":
-        return await self.table.find_first(
-            where={"unified_object_id": unified_batch_id}  # mutable-ok: prisma filters are plain dicts
-        )
+        return await self.table.find_first(where={"unified_object_id": unified_batch_id})

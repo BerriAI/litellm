@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     Mode,
@@ -26,7 +27,7 @@ def _coerce_event_hook(
 
 def _get_optional_value(litellm_params: LitellmParams, optional_params: object | None, attribute_name: str) -> object:
     if optional_params is not None:
-        value: Final = getattr(optional_params, attribute_name, None)
+        value: Final = attribute_or_none(optional_params, attribute_name)
         if value is not None:
             return value
     return getattr(litellm_params, attribute_name, None)
@@ -59,6 +60,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         event_hook=_coerce_event_hook(litellm_params.mode),
         default_on=litellm_params.default_on or False,
         unreachable_fallback=litellm_params.unreachable_fallback,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]  # callback manager is untyped
         _callback

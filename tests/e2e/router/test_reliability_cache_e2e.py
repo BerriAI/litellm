@@ -18,12 +18,15 @@ from e2e_config import (
     REQUEST_TIMEOUT,
     unique_marker,
 )
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
 from provider_edge import ProviderRequestObservation, observed_provider_edge
 from pydantic import BaseModel, JsonValue
 
 pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
+
+CACHE_MODEL: Final = "openai/gpt-5.6"
 
 
 class _CacheChatBody(ChatBody):
@@ -38,6 +41,14 @@ class _CachedAnswer(BaseModel):
 
 class TestReliabilityCache:
     @pytest.mark.covers("reliability.cache.exact.returns_cached")
+    @meta(
+        Subject(
+            domain=Domain.CACHING,
+            providers=(Provider.OPENAI,),
+            models=(CACHE_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_exact_cache_returns_cached(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -57,7 +68,7 @@ class TestReliabilityCache:
             model_id: Final = client.proxy.create_model(
                 model,
                 LiteLLMParamsBody(
-                    model="openai/gpt-5.6",
+                    model=CACHE_MODEL,
                     api_key="os.environ/OPENAI_API_KEY",
                     api_base=f"{edge.api_base('openai')}/v1",
                 ),

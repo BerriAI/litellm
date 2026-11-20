@@ -2,6 +2,7 @@
 Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 """
 
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
@@ -110,6 +111,27 @@ def _remember_trace_id(litellm_call_id: object, logged: LangfuseLoggedEvent) -> 
     in_memory_trace_id_cache.set_cache(litellm_call_id=litellm_call_id, service_name="langfuse", trace_id=trace_id)
 
 
+def _params_without_model(config: Mapping[str, object]) -> Mapping[str, object]:
+    return {k: v for k, v in config.items() if k != "model"}
+
+
+def _tenant_langfuse_client(dynamic_callback_params: StandardCallbackDynamicParams) -> LangfuseClass:
+    from litellm.integrations.otel.presets.destinations import langfuse_sdk_tenant_host_refused_by_otel_v2
+
+    if langfuse_sdk_tenant_host_refused_by_otel_v2(dynamic_callback_params):
+        raise ValueError(
+            "Langfuse prompt management: the key/team langfuse_host is not allowed. Add its host to "
+            "`provider_url_destination_allowed_hosts` in litellm_settings."
+        )
+    return langfuse_client_init(
+        langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
+        langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
+        langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
+        langfuse_host=dynamic_callback_params.get("langfuse_host"),
+        allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
+    )
+
+
 class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogger):
     def __init__(
         self,
@@ -182,12 +204,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         return compiled_prompt
 
     def _get_optional_params_from_langfuse(self, langfuse_prompt_client: PROMPT_CLIENT) -> dict:
-        config: Final = langfuse_prompt_client.config
-        optional_params: Final = {}
-        for k, v in config.items():
-            if k != "model":
-                optional_params[k] = v
-        return optional_params
+        return dict(_params_without_model(langfuse_prompt_client.config))
 
     async def async_get_chat_completion_prompt(
         self,
@@ -231,13 +248,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
     ) -> bool:
         if prompt_id is None:
             return False
-        langfuse_client: Final = langfuse_client_init(
-            langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
-            langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
-            langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
-            langfuse_host=dynamic_callback_params.get("langfuse_host"),
-            allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
-        )
+        langfuse_client: Final = _tenant_langfuse_client(dynamic_callback_params)
         self._get_prompt_from_id(langfuse_prompt_id=prompt_id, langfuse_client=langfuse_client)
         return True
 
@@ -253,13 +264,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         if prompt_id is None:
             raise ValueError("prompt_id is required for Langfuse prompt management")
 
-        langfuse_client: Final = langfuse_client_init(
-            langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
-            langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
-            langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
-            langfuse_host=dynamic_callback_params.get("langfuse_host"),
-            allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
-        )
+        langfuse_client: Final = _tenant_langfuse_client(dynamic_callback_params)
         langfuse_prompt_client: Final = self._get_prompt_from_id(
             langfuse_prompt_id=prompt_id,
             langfuse_client=langfuse_client,

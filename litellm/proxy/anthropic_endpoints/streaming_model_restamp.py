@@ -14,6 +14,8 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines_keepends
+
 _MESSAGE_START_EVENT: Final = "message_start"
 _MESSAGE_START_MARKER: Final = b"message_start"
 _SSE_DATA_FIELD: Final = "data:"
@@ -30,7 +32,7 @@ def _restamped_event(event: Mapping[str, object], requested_model: str) -> Mappi
         return None
     if message.get("model") == requested_model:
         return None
-    return {**event, "message": {**message, "model": requested_model}}  # mutable-ok: SSE payload, re-serialized as is
+    return {**event, "message": {**message, "model": requested_model}}
 
 
 def _restamped_data_line(line: str, requested_model: str) -> str | None:
@@ -52,7 +54,7 @@ def _restamped_data_line(line: str, requested_model: str) -> str | None:
 
 
 def _restamped_frame(frame: str, requested_model: str) -> str | None:
-    lines: Final = frame.splitlines(keepends=True)
+    lines: Final = split_sse_lines_keepends(frame)
     restamped: Final = tuple(_restamped_data_line(line, requested_model) for line in lines)
     if all(line is None for line in restamped):
         return None

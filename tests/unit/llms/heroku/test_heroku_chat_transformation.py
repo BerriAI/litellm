@@ -179,3 +179,20 @@ class TestHerokuChatConfig:
         assert response.usage.prompt_tokens == 354
         assert response.usage.completion_tokens == 69
         assert response.usage.total_tokens == 423
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/heroku",
+        "https://gateway.example.com/heroku/",
+        "https://gateway.example.com/heroku/v1/chat/completions/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        HerokuChatConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="claude-4-sonnet", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/heroku/v1/chat/completions"
+    )

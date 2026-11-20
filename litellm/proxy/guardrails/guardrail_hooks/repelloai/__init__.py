@@ -33,6 +33,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         unreachable_fallback=litellm_params.unreachable_fallback,
         event_hook=_event_hook_from_mode(litellm_params.mode),
         default_on=litellm_params.default_on or False,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_repelloai_callback)
 
