@@ -250,6 +250,25 @@ async def test_a_content_policy_cut_before_output_uses_the_content_policy_chain(
     assert host.deployments_called() == ["a", "b"]
 
 
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_a_mid_stream_error_before_output_walks_the_order_levels_of_a_team_public_name(
+    make_core: MakeCore, host: ScriptedHost, bucket: str
+) -> None:
+    public = {"team_id": "T1", "team_public_model_name": "tp"}
+    host.answer("openai/ta1", responses_stream(Event(CREATED), Event(IN_PROGRESS), error=cut()))
+    host.answer("openai/ta2", fallback_ok())
+    core = make_core(
+        model_list=[
+            deployment("t1a", "ta1", order=1, model_info=public),
+            deployment("t1b", "ta2", order=2, model_info=public),
+        ],
+        num_retries=0,
+    )
+    stream = await core.aresponses(model="tp", input="hi", stream=True, **{bucket: {"user_api_key_team_id": "T1"}})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    assert host.deployments_called() == ["ta1", "ta2"]
+
+
 # --- continuation after output -----------------------------------------------------------------
 
 

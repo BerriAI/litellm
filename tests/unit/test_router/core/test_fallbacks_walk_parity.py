@@ -5,15 +5,17 @@ raise, dict targets naming no group, weighted failover past an affinity pin, and
 reasoning a fallback hop strips.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
 
 import litellm
+from litellm.router_core import RouterCore
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.types.router import RoutingContext as PluginContext
 from tests.unit.test_router.core.fallbacks_helpers import (
+    MESSAGES,
     MakeCore,
     build,
     complete,
@@ -63,21 +65,68 @@ async def test_order_levels_walk_through_an_alias(make_core: MakeCore, host: Scr
     assert host.deployments_called("acompletion") == ["d1", "d2"]
 
 
+TEAM_PUBLIC: Final = {"team_id": "T1", "team_public_model_name": "tp"}
+# /v1/responses and /v1/messages carry the team in litellm_metadata.
+TEAM_ROUTES: Final[Mapping[str, Callable[[RouterCore, Mapping[str, Mapping[str, str]]], object]]] = {
+    "acompletion": lambda core, buckets: core.acompletion(model="tp", messages=MESSAGES, **buckets),
+    "aresponses": lambda core, buckets: core.aresponses(model="tp", input="hi", **buckets),
+    "responses": lambda core, buckets: core.responses(model="tp", input="hi", **buckets),
+    "aanthropic_messages": lambda core, buckets: core.aanthropic_messages(
+        model="tp", messages=MESSAGES, max_tokens=5, **buckets
+    ),
+    "anthropic_messages": lambda core, buckets: core.anthropic_messages(
+        model="tp", messages=MESSAGES, max_tokens=5, **buckets
+    ),
+}
+SYNC_TEAM_ROUTES: Final = frozenset({"responses"})
+
+
+async def call_team_route(core: RouterCore, route: str, bucket: str) -> None:
+    result: Final = TEAM_ROUTES[route](core, {bucket: dict(TEAM_METADATA)})
+    if route not in SYNC_TEAM_ROUTES:
+        await result  # pyright: ignore[reportGeneralTypeIssues]  # the async endpoints return awaitables
+
+
 @pytest.mark.asyncio
-async def test_order_levels_walk_through_a_team_public_name(make_core: MakeCore, host: ScriptedHost) -> None:
-    public: Final = {"team_id": "T1", "team_public_model_name": "tp"}
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("route", list(TEAM_ROUTES))
+async def test_order_levels_walk_through_a_team_public_name_on_every_route(
+    make_core: MakeCore, host: ScriptedHost, route: str, bucket: str
+) -> None:
     core: Final = build(
         make_core,
         model_list=[
-            deployment("t1a", "ta1", order=1, model_info=public),
-            deployment("t1b", "ta2", order=2, model_info=public),
+            deployment("t1a", "ta1", order=1, model_info=TEAM_PUBLIC),
+            deployment("t1b", "ta2", order=2, model_info=TEAM_PUBLIC),
         ],
     )
     host.answer("openai/ta1", rate_limit())
 
-    await complete(core, "tp", metadata=dict(TEAM_METADATA))
+    await call_team_route(core, route, bucket)
 
-    assert host.deployments_called("acompletion") == ["ta1", "ta2"]
+    assert host.deployments_called() == ["ta1", "ta2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("route", list(TEAM_ROUTES))
+async def test_weighted_failover_walks_a_team_public_name_on_every_route(
+    make_core: MakeCore, host: ScriptedHost, route: str, bucket: str
+) -> None:
+    core: Final = build(
+        make_core,
+        model_list=[
+            deployment("t1a", "ta1", model="openai/same", model_info=TEAM_PUBLIC),
+            deployment("t1b", "ta2", model="openai/same", model_info=TEAM_PUBLIC),
+        ],
+        enable_weighted_failover=True,
+    )
+    host.answer("openai/same", server_error(), completion_response())
+
+    await call_team_route(core, route, bucket)
+
+    called: Final = host.deployments_called()
+    assert sorted(called) == ["ta1", "ta2"]
 
 
 # --- a team wildcard ------------------------------------------------------------------------------

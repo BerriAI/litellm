@@ -1050,14 +1050,6 @@ def unsupported_arguments(config: RouterConfig) -> frozenset[str]:
     return unserved
 
 
-def _listing_team_id(request: Mapping[str, object]) -> str | None:
-    """``(kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")``: the team
-    ``async_function_with_fallbacks_common_utils`` lists a group for reads this bucket alone."""
-    metadata: Final = as_str_mapping(request.get("metadata"))
-    team_id: Final = metadata.get("user_api_key_team_id") if metadata is not None else None
-    return team_id if isinstance(team_id, str) else None
-
-
 def _strings(value: object) -> "tuple[str, ...]":
     """Every string in ``value``, a name or a fallback list of names and dict entries."""
     if isinstance(value, str):
@@ -1089,7 +1081,6 @@ class RequestStartFields(BaseModel):
     cooldown_time: object | None = None
     router_weights: object | None = Field(default=None, validation_alias="_router_weights")
     team_id: str | None = None
-    listing_team_id: str | None = None
     routing_strategy: str | None = None
 
     @model_validator(mode="before")
@@ -1117,7 +1108,6 @@ def _request_start_fields(request: Mapping[str, object]) -> RequestStartFields:
     fields: Final = {
         **request,
         "team_id": get_request_team_id(request),
-        "listing_team_id": _listing_team_id(request),
         "routing_strategy": override,
     }
     try:
@@ -1144,7 +1134,6 @@ def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
             ("cooldown_time", normalized.cooldown_time is None),
             ("router_weights", normalized.router_weights is None),
             ("team_id", not normalized.team_id),
-            ("listing_team_id", normalized.listing_team_id is None),
             ("routing_strategy", normalized.routing_strategy is None),
         )
         if omit

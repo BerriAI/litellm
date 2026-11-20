@@ -34,12 +34,10 @@ pub struct RouterRequest {
     /// The request params, for the plugins and host steps that read them.
     pub body: Value,
     /// `user_api_key_team_id`, from the first metadata bucket that holds one
-    /// (`get_request_team_id`).
+    /// (`get_request_team_id`). A failed level lists the group's deployments for this team too
+    /// (`async_function_with_fallbacks_common_utils`, `_stream_order_levels`); `None` lists every
+    /// team's.
     pub team_id: Option<String>,
-    /// The `metadata` bucket's `user_api_key_team_id` alone: the team a failed level lists the
-    /// group's deployments for (`async_function_with_fallbacks_common_utils`,
-    /// `_stream_order_levels`). `None` lists every team's.
-    pub listing_team_id: Option<String>,
     /// The caller's `user_role` is `proxy_admin`.
     pub proxy_admin: bool,
     /// The caller's `models` plus `team_models` (`user_api_key_auth`), which narrow a caller

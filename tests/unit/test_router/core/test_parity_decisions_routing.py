@@ -19,7 +19,7 @@ import litellm
 from litellm.router_core import RouterCore
 from litellm.types.router import RouterRateLimitError
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost, patch_direct_endpoints
-from tests.unit.test_router.core.scripted_host import auth_error, deployment
+from tests.unit.test_router.core.scripted_host import auth_error, deployment, rate_limit
 
 MakeCore = Callable[..., RouterCore]
 
@@ -142,6 +142,28 @@ def test_the_retry_count_reads_the_group_before_the_route_filter(make_core: Make
         _call(core, "adecisions", model="e", **QUESTION)
 
     assert host.deployments_called("adecisions") == ["p7-openai"] * 3
+
+
+# --- order levels behind a team public name ------------------------------------------------------
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_adecisions_walks_the_order_levels_of_a_team_public_name_from_either_metadata_bucket(
+    make_core: MakeCore, host: EndpointHost, bucket: str
+) -> None:
+    public: Final = {"team_id": "T1", "team_public_model_name": "tp"}
+    core: Final = make_core(
+        model_list=[
+            deployment("t1a", "ta1", order=1, model_info=public),
+            deployment("t1b", "ta2", order=2, model_info=public),
+        ],
+        num_retries=0,
+    )
+    host.answer("openai/ta1", rate_limit())
+
+    _call(core, "adecisions", model="tp", **{bucket: {"user_api_key_team_id": "T1"}}, **QUESTION)
+
+    assert host.deployments_called("adecisions") == ["ta1", "ta2"]
 
 
 # --- deployments refusing a call's audio or videos ------------------------------------------------

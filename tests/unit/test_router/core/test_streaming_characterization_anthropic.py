@@ -159,6 +159,28 @@ async def test_when_the_fallback_after_an_error_frame_fails_the_frames_error_is_
     assert host.deployments_called() == ["a", "b"]
 
 
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_an_error_frame_before_content_walks_the_order_levels_of_a_team_public_name(
+    make_core: MakeCore, host: ScriptedHost, bucket: str
+) -> None:
+    public = {"team_id": "T1", "team_public_model_name": "tp"}
+    host.answer("openai/ta1", anthropic_stream(MESSAGE_START, BLOCK_START, error_frame()))
+    host.answer("openai/ta2", fallback_ok())
+    core = make_core(
+        model_list=[
+            deployment("t1a", "ta1", order=1, model_info=public),
+            deployment("t1b", "ta2", order=2, model_info=public),
+        ],
+        num_retries=0,
+    )
+    stream = await core.aanthropic_messages(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="tp", messages=MESSAGES, max_tokens=5, stream=True, **{bucket: {"user_api_key_team_id": "T1"}}
+    )
+    frames = await collect_bytes(stream)
+    assert frames == [MESSAGE_START, text_delta("B"), MESSAGE_STOP]
+    assert host.deployments_called() == ["ta1", "ta2"]
+
+
 # --- held lifecycle frames --------------------------------------------------------------------
 
 

@@ -374,9 +374,7 @@ class _ManagedFilesCreatedBy(CustomLogger):
         super().__init__()
         self.creators: Final = creators
 
-    async def can_user_call_unified_file_id(
-        self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth
-    ) -> bool:
+    async def can_user_call_unified_file_id(self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth) -> bool:
         if unified_file_id not in self.creators:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File not found: {unified_file_id}")
         return self.creators[unified_file_id] == user_api_key_dict.user_id
@@ -392,9 +390,7 @@ class _ManagedFilesCountingLookups(_ManagedFilesCreatedBy):
         super().__init__(creators)
         self.looked_up: Final[list[str]] = []  # mutable-ok: the fake records the lookups the gate makes
 
-    async def can_user_call_unified_file_id(
-        self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth
-    ) -> bool:
+    async def can_user_call_unified_file_id(self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth) -> bool:
         self.looked_up.append(unified_file_id)
         return await super().can_user_call_unified_file_id(unified_file_id, user_api_key_dict)
 
@@ -594,6 +590,109 @@ async def _send_s3_media(
         proxy_config=RealProxyConfig(),
         llm_router=router,
     )
+
+
+_TEAM_FALLBACK_ROUTES: Final = (
+    pytest.param(
+        "acompletion",
+        "/v1/chat/completions",
+        "/v1/chat/completions",
+        {"messages": [{"role": "user", "content": "hi"}]},
+        id="chat-completions",
+    ),
+    pytest.param("aresponses", "/v1/responses", "/v1/responses", {"input": "hi"}, id="responses"),
+    # /v1/messages reaches an openai/ deployment through its Responses API.
+    pytest.param(
+        "anthropic_messages",
+        "/v1/messages",
+        "/v1/responses",
+        {"max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]},
+        id="anthropic-messages",
+    ),
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("route_type", "path", "upstream_path", "body"), _TEAM_FALLBACK_ROUTES)
+async def test_a_team_request_falls_back_to_its_next_order_level_on_every_llm_route(
+    route_type: _S3MediaRoute, path: str, upstream_path: str, body: dict[str, object]
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": f"team-a-{level}",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_base": f"https://{level}.example/v1",
+                    "api_key": "fake",
+                    "order": order,
+                },
+                "model_info": {"id": level, "team_id": "team-a", "team_public_model_name": "shared-model"},
+            }
+            for order, level in enumerate(("primary", "backup"), start=1)
+        ],
+        num_retries=0,
+    )
+    chat: Final = {
+        "id": "chatcmpl-backup",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5.4-mini",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    responses: Final = {
+        "id": "resp_backup",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-5.4-mini",
+        "output": [
+            {
+                "id": "msg_backup",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    try:
+        with respx.mock as upstream:
+            upstream.post(f"https://primary.example{upstream_path}").respond(
+                429, json={"error": {"message": "rate limited", "type": "rate_limit_error"}}
+            )
+            upstream.post(f"https://backup.example{upstream_path}").respond(
+                json=chat if upstream_path == "/v1/chat/completions" else responses
+            )
+            await ProxyBaseLLMRequestProcessing(data={"model": "shared-model", **body}).base_process_llm_request(
+                request=Request(
+                    {
+                        "type": "http",
+                        "method": "POST",
+                        "path": path,
+                        "query_string": b"",
+                        "headers": [(b"content-type", b"application/json")],
+                    }
+                ),
+                fastapi_response=Response(),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", user_id="user-a", team_id="team-a"),
+                route_type=route_type,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+                general_settings={},
+                proxy_config=RealProxyConfig(),
+                llm_router=router,
+            )
+            assert [(call.request.url.host, call.request.url.path) for call in upstream.calls] == [
+                ("primary.example", upstream_path),
+                ("backup.example", upstream_path),
+            ]
+    finally:
+        router.reset()
 
 
 class TestProxyBaseLLMRequestProcessing:

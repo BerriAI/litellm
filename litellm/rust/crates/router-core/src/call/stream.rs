@@ -432,10 +432,10 @@ fn stream_can_fall_back(
         return true;
     }
     // `_stream_order_levels`, the levels the fallback walk sees for the group.
-    let listing_team = request.listing_team_id.as_deref();
-    let mut orders: Vec<i64> = group_members(snapshot, &origin.group, listing_team)
+    let team = request.team_id.as_deref();
+    let mut orders: Vec<i64> = group_members(snapshot, &origin.group, team)
         .iter()
-        .filter(|d| d.listed_for_team(listing_team))
+        .filter(|d| d.listed_for_team(team))
         .filter_map(|d| d.order())
         .collect();
     orders.sort_unstable();

@@ -913,7 +913,6 @@ async fn a_pick_reads_only_the_cooldowns_of_the_deployments_it_could_route_to(
     let request = RouterRequest {
         model: model.to_owned(),
         team_id: team.map(str::to_owned),
-        listing_team_id: team.map(str::to_owned),
         ..RouterRequest::default()
     };
     router
@@ -2355,25 +2354,17 @@ fn team_tiers() -> RouterConfig {
     .unwrap()
 }
 
-#[rstest]
-#[case::listed_for_the_team(Some("t1"), false)]
-#[case::listed_for_no_team(None, true)]
 #[tokio::test]
-async fn a_failed_level_lists_its_order_levels_for_the_metadata_team(
-    #[case] listing_team_id: Option<&str>,
-    #[case] walks_the_order_chain: bool,
-) {
+async fn a_failed_level_lists_no_order_level_of_another_team() {
     let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
     let router = router(team_tiers(), json!({"num_retries": 0}), host.clone());
     let request = RouterRequest {
         team_id: Some("t1".to_owned()),
-        listing_team_id: listing_team_id.map(str::to_owned),
         ..request()
     };
     let raised = router.call(Op::from("acompletion"), request).await;
-    assert_eq!(
-        matches!(raised, Err(Error::NoHealthyDeployments { .. })),
-        walks_the_order_chain
+    assert!(
+        matches!(raised, Err(Error::Attempt { failure: failed, .. }) if failed.kind == FailureKind::InternalServer)
     );
     assert_eq!(host.selected(), ["p1"]);
 }
@@ -2603,7 +2594,6 @@ async fn order_levels_walk_through_any_name_the_model_list_lists(
     let request = RouterRequest {
         model: model.to_owned(),
         team_id: team.map(str::to_owned),
-        listing_team_id: team.map(str::to_owned),
         ..RouterRequest::default()
     };
     let response = router(config, dynamic, host.clone())

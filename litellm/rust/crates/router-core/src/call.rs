@@ -377,7 +377,7 @@ impl<H: RouterHost> Call<'_, H> {
         if let Err(raised) = crate::resolve::all_deployments(
             &snapshot.registry,
             &target.group,
-            request.listing_team_id.as_deref(),
+            request.team_id.as_deref(),
         ) {
             self.level_failed(at, &target, &raised, true);
             return Err(raised);
@@ -716,10 +716,10 @@ impl<H: RouterHost> Call<'_, H> {
         if !excluded.iter().any(|id| id == failed_id) {
             excluded.push(failed_id.to_owned());
         }
-        let listing_team = request.listing_team_id.as_deref();
-        let ids: Vec<String> = group_members(snapshot, &target.group, listing_team)
+        let team = request.team_id.as_deref();
+        let ids: Vec<String> = group_members(snapshot, &target.group, team)
             .iter()
-            .filter(|d| d.listed_for_team(listing_team))
+            .filter(|d| d.listed_for_team(team))
             .map(|d| d.id.clone())
             .collect();
         let cooling = self
@@ -808,10 +808,10 @@ impl<H: RouterHost> Call<'_, H> {
             error_specific_list.and_then(|list| list.lookup_groups(&lookup, lists.keys));
         if error_specific_targets.is_none() {
             // A routing group's members, with a priority group's priorities as their order.
-            let listing_team = request.listing_team_id.as_deref();
-            let members: Vec<_> = group_members(snapshot, order_group, listing_team)
+            let team = request.team_id.as_deref();
+            let members: Vec<_> = group_members(snapshot, order_group, team)
                 .into_iter()
-                .filter(|d| d.listed_for_team(listing_team))
+                .filter(|d| d.listed_for_team(team))
                 .collect();
             let batch_levels_only =
                 request.batch_create && members.iter().any(|d| d.is_batch_capable());

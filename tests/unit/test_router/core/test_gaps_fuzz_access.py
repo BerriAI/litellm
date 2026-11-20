@@ -10,7 +10,7 @@ import pytest
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.router import CustomRoutingStrategyBase, RouterRateLimitError
+from litellm.types.router import CustomRoutingStrategyBase
 from tests.unit.test_router.core.fallbacks_helpers import (
     MakeCore,
     build,
@@ -141,25 +141,23 @@ async def test_the_first_bucket_holding_a_team_routes_the_call(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("bucket", "raised"),
-    [("metadata", litellm.RateLimitError), ("litellm_metadata", RouterRateLimitError)],
-    ids=["one-level-listed-so-the-level-raises-its-own-error", "no-team-listed-so-the-second-level-raises"],
-)
-async def test_the_order_levels_of_a_failed_group_read_only_the_metadata_bucket(
-    make_core: MakeCore, host: ScriptedHost, bucket: str, raised: type[Exception]
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("name", ["g", "al"], ids=["group", "alias"])
+async def test_the_order_levels_of_a_failed_group_list_the_team_of_either_bucket(
+    make_core: MakeCore, host: ScriptedHost, bucket: str, name: str
 ) -> None:
     core: Final = make_core(
         model_list=[
             deployment("g", "own", order=1, model_info={"team_id": "t1"}),
             deployment("g", "theirs", order=2, model_info={"team_id": "t2"}),
         ],
+        model_group_alias={"al": "g"},
         num_retries=0,
     )
     host.answer("openai/own", rate_limit())
 
-    with pytest.raises(raised):
-        await complete(core, "g", **{bucket: dict(_TEAM)})
+    with pytest.raises(litellm.RateLimitError):
+        await complete(core, name, **{bucket: dict(_TEAM)})
 
     assert host.deployments_called("acompletion") == ["own"]
 
