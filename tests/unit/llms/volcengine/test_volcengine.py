@@ -1,7 +1,9 @@
 import os
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import pytest
 from openai._legacy_response import LegacyAPIResponse
 from pydantic import BaseModel
 
@@ -109,6 +111,35 @@ class TestVolcEngineConfig:
             drop_params=False,
         )
         assert result_no_thinking == {}
+
+    @pytest.mark.parametrize("drop_params", [True, False])
+    @pytest.mark.parametrize("effort", ["none", "low", "high"])
+    def test_reasoning_effort_reaches_provider(self, effort: str, drop_params: bool) -> None:
+        result: Final = get_optional_params(
+            model="deepseek-v4-1-flash-261017",
+            custom_llm_provider="volcengine",
+            reasoning_effort=effort,
+            drop_params=drop_params,
+        )
+
+        if effort == "none":
+            assert result["extra_body"]["thinking"] == {"type": "disabled"}
+            assert "reasoning_effort" not in result
+        else:
+            assert result["reasoning_effort"] == effort
+
+    @pytest.mark.parametrize("thinking_type", ["enabled", "disabled"])
+    def test_explicit_thinking_takes_precedence(self, thinking_type: str) -> None:
+        result: Final = get_optional_params(
+            model="deepseek-v4-1-flash-261017",
+            custom_llm_provider="volcengine",
+            thinking={"type": thinking_type},
+            reasoning_effort="none" if thinking_type == "enabled" else "high",
+            drop_params=True,
+        )
+
+        assert result["extra_body"]["thinking"] == {"type": thinking_type}
+        assert "reasoning_effort" not in result
 
     def test_e2e_completion(self):
         from openai import OpenAI
