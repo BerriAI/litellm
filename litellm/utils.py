@@ -69,6 +69,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
+    GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS,
     HF_CONFIG_FETCH_TIMEOUT_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
@@ -3858,6 +3859,16 @@ def _get_non_default_params(passed_params: dict, default_params: dict, additiona
     return non_default_params
 
 
+_TRANSCRIPTION_STREAM_FLAG: Final = TypeAdapter(bool)
+
+
+def _transcription_stream_flag(value: object) -> bool | None:
+    try:
+        return _TRANSCRIPTION_STREAM_FLAG.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def get_optional_params_transcription(
     model: str,
     custom_llm_provider: str,
@@ -3883,9 +3894,7 @@ def get_optional_params_transcription(
         passed_params[k] = v
 
     gnani_rejected_params: Final = (
-        ("stream", "chunking_strategy", "include", "known_speaker_names", "known_speaker_references")
-        if custom_llm_provider == "gnani"
-        else ()
+        ("stream", *GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS) if custom_llm_provider == "gnani" else ()
     )
     default_params: Final = {
         "language": None,
@@ -3896,10 +3905,13 @@ def get_optional_params_transcription(
         **{param: None for param in gnani_rejected_params},
     }
 
+    gnani_stream_off: Final = (
+        custom_llm_provider == "gnani" and _transcription_stream_flag(passed_params.get("stream")) is False
+    )
     non_default_params = {
         k: v
         for k, v in passed_params.items()
-        if k in default_params and v != default_params[k] and not (k == "stream" and v == "")
+        if k in default_params and v != default_params[k] and not (k == "stream" and (v == "" or gnani_stream_off))
     }
     optional_params = {}
 

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.constants import GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS, OPENAI_TRANSCRIPTION_PARAMS
 from litellm.exceptions import AuthenticationError, BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -26,6 +27,16 @@ _SHARED_FIELDS: Final = frozenset(("format", "enable_substitution", "substitutio
 _V25_FIELDS: Final = _SHARED_FIELDS | {"bias_score", "itn_native_numerals"}
 _V3_FIELDS: Final = _SHARED_FIELDS | {"keyterms", "topic", "previous_text", "speaker_names"}
 _V25_MODEL: Final = "prisma-v2.5"
+_NOT_FORWARDED: Final = frozenset(
+    (
+        *OPENAI_TRANSCRIPTION_PARAMS,
+        *GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS,
+        "prompt",
+        "stream",
+        "temperature",
+        "extra_body",
+    )
+)
 _REGION_CODE: Final = re.compile(r"([A-Za-z]{2})-([A-Za-z]{2})")
 
 
@@ -65,6 +76,15 @@ def _language_code(model: str, language: object) -> str:
             llm_provider="gnani",
         )
     return ",".join(_normalized_hint(hint) for hint in hints)
+
+
+def _language_hint(fields: Mapping[str, object]) -> object:
+    native: Final = fields.get("language_code")
+    return fields.get("language") if native is None or native == "" else native
+
+
+def _form_value(value: object) -> str:
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
 def _with_prompt_as_previous_text(fields: Mapping[str, object]) -> Mapping[str, object]:
@@ -108,12 +128,8 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             raise UnsupportedParamsError(
                 message="Gnani transcription supports response_format=json", model=model, llm_provider="gnani"
             )
-        prompt: Final = non_default_params.get("prompt")
-        return {
-            **optional_params,
-            "language_code": _language_code(model, non_default_params.get("language")),
-            **({} if prompt is None else {"prompt": prompt}),
-        }
+        mapped: Final = {key: non_default_params.get(key) for key in ("language", "prompt")}
+        return {**optional_params, **{key: value for key, value in mapped.items() if value is not None}}
 
     def validate_environment(
         self,
@@ -171,13 +187,13 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 model=model,
                 llm_provider="gnani",
             )
-        form: Final = {
-            key: value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-            for key, value in fields.items()
-            if key in supported and value is not None
+        language_code: Final = _language_code(model, _language_hint(fields))
+        forwarded: Final = {
+            key: value for key, value in fields.items() if key not in _NOT_FORWARDED and key not in incompatible
         }
+        form: Final = {key: _form_value(value) for key, value in forwarded.items() if value is not None}
         return AudioTranscriptionRequestData(
-            data={**form, "model": model, "language_code": optional_params["language_code"]},
+            data={**form, "model": model, "language_code": language_code},
             files={"audio_file": (Path(audio.filename).name, audio.file_content, audio.content_type)},
         )
 
