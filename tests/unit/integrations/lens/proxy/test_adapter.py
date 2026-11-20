@@ -14,6 +14,7 @@ from litellm.integrations.lens.proxy.adapter import (
     forward,
     lens_request,
     login_redirect,
+    password_change_redirect,
     request_body,
     service_connection,
     service_status,
@@ -340,7 +341,7 @@ async def test_failed_forward_reports_service_unavailability(connection: Connect
     assert error.value.detail == "Lens service is unavailable"
 
 
-SIGN_IN_URL: Final = "http://gateway.test/sso/key/generate?return_to=%2Flens%2Flogin"
+SIGN_IN_URL: Final = "http://gateway.test/ui/login?redirect_to=%2Flens%2Flogin"
 
 
 def test_lens_login_redirects_a_signed_in_user_to_lens_with_a_sign_in_only_token(
@@ -403,3 +404,27 @@ def test_lens_login_refuses_an_identity_with_no_user_or_key(connection: Connecti
     with pytest.raises(HTTPException) as error:
         login_redirect(connection, "https://lens.test", anonymous, SIGN_IN_URL, 1000)
     assert error.value.status_code == 403
+
+
+def test_lens_login_sends_a_session_that_must_change_its_password_to_the_password_page() -> None:
+    restricted: Final = UserAPIKeyAuth(
+        user_id="user-1",
+        allowed_routes=["/user/password/change", "/session/logout"],
+        metadata={"password_reset_required": True},
+    )
+    response: Final = password_change_redirect(restricted, "/lens/login", "http://gateway.test")
+    assert response is not None
+    assert response.status_code == 303
+    assert response.headers["location"] == "http://gateway.test/ui/change-password"
+
+
+def test_lens_login_refuses_a_session_whose_key_may_not_call_it() -> None:
+    restricted: Final = UserAPIKeyAuth(user_id="user-1", allowed_routes=["/key/info"])
+    with pytest.raises(HTTPException) as error:
+        password_change_redirect(restricted, "/lens/login", "http://gateway.test")
+    assert error.value.status_code == 403
+
+
+def test_lens_login_lets_an_unrestricted_session_and_a_missing_session_through() -> None:
+    assert password_change_redirect(UserAPIKeyAuth(user_id="user-1"), "/lens/login", "http://gateway.test") is None
+    assert password_change_redirect(None, "/lens/login", "http://gateway.test") is None

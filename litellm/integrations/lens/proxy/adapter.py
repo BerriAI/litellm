@@ -169,7 +169,6 @@ async def browser_session(request: Request) -> UserAPIKeyAuth | None:
             azure_apim_header=None,
             request_data={},
         )
-        RouteChecks.should_call_route(route=request.url.path, valid_token=auth, request=request)
     except Exception:  # noqa: BLE001  # any rejected dashboard session means the browser signs in again
         return None
     return auth if auth.user_id == user_id else None
@@ -192,19 +191,32 @@ def login_redirect(
     )
 
 
+def password_change_redirect(auth: UserAPIKeyAuth | None, route: str, base_url: str) -> Response | None:
+    if auth is None or RouteChecks.key_allowed_routes_grant(route=route, valid_token=auth):
+        return None
+    if auth.metadata.get("password_reset_required") is True:
+        return RedirectResponse(f"{base_url}/ui/change-password", status_code=303)
+    raise HTTPException(403, "This session is not allowed to sign in to Lens")
+
+
 @router.get("/login", include_in_schema=False)
+@router.get("/login/", include_in_schema=False)
 async def lens_login(request: Request, log_team_lookup: LogTeamLookupDependency) -> Response:
     from litellm.proxy.mcp_server.oauth_utils import (  # noqa: PLC0415  # circular import at module load
         get_request_base_url,
     )
 
     auth: Final = await browser_session(request)
-    return_to: Final = urlencode({"return_to": request.url.path})
+    route: Final = request.url.path.rstrip("/")
+    base_url: Final = get_request_base_url(request)
+    blocked: Final = password_change_redirect(auth, route, base_url)
+    if blocked is not None:
+        return blocked
     return login_redirect(
         Connection.from_env(),
         os.environ.get("LITELLM_LENS_PUBLIC_URL", "").rstrip("/"),
         await delegated_identity(auth, log_team_lookup) if auth else None,
-        f"{get_request_base_url(request)}/sso/key/generate?{return_to}",
+        f"{base_url}/ui/login?{urlencode({'redirect_to': route})}",
         int(time.time()),
     )
 
