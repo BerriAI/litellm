@@ -1266,8 +1266,9 @@ class ParallelRequestLimiterHook(CustomLogger):
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
     ) -> None:
         """Charge one realtime response's tokens to the TPM windows its session's next check reads, keeping
-        the session's parallel slot and RPM untouched. The session's own success log still runs once at close."""
-        from litellm.proxy.hooks.parallel_request_limiter_v3_native import post_call_request
+        the session's parallel slot and RPM untouched. The tokens land before this returns rather than riding the
+        socket's post-call Redis batch, which flushes only after the client may already have sent its next turn.
+        The session's own success log still runs once at close."""
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
         turn_kwargs: Final = MappingProxyType(
@@ -1300,7 +1301,6 @@ class ParallelRequestLimiterHook(CustomLogger):
             None,
             _settlement_resolved(self, turn_kwargs, None, charges_ptu=False),
             token_rate_limit_type(),
-            request=post_call_request() if self.rate_limits.has_redis else None,
             turn=True,
         )
 

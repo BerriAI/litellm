@@ -5,10 +5,7 @@ import functools
 import logging
 import shutil
 import socket
-import subprocess
-import time
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -71,6 +68,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from litellm.types.utils import CallTypes, ModelResponse, Usage
 from tests._support.parallel_request_limiter_golden import Golden, Ttl
+from tests._support.redis_server import redis_server
 from tests._support.rust_parallel_request_limiter import declared_reads
 from tests.unit.proxy.hooks.native_capacity_handler import NativeDynamicRateLimitHandler
 
@@ -152,31 +150,6 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
-@contextmanager
-def _redis_server() -> Iterator[int]:
-    port: Final = _free_port()
-    server: Final = subprocess.Popen(
-        ["redis-server", "--port", str(port), "--save", "", "--appendonly", "no"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        client: Final = redis.Redis(port=port)
-        deadline: Final = time.monotonic() + 10
-        while True:
-            try:
-                client.ping()
-                break
-            except redis.ConnectionError:
-                if time.monotonic() > deadline:
-                    raise
-                time.sleep(0.05)
-        yield port
-    finally:
-        server.terminate()
-        server.wait()
-
-
 @pytest.fixture(params=("memory", "redis"))
 def backend(request: pytest.FixtureRequest) -> Iterator[int | None]:
     if request.param == "memory":
@@ -185,7 +158,7 @@ def backend(request: pytest.FixtureRequest) -> Iterator[int | None]:
     if shutil.which("redis-server") is None:
         _GOLDEN.skip_case()
         pytest.skip("redis-server is not installed")
-    with _redis_server() as port:
+    with redis_server() as port:
         yield port
 
 
@@ -1739,7 +1712,7 @@ async def test_native_redis_calls_report_the_rate_limit_target_and_call_types_li
         pytest.skip("redis-server is not installed")
     auth: Final = _auth(rpm_limit=5, tpm_limit=4000, max_parallel_requests=2)
     requests: Final = [Request(auth, {**_CHAT, "max_tokens": 30}, end=end, usage=_CACHED_USAGE) for _ in range(2)]
-    with _redis_server() as port:
+    with redis_server() as port:
         native: Final = await _redis_events(monkeypatch, port, requests=requests)
     _GOLDEN.agree(native)
     assert native
