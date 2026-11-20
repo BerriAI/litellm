@@ -5,9 +5,11 @@
 
 pub mod auth;
 mod boot;
+mod capacity;
 mod router;
 
 pub use boot::NativeBootHost;
+pub use capacity::NativeCapacityHost;
 pub use router::NativeRouterHost;
 
 use std::sync::Arc;

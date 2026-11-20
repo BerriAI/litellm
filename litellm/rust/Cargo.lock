@@ -4048,6 +4048,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "litellm-callbacks",
+ "litellm-callbacks-model-capacity",
  "litellm-callbacks-parallel-request-limiter",
  "litellm-circuit-breaker",
  "litellm-config",

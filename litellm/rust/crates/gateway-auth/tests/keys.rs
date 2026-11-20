@@ -43,6 +43,10 @@ impl HeldKey for Held {
     fn limits(&self) -> KeyLimits {
         self.limits.clone()
     }
+
+    fn priority(&self) -> Option<Arc<str>> {
+        None
+    }
 }
 
 /// A host that authenticated every credential as the virtual key it holds.

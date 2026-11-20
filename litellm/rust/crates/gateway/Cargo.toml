@@ -37,6 +37,7 @@ litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
 litellm-redis-store.workspace = true
 litellm-callbacks-parallel-request-limiter.workspace = true
+litellm-callbacks-model-capacity.workspace = true
 litellm-redis-connect.workspace = true
 litellm-redis-resolve.workspace = true
 litellm-redis-types.workspace = true

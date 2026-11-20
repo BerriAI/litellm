@@ -117,6 +117,7 @@ impl Authenticator for Verifier {
                     credential_id: "credential".into(),
                     expires_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(100)),
                     limits: KeyLimits::default(),
+                    priority: None,
                 },
                 restrictions: self.restrictions.clone(),
             })

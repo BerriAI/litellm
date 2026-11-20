@@ -598,6 +598,7 @@ pub(crate) mod tests {
     #[case::metadata_beside_a_model_limit(|key: &mut KeyView| key.metadata = json(r#"{"model_rpm_limit":{"claude":2},"tags":["a"]}"#))]
     #[case::a_model_limit_that_is_no_whole_number(|key: &mut KeyView| key.metadata = json(r#"{"model_tpm_limit":{"claude":"100"}}"#))]
     #[case::model_limits_that_are_no_map(|key: &mut KeyView| key.metadata = json(r#"{"model_rpm_limit":5}"#))]
+    #[case::a_priority_that_is_no_text(|key: &mut KeyView| key.metadata = json(r#"{"priority":5}"#))]
     #[case::max_budget(|key: &mut KeyView| key.max_budget = Some(5.0))]
     #[case::soft_budget(|key: &mut KeyView| key.soft_budget = Some(5.0))]
     #[case::budget_duration(|key: &mut KeyView| key.budget_duration = Some("30d".to_owned()))]
@@ -646,6 +647,18 @@ pub(crate) mod tests {
         let identity = authenticate(holding(change), VIRTUAL_KEY).await.unwrap();
 
         assert_eq!(identity.caller().authentication().limits, limits);
+    }
+
+    #[tokio::test]
+    async fn a_keys_metadata_priority_is_the_class_it_is_counted_under() {
+        let rows = holding(|key: &mut KeyView| key.metadata = json(r#"{"priority":"prod"}"#));
+
+        let identity = authenticate(rows, VIRTUAL_KEY).await.unwrap();
+
+        assert_eq!(
+            identity.caller().authentication().priority.as_deref(),
+            Some("prod")
+        );
     }
 
     #[rstest]

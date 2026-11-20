@@ -50,6 +50,8 @@ pub struct Authentication {
     pub credential_id: String,
     pub expires_at: Option<SystemTime>,
     pub limits: KeyLimits,
+    /// The priority class a virtual key names. The master key names none.
+    pub priority: Option<Arc<str>>,
 }
 
 pub struct VerifiedIdentity {

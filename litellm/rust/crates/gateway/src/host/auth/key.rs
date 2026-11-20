@@ -87,6 +87,7 @@ pub struct Key {
     expires_at: Option<SystemTime>,
     models: Arc<[String]>,
     limits: KeyLimits,
+    priority: Option<Arc<str>>,
     /// The first budget column the row holds, which `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
@@ -105,10 +106,15 @@ impl HeldKey for Key {
     fn limits(&self) -> KeyLimits {
         self.limits.clone()
     }
+
+    fn priority(&self) -> Option<Arc<str>> {
+        self.priority.clone()
+    }
 }
 
 /// The `metadata` the native app honors: the key's own limit for each model it names one for,
-/// which `/key/generate` stores from `model_rpm_limit` and `model_tpm_limit`.
+/// which `/key/generate` stores from `model_rpm_limit` and `model_tpm_limit`, and the priority
+/// class `dynamic_rate_limiter_v3` counts the key under, when it is written as text.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Metadata {
@@ -116,6 +122,7 @@ struct Metadata {
     model_rpm_limit: BTreeMap<String, i64>,
     #[serde(default)]
     model_tpm_limit: BTreeMap<String, i64>,
+    priority: Option<String>,
 }
 
 impl Metadata {
@@ -315,6 +322,7 @@ pub(super) fn read(key: &KeyView, also: Option<&'static str>) -> Result<Keyed<Ke
                 model_rpm: ModelLimits::new(metadata.model_rpm_limit),
                 model_tpm: ModelLimits::new(metadata.model_tpm_limit),
             },
+            priority: metadata.priority.map(Arc::from),
             budget,
             aliased,
         },

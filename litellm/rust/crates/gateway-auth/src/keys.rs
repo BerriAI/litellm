@@ -48,6 +48,10 @@ pub trait HeldKey {
 
     fn limits(&self) -> KeyLimits;
 
+    /// The priority class the key's `metadata.priority` names, which reserves it a share of a
+    /// model group's capacity.
+    fn priority(&self) -> Option<Arc<str>>;
+
     /// The key's model list, where none reaches every model.
     fn models(&self) -> Arc<[String]>;
 }

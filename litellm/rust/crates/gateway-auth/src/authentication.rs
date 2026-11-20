@@ -386,6 +386,7 @@ impl VerifiedIdentity {
                 credential_id: hash.as_str().into(),
                 expires_at: key.expires_at(),
                 limits: key.limits(),
+                priority: key.priority(),
             },
             restrictions: match models.is_empty() {
                 true => Permissions::All,
@@ -404,6 +405,7 @@ fn master_identity() -> VerifiedIdentity {
             credential_id: "master".into(),
             expires_at: None,
             limits: KeyLimits::default(),
+            priority: None,
         },
         restrictions: Permissions::All,
     }
