@@ -306,7 +306,9 @@ impl AnthropicBeta {
 
     fn rejected_by(&self) -> &'static [BetaProvider] {
         match self {
-            Self::AdvancedToolUse20251120 | Self::ToolSearchTool20251019 => {
+            Self::AdvancedToolUse20251120
+            | Self::ServerSideFallback20260601
+            | Self::ToolSearchTool20251019 => {
                 &[BetaProvider::BedrockConverse, BetaProvider::Databricks]
             }
             Self::AdvisorTool20260301 => &[
@@ -335,7 +337,6 @@ impl AnthropicBeta {
             | Self::PromptCaching20240731
             | Self::PromptCachingScope20260105
             | Self::RedactThinking20260212
-            | Self::ServerSideFallback20260601
             | Self::SpendLimitReads20260926
             | Self::StructuredOutputs20251215
             | Self::TaskBudgets20260313
