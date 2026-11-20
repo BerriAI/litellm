@@ -32,6 +32,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.mcp_server.auth_profile_selection import effective_server_for
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.exceptions import (
     MCPServerListError,
@@ -734,7 +735,11 @@ if MCP_AVAILABLE:
         allowed_mcp_servers: Final[list[MCPServer]] = []
         for allowed_server_id in allowed_server_ids_set:
             server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
-            if server is not None:
+            if server is not None and server.server_id == canonical_server_id:
+                allowed_mcp_servers.append(
+                    await effective_server_for(server, user_api_key_dict, global_mcp_server_manager)
+                )
+            elif server is not None:
                 allowed_mcp_servers.append(server)
 
         return allowed_mcp_servers, canonical_server_id
@@ -928,13 +933,14 @@ if MCP_AVAILABLE:
                     "message": f"The key is not allowed to access server {server_id}",
                 },
             )
-        server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-        if server is None:
+        registered_server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if registered_server is None:
             return {
                 "tools": [],
                 "error": "server_not_found",
                 "message": f"Server with id {server_id} not found",
             }
+        server: Final = await effective_server_for(registered_server, user_api_key_dict, global_mcp_server_manager)
 
         server_auth_header: Final = _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header)
         user_oauth_extra_headers: Final = await _get_user_oauth_extra_headers(server, user_api_key_dict)
@@ -1144,8 +1150,18 @@ if MCP_AVAILABLE:
                 )
 
                 async def list_server(
-                    server: MCPServer,
+                    registered: MCPServer,
                 ) -> tuple[Sequence[ListMCPToolsRestAPIResponseObject], ServerOutcome]:
+                    try:
+                        server: Final = await effective_server_for(
+                            registered, user_api_key_dict, global_mcp_server_manager
+                        )
+                    except Exception as e:  # noqa: BLE001  # an unusable profile fails only its own server's listing
+                        unusable: Final = classify_list_exception(e)
+                        verbose_logger.warning(
+                            "Error resolving the auth profile of %s: %s", registered.name, unusable.tag
+                        )
+                        return (), unusable
                     server_auth_header: Final = _get_server_auth_header(
                         server, mcp_server_auth_headers, mcp_auth_header
                     )

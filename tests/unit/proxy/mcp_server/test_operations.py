@@ -1,6 +1,7 @@
 import asyncio
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
@@ -32,6 +33,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.mcp_server import operations, rest_endpoints
+from litellm.proxy.mcp_server.auth_profile_selection import AuthProfileGrantSource
 from litellm.proxy.mcp_server.mcp_server_manager import (
     HTTPException as MCPServerManagerHTTPException,
 )
@@ -44,7 +46,7 @@ from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPServer
 
 
 class _CatalogHookCapture(CustomLogger):
@@ -837,6 +839,7 @@ async def test_mcp_server_rpm_limits_every_catalog_operation(operation: str) -> 
 
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(operations, "_usable_and_left_out_mcp_servers", AsyncMock(return_value=([server], ()))),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
         patch("litellm.proxy.proxy_server.prisma_client", None),
         patch.dict(manager.registry, {server.server_id: server}),
@@ -1113,10 +1116,10 @@ async def test_catalog_helpers_preserve_context_results_and_failure_policy(metho
     caller = UserAPIKeyAuth(user_id="catalog-caller")
     headers = {"x-caller": "catalog-caller"}
     upstream_server = MCPServer(server_id="catalog", name="catalog", transport=MCPTransport.http)
-    allowed = AsyncMock(
-        return_value=[] if state == "denied" else [upstream_server],
-        side_effect=HTTPException(status_code=403, detail="scope denied") if state == "scope_failure" else None,
-    )
+    listed = [] if state == "denied" else [upstream_server]
+    scope_error = HTTPException(status_code=403, detail="scope denied") if state == "scope_failure" else None
+    allowed = AsyncMock(return_value=listed, side_effect=scope_error)
+    allowed_with_left_out = AsyncMock(return_value=(listed, ()), side_effect=scope_error)
     upstream = AsyncMock(
         return_value=payload, side_effect=RuntimeError("upstream unavailable") if state == "upstream_failure" else None
     )
@@ -1127,6 +1130,7 @@ async def test_catalog_helpers_preserve_context_results_and_failure_policy(metho
     with (
         patch.object(server, "get_or_extract_auth_context", AsyncMock(return_value=auth)),
         patch.object(operations, "_get_allowed_mcp_servers", allowed),
+        patch.object(operations, "_usable_and_left_out_mcp_servers", allowed_with_left_out),
         patch.object(operations.global_mcp_server_manager, manager_method, upstream),
     ):
         if collection is None and state != "success":
@@ -1152,7 +1156,8 @@ async def test_catalog_helpers_preserve_context_results_and_failure_policy(metho
             else:
                 result = await getattr(server, handler_name)(ctx, operation.params or PaginatedRequestParams())
                 assert result == payload
-    assert allowed.await_args.kwargs == {
+    scope_read = allowed_with_left_out if method == "resources/read" else allowed
+    assert scope_read.await_args.kwargs == {
         "user_api_key_auth": caller,
         "mcp_servers": ["catalog"],
         "client_ip": "192.0.2.41",
@@ -2368,3 +2373,245 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
     else:
         assert entered.is_set()
         assert cleaned.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("default_auth", "tool_name", "mcp_servers"),
+    [
+        ({}, "get_issue", ["analytics"]),
+        (
+            {
+                "auth_type": MCPAuth.oauth2_token_exchange,
+                "oauth2_flow": None,
+                "token_exchange_endpoint": "https://idp.example/exchange",
+            },
+            "analytics-get_issue",
+            None,
+        ),
+        (
+            {
+                "auth_type": MCPAuth.oauth2_token_exchange,
+                "oauth2_flow": None,
+                "token_exchange_endpoint": "https://idp.example/exchange",
+            },
+            "get_issue",
+            ["analytics"],
+        ),
+    ],
+    ids=[
+        "authorization-code-scoped",
+        "token-exchange-prefixed",
+        "token-exchange-scoped",
+    ],
+)
+async def test_a_granted_caller_lists_and_calls_with_its_profile_whatever_the_default_flow(
+    monkeypatch: pytest.MonkeyPatch,
+    default_auth: dict[str, object],
+    tool_name: str,
+    mcp_servers: list[str] | None,
+) -> None:
+    from litellm.proxy import proxy_server
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    upstream: Final = AnalyticsUpstream()
+    token_endpoint: Final = BotTokenEndpoint()
+    server: Final = profiled_analytics_server(allow_all_keys=True, **default_auth)
+    manager: Final = profile_aware_manager(server, upstream, token_endpoint, "ana-bots")
+    manager.tool_name_to_mcp_server_name_mapping.clear()
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    async with manager.catalog.operation():
+        result: Final = await operations.call_mcp_tool(
+            name=tool_name,
+            arguments={"issueKey": "PAY-142"},
+            user_api_key_auth=UserAPIKeyAuth(api_key=hash_token("sk-nightly-bot"), team_id="payments"),
+            mcp_servers=mcp_servers,
+        )
+
+    assert result.is_error is False, result
+    assert upstream.calls("tools/call") == ("Bearer bot-app-token-1",), upstream.requests
+    assert frozenset(authorization for _, authorization in upstream.requests) == {"Bearer bot-app-token-1"}, (
+        "every listing and call of the request must use the granted profile"
+    )
+    assert token_endpoint.client_ids == ("bot-app",)
+
+
+async def _new_bots_grant(user_api_key_auth: UserAPIKeyAuth | None) -> tuple[tuple[str, ...], ...]:
+    return (("new-bots",),)
+
+
+async def _unreadable_grants(user_api_key_auth: UserAPIKeyAuth | None) -> tuple[tuple[str, ...], ...]:
+    raise ConnectionError("permission rows unreadable")
+
+
+async def _new_bots_stored_on_analytics(profile_ids: AbstractSet[str]) -> Mapping[str, str | None]:
+    return {"new-bots": "analytics"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "grants", [_new_bots_grant, _unreadable_grants], ids=["unloaded-profile-elsewhere", "unreadable-grants"]
+)
+async def test_a_request_scoped_to_one_server_never_fails_on_another_servers_profile(
+    monkeypatch: pytest.MonkeyPatch, grants: AuthProfileGrantSource
+) -> None:
+    from litellm.proxy import proxy_server
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import profiled_analytics_server
+
+    manager: Final = MCPServerManager(auth_profile_grants=grants, auth_profile_owners=_new_bots_stored_on_analytics)
+    tickets: Final = MCPServer.model_validate(
+        {
+            "server_id": "tickets",
+            "name": "tickets",
+            "url": "https://tickets.example/mcp",
+            "transport": MCPTransport.http,
+            "allow_all_keys": True,
+        }
+    )
+    manager.registry["analytics"] = profiled_analytics_server(allow_all_keys=True)
+    manager.registry["tickets"] = tickets
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    async with manager.catalog.operation():
+        allowed: Final = await operations._get_allowed_mcp_servers(
+            UserAPIKeyAuth(api_key=hash_token("sk-nightly-bot")), ["tickets"]
+        )
+
+    assert [server.server_id for server in allowed] == ["tickets"]
+
+
+def _two_analytics_profiles_granted() -> tuple[AuthProfileGrantSource, MCPServer]:
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import BOT_PROFILE, granting, profiled_analytics_server
+
+    static: Final = MCPAuthProfile(id="ana-static", auth_type=MCPAuth.bearer_token, authentication_token="static")
+    return granting("ana-bots", "ana-static"), profiled_analytics_server(
+        allow_all_keys=True, additional_auth=(BOT_PROFILE, static)
+    )
+
+
+def _analytics_whose_profile_is_unloaded() -> tuple[AuthProfileGrantSource, MCPServer]:
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import profiled_analytics_server
+
+    return _new_bots_grant, profiled_analytics_server(allow_all_keys=True)
+
+
+def _analytics_with_unreadable_grants() -> tuple[AuthProfileGrantSource, MCPServer]:
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import profiled_analytics_server
+
+    return _unreadable_grants, profiled_analytics_server(allow_all_keys=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "broken_analytics",
+    [_analytics_whose_profile_is_unloaded, _two_analytics_profiles_granted, _analytics_with_unreadable_grants],
+    ids=["unloaded", "ambiguous", "unreadable-grants"],
+)
+async def test_one_servers_unusable_profile_leaves_only_that_server_out_and_refuses_calls_to_it(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    broken_analytics: Callable[[], tuple[AuthProfileGrantSource, MCPServer]],
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import AnalyticsUpstream
+
+    grants, analytics = broken_analytics()
+    upstream: Final = AnalyticsUpstream()
+    manager: Final = MCPServerManager(
+        upstream_transport=httpx2.MockTransport(upstream.respond),
+        auth_profile_grants=grants,
+        auth_profile_owners=_new_bots_stored_on_analytics,
+    )
+    tickets: Final = MCPServer.model_validate(
+        {
+            "server_id": "tickets",
+            "name": "tickets",
+            "url": "https://tickets.example/mcp",
+            "transport": MCPTransport.http,
+            "auth_type": MCPAuth.bearer_token,
+            "authentication_token": "tickets-token",
+            "allow_all_keys": True,
+        }
+    )
+    manager.registry["analytics"] = analytics
+    manager.registry["tickets"] = tickets
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-nightly-bot"))
+
+    async with manager.catalog.operation():
+        listing: Final = await operations._get_tools_from_mcp_servers(
+            user_api_key_auth=caller, mcp_auth_header=None, mcp_servers=None
+        )
+        called: Final = await operations.call_mcp_tool(name="tickets-get_issue", arguments={}, user_api_key_auth=caller)
+        with pytest.raises(HTTPException) as scoped:
+            await operations._get_allowed_mcp_servers(caller, ["analytics"])
+        with pytest.raises(HTTPException) as call:
+            await operations.call_mcp_tool(name="analytics-get_issue", arguments={}, user_api_key_auth=caller)
+        with pytest.raises(HTTPException) as prompt:
+            await operations.mcp_get_prompt(name="analytics-triage", user_api_key_auth=caller)
+
+    assert [tool.name for tool in listing.tools] == ["tickets-get_issue"]
+    assert called.is_error is False, called
+    assert (scoped.value.status_code, call.value.status_code, prompt.value.status_code) == (503, 503, 503)
+    assert frozenset(authorization for _, authorization in upstream.requests) == {"Bearer tickets-token"}
+    assert "MCP server analytics is left out of this request" in caplog.text
+    assert "bot-secret" not in caplog.text
+
+
+def _bearer_server(name: str) -> MCPServer:
+    return MCPServer.model_validate(
+        {
+            "server_id": name,
+            "name": name,
+            "url": f"https://{name}.example/mcp",
+            "transport": MCPTransport.http,
+            "auth_type": MCPAuth.bearer_token,
+            "authentication_token": f"{name}-token",
+            "allow_all_keys": True,
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("usable", [("tickets",), ("tickets", "wiki")], ids=["one-usable", "two-usable"])
+async def test_a_resource_no_usable_server_lists_answers_503_while_another_server_is_left_out(
+    monkeypatch: pytest.MonkeyPatch, usable: tuple[str, ...]
+) -> None:
+    from fastapi import HTTPException
+    from pydantic import AnyUrl
+
+    from litellm.proxy import proxy_server
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import AnalyticsUpstream
+
+    grants, analytics = _analytics_whose_profile_is_unloaded()
+    upstream: Final = AnalyticsUpstream()
+    manager: Final = MCPServerManager(
+        upstream_transport=httpx2.MockTransport(upstream.respond),
+        auth_profile_grants=grants,
+        auth_profile_owners=_new_bots_stored_on_analytics,
+    )
+    manager.registry["analytics"] = analytics
+    for name in usable:
+        manager.registry[name] = _bearer_server(name)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-nightly-bot"))
+
+    async with manager.catalog.operation():
+        with pytest.raises(HTTPException) as read:
+            await operations.mcp_read_resource(url=AnyUrl("analytics://reports/q3"), user_api_key_auth=caller)
+
+    assert read.value.status_code == 503
+    assert sorted(upstream.calls("resources/list")) == [f"Bearer {name}-token" for name in usable]
+    assert upstream.calls("resources/read") == ()

@@ -20,6 +20,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPTransport,
 )
 from litellm.types.mcp import MCPAuth
+from tests.unit.proxy.mcp_server.auth_profile_fakes import granting
 
 mcp_server_manager = MCPServerManager()
 
@@ -2464,7 +2465,7 @@ async def test_list_tool_rest_api_all_servers_with_auth():
 
 
 @pytest.mark.asyncio
-async def test_filter_tools_by_allowed_tools_integration():
+async def test_filter_tools_by_allowed_tools_integration() -> None:
     """Test that filter_tools_by_allowed_tools works correctly via _get_tools_from_mcp_servers"""
     from mcp.types import Tool as MCPTool
 
@@ -2531,6 +2532,7 @@ async def test_filter_tools_by_allowed_tools_integration():
             return_value=["test-server-123"]
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+        mock_manager.auth_profile_grants = granting()
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -2580,7 +2582,7 @@ async def test_filter_tools_by_allowed_tools_integration():
 
 
 @pytest.mark.asyncio
-async def test_filter_tools_by_disallowed_tools_integration():
+async def test_filter_tools_by_disallowed_tools_integration() -> None:
     """Test that filter_tools_by_allowed_tools works correctly with disallowed_tools via _get_tools_from_mcp_servers"""
     from mcp.types import Tool as MCPTool
 
@@ -2647,6 +2649,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
             return_value=["test-server-456"]
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+        mock_manager.auth_profile_grants = granting()
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -2695,7 +2698,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
 
 
 @pytest.mark.asyncio
-async def test_filter_tools_no_restrictions_integration():
+async def test_filter_tools_no_restrictions_integration() -> None:
     """Test that filter_tools_by_allowed_tools returns all tools when no restrictions are set"""
     from mcp.types import Tool as MCPTool
 
@@ -2749,6 +2752,7 @@ async def test_filter_tools_no_restrictions_integration():
             return_value=["test-server-000"]
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+        mock_manager.auth_profile_grants = granting()
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -3496,3 +3500,129 @@ async def test_bare_options_skips_litellm_auth(path: str):
     assert start["status"] == 204
     headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
     assert headers["allow"] == "GET, POST, DELETE, OPTIONS"
+
+
+async def _connect_as_bot(*grants: str) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server import server as server_module
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(), AnalyticsUpstream(), BotTokenEndpoint(), *grants
+    )
+    with patch("litellm.proxy.mcp_server.operations.global_mcp_server_manager", manager):
+        await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "method": "POST", "path": "/mcp/analytics", "headers": []},
+            mcp_servers=["analytics"],
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-bot-key", team_id="payments"),
+            client_ip=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_connect_time_sign_in_challenge_skips_a_caller_granted_a_machine_profile() -> None:
+    assert await _connect_as_bot("ana-bots") is None, "a granted caller opens its session without a sign-in challenge"
+
+
+@pytest.mark.asyncio
+async def test_the_connect_time_sign_in_challenge_still_meets_a_caller_without_a_grant() -> None:
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as challenge:
+        await _connect_as_bot()
+    assert challenge.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_the_connect_time_check_never_resolves_a_server_the_toolset_excludes() -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server import server as server_module
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    async def new_bots_stored_on_analytics(profile_ids: object) -> dict[str, str | None]:
+        return {"new-bots": "analytics"}
+
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(),
+        AnalyticsUpstream(),
+        BotTokenEndpoint(),
+        "new-bots",
+        owners=new_bots_stored_on_analytics,
+    )
+    with patch("litellm.proxy.mcp_server.operations.global_mcp_server_manager", manager):
+        challenge: Final = await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "method": "POST", "path": "/mcp/analytics", "headers": []},
+            mcp_servers=["analytics"],
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-bot-key", team_id="payments"),
+            client_ip=None,
+            allowed_server_ids={"tickets"},
+        )
+    assert challenge is None, "a server outside the toolset is never resolved, so its unloaded grant cannot refuse"
+
+
+async def _connect_to_analytics_with_an_unloaded_profile_and(*scope: str) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server import server as server_module
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    async def new_bots_stored_on_analytics(profile_ids: object) -> dict[str, str | None]:
+        return {"new-bots": "analytics"}
+
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(),
+        AnalyticsUpstream(),
+        BotTokenEndpoint(),
+        "new-bots",
+        owners=new_bots_stored_on_analytics,
+    )
+    manager.registry["tickets"] = MCPServer(
+        server_id="tickets",
+        name="tickets",
+        url="https://tickets.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+    )
+    with patch("litellm.proxy.mcp_server.operations.global_mcp_server_manager", manager):
+        await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "method": "POST", "path": "/mcp", "headers": []},
+            mcp_servers=list(scope),
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-bot-key", team_id="payments"),
+            client_ip=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_one_unusable_profile_in_a_multi_server_session_leaves_only_that_server_out() -> None:
+    assert await _connect_to_analytics_with_an_unloaded_profile_and("analytics", "tickets") is None
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_every_server_has_an_unusable_profile_is_refused_with_503() -> None:
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as refused:
+        await _connect_to_analytics_with_an_unloaded_profile_and("analytics")
+    assert refused.value.status_code == 503

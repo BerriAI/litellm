@@ -48,6 +48,12 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401 
     _is_mcp_admitted_user_subject,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_mcp_admitted_user_subject,
 )
+from litellm.proxy.mcp_server.auth_profile_selection import (
+    UNUSABLE_PROFILE,
+    raise_unusable_profile,
+    resolve_effective_server,
+    unusable_profile_detail,
+)
 from litellm.proxy.mcp_server.client_allowlist import (
     MCPClientAllowlist,
     check_mcp_client_allowed,
@@ -1927,6 +1933,34 @@ if MCP_AVAILABLE:
 
     from litellm.proxy.mcp_server.catalog import catalog_operation
 
+    async def _usable_connect_targets(
+        mcp_servers: Sequence[str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        client_ip: str | None,
+        allowed_server_ids: Set[str] | None,
+    ) -> Mapping[str, MCPServer]:
+        manager: Final = operations.global_mcp_server_manager
+        found: Final = ((name, manager.get_mcp_server_by_name(name, client_ip=client_ip)) for name in mcp_servers or ())
+        in_scope: Final = tuple(
+            (name, server)
+            for name, server in found
+            if server is not None and (allowed_server_ids is None or server.server_id in allowed_server_ids)
+        )
+        resolved: Final = [
+            (name, await resolve_effective_server(server, user_api_key_auth, manager)) for name, server in in_scope
+        ]
+        left_out: Final = tuple((name, outcome) for name, outcome in resolved if isinstance(outcome, UNUSABLE_PROFILE))
+        for name, unusable in left_out:
+            verbose_logger.warning(
+                "MCP server %s is left out of this session: %s", name, unusable_profile_detail(unusable)
+            )
+        usable: Final = types.MappingProxyType(
+            {name: outcome for name, outcome in resolved if not isinstance(outcome, UNUSABLE_PROFILE)}
+        )
+        if left_out and not usable:
+            raise_unusable_profile(left_out[0][1])
+        return usable
+
     @catalog_operation(lambda: operations.global_mcp_server_manager)
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
@@ -1949,13 +1983,9 @@ if MCP_AVAILABLE:
         excludes a passthrough server is not pushed into an OAuth flow for
         a server it will be 403'd on immediately after authentication.
         """
+        usable: Final = await _usable_connect_targets(mcp_servers, user_api_key_auth, client_ip, allowed_server_ids)
         for server_name in mcp_servers or []:
-            server = operations.global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
-            if server is not None and allowed_server_ids is not None and server.server_id not in allowed_server_ids:
-                # Caller's narrowed scope excludes this server — skip the
-                # preemptive challenge and let downstream authorization
-                # return 403.
-                continue
+            server = usable.get(server_name)
             if server is not None and server.auth_type == MCPAuth.oauth2 and server.oauth2_flow == "client_credentials":
                 # Stamped M2M: the challenge decision below never reads discovered
                 # metadata, so deferred-discovery failures must not 503 this loop.

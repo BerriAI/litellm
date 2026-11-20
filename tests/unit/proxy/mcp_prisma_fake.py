@@ -191,7 +191,7 @@ class _ServerTable:
         row: Final = self._find(where["server_id"])
         if row is None:
             return None
-        row.update(data)
+        row.update({"updated_at": self._store.next_updated_at(), **data})
         return self._as_row(row)
 
     async def find_unique(
