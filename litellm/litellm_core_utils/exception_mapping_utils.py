@@ -329,6 +329,18 @@ def _github_copilot_custom_app_hint(custom_llm_provider: str, request_kwargs: Ma
     return github_copilot_sign_in_app_hint(request_kwargs).strip() or None
 
 
+def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | None:
+    message: Final = attribute_or_none(original_exception, "message")
+    if isinstance(attribute_or_none(original_exception, "body"), dict) or not isinstance(message, str):
+        return None
+    try:
+        decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(message)))
+    except ValueError:
+        return None
+    relayed: Final = None if decoded is None else as_str_mapping(decoded.get("error"))
+    return relayed if relayed is not None and isinstance(relayed.get("message"), str) else None
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -351,7 +363,13 @@ def _map_openai_exception(
             body=dict(cyber_policy_body),
         )
     # custom_llm_provider is openai, make it OpenAI
-    initial_message: Final = get_error_message(error_obj=original_exception)
+    relayed_error: Final = _relayed_openai_error(original_exception)
+    body: Final[Mapping[str, object] | None] = (
+        dict(relayed_error) if relayed_error is not None else getattr(original_exception, "body", None)
+    )
+    initial_message: Final = (
+        get_error_message(error_obj=original_exception) if relayed_error is None else str(relayed_error["message"])
+    )
     provider_message: Final = (
         initial_message
         if initial_message is not None
@@ -389,7 +407,7 @@ def _map_openai_exception(
             model=model,
             llm_provider=custom_llm_provider,
             response=response,
-            body=getattr(original_exception, "body", None),
+            body=body,
         )
     elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
         raise ContextWindowExceededError(
@@ -418,7 +436,7 @@ def _map_openai_exception(
             llm_provider=custom_llm_provider,
             response=response,
             litellm_debug_info=extra_information,
-            body=getattr(original_exception, "body", None),
+            body=body,
         )
     elif "invalid_request_error" in error_str and "model_not_found" in error_str:
         raise NotFoundError(
@@ -447,7 +465,7 @@ def _map_openai_exception(
             model=model,
             response=response,
             litellm_debug_info=extra_information,
-            body=getattr(original_exception, "body", None),
+            body=body,
         )
     elif "invalid_encrypted_content" in error_str or "could not be verified" in error_str:
         helpful_message: Final = (
@@ -467,7 +485,7 @@ def _map_openai_exception(
             model=model,
             response=response,
             litellm_debug_info=extra_information,
-            body=getattr(original_exception, "body", None),
+            body=body,
         )
     elif "invalid_request_error" in error_str and "Incorrect API key provided" not in error_str:
         invalid_request_status: Final = getattr(original_exception, "status_code", None)
@@ -478,7 +496,7 @@ def _map_openai_exception(
                 model=model,
                 response=response,
                 litellm_debug_info=extra_information,
-                body=getattr(original_exception, "body", None),
+                body=body,
             )
         if invalid_request_status == 403:
             raise PermissionDeniedError(
@@ -487,7 +505,7 @@ def _map_openai_exception(
                 model=model,
                 response=response if response is not None else _response_or_stub(original_exception, status_code=403),
                 litellm_debug_info=extra_information,
-                body=getattr(original_exception, "body", None),
+                body=body,
             )
         if invalid_request_status == 404:
             raise NotFoundError(
@@ -496,7 +514,7 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 response=response,
                 litellm_debug_info=extra_information,
-                body=getattr(original_exception, "body", None),
+                body=body,
             )
         raise BadRequestError(
             message=f"{exception_provider} - {message}",
@@ -504,7 +522,7 @@ def _map_openai_exception(
             model=model,
             response=response,
             litellm_debug_info=extra_information,
-            body=getattr(original_exception, "body", None),
+            body=body,
         )
     elif (
         "Web server is returning an unknown error" in error_str
@@ -514,7 +532,7 @@ def _map_openai_exception(
             message=f"{exception_provider} - {message}",
             model=model,
             llm_provider=custom_llm_provider,
-            body=getattr(original_exception, "body", None),
+            body=body,
             response=_upstream_reply(response),
         )
     elif "Request too large" in error_str:
@@ -524,7 +542,7 @@ def _map_openai_exception(
             llm_provider=custom_llm_provider,
             response=response,
             litellm_debug_info=extra_information,
-            body=getattr(original_exception, "body", None),
+            body=body,
         )
     elif (
         "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
@@ -556,7 +574,7 @@ def _map_openai_exception(
                 model=model,
                 response=response,
                 litellm_debug_info=extra_information,
-                body=getattr(original_exception, "body", None),
+                body=body,
             )
         elif original_exception.status_code == 401:
             raise AuthenticationError(
@@ -597,7 +615,7 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 response=response,
                 litellm_debug_info=extra_information,
-                body=getattr(original_exception, "body", None),
+                body=body,
             )
         elif original_exception.status_code == 429:
             raise RateLimitError(
@@ -606,7 +624,7 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 response=response,
                 litellm_debug_info=extra_information,
-                body=getattr(original_exception, "body", None),
+                body=body,
             )
         elif original_exception.status_code == 500:
             raise InternalServerError(
@@ -615,7 +633,7 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 response=response,
                 litellm_debug_info=extra_information,
-                body=getattr(original_exception, "body", None),
+                body=body,
             )
         elif original_exception.status_code == 502:
             raise BadGatewayError(
