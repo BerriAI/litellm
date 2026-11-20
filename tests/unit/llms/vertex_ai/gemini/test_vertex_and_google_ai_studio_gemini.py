@@ -12390,3 +12390,126 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
         }
         for index, start, end in expected_sources
     ]
+
+
+_MALFORMED_USAGE: Final = {"promptTokenCount": 9098, "candidatesTokenCount": 381, "totalTokenCount": 9479}
+
+
+async def _ask_gemini_4_carbon(candidates: Sequence[Mapping[str, object]]) -> ModelResponse:
+    body: Final = {"candidates": list(candidates), "usageMetadata": _MALFORMED_USAGE}
+    return cast(
+        ModelResponse,
+        await litellm.acompletion(
+            model="gemini/gemini-4-carbon",
+            messages=[{"role": "user", "content": "What is the weather in Oslo?"}],
+            api_key="test-api-key",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body))),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "candidates",
+    (
+        ({"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL", "index": 0},),
+        ({"finishReason": "MALFORMED_RESPONSE", "index": 0},),
+        ({"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "MALFORMED_FUNCTION_CALL"},),
+        (
+            {
+                "content": {"role": "model", "parts": [{"text": "Call get_weather for Oslo.", "thought": True}]},
+                "finishReason": "MALFORMED_FUNCTION_CALL",
+            },
+        ),
+        (
+            {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL", "index": 0},
+            {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_RESPONSE", "index": 1},
+        ),
+    ),
+    ids=("function-call-no-parts", "response-no-content", "empty-text-part", "thoughts-only", "every-candidate"),
+)
+async def test_gemini_malformed_finish_with_no_output_raises_a_retriable_500(
+    candidates: Sequence[Mapping[str, object]],
+) -> None:
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await _ask_gemini_4_carbon(candidates)
+
+    assert raised.value.status_code == 500
+    assert "MALFORMED_" in str(raised.value)
+    assert "completion_tokens=381" in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("candidates", "finish_reason", "content"),
+    (
+        (
+            ({"content": {"parts": [{"text": "Oslo is 4C."}]}, "finishReason": "MALFORMED_FUNCTION_CALL"},),
+            "stop",
+            "Oslo is 4C.",
+        ),
+        (
+            (
+                {
+                    "content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Oslo"}}}]},
+                    "finishReason": "MALFORMED_FUNCTION_CALL",
+                },
+            ),
+            "tool_calls",
+            None,
+        ),
+        (({"content": {"role": "model", "parts": []}, "finishReason": "STOP"},), "stop", None),
+        (({"content": {"parts": [{"text": "Oslo is 4C."}]}},), "stop", "Oslo is 4C."),
+        (
+            (
+                {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL", "index": 0},
+                {"content": {"parts": [{"text": "Oslo is 4C."}]}, "finishReason": "STOP", "index": 1},
+            ),
+            "stop",
+            None,
+        ),
+    ),
+    ids=("malformed-with-text", "malformed-with-function-call", "empty-stop", "no-finish-reason", "one-good-candidate"),
+)
+async def test_gemini_reply_with_any_output_keeps_its_200_shape(
+    candidates: Sequence[Mapping[str, object]],
+    finish_reason: str,
+    content: str | None,
+) -> None:
+    response: Final = await _ask_gemini_4_carbon(candidates)
+
+    assert response.choices[0].finish_reason == finish_reason
+    assert response.choices[0].message.content == content
+    assert response.usage.completion_tokens == 381
+    if len(candidates) > 1:
+        assert response.choices[1].message.content == "Oslo is 4C."
+
+
+@pytest.mark.asyncio
+async def test_gemini_malformed_finish_with_no_output_bills_the_tokens_on_the_failure_log(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failures: Final[list[Mapping[str, object]]] = []
+
+    class FailureLogger(CustomLogger):
+        async def async_log_failure_event(
+            self,
+            kwargs: Mapping[str, Mapping[str, object]],
+            response_obj: object,
+            start_time: object,
+            end_time: object,
+        ) -> None:
+            failures.append(kwargs["standard_logging_object"])
+
+    monkeypatch.setattr(litellm, "callbacks", [FailureLogger()])
+    with pytest.raises(litellm.InternalServerError):
+        await _ask_gemini_4_carbon(
+            ({"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL"},)
+        )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert len(failures) == 1
+    assert failures[0]["completion_tokens"] == 381
+    assert failures[0]["prompt_tokens"] == 9098
+    assert cast(float, failures[0]["response_cost"]) > 0
