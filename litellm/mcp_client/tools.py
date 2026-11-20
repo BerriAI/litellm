@@ -122,6 +122,7 @@ async def list_tools_result_with_pagination(
     *,
     require_complete: bool = False,
     on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
+    server_name: str = "MCP session",
 ) -> ListToolsResult:
     """Collect tools from every tools/list page by following nextCursor.
 
@@ -143,14 +144,30 @@ async def list_tools_result_with_pagination(
     effective_deadline: Final = (
         listing_deadline if listing_deadline is not None else max(MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT)
     )
+    walk_deadline: Final = time.monotonic() + effective_deadline
+
+    async def fetch_page(page_cursor: str | None) -> ListToolsResult:
+        async def request_page() -> ListToolsResult:
+            return (
+                await session.list_tools()
+                if page_cursor is None
+                else await session.list_tools(params=PaginatedRequestParams(cursor=page_cursor))
+            )
+
+        if on_page is None:
+            return await request_page()
+
+        from litellm.proxy.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+        return await retry_upstream_rate_limit(
+            request_page,
+            server_name,
+            deadline_seconds=max(0.0, walk_deadline - time.monotonic()),
+        )
 
     with anyio.move_on_after(effective_deadline):
         for _ in range(MCP_TOOL_LISTING_MAX_PAGES):
-            result = (
-                await session.list_tools()
-                if cursor is None
-                else await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
-            )
+            result = await fetch_page(cursor)
             pages.append((result, time.monotonic()))
             if on_page is not None:
                 await on_page(result)

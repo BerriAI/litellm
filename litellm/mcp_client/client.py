@@ -11,6 +11,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, nullcontext
+from contextvars import ContextVar
 from functools import partial
 from importlib.metadata import version
 from types import MappingProxyType
@@ -39,6 +40,9 @@ _SessionCallbackName: TypeAlias = Literal["sampling_callback", "elicitation_call
 
 
 SESSION_CLEANUP_TIMEOUT_MESSAGE: Final = "MCP session cleanup timed out"
+_MCP_OBSERVED_TOOLS_LIST_DEADLINE: Final[ContextVar[float | None]] = ContextVar(
+    "mcp_observed_tools_list_deadline", default=None
+)
 
 
 class _SessionCallbackMap(TypedDict):
@@ -101,7 +105,10 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
-from litellm.mcp_client.tools import list_tools_result_with_pagination, list_tools_with_pagination
+from litellm.mcp_client.tools import (
+    list_tools_result_with_pagination,
+    list_tools_with_pagination,
+)
 from litellm.proxy.mcp_server.mcp_context import get_active_mcp_request_ctx
 from litellm.proxy.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.proxy.mcp_server.result_conversion import (
@@ -318,21 +325,48 @@ class _MCPHTTPClient(httpx2.AsyncClient):
                 return termination
 
             return await _run_bounded_cleanup(terminate, self.cleanup_scope.deadline)
-        try:
-            response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
+
+        deadline_at: Final = _MCP_OBSERVED_TOOLS_LIST_DEADLINE.get()
+
+        def is_observed_tools_list() -> bool:
+            if deadline_at is None or request.method != "POST":
+                return False
+            try:
+                payload: Final = TypeAdapter(dict[str, object]).validate_json(request.content)
+            except (TypeError, ValueError, RuntimeError):
+                return False
+            return payload.get("method") == "tools/list"
+
+        retry_tools_list: Final = is_observed_tools_list()
+
+        async def send_once() -> httpx2.Response:
+            response: Final = await super(_MCPHTTPClient, self).send(
+                request, stream=stream, auth=auth, follow_redirects=follow_redirects
+            )
             if request.method == "POST" and response.is_error and response.status_code != 404:
                 await response.aclose()
-                try:
-                    response.raise_for_status()
-                except httpx2.HTTPStatusError as error:
-                    if self.post_failure is not None and not self.post_failure.done():
-                        self.post_failure.set_result(error)
-                    raise
+                response.raise_for_status()
             if stream:
                 response.stream = _MCPResponseStream(
                     cast(httpx2.AsyncByteStream, response.stream), self._record_cleanup_error
                 )
             return response
+
+        try:
+            if retry_tools_list:
+                from litellm.proxy.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+                return await retry_upstream_rate_limit(
+                    send_once,
+                    str(request.url),
+                    deadline_seconds=max(0.0, deadline_at - time.monotonic()) if deadline_at is not None else 0.0,
+                )
+            return await send_once()
+        except httpx2.HTTPStatusError as error:
+            if request.method == "POST" and self.post_failure is not None and not self.post_failure.done():
+                self.post_failure.set_result(error)
+            self._record_cleanup_error(error)
+            raise
         except Exception as error:
             self._record_cleanup_error(error)
             raise
@@ -1095,15 +1129,22 @@ class MCPClient:
         try:
             # A per-server timeout above the global default extends the whole-walk deadline
             listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
-            listing: Final = await self.run_with_session(
-                partial(
-                    list_tools_result_with_pagination,
-                    listing_deadline=listing_deadline,
-                    require_complete=raise_on_error,
-                    on_page=on_page,
-                ),
-                quiet_on_error=raise_on_error,
+            token: Final = _MCP_OBSERVED_TOOLS_LIST_DEADLINE.set(
+                time.monotonic() + listing_deadline if on_page is not None else None
             )
+            try:
+                listing: Final = await self.run_with_session(
+                    partial(
+                        list_tools_result_with_pagination,
+                        listing_deadline=listing_deadline,
+                        require_complete=raise_on_error,
+                        on_page=on_page,
+                        server_name=self.server_url or "stdio",
+                    ),
+                    quiet_on_error=raise_on_error,
+                )
+            finally:
+                _MCP_OBSERVED_TOOLS_LIST_DEADLINE.reset(token)
             tool_count: Final = len(listing.tools)
             tool_names: Final = tuple(tool.name for tool in listing.tools)
             verbose_logger.info(
@@ -1318,7 +1359,7 @@ class MCPClient:
                 pages.append((page, time.monotonic()))
                 items.extend(items_of(page))
                 if not page.next_cursor:
-                    now: Final = time.monotonic()
+                    now = time.monotonic()
                     return items, aggregate_freshness(
                         tuple(age_freshness(value, now - received) for value, received in pages)
                     )

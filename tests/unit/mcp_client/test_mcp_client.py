@@ -42,6 +42,7 @@ from mcp.types import (
     JSONRPCRequest,
     JSONRPCResponse,
     LoggingMessageNotificationParams,
+    ListToolsResult,
     ServerCapabilities,
     TextContent,
 )
@@ -1983,6 +1984,82 @@ async def test_list_tools_classifies_upstream_status_for_post_failures(failure_m
         assert rate_limit.retry_after_seconds == 7
     else:
         assert rate_limit is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rate_limited_cursor", "expected_cursors"),
+    (
+        pytest.param(None, (None, None, "upstream-page-2"), id="page-one"),
+        pytest.param(
+            "upstream-page-2",
+            (None, "upstream-page-2", "upstream-page-2"),
+            id="later-page",
+        ),
+    ),
+)
+async def test_observed_tools_listing_retries_only_the_rate_limited_page(
+    rate_limited_cursor: str | None,
+    expected_cursors: tuple[str | None, ...],
+) -> None:
+    cursors: Final[list[str | None]] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(200)
+        payload: Final = TypeAdapter(dict[str, object]).validate_json(request.content)
+        method: Final = payload.get("method")
+        request_id: Final = payload.get("id")
+        if method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "pagination", "version": "1"},
+                    },
+                },
+            )
+        if method == "notifications/initialized":
+            return httpx2.Response(202)
+        if method != "tools/list":
+            return httpx2.Response(405)
+
+        params_value: Final = payload.get("params")
+        params: Final = params_value if isinstance(params_value, dict) else {}
+        cursor_value: Final = params.get("cursor")
+        cursor: Final = cursor_value if isinstance(cursor_value, str) else None
+        prior_attempts: Final = cursors.count(cursor)
+        cursors.append(cursor)
+        if cursor == rate_limited_cursor and prior_attempts == 0:
+            return httpx2.Response(429, headers={"Retry-After": "0"})
+        tool_name: Final = "first-tool" if cursor is None else "second-tool"
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "tools": [{"name": tool_name, "inputSchema": {"type": "object"}}],
+                    "nextCursor": "upstream-page-2" if cursor is None else None,
+                },
+            },
+        )
+
+    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp")
+    observed: Final[list[tuple[tuple[str, ...], str | None]]] = []
+
+    async def observe(page: ListToolsResult) -> None:
+        observed.append((tuple(tool.name for tool in page.tools), page.next_cursor))
+
+    result: Final = await client.list_tools_result(raise_on_error=True, on_page=observe)
+
+    assert tuple(tool.name for tool in result.tools) == ("first-tool", "second-tool")
+    assert tuple(observed) == ((("first-tool",), "upstream-page-2"), (("second-tool",), None))
+    assert tuple(cursors) == expected_cursors
 
 
 @pytest.mark.asyncio
