@@ -143,8 +143,8 @@ def _schema_shapes_checked(
     if clash is not None:
         raise VertexAIError(
             status_code=400,
-            message=f"Batch input file line {lineno} sets a response_format json_schema that cannot share a Vertex AI "
-            f"batch with the one on line {clash.earlier_lineno}. Vertex AI loads every row of a batch file into one "
+            message=f"Batch input file line {lineno} sets a json_schema that cannot share a Vertex AI batch with the "
+            f"one on line {clash.earlier_lineno}. Vertex AI loads every row of a batch file into one "
             f"BigQuery table, which would set {_shown_path(clash.path)} to null in the schema of line "
             f"{clash.nulled_lineno}, and Vertex AI refuses that null. Put rows with these schemas in separate batch "
             "files",
