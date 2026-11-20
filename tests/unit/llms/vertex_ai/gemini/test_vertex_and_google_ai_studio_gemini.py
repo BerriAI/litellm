@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
+from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, TypeAdapter
 
 import litellm
@@ -28,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.main import vertex_chat_completion
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
@@ -7148,13 +7150,15 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
 
 def test_vertex_ai_unknown_service_tier_answers_400() -> None:
-    with pytest.raises(litellm.UnsupportedParamsError, match="Invalid `service_tier`: 'turbo'"):
+    with pytest.raises(litellm.UnsupportedParamsError, match="Invalid `service_tier`: 'turbo'") as raised:
         VertexGeminiConfig().map_openai_params(
             non_default_params={"service_tier": "turbo"},
             optional_params={},
             model="gemini-2.5-flash",
             drop_params=False,
         )
+
+    assert "'standard_only'" in str(raised.value)
 
 
 @pytest.mark.parametrize(("global_drop_params", "drop_params"), [(False, True), (True, False)])
@@ -7179,6 +7183,17 @@ _GENERATE_CONTENT_RESPONSE: Final = {
 }
 
 
+@pytest.fixture
+def _cached_vertex_credentials(monkeypatch: pytest.MonkeyPatch) -> str:
+    credential_key: Final = "test-vertex-service-tier-credentials"
+    monkeypatch.setitem(
+        vertex_chat_completion._credentials_project_mapping,
+        (credential_key, "test-project"),
+        (Credentials(token="test-vertex-token"), "test-project"),
+    )
+    return credential_key
+
+
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
     ("model", "service_tier", "shared_request_type", "body_service_tier"),
@@ -7197,11 +7212,12 @@ _GENERATE_CONTENT_RESPONSE: Final = {
         ("gemini/gemini-2.5-flash", "auto", None, None),
         ("gemini/gemini-2.5-flash", "default", None, None),
         ("gemini/gemini-2.5-flash", "unspecified", None, None),
-        ("gemini/gemini-2.5-flash", "standard_only", None, "standard"),
+        ("gemini/gemini-2.5-flash", "SERVICE_TIER_STANDARD_ONLY", None, "standard"),
     ],
 )
 def test_service_tier_reaches_vertex_as_headers_and_ai_studio_as_body(
     respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
     model: str,
     service_tier: str,
     shared_request_type: str | None,
@@ -7211,16 +7227,17 @@ def test_service_tier_reaches_vertex_as_headers_and_ai_studio_as_body(
         url__regex=r"https://(aiplatform|generativelanguage)\.googleapis\.com/.*:generateContent.*"
     ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
 
-    with patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")):
-        completion(
-            model=model,
-            messages=[{"role": "user", "content": "Hello"}],
-            service_tier=service_tier,
-            api_key="test-api-key" if model.startswith("gemini/") else None,
-            vertex_project="fake-project",
-            vertex_location="global",
-            client=HTTPHandler(),
-        )
+    is_ai_studio: Final = model.startswith("gemini/")
+    completion(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier=service_tier,
+        api_key="test-api-key" if is_ai_studio else None,
+        vertex_credentials=None if is_ai_studio else _cached_vertex_credentials,
+        vertex_project="test-project",
+        vertex_location="global",
+        client=HTTPHandler(),
+    )
 
     sent: Final = route.calls.last.request
     assert json.loads(sent.content).get("serviceTier") == body_service_tier
@@ -7229,21 +7246,26 @@ def test_service_tier_reaches_vertex_as_headers_and_ai_studio_as_body(
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_caller_tier_header_in_any_case_replaces_the_service_tier_header(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize(
+    "caller_header_name", ["x-vertex-ai-llm-shared-request-type", "X-VERTEX-AI-LLM-SHARED-REQUEST-TYPE"]
+)
+def test_caller_tier_header_in_any_case_replaces_the_service_tier_header(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str, caller_header_name: str
+) -> None:
     route: Final = respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:generateContent.*").mock(
         return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE)
     )
 
-    with patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")):
-        completion(
-            model="vertex_ai/gemini-2.5-flash",
-            messages=[{"role": "user", "content": "Hello"}],
-            service_tier="flex",
-            extra_headers={"x-vertex-ai-llm-shared-request-type": "priority"},
-            vertex_project="fake-project",
-            vertex_location="global",
-            client=HTTPHandler(),
-        )
+    completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier="flex",
+        extra_headers={caller_header_name: "priority"},
+        vertex_credentials=_cached_vertex_credentials,
+        vertex_project="test-project",
+        vertex_location="global",
+        client=HTTPHandler(),
+    )
 
     sent: Final = route.calls.last.request
     assert sent.headers.get_list("X-Vertex-AI-LLM-Shared-Request-Type") == ["priority"]
