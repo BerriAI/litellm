@@ -102,7 +102,6 @@ def test_queue_limits_and_delivery_deadline_reach_the_client() -> None:
         {"queue_max_messages": 0},
         {"queue_max_kbytes": 0},
         {"callback_queue_max_messages": 0},
-        {"callback_timeout_ms": 0},
         {"security_protocol": "SASL_SSL"},
         {"sasl_password": "unused-password"},
         {"ssl_certificate_location": "/certificates/client.pem"},

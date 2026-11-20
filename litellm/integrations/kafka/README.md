@@ -79,8 +79,7 @@ when the first record is produced.
 | `linger_ms` | `20` | Producer batching delay in milliseconds |
 | `batch_size` | `65536` | Producer batch size in bytes |
 | `queue_max_messages` | `10000` | Maximum queued producer records per worker |
-| `callback_queue_max_messages` | `128` | Maximum waiting async preparation jobs, in addition to one active job |
-| `callback_timeout_ms` | `100` | Maximum wait for async preparation before other callbacks continue |
+| `callback_queue_max_messages` | `128` | Maximum waiting preparation jobs, in addition to one active job |
 | `queue_max_kbytes` | `65536` | Maximum queued producer value bytes in KiB per worker |
 | `message_max_bytes` | `1000000` | Client record size limit, align with broker and topic limits |
 | `request_timeout_ms` | `10000` | Broker acknowledgement timeout |
@@ -94,12 +93,12 @@ TLS verifies both the certificate chain and broker hostname. SASL passwords are
 passed to the Kafka client and masked in configuration representations. The
 integration does not support Kerberos or OAuth token refresh.
 
-Each logger lazily creates a reusable producer and a daemon poll thread. Async
-preparation has its own bounded queue and daemon worker, separate from the
-application's default executor. A full preparation queue rejects the new event.
-If preparation exceeds `callback_timeout_ms`, other callbacks can continue.
-Queued work is cancelled when possible. Already running work may still finish,
-so a preparation timeout does not by itself mean a record was dropped.
+Each logger uses one bounded queue and a daemon worker for preparation, producer
+operations and delivery callbacks. Both sync and async logging callbacks enqueue
+without waiting for preparation, broker acknowledgements or the application's
+default executor. A full preparation queue rejects the new event. The worker
+lazily creates a reusable producer and preserves the submitting callback's
+context. There is no second Python batch queue or application retry loop.
 
 The native client batches, compresses and retries retriable transport/broker
 errors within `delivery_timeout_ms`. There is no application retry loop around
@@ -123,15 +122,14 @@ An explicit logger exposes `statistics.accepted`, `statistics.delivered` and
 `statistics.dropped`. Accepted means queued in the native producer, delivered
 means acknowledged by the broker, and dropped includes pre-enqueue and terminal
 delivery failures. `statistics.delivery_failed` counts that latter subset.
-`statistics.callback_timeouts` counts preparation deadlines, including work that
-may subsequently succeed. `statistics.unconfirmed` records messages still
+`statistics.unconfirmed` records messages still
 unacknowledged at the final shutdown flush, or outstanding messages when that
 flush fails. It is not proof that the broker never received those messages.
 
 Graceful proxy shutdown drains logging work and finishes the existing PostgreSQL
 writer cleanup before closing Kafka. Preparation drain and final producer flush
 share the remaining shutdown budget. Neither producer construction nor the
-application's default executor can hold up Kafka's asynchronous close. Native
+application's default executor can hold up Kafka's asynchronous close. Client
 cleanup that outlives the deadline continues on its daemon thread. A timed-out
 close does not claim all messages were delivered. Process crashes, forced termination or a broker
 outage longer than the delivery deadline can lose records. Idempotence does not

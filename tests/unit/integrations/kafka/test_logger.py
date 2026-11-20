@@ -106,11 +106,8 @@ def configured(
 ) -> Generator[tuple[KafkaLogger, RecordingFactory]]:
     factory: Final = RecordingFactory(producer)
     logger: Final = KafkaLogger(
-        KafkaInitParams.model_validate(
-            {"bootstrap_servers": "broker:9092", "topic": "events", "callback_timeout_ms": 5000, **(settings or {})}
-        ),
+        KafkaInitParams.model_validate({"bootstrap_servers": "broker:9092", "topic": "events", **(settings or {})}),
         producer_factory=factory,
-        start_polling=False,
     )
     try:
         yield logger, factory
@@ -142,6 +139,7 @@ def test_configuration_does_not_connect_and_requests_reuse_one_producer() -> Non
         logger.log_success_event(event(), None, NOW, NOW)
         _ = logger.sink.flush()
         logger.log_failure_event(event("failure"), None, NOW, NOW)
+        _ = logger.sink.flush()
 
         assert len(factory.configurations) == 1
         assert tuple(json.loads(message.value)["status"] for message in producer.messages) == ("success", "failure")
@@ -152,14 +150,13 @@ def test_the_standard_event_keeps_identity_usage_and_request_correlation() -> No
     original: Final = event()
     with configured(producer) as (logger, _):
         logger.log_success_event(original, None, NOW, NOW)
+        assert logger.sink.flush() == 0
         message: Final = producer.messages[0]
 
         assert message.topic == logger.sink.params.topic
         assert message.key == b"gateway-id"
         assert json.loads(message.value) == original["standard_logging_object"]
         assert logger.statistics.accepted == 1
-        assert logger.statistics.delivered == 0
-        assert logger.sink.flush() == 0
         assert logger.statistics.delivered == 1
 
 
@@ -174,10 +171,9 @@ async def test_async_export_runs_serialization_and_produce_off_the_event_loop(st
         else:
             await logger.async_log_failure_event(event(status), None, NOW, NOW)
 
+        await logger.flush_queue()
         assert producer.producing_threads
         assert all(thread != event_loop_thread for thread in producer.producing_threads)
-        assert logger.statistics.delivered == 0
-        await logger.flush_queue()
         assert logger.statistics.delivered == 1
 
 
@@ -188,6 +184,7 @@ def test_per_destination_redaction_keeps_attribution_and_does_not_change_other_d
     snapshot: Final = json.dumps(original)
     with configured(producer, {"turn_off_message_logging": True}) as (logger, _):
         logger.log_success_event(original, None, NOW, NOW)
+        assert logger.sink.flush() == 0
         body: Final = producer.messages[0].value
         payload: Final = Payload.model_validate_json(body)
 
@@ -203,6 +200,7 @@ def test_global_redaction_applies_to_a_failure_event(monkeypatch: pytest.MonkeyP
     producer: Final = RecordingProducer()
     with configured(producer) as (logger, _):
         logger.log_failure_event(event("failure"), None, NOW, NOW)
+        _ = logger.sink.flush()
 
         assert b"private-prompt" not in producer.messages[0].value
         assert b"private-answer" not in producer.messages[0].value
@@ -214,6 +212,7 @@ def test_excluded_fields_are_not_exported_or_removed_from_the_shared_event(monke
     original: Final = event()
     with configured(producer) as (logger, _):
         logger.log_success_event(original, None, NOW, NOW)
+        assert logger.sink.flush() == 0
 
         assert "messages" not in json.loads(producer.messages[0].value)
         shared: Final = original["standard_logging_object"]
@@ -225,6 +224,7 @@ def test_a_full_buffer_drops_the_log_without_failing_the_request() -> None:
     producer: Final = RecordingProducer(full=True)
     with configured(producer) as (logger, _):
         logger.log_success_event(event(), None, NOW, NOW)
+        _ = logger.sink.flush()
 
         assert producer.messages == ()
         assert logger.statistics.accepted == 0
@@ -246,6 +246,7 @@ def test_oversized_events_are_rejected_before_allocating_a_producer() -> None:
     producer: Final = RecordingProducer()
     with configured(producer, {"message_max_bytes": 1000}) as (logger, factory):
         logger.log_success_event(event(fields={"messages": "large-prompt" * 1000}), None, NOW, NOW)
+        assert logger.sink.flush() == 0
 
         assert factory.configurations == ()
         assert logger.statistics.dropped == 1
@@ -264,6 +265,7 @@ def test_nonfinite_usage_values_produce_valid_json() -> None:
     producer: Final = RecordingProducer()
     with configured(producer) as (logger, _):
         logger.log_success_event(event(fields={"response_cost": float("nan")}), None, NOW, NOW)
+        assert logger.sink.flush() == 0
 
         assert json.loads(producer.messages[0].value)["response_cost"] is None
         assert b"NaN" not in producer.messages[0].value
@@ -273,11 +275,13 @@ def test_shutdown_flush_is_bounded_idempotent_and_rejects_new_events() -> None:
     producer: Final = RecordingProducer()
     with configured(producer, {"flush_timeout": 2.0}) as (logger, _):
         logger.log_success_event(event(), None, NOW, NOW)
-        logger.close(timeout=0.0)
+        _ = logger.sink.flush()
+        logger.sink.request_close(0).result(5)
         logger.close()
         logger.log_success_event(event(), None, NOW, NOW)
+        _ = logger.sink.flush()
 
-        assert producer.flush_timeouts == (0.0,)
+        assert producer.flush_timeouts[-1] == 0.0
         assert logger.statistics.delivered == 1
         assert logger.statistics.dropped == 1
         assert len(producer.messages) == 1
@@ -312,6 +316,7 @@ async def test_sdk_success_and_streams_export_one_final_event(monkeypatch: pytes
                 pass
         await drain_logging_tasks()
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
+        await logger.flush_queue()
 
         assert len(producer.messages) == 1
         payload: Final = Payload.model_validate_json(producer.messages[0].value)
@@ -336,6 +341,7 @@ async def test_sdk_failures_export_a_terminal_failure_event(monkeypatch: pytest.
             )
         await drain_logging_tasks()
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
+        await logger.flush_queue()
 
         assert len(producer.messages) == 1
         assert json.loads(producer.messages[0].value)["status"] == "failure"
@@ -354,6 +360,7 @@ async def test_queue_saturation_does_not_change_a_successful_model_response(monk
         )
         await drain_logging_tasks()
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
+        await logger.flush_queue()
 
         assert isinstance(response, ModelResponse)
         assert response.choices[0].message.content == "still-served"
@@ -367,12 +374,13 @@ async def test_proxy_shutdown_flushes_each_active_destination_once(monkeypatch: 
     producer: Final = RecordingProducer()
     with configured(producer) as (logger, _):
         logger.log_success_event(event(), None, NOW, NOW)
+        _ = logger.sink.flush()
         monkeypatch.setattr(litellm, "callbacks", [logger])
         monkeypatch.setattr(litellm, "success_callback", [logger])
 
-        await close_kafka_loggers(0.0)
+        await close_kafka_loggers(1.0)
 
-        assert producer.flush_timeouts == (0.0,)
+        assert len(producer.flush_timeouts) == 2
         assert logger.statistics.delivered == 1
 
 
@@ -434,6 +442,7 @@ def test_async_logging_does_not_wait_for_the_applications_default_executor() -> 
         with configured(producer) as (logger, _):
             async with saturated_default_executor():
                 await asyncio.wait_for(logger.async_log_success_event(event(), None, NOW, NOW), 5)
+                await logger.flush_queue()
                 assert len(producer.messages) == 1
 
     asyncio.run(run())
@@ -450,7 +459,7 @@ def test_proxy_kafka_shutdown_does_not_wait_for_the_applications_default_executo
             logger.log_success_event(event(), None, NOW, NOW)
             monkeypatch.setattr(litellm, "callbacks", [logger])
             async with saturated_default_executor():
-                await asyncio.wait_for(close_kafka_loggers(0), 5)
+                await asyncio.wait_for(close_kafka_loggers(1), 5)
                 assert logger.statistics.delivered == 1
 
     asyncio.run(run())
@@ -484,7 +493,7 @@ def test_shutdown_does_not_wait_for_or_publish_after_an_inflight_producer_constr
         release.set()
         publisher.join(5)
         closer.join(5)
-        logger.close(0)
+        logger.sink.request_close(0).result(5)
 
     assert producer.messages == ()
     assert logger.statistics.accepted == 0
@@ -495,7 +504,8 @@ def test_close_does_not_report_an_empty_queue_after_an_unconfirmed_flush() -> No
     producer: Final = RecordingProducer(pending_flush=True)
     with configured(producer) as (logger, _):
         logger.log_success_event(event(), None, NOW, NOW)
-        logger.close(0)
+        _ = logger.sink.flush()
+        logger.sink.request_close(0).result(5)
 
         assert logger.sink.flush() == 1
         assert logger.statistics.unconfirmed == 1
@@ -514,9 +524,7 @@ def test_a_stalled_kafka_constructor_does_not_hold_the_next_accounting_callback(
         assert release.wait(10), "test did not release its blocked Kafka client"
         return producer
 
-    logger: Final = KafkaLogger(
-        KafkaInitParams(bootstrap_servers="broker:9092", topic="events", callback_timeout_ms=1), factory
-    )
+    logger: Final = KafkaLogger(KafkaInitParams(bootstrap_servers="broker:9092", topic="events"), factory)
     publisher: Final = threading.Thread(target=logger.log_success_event, args=(event(), None, NOW, NOW), daemon=True)
 
     async def callback_chain() -> None:
@@ -528,7 +536,6 @@ def test_a_stalled_kafka_constructor_does_not_hold_the_next_accounting_callback(
         assert entered.wait(5)
         asyncio.run(asyncio.wait_for(callback_chain(), 5))
         assert accounted.is_set()
-        assert logger.statistics.callback_timeouts == 1
         assert not release.is_set()
     finally:
         release.set()
@@ -558,7 +565,7 @@ def test_shutdown_accounts_for_a_produce_call_that_finishes_after_the_close_dead
     finally:
         release.set()
         publisher.join(5)
-        logger.close(0)
+        logger.sink.request_close(0).result(5)
 
     assert logger.statistics.accepted == 1
     assert logger.statistics.delivered == 0

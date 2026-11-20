@@ -25,7 +25,6 @@ class KafkaInitParams(StandardCustomLoggerInitParams):
     batch_size: int = Field(default=65_536, gt=0)
     queue_max_messages: int = Field(default=10_000, gt=0)
     callback_queue_max_messages: int = Field(default=128, gt=0)
-    callback_timeout_ms: int = Field(default=100, gt=0)
     queue_max_kbytes: int = Field(default=65_536, gt=0)
     message_max_bytes: int = Field(default=1_000_000, ge=1_000)
     delivery_timeout_ms: int = Field(default=30_000, gt=0)

@@ -165,6 +165,7 @@ def test_native_queue_limit_drops_extra_events_during_a_broker_outage(broker: Br
     try:
         logger.log_success_event({"standard_logging_object": {"id": "queued"}}, None, NOW, NOW)
         logger.log_success_event({"standard_logging_object": {"id": "over-capacity"}}, None, NOW, NOW)
+        assert logger.sink.request_flush(0).result(5) == 1
         assert logger.statistics.accepted == 1
         assert logger.statistics.delivered == 0
         assert logger.statistics.dropped == 1

@@ -1,3 +1,5 @@
+import contextvars
+import queue
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -18,10 +20,6 @@ def prepare_interpreter_exit() -> None:
     _EXITING.set()
 
 
-def interpreter_exiting() -> bool:
-    return _EXITING.is_set()
-
-
 class DeliveryError(Protocol):
     def code(self) -> int: ...
 
@@ -38,7 +36,6 @@ class KafkaProducer(Protocol):
 
 
 ProducerFactory: TypeAlias = Callable[[Mapping[str, KafkaConfigValue]], KafkaProducer]
-FailureReporter: TypeAlias = Callable[[], None]
 
 
 def load_producer_factory() -> ProducerFactory:
@@ -56,39 +53,37 @@ class KafkaExportStats:
     dropped: int = 0
     delivery_failed: int = 0
     unconfirmed: int = 0
-    callback_timeouts: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class CallbackJob:
+    callback: Callable[[], None]
+    context: contextvars.Context
 
 
 @dataclass(frozen=True, slots=True)
 class FlushRequest:
     finished: Future[int | None]
     deadline: float
+    target: int
 
 
 class KafkaSink:
-    def __init__(
-        self,
-        params: KafkaInitParams,
-        factory: ProducerFactory,
-        report_failure: FailureReporter,
-        *,
-        start_polling: bool = True,
-    ) -> None:
+    def __init__(self, params: KafkaInitParams, factory: ProducerFactory, report_failure: Callable[[], None]) -> None:
         self.params: Final = params
         self._factory: Final = factory
         self._report_failure: Final = report_failure
-        self._start_polling: Final = start_polling
+        self._queue: Final[queue.Queue[CallbackJob]] = queue.Queue(maxsize=params.callback_queue_max_messages)
         self._lock: Final = threading.Lock()
         self._stats_lock: Final = threading.Lock()
-        self._close_lock: Final = threading.Lock()
-        self._finalize_lock: Final = threading.Lock()
-        self._flush_lock: Final = threading.Lock()
-        self._stop: Final = threading.Event()
         self._closed: Final[Future[None]] = Future()
+        self._shutdown_flush: Final[Future[int | None]] = Future()
         self._producer: KafkaProducer | None = None
-        self._poll_thread: threading.Thread | None = None
+        self._thread: threading.Thread | None = None
         self._close_deadline: float | None = None
         self._flush_request: FlushRequest | None = None
+        self._submitted: int = 0
+        self._completed: int = 0
         self._stats: KafkaExportStats = KafkaExportStats()
 
     @property
@@ -97,14 +92,7 @@ class KafkaSink:
             return self._stats
 
     def _update(
-        self,
-        *,
-        accepted: int = 0,
-        delivered: int = 0,
-        dropped: int = 0,
-        delivery_failed: int = 0,
-        unconfirmed: int = 0,
-        callback_timeouts: int = 0,
+        self, *, accepted: int = 0, delivered: int = 0, dropped: int = 0, delivery_failed: int = 0, unconfirmed: int = 0
     ) -> KafkaExportStats:
         with self._stats_lock:
             updated: Final = replace(
@@ -114,7 +102,6 @@ class KafkaSink:
                 dropped=self._stats.dropped + dropped,
                 delivery_failed=self._stats.delivery_failed + delivery_failed,
                 unconfirmed=self._stats.unconfirmed + unconfirmed,
-                callback_timeouts=self._stats.callback_timeouts + callback_timeouts,
             )
             self._stats = updated
             return updated
@@ -125,16 +112,35 @@ class KafkaSink:
         if stats.dropped & (stats.dropped - 1) == 0:
             verbose_logger.warning("Kafka logging dropped an event reason=%s total_dropped=%d", reason, stats.dropped)
 
-    def preparation_timed_out(self) -> None:
-        stats: Final = self._update(callback_timeouts=1)
-        self._report_failure()
-        if stats.callback_timeouts & (stats.callback_timeouts - 1) == 0:
-            verbose_logger.warning(
-                "Kafka logging preparation deadline reached total_timeouts=%d", stats.callback_timeouts
-            )
+    def submit(self, callback: Callable[[], None]) -> None:
+        job: Final = CallbackJob(callback, contextvars.copy_context())
+        if _EXITING.is_set() and self._thread is None and self._close_deadline is None:
+            self._execute(job)
+            return
+        reason: Final = self._enqueue(job)
+        if reason is not None:
+            self.drop(reason)
+
+    def _enqueue(self, job: CallbackJob) -> str | None:
+        with self._lock:
+            if self._close_deadline is not None:
+                return "closed"
+            if self._thread is None:
+                thread: Final = threading.Thread(target=self._run, name="litellm-kafka", daemon=True)
+                try:
+                    thread.start()
+                except RuntimeError:
+                    return "worker_unavailable"
+                self._thread = thread
+            try:
+                self._queue.put_nowait(job)
+            except queue.Full:
+                return "callback_queue_full"
+            self._submitted += 1
+        return None
 
     def publish(self, payload: Mapping[str, object]) -> None:
-        if self._stop.is_set():
+        if self._expired():
             self.drop("closed")
             return
         try:
@@ -142,62 +148,57 @@ class KafkaSink:
             if len(body) > self.params.message_max_bytes:
                 self.drop("message_too_large")
                 return
+            if self._producer is None:
+                self._producer = self._factory(producer_config(self.params))
+            if self._expired():
+                self.drop("closed")
+                return
             identity: Final = payload.get("litellm_call_id") or payload.get("id")
             key: Final = identity.encode("utf-8") if isinstance(identity, str) else None
-            reason: Final = self._enqueue(body, key)
-            if reason is not None:
-                self.drop(reason)
+            self._producer.produce(self.params.topic, value=body, key=key, on_delivery=self._delivered)
+            _ = self._update(accepted=1)
         except BufferError:
             self.drop("queue_full")
         except Exception:  # noqa: BLE001  # exporter failures must not change the model response
             self.drop("producer_error")
 
-    def _enqueue(self, body: bytes, key: bytes | None) -> str | None:
-        with self._lock:
-            try:
-                if self._stop.is_set():
-                    return "closed"
-                producer: Final = self._producer if self._producer is not None else self._create_producer()
-                if self._stop.is_set():
-                    return "closed"
-                producer.produce(self.params.topic, value=body, key=key, on_delivery=self._delivered)
-                _ = self._update(accepted=1)
-            finally:
-                closing: Final = self._producer
-                if self._stop.is_set() and closing is not None:
-                    self._finalize(closing)
-        return None
-
-    def _create_producer(self) -> KafkaProducer:
-        producer: Final = self._factory(producer_config(self.params))
-        self._producer = producer
-        if self._stop.is_set():
-            self._finalize(producer)
-            return producer
-        if self._start_polling and not interpreter_exiting():
-            thread: Final = threading.Thread(
-                target=self._poll, args=(producer,), name="litellm-kafka-poll", daemon=True
-            )
-            try:
-                thread.start()
-            except RuntimeError:
-                _ = self.request_close(0)
-                self._finalize(producer)
-                raise
-            self._poll_thread = thread
-        return producer
-
-    def _poll(self, producer: KafkaProducer) -> None:
+    def _execute(self, job: CallbackJob) -> None:
         try:
-            while not self._stop.is_set():
-                self._run_flush_request(producer)
-                _ = producer.poll(0.1)
-        except Exception:  # noqa: BLE001  # stop a failed poller without crashing the application
+            job.context.run(job.callback)
+        except Exception:  # noqa: BLE001  # a failed log job must not stop later events
+            self.drop("invalid_payload")
+
+    def _run_next(self) -> None:
+        try:
+            job: Final = self._queue.get(timeout=0.1)
+        except queue.Empty:
+            return
+        if self._expired():
+            self.drop("shutdown_callback")
+        else:
+            self._execute(job)
+        with self._lock:
+            self._completed += 1
+
+    def _run(self) -> None:
+        try:
+            while self._close_deadline is None or (not self._queue.empty() and not self._expired()):
+                self._run_flush_request()
+                self._run_next()
+                if self._producer is not None:
+                    _ = self._producer.poll(0)
+        except Exception:  # noqa: BLE001  # a failed client must not crash the application
             self._report_failure()
-            verbose_logger.warning("Kafka logging poller stopped after a client error")
-            _ = self.request_close(self.params.flush_timeout)
+            verbose_logger.warning("Kafka logging worker stopped after a client error")
         finally:
-            self._finish_close(producer)
+            with self._lock:
+                if self._close_deadline is None:
+                    self._close_deadline = time.monotonic() + self.params.flush_timeout
+            self._finish_close()
+
+    def _expired(self) -> bool:
+        deadline: Final = self._close_deadline
+        return deadline is not None and time.monotonic() >= deadline
 
     def _delivered(self, error: DeliveryError | None, message: object) -> None:
         if error is not None:
@@ -205,16 +206,12 @@ class KafkaSink:
             return
         _ = self._update(delivered=1)
 
-    def flush(self, timeout: float | None = None) -> int | None:
-        producer: Final = self._producer
-        if producer is None:
+    def _flush(self, timeout: float) -> int | None:
+        if self._producer is None:
             return self.statistics.unconfirmed
-        return self._flush(producer, self.budget(timeout))
-
-    def _flush(self, producer: KafkaProducer, timeout: float) -> int | None:
         try:
-            remaining: Final = producer.flush(timeout)
-        except Exception:  # noqa: BLE001  # a bounded shutdown flush must not prevent other cleanup
+            remaining: Final = self._producer.flush(timeout)
+        except Exception:  # noqa: BLE001  # a bounded flush must not prevent other cleanup
             self._report_failure()
             verbose_logger.warning("Kafka logging flush failed")
             return None
@@ -224,84 +221,76 @@ class KafkaSink:
         return remaining
 
     def request_flush(self, timeout: float | None = None) -> Future[int | None]:
-        future: Final[Future[int | None]] = Future()
-        if self._producer is None or self._stop.is_set():
-            future.set_result(self.statistics.unconfirmed if self._closed.done() or not self._stop.is_set() else None)
-            return future
-        if not self._start_polling or interpreter_exiting():
-            future.set_result(self.flush(timeout))
-            return future
-        with self._flush_lock:
+        with self._lock:
+            if self._close_deadline is not None:
+                return self._shutdown_flush
+            if self._thread is None:
+                finished: Final[Future[int | None]] = Future()
+                finished.set_result(self._flush(self.budget(timeout)))
+                return finished
+            deadline: Final = time.monotonic() + self.budget(timeout)
             if self._flush_request is not None:
-                return self._flush_request.finished
-            if self._closed.done():
-                future.set_result(self.statistics.unconfirmed)
-                return future
-            self._flush_request = FlushRequest(future, time.monotonic() + self.budget(timeout))
-        return future
+                self._flush_request = replace(
+                    self._flush_request, deadline=min(deadline, self._flush_request.deadline), target=self._submitted
+                )
+            else:
+                self._flush_request = FlushRequest(Future(), deadline, self._submitted)
+            return self._flush_request.finished
 
-    def _run_flush_request(self, producer: KafkaProducer) -> None:
-        with self._flush_lock:
+    def _run_flush_request(self) -> None:
+        with self._lock:
             request: Final = self._flush_request
+            if request is None or self._completed < request.target:
+                return
             self._flush_request = None
-        if request is not None and request.finished.set_running_or_notify_cancel():
-            request.finished.set_result(self._flush(producer, max(0.0, request.deadline - time.monotonic())))
+        request.finished.set_result(self._flush(max(0.0, request.deadline - time.monotonic())))
 
     def budget(self, timeout: float | None) -> float:
         return self.params.flush_timeout if timeout is None else min(max(timeout, 0.0), self.params.flush_timeout)
 
+    def flush(self, timeout: float | None = None) -> int | None:
+        budget: Final = self.budget(timeout)
+        try:
+            return self.request_flush(budget).result(timeout=budget)
+        except FutureTimeoutError:
+            return None
+
     def request_close(self, timeout: float | None = None) -> Future[None]:
-        with self._close_lock:
-            if self._close_deadline is None:
-                self._close_deadline = time.monotonic() + self.budget(timeout)
-                self._stop.set()
-        producer: Final = self._producer
-        if producer is None:
-            with self._close_lock:
-                if not self._closed.done():
-                    self._closed.set_result(None)
-        elif not self._start_polling or interpreter_exiting():
-            self._finish_close(producer)
+        with self._lock:
+            if self._close_deadline is not None:
+                return self._closed
+            self._close_deadline = time.monotonic() + self.budget(timeout)
+            inline: Final = self._thread is None
+        if inline:
+            self._finish_close()
         return self._closed
 
-    def _finish_close(self, producer: KafkaProducer) -> None:
-        deadline: Final = self._close_deadline
-        if not self._lock.acquire(timeout=max(0.0, deadline - time.monotonic()) if deadline is not None else 0.0):
-            return
-        try:
-            self._finalize(producer)
-        finally:
-            self._lock.release()
-
-    def _finalize(self, producer: KafkaProducer) -> None:
-        if not self._finalize_lock.acquire(blocking=False):
-            return
-        try:
-            deadline: Final = self._close_deadline or time.monotonic()
-            remaining: Final = self._flush(producer, max(0.0, deadline - time.monotonic()))
-            stats: Final = self.statistics
-            unconfirmed: Final = (
-                remaining if remaining is not None else max(0, stats.accepted - stats.delivered - stats.delivery_failed)
-            )
-            _ = self._update(unconfirmed=unconfirmed)
-        finally:
-            self._producer = None
-            with self._close_lock:
-                if not self._closed.done():
-                    self._closed.set_result(None)
-            with self._flush_lock:
-                request: Final = self._flush_request
-                self._flush_request = None
-            if request is not None and request.finished.set_running_or_notify_cancel():
-                request.finished.set_result(self.statistics.unconfirmed)
+    def _finish_close(self) -> None:
+        while True:
+            try:
+                _ = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            self.drop("shutdown_callback")
+        remaining: Final = self._flush(max(0.0, (self._close_deadline or time.monotonic()) - time.monotonic()))
+        stats: Final = self.statistics
+        unconfirmed: Final = (
+            remaining if remaining is not None else max(0, stats.accepted - stats.delivered - stats.delivery_failed)
+        )
+        _ = self._update(unconfirmed=unconfirmed)
+        self._producer = None
+        with self._lock:
+            request: Final = self._flush_request
+            self._flush_request = None
+        if request is not None:
+            request.finished.set_result(remaining)
+        self._shutdown_flush.set_result(remaining)
+        self._closed.set_result(None)
 
     def close(self, timeout: float | None = None) -> None:
         budget: Final = self.budget(timeout)
-        closed: Final = self.request_close(budget)
         try:
-            closed.result(timeout=budget)
+            self.request_close(budget).result(timeout=budget)
         except FutureTimeoutError:
             self._report_failure()
-            verbose_logger.warning(
-                "Kafka logging shutdown deadline reached; client cleanup continues in the background"
-            )
+            verbose_logger.warning("Kafka logging shutdown deadline reached; cleanup continues in the background")

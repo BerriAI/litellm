@@ -2,9 +2,7 @@ import asyncio
 import atexit
 import time
 from collections.abc import Mapping
-from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import datetime
 from functools import partial
 from typing import Final, TypeVar
@@ -19,11 +17,9 @@ from litellm.integrations.kafka.producer import (
     KafkaExportStats,
     KafkaSink,
     ProducerFactory,
-    interpreter_exiting,
     load_producer_factory,
     prepare_interpreter_exit,
 )
-from litellm.integrations.kafka.worker import KafkaCallbackWorker
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
     redacted_standard_logging_payload,
@@ -36,22 +32,13 @@ _T: Final = TypeVar("_T")
 
 
 async def _wait_until(future: Future[_T], deadline: float) -> bool:
-    if future.cancelled():
-        return True
     if future.done():
-        try:
-            _ = future.result()
-        except FutureCancelledError:
-            return True
+        _ = future.result()
         return True
     try:
         _ = await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(future)), max(0.0, deadline - time.monotonic()))
     except asyncio.TimeoutError:
         return False
-    except asyncio.CancelledError:
-        if future.cancelled():
-            return True
-        raise
     return True
 
 
@@ -60,8 +47,6 @@ class KafkaLogger(CustomLogger):
         self,
         params: KafkaInitParams | None = None,
         producer_factory: ProducerFactory | None = None,
-        *,
-        start_polling: bool = True,
     ) -> None:
         configured: Final = params if params is not None else litellm.kafka_params
         resolved: Final = resolve_params(configured)
@@ -70,9 +55,7 @@ class KafkaLogger(CustomLogger):
             resolved,
             producer_factory if producer_factory is not None else load_producer_factory(),
             self._callback_failed,
-            start_polling=start_polling,
         )
-        self._worker: Final = KafkaCallbackWorker(resolved.callback_queue_max_messages, self.sink.drop)
         atexit.register(self._close_on_exit)
 
     def _callback_failed(self) -> None:
@@ -105,42 +88,29 @@ class KafkaLogger(CustomLogger):
     def log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self._log(kwargs)
+        self._submit(kwargs)
 
     def log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self._log(kwargs)
+        self._submit(kwargs)
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        await self._async_log(kwargs)
+        self._submit(kwargs)
 
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        await self._async_log(kwargs)
+        self._submit(kwargs)
 
-    async def _async_log(self, kwargs: Mapping[str, object]) -> None:
-        if kwargs.get("standard_logging_object") is None:
-            return
-        if interpreter_exiting():
-            self._log(kwargs)
-            return
-        finished: Final = self._worker.submit(partial(self._log, kwargs))
-        if finished is not None:
-            try:
-                await asyncio.wait_for(asyncio.wrap_future(finished), self.sink.params.callback_timeout_ms / 1000)
-            except asyncio.TimeoutError:
-                self.sink.preparation_timed_out()
+    def _submit(self, kwargs: Mapping[str, object]) -> None:
+        if kwargs.get("standard_logging_object") is not None:
+            self.sink.submit(partial(self._log, kwargs))
 
     async def flush_queue(self) -> None:
         deadline: Final = time.monotonic() + self.sink.params.flush_timeout
-        for future in self._worker.pending():
-            if not await _wait_until(future, deadline):
-                self._shutdown_timeout()
-                return
         if not await _wait_until(self.sink.request_flush(max(0.0, deadline - time.monotonic())), deadline):
             self._shutdown_timeout()
 
@@ -150,21 +120,12 @@ class KafkaLogger(CustomLogger):
 
     async def aclose(self, timeout: float | None = None) -> None:
         deadline: Final = time.monotonic() + self.sink.budget(timeout)
-        if not await _wait_until(self._worker.stop(deadline), deadline):
-            self._shutdown_timeout()
-        self._worker.discard_pending()
         if not await _wait_until(self.sink.request_close(max(0.0, deadline - time.monotonic())), deadline):
             self._shutdown_timeout()
         atexit.unregister(self._close_on_exit)
 
     def close(self, timeout: float | None = None) -> None:
-        deadline: Final = time.monotonic() + self.sink.budget(timeout)
-        try:
-            self._worker.stop(deadline).result(timeout=max(0.0, deadline - time.monotonic()))
-        except FutureTimeoutError:
-            self._shutdown_timeout()
-        self._worker.discard_pending()
-        self.sink.close(max(0.0, deadline - time.monotonic()))
+        self.sink.close(timeout)
         atexit.unregister(self._close_on_exit)
 
     def _close_on_exit(self) -> None:
