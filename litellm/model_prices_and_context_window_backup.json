@@ -123904,5 +123904,23 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "baseten/decision-models/baseten-bison-latest": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 32768,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
+    },
+    "baseten/decision-models/baseten-groundhog-latest": {
+        "input_cost_per_token": 3.5e-08,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 16384,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
     }
 }
