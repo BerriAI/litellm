@@ -15723,6 +15723,7 @@ from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCoun
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
 from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
@@ -15779,6 +15780,8 @@ def _with_client_identity(
             return AnthropicTokenCounter(user_profile_id=user_profile_id)
         case AzureAIAnthropicTokenCounter() if user_profile_id:
             return AzureAIAnthropicTokenCounter(user_profile_id=user_profile_id)
+        case BedrockTokenCounter() if user_profile_id:
+            return BedrockTokenCounter(user_profile_id=user_profile_id)
         case VertexAITokenCounter() if user_profile_id:
             return VertexAITokenCounter(user_profile_id=user_profile_id)
         case _:
