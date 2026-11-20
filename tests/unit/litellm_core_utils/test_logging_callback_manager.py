@@ -584,3 +584,131 @@ def test_a_v2_callback_is_added_to_every_event_list_once_per_logger_key(monkeypa
         litellm._async_failure_callback,
     ):
         assert callback_list == [first, second]
+
+
+"""Unit and integration tests for WhiteBoxXAI callback in LiteLLM.
+
+These tests match the conventions in BerriAI/litellm's
+`tests/litellm_utils_tests/test_logging_callback_manager.py` (modelled on the
+`sumologic` and `rubrik` test cases introduced in PR #17630).
+"""
+
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_generic_api_compatible_callbacks_json_whiteboxxai():
+    """Test that the whiteboxxai callback from generic_api_compatible_callbacks.json
+
+    is properly loaded and initialized by _add_custom_callback_generic_api_str
+    with endpoint, headers, and event_types configured.
+    """
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+    from litellm.litellm_core_utils.logging_callback_manager import (
+        LoggingCallbackManager,
+    )
+
+    test_url = "https://api.whiteboxxai.com/api/v1/llm/gateways/litellm/ingest"
+    test_api_key = "wbx_lgw_test_secret_credential_12345"
+
+    with patch.dict(
+        os.environ,
+        {
+            "WHITEBOXXAI_INGEST_URL": test_url,
+            "WHITEBOXXAI_API_KEY": test_api_key,
+        },
+    ):
+        result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+            "whiteboxxai"
+        )
+
+        assert isinstance(
+            result, GenericAPILogger
+        ), "Should return GenericAPILogger instance for whiteboxxai callback"
+
+        # Verify endpoint interpolated correctly
+        assert (
+            result.endpoint == test_url
+        ), f"Endpoint should match WHITEBOXXAI_INGEST_URL ({test_url})"
+
+        # Verify headers include Content-Type and Bearer Authorization
+        assert "Content-Type" in result.headers, "Should have Content-Type header"
+        assert result.headers["Content-Type"] == "application/json"
+        assert "Authorization" in result.headers, "Should have Authorization header"
+        assert (
+            result.headers["Authorization"] == f"Bearer {test_api_key}"
+        ), "Authorization header should use Bearer token from WHITEBOXXAI_API_KEY"
+
+        # Verify both success and failure event types are tracked
+        assert result.event_types == [
+            "llm_api_success",
+            "llm_api_failure",
+        ], "WhiteBoxXAI must log both successful and failing calls for audit completeness"
+
+
+@pytest.mark.asyncio
+async def test_whiteboxxai_callback_end_to_end_mock():
+    """Test end-to-end batch flush behavior for whiteboxxai GenericAPILogger,
+
+    asserting that a standard logging payload batch is posted as a JSON array
+    with the expected Bearer authorization header.
+    """
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+
+    test_url = "https://api.whiteboxxai.com/api/v1/llm/gateways/litellm/ingest"
+    test_api_key = "wbx_lgw_test_mock_token_abc"
+
+    with patch.dict(
+        os.environ,
+        {
+            "WHITEBOXXAI_INGEST_URL": test_url,
+            "WHITEBOXXAI_API_KEY": test_api_key,
+        },
+    ):
+        logger = GenericAPILogger(callback_name="whiteboxxai")
+
+        # Mock the underlying HTTP client post method
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        mock_http_client = MagicMock()
+        mock_http_client.post = AsyncMock(return_value=mock_response)
+        logger.async_httpx_client = mock_http_client
+
+        # Sample standard logging payload record
+        sample_event = {
+            "id": "chatcmpl-test-123",
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Audit this transaction"}],
+            "response": {
+                "choices": [{"message": {"role": "assistant", "content": "Approved"}}]
+            },
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            "response_cost": 0.00015,
+        }
+
+        # Send batch
+        logger.log_queue.append(sample_event)
+        await logger.async_send_batch()
+
+        # Assert post call was made to the correct endpoint
+        assert mock_http_client.post.called, "HTTP post should have been called"
+        _, call_kwargs = mock_http_client.post.call_args
+        assert (
+            call_kwargs["url"] == test_url
+        ), f"Expected POST to {test_url}, got {call_kwargs['url']}"
+
+        # Assert headers
+        headers = call_kwargs.get("headers", {})
+        assert headers.get("Authorization") == f"Bearer {test_api_key}"
+        assert headers.get("Content-Type") == "application/json"
+
+        # Assert data was serialized
+        import json
+
+        body = json.loads(call_kwargs["data"])
+        assert isinstance(body, list) and len(body) == 1
+        assert body[0]["id"] == "chatcmpl-test-123"
