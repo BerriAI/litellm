@@ -634,7 +634,7 @@ def _aws_signing_overrides(
     return MappingProxyType(
         {
             key: litellm_params[key]
-            for key in AWS_CREDENTIAL_KWARGS_KEYS
+            for key in (*AWS_CREDENTIAL_KWARGS_KEYS, "metadata", "litellm_metadata")
             if optional_params.get(key) is None and litellm_params.get(key) is not None
         }
     )
