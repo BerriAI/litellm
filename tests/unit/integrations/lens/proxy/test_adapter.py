@@ -428,3 +428,16 @@ def test_lens_login_refuses_a_session_whose_key_may_not_call_it() -> None:
 def test_lens_login_lets_an_unrestricted_session_and_a_missing_session_through() -> None:
     assert password_change_redirect(UserAPIKeyAuth(user_id="user-1"), "/lens/login", "http://gateway.test") is None
     assert password_change_redirect(None, "/lens/login", "http://gateway.test") is None
+
+
+def test_lens_login_honours_admin_only_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"admin_only_routes": ["/lens/login"]})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    member: Final = UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
+    admin: Final = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as error:
+        password_change_redirect(member, "/lens/login", "http://gateway.test")
+    assert error.value.status_code == 403
+    assert password_change_redirect(admin, "/lens/login", "http://gateway.test") is None

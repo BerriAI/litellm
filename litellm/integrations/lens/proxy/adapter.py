@@ -35,6 +35,7 @@ _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "re
 _REQUEST_AUDIENCE: Final = "litellm-lens"
 _LOGIN_AUDIENCE: Final = "litellm-lens-login"
 _LOGIN_TOKEN_SECONDS: Final = 60
+_PASSWORD_CHANGE_ROUTE: Final = "/user/password/change"
 _LOGIN_UNAVAILABLE: Final = (
     "Configure LITELLM_LENS_URL, LENS_GATEWAY_SECRET and LITELLM_LENS_PUBLIC_URL to sign in to Lens"
 )
@@ -192,9 +193,13 @@ def login_redirect(
 
 
 def password_change_redirect(auth: UserAPIKeyAuth | None, route: str, base_url: str) -> Response | None:
-    if auth is None or RouteChecks.key_allowed_routes_grant(route=route, valid_token=auth):
+    if auth is None:
         return None
-    if auth.metadata.get("password_reset_required") is True:
+    if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
+        RouteChecks.custom_admin_only_route_check(route=route)
+    if RouteChecks.key_allowed_routes_grant(route=route, valid_token=auth):
+        return None
+    if RouteChecks.key_allowed_routes_grant(route=_PASSWORD_CHANGE_ROUTE, valid_token=auth):
         return RedirectResponse(f"{base_url}/ui/change-password", status_code=303)
     raise HTTPException(403, "This session is not allowed to sign in to Lens")
 
