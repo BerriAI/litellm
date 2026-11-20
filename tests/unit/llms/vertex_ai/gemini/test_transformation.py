@@ -478,7 +478,7 @@ async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video
     video_url: Final = f"https://videos.example/{uuid.uuid4()}.mp4"
     captured = {}
 
-    def handle(request):
+    def handle(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content)
         return httpx.Response(
             200,
@@ -551,7 +551,7 @@ async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video
         ),
         pytest.param(
             {"type": "video_url", "video_url": {"url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}},
-            {"file_data": {"file_uri": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}},
+            {"file_data": {"mime_type": "video/mp4", "file_uri": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}},
             id="youtube-link",
         ),
     ],
@@ -601,8 +601,8 @@ async def test_async_transform_lets_gemini_fetch_youtube_links_itself(
 
     assert body["contents"][0]["parts"] == [
         {"text": "Describe these"},
-        {"file_data": {"file_uri": watch_link}},
-        {"file_data": {"file_uri": short_link}},
+        {"file_data": {"mime_type": "video/mp4", "file_uri": watch_link}},
+        {"file_data": {"mime_type": "video/mp4", "file_uri": short_link}},
     ]
     assert async_only_image_fetch.fetched == []
 
@@ -612,7 +612,7 @@ def test_gemini_ai_studio_sync_completion_lets_gemini_fetch_youtube_links_itself
     short_link: Final = "https://youtu.be/aqz-KE-bpKQ"
     captured = {}
 
-    def handle(request):
+    def handle(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content)
         return httpx.Response(
             200,
@@ -643,8 +643,8 @@ def test_gemini_ai_studio_sync_completion_lets_gemini_fetch_youtube_links_itself
 
     assert captured["body"]["contents"][0]["parts"] == [
         {"text": "Describe these"},
-        {"file_data": {"file_uri": watch_link}},
-        {"file_data": {"file_uri": short_link}},
+        {"file_data": {"mime_type": "video/mp4", "file_uri": watch_link}},
+        {"file_data": {"mime_type": "video/mp4", "file_uri": short_link}},
     ]
 
 
@@ -660,6 +660,21 @@ def test_gemini_completion_rejects_a_video_url_part_without_a_url_instead_of_dro
                 }
             ],
         )
+
+
+def test_drop_params_drops_a_video_url_part_without_a_url() -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Describe the clip"}, {"type": "video_url", "video_url": {}}],
+            }
+        ],
+        model="gemini-3.8-flash",
+        litellm_params={"drop_params": True},
+    )
+
+    assert contents[0]["parts"] == [{"text": "Describe the clip"}]
 
 
 def test_image_only_user_content_logs_the_blank_text_fixup_at_debug(caplog: pytest.LogCaptureFixture) -> None:

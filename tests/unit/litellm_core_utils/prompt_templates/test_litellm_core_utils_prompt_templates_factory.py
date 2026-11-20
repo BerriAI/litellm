@@ -2758,7 +2758,7 @@ _YOUTUBE_TOOL_RESULT: Final = {
     "name": "find_clip",
     "content": [
         {"type": "text", "text": '{"ok":true}'},
-        {"type": "video_url", "video_url": {"url": _YOUTUBE_LINK, "format": "video/mp4"}},
+        {"type": "video_url", "video_url": {"url": _YOUTUBE_LINK}},
     ],
 }
 

@@ -63,6 +63,10 @@ def gemini_fetches_url_itself(url: str) -> bool:
     return url.startswith(GEMINI_FILES_API_URI_PREFIX) or _YOUTUBE_VIDEO_URL.match(url) is not None
 
 
+def youtube_video_mime_type(url: str) -> str | None:
+    return "video/mp4" if _YOUTUBE_VIDEO_URL.match(url) else None
+
+
 # https://cloud.google.com/vertex-ai/generative-ai/docs/image/configure-aspect-ratio
 _IMAGEN_ASPECT_RATIOS: Final = MappingProxyType(
     {"1:1": 1.0, "3:4": 3 / 4, "4:3": 4 / 3, "9:16": 9 / 16, "16:9": 16 / 9}

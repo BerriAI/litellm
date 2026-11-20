@@ -69,6 +69,7 @@ from ..common_utils import (
     get_supports_system_message,
     with_forced_bare_root_unions_on_parameters,
     with_integer_enums_that_fit,
+    youtube_video_mime_type,
 )
 from .long_decode import with_default_output_budget
 
@@ -569,8 +570,10 @@ def process_gemini_media(
         elif gemini_fetches_url_itself(image_url):
             # Gemini fetches Files API URIs and YouTube links itself. Fetching them here
             # gets a 403 (Files API) or a YouTube HTML page, so pass the URI through.
-            if format:
-                file_data = FileDataType(mime_type=format, file_uri=image_url)
+            # Vertex rejects a fileData without mimeType, so YouTube links default to video/mp4.
+            uri_mime_type: Final = format or youtube_video_mime_type(image_url)
+            if uri_mime_type:
+                file_data = FileDataType(mime_type=uri_mime_type, file_uri=image_url)
             else:
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
@@ -727,6 +730,7 @@ def _gemini_history_media_part(
     *,
     message_index: int | None = None,
     content_index: int | None = None,
+    drop_params: bool = False,
 ) -> PartType | None:
     source: Final = gemini_media_source(content, prefer_file_id=message_index is not None)
     if source is None:
@@ -746,7 +750,7 @@ def _gemini_history_media_part(
                     llm_provider="vertex_ai",
                 )
             raise ValueError(f"Invalid image received - {raw_url}")
-        if message_index is not None and content.get("type") == "video_url":
+        if message_index is not None and content.get("type") == "video_url" and not drop_params:
             raise litellm.BadRequestError(
                 message="Invalid message content: element type is 'video_url' but it has no 'url'",
                 model=model,
@@ -837,6 +841,7 @@ def gemini_convert_messages_with_history(
                                 vertex_credentials,
                                 message_index=msg_i,
                                 content_index=element_idx,
+                                drop_params=drop_params,
                             )
                         ) is not None:
                             _parts.append(media_part)
