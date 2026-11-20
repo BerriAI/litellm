@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
 use crate::anthropic::common_utils::supports_effort_param;
+use crate::anthropic::messages::transformation::is_claude_model;
 use crate::base_llm::messages::context::{
     BedrockCapabilities, MessagesModelCapabilities, NativeOutputSupport, SupportedEffortTiers,
 };
@@ -28,6 +29,7 @@ const BEDROCK_NATIVE_OUTPUT: &str = "supports_bedrock_native_structured_output";
 const NATIVE_OUTPUT_BY_DEFAULT: &str = "supports_bedrock_native_structured_output_by_default";
 const OUTPUT_CONFIG: &str = "supports_output_config";
 const PER_TURN_CONTROL: &str = "supports_per_turn_control";
+const SAFEGUARDS: &str = "supports_safeguards";
 const PROMPT_CACHE_TTL_PRICE: &str = "cache_creation_input_token_cost_above_1hr";
 const BACKSTOP_PREFIXES: [&str; 4] = [
     "bedrock/converse/",
@@ -207,6 +209,8 @@ pub fn bedrock_model_capabilities(
         supports_tool_search: probe.supports("supports_tool_search"),
         supports_per_turn_control: declared(PER_TURN_CONTROL)
             .unwrap_or_else(|| probe.supports(PER_TURN_CONTROL)),
+        supports_safeguards: declared(SAFEGUARDS)
+            .unwrap_or_else(|| !is_claude_model(model) || probe.supports(SAFEGUARDS)),
         native_output: NativeOutputSupport {
             enabled: declared(NATIVE_OUTPUT)
                 .unwrap_or_else(|| declared(BEDROCK_NATIVE_OUTPUT) != Some(false) && mapped),
@@ -814,6 +818,49 @@ mod tests {
 
         assert_eq!(
             projected(bedrock_model_capabilities(&bundled, model, &lookup)),
+            expected
+        );
+    }
+
+    const SONNET_4_5: &str = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    const OPUS_4_1: &str = "bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0";
+
+    #[rstest]
+    #[case::sonnet_4_5(SONNET_4_5, None, true)]
+    #[case::opus_4_1(OPUS_4_1, None, false)]
+    #[case::sonnet_4("bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0", None, false)]
+    #[case::claude_3_5("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", None, false)]
+    #[case::unmapped_newer_claude("bedrock/us.anthropic.claude-opus-9-v1:0", None, true)]
+    #[case::other_family("bedrock/amazon.nova-pro-v1:0", None, true)]
+    #[case::application_profile(APPLICATION, None, true)]
+    #[case::deployment_opts_in(OPUS_4_1, Some(true), true)]
+    #[case::deployment_opts_out(SONNET_4_5, Some(false), false)]
+    fn bedrock_safeguards_follow_the_deployment_then_the_catalog_as_python_does(
+        bundled: Catalog,
+        #[case] model: &str,
+        #[case] declared: Option<bool>,
+        #[case] expected: bool,
+    ) {
+        let lookup = |capability: &str| declared.filter(|_| capability == "supports_safeguards");
+
+        assert_eq!(
+            bedrock_model_capabilities(&bundled, model, &lookup).supports_safeguards,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-sonnet-5", true)]
+    #[case::amazon_mantle("bedrock/mantle/anthropic.claude-mythos-preview", false)]
+    fn mantle_routes_read_safeguards_off_the_bedrock_row_as_python_does(
+        bundled: Catalog,
+        #[case] model: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            messages_route_capabilities(&bundled, model, None, None, &|_| None)
+                .bedrock
+                .supports_safeguards,
             expected
         );
     }

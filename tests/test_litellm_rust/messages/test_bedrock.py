@@ -885,6 +885,41 @@ async def test_bedrock_mantle_sends_the_request_python_sends(
     assert _public(rust_response) == MESSAGES_RESPONSE
 
 
+_OPUS_4_1: Final = "bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers")
+@pytest.mark.parametrize(
+    ("global_drop_params", "request_params"),
+    (
+        pytest.param(False, {"model": _OPUS_4_1, "drop_params": True}, id="deployment-drop-params"),
+        pytest.param(True, {"model": _OPUS_4_1}, id="global-drop-params"),
+        pytest.param(
+            False, {"drop_params": True, "model_info": {"supports_safeguards": False}}, id="deployment-opts-out"
+        ),
+    ),
+)
+async def test_bedrock_invoke_drops_safeguards_the_model_rejects_under_drop_params(
+    server: RecordingServer, global_drop_params: bool, request_params: Mapping[str, object]
+) -> None:
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+
+    with rebound(litellm, "drop_params", global_drop_params):
+        await _rust(
+            server,
+            safeguards=_SAFEGUARDS,
+            extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03,context-1m-2025-08-07"},
+            **request_params,
+        )
+
+    [rust_sent] = server.requests
+    body: Final = _OBJECT.validate_python(rust_sent.body)
+    assert "safeguards" not in body
+    assert body["anthropic_beta"] == ["context-1m-2025-08-07"]
+    assert_served_natively(server)
+
+
 @pytest.mark.asyncio
 async def test_bedrock_mantle_sends_a_proxy_clients_betas_filtered_as_python_does(
     server: RecordingServer, local_beta_headers: None
