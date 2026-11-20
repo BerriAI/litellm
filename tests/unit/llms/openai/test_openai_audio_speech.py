@@ -400,6 +400,7 @@ def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object]) -> in
             id="opus whose last packet holds the bytes that start a page",
         ),
         pytest.param(_PCM[:50352], {"response_format": "pcm", "speed": 4.0}, 83, id="rounds once after speed"),
+        pytest.param(_PCM[:48000], {"response_format": "pcm", "speed": 0.3}, 6, id="a decimal speed is exact"),
         pytest.param(_MP3, {"response_format": "mp3"}, _BILLED_TOKENS - 1, id="mp3 drops the encoder delay"),
         pytest.param(_MP3, {}, _BILLED_TOKENS - 1, id="mp3 is the default format"),
         pytest.param(_PCM, {"response_format": "pcm", "speed": 2.0}, _BILLED_TOKENS * 2, id="sped up audio"),

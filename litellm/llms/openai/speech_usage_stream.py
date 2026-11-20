@@ -115,7 +115,7 @@ def _opus_seconds(head: bytes, tail: bytes) -> Fraction | None:
 def _accepted_speed(speed: object) -> Fraction | None:
     if isinstance(speed, bool) or not isinstance(speed, (int, float)):
         return None
-    return Fraction(speed) if _MIN_SPEED <= speed <= _MAX_SPEED else None
+    return Fraction(str(speed)) if _MIN_SPEED <= speed <= _MAX_SPEED else None
 
 
 class BilledAudioClock:
