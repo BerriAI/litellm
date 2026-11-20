@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 import httpx
 import pytest
@@ -82,7 +83,6 @@ def test_azure_ai_embedding_calls_foundry_models_route():
     assert [item["embedding"] for item in response.data] == [[0.1, 0.2]]
 
 
-
 @pytest.mark.parametrize(
     "api_base",
     [
@@ -93,13 +93,13 @@ def test_azure_ai_embedding_calls_foundry_models_route():
     ],
 )
 @respx.mock
-def test_azure_ai_embedding_on_azure_openai_resource_calls_v1_route(api_base):
-    host = httpx.URL(api_base).host
-    route = respx.post(f"https://{host}/openai/v1/embeddings").mock(
+def test_azure_ai_embedding_on_azure_openai_resource_calls_v1_route(api_base: str) -> None:
+    host: Final = httpx.URL(api_base).host
+    route: Final = respx.post(f"https://{host}/openai/v1/embeddings").mock(
         return_value=httpx.Response(200, json=EMBEDDING_PAYLOAD)
     )
 
-    response = embedding(
+    response: Final = embedding(
         model="azure_ai/embedding-deployment",
         input=["hello world"],
         api_base=api_base,

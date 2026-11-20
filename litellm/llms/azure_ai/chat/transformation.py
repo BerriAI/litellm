@@ -4,6 +4,7 @@ import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast
+from urllib.parse import quote
 
 import httpx
 from httpx import Response
@@ -11,7 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -46,6 +47,10 @@ from litellm.utils import add_path_to_api_base, durable_model_cost_registration,
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+def _is_plain_path_segment(segment: str) -> bool:
+    return quote(segment, safe="") == segment and segment.strip(".") != ""
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -352,10 +357,21 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         requested_api_version: Final = query_params.get("api-version")
         if is_openai_v1_resource_base(original_url):
+            deployment: Final = AzureFoundryModelInfo.get_base_model(model)
+            dated_version: Final = requested_api_version is not None and not BaseAzureLLM.is_azure_v1_api_version(
+                requested_api_version
+            )
+            if dated_version and not _is_plain_path_segment(deployment):
+                raise BadRequestError(
+                    message=f"azure_ai deployment name {deployment!r} must be one URL path segment made of letters, "
+                    "digits, '-', '_', '.', or '~'",
+                    model=model,
+                    llm_provider="azure_ai",
+                )
             resource_path: Final = (
-                (*OPENAI_V1_PATH, *CHAT_COMPLETIONS_PATH)
-                if requested_api_version is None or BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
-                else ("openai", "deployments", AzureFoundryModelInfo.get_base_model(model), *CHAT_COMPLETIONS_PATH)
+                ("openai", "deployments", deployment, *CHAT_COMPLETIONS_PATH)
+                if dated_version
+                else (*OPENAI_V1_PATH, *CHAT_COMPLETIONS_PATH)
             )
             return str(original_url.copy_with(path="/" + "/".join(resource_path), params=query_params))
 
