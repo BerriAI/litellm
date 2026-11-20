@@ -85,6 +85,7 @@ class CustomLoggerV2:
     subscriptions: ClassVar[Mapping[Hook, Subscription]] = MappingProxyType({})
     request_state: ClassVar[type | None] = None
     declared_hooks: ClassVar[frozenset[Hook]] = frozenset()
+    inspects_request_content: ClassVar[bool] = True
 
     selection: Selection | None = None
     enabled_hooks: frozenset[Hook] | None = None
