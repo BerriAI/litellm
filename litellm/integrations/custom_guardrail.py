@@ -401,6 +401,8 @@ class CustomGuardrail(CustomLogger):
     records_own_guardrail_information: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
+    scan_tool_descriptions_as_text: bool | None = None
+    scan_tool_calls_as_text: bool | None = None
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
@@ -1339,6 +1341,12 @@ class CustomGuardrail(CustomLogger):
             response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
 
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return False
+
+    def supports_scan_tool_calls_as_text(self) -> bool:
+        return False
+
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.
 
@@ -1347,6 +1355,12 @@ class CustomGuardrail(CustomLogger):
         ``scan_only_tool_results`` is rejected at initialization instead of
         silently scanning nothing on every request.
         """
+        return True
+
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return False
+
+    def scans_each_text_separately(self) -> bool:
         return True
 
     def structured_messages_cover_full_request(self) -> bool:
@@ -1989,7 +2003,13 @@ def log_guardrail_information(func):
     async def async_wrapper(*args, **kwargs):
         start_time: Final = datetime.now()  # Move start_time inside the wrapper
         self: Final[CustomGuardrail] = args[0]
-        request_data: Final[dict] = kwargs.get("data") or kwargs.get("request_data") or {}
+        request_data: Final[dict] = (
+            kwargs["data"]
+            if kwargs.get("data") is not None
+            else kwargs["request_data"]
+            if kwargs.get("request_data") is not None
+            else {}
+        )
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)
@@ -2029,7 +2049,13 @@ def log_guardrail_information(func):
     def sync_wrapper(*args, **kwargs):
         start_time: Final = datetime.now()  # Move start_time inside the wrapper
         self: Final[CustomGuardrail] = args[0]
-        request_data: Final[dict] = kwargs.get("data") or kwargs.get("request_data") or {}
+        request_data: Final[dict] = (
+            kwargs["data"]
+            if kwargs.get("data") is not None
+            else kwargs["request_data"]
+            if kwargs.get("request_data") is not None
+            else {}
+        )
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)

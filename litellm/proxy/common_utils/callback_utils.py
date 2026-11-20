@@ -14,11 +14,13 @@ from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
+    CALLBACK_CONFIG_METADATA_SLOTS,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -34,6 +36,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -54,7 +57,7 @@ _CALLBACK_VAR_ENCRYPTED_PREFIX: Final = CALLBACK_VAR_ENCRYPTED_PREFIX
 # Metadata slots that hold operator-configured callback and secret-manager setup
 # (and therefore integration credentials). Resolved from UserAPIKeyAuth during
 # pre-call setup, never read back off the copies stamped into request metadata.
-_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings", "secret_manager_settings"})
+_CALLBACK_CONFIG_SLOTS: Final = CALLBACK_CONFIG_METADATA_SLOTS
 
 blue_color_code: Final = "\033[94m"
 reset_color_code: Final = "\033[0m"
@@ -564,6 +567,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         "_pipeline_managed_guardrails",
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
         CONSUMED_REQUEST_TAGS_METADATA_KEY,
         BAGGAGE_MAPPED_TAGS_METADATA_KEY,
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
@@ -712,7 +716,7 @@ def add_guardrail_response_to_standard_logging_object(
     return standard_logging_object
 
 
-def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict:
+def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict[str, object]:
     """Process a single callback and return its data with environment variables"""
     env_vars: Final = CustomLogger.get_callback_env_vars(_callback)
 
@@ -843,6 +847,8 @@ def _encrypt_if_plaintext(key: str, value: object) -> object:
         # No salt key / master key configured — leave the value as-is rather
         # than crash the write. Dev environments without LITELLM_SALT_KEY hit
         # this path; production always has a master key so encryption proceeds.
+        if fips_mode_active():
+            raise
         return value
 
 

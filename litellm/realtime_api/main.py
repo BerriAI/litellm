@@ -142,8 +142,18 @@ def _build_litellm_metadata(kwargs: Mapping[str, object]) -> dict[str, object]:
     policy_pipeline_state: Final = {
         key: request_metadata[key] for key in _POLICY_PIPELINE_METADATA_KEYS if key in request_metadata
     }
+    caller_identity: Final = {
+        key: value
+        for key, value in request_metadata.items()
+        if key.startswith("user_api_key_") and isinstance(value, str)
+    }
     guardrails: Final = request_metadata.get("guardrails") or kwargs.get("guardrails")
-    return {**policy_pipeline_state, **internal_metadata, **({"guardrails": guardrails} if guardrails else {})}
+    return {
+        **caller_identity,
+        **policy_pipeline_state,
+        **internal_metadata,
+        **({"guardrails": guardrails} if guardrails else {}),
+    }
 
 
 _GUARDRAIL_OPT_OUT_METADATA_KEYS: Final = ("user_api_key_metadata", "user_api_key_team_metadata")

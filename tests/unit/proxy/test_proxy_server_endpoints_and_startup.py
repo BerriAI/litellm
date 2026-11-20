@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
 import dataclasses
+import gc
 import importlib
+import itertools
 import json
 import logging
 import os
@@ -9,6 +11,7 @@ import re
 import sys
 import time
 import types
+import weakref
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,6 +24,10 @@ import fastapi.routing
 import httpx
 import pytest
 import yaml
+import redis
+import redis.asyncio
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
@@ -33,6 +40,7 @@ from litellm._logging import turn_on_json, verbose_proxy_logger
 from litellm.caching.caching import RedisCache
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     ModelCostMapReloaded,
@@ -62,6 +70,7 @@ from litellm.rust_bridge._native import NativeRedisStoreError
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
 
@@ -1702,6 +1711,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
 
     # Mock the Prisma import
     monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", MockPrisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
 
     # Create test app
     app = FastAPI()
@@ -1840,6 +1850,68 @@ async def test_proxy_startup_refuses_a_fips_mode_reference_to_an_unset_variable(
             pass
 
 
+_HEX_KEY: Final = "sk-" + bytes(range(32)).hex()
+
+
+def _boot_in_fips_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]
+) -> None:
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": master_key, "fips_mode": True})
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_enforces_fips", lambda: True)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.cryptography_enforces_fips", lambda: True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "master_key, environment, refusal",
+    [
+        (_HEX_KEY, {"LITELLM_SALT_KEY": "thirteen-byte"}, r"but LITELLM_SALT_KEY is too short"),
+        ("sk-a-safe-master-key", {}, r"but LITELLM_SALT_KEY is not set"),
+        (_HEX_KEY, {}, r"but LITELLM_SALT_KEY is not set"),
+    ],
+    ids=["13-byte-salt-key-and-hex-master-key", "20-byte-master-key-and-no-salt-key", "hex-master-key-and-no-salt-key"],
+)
+async def test_proxy_startup_refuses_fips_mode_without_a_salt_key_of_at_least_112_bits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str], refusal: str
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError, fips_mode_active
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_in_fips_mode(monkeypatch, tmp_path, master_key, environment)
+
+    with pytest.raises(FipsModeError, match=refusal):
+        async with proxy_startup_event(FastAPI()):
+            pass
+    assert fips_mode_active() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "master_key, environment",
+    [
+        ("sk-short-key!", {"LITELLM_SALT_KEY": _HEX_KEY}),
+        ("sk-a-safe-master-key", {"LITELLM_SALT_KEY": "fourteen-bytes"}),
+    ],
+    ids=["hex-salt-key-and-13-byte-master-key", "14-byte-salt-key-and-20-byte-master-key"],
+)
+async def test_proxy_startup_starts_fips_mode_with_a_salt_key_of_at_least_112_bits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]
+) -> None:
+    from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_active
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_in_fips_mode(monkeypatch, tmp_path, master_key, environment)
+
+    try:
+        async with proxy_startup_event(FastAPI()):
+            started_in_fips_mode: Final = fips_mode_active()
+    finally:
+        enforce_fips_mode({})
+    assert started_in_fips_mode is True
+
+
 class _DatabaseWithOneStoredCredential:
     def __init__(self, ciphertext):
         self._ciphertext = ciphertext
@@ -1932,6 +2004,7 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     prisma: Final = _PrismaClientWhoseDatabaseRejectsQueries()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
 
     with (
@@ -1955,12 +2028,14 @@ async def test_proxy_startup_after_a_failed_migration_does_not_reuse_the_closed_
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
     with pytest.raises(RuntimeError, match="permission denied"):
         async with proxy_startup_event(FastAPI()):
             pass
 
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "")
+    monkeypatch.delenv("DATABASE_URL")
     async with proxy_startup_event(FastAPI()) as state:
         assert state["database"] is None
 
@@ -2023,6 +2098,7 @@ async def test_proxy_shutdown_stops_database_background_tasks(monkeypatch, tmp_p
         yaml.dump({"general_settings": {"master_key": MASTER_KEY}}, f)
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", False)
 
     async with proxy_startup_event(FastAPI()):
@@ -3676,58 +3752,6 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_load_config_role_permissions_usable_by_jwt_auth(tmp_path):
-    from litellm.proxy.auth.auth_checks import get_role_based_models, get_role_based_routes
-    from litellm.proxy.proxy_server import ProxyConfig
-
-    config_file: Final = tmp_path / "config.yaml"
-    config_file.write_text(
-        yaml.dump(
-            {
-                "model_list": [],
-                "general_settings": {
-                    "role_permissions": [
-                        {
-                            "role": "proxy_admin",
-                            "models": ["admin-only-model"],
-                            "routes": ["/v1/embeddings"],
-                        },
-                        {
-                            "role": "internal_user",
-                            "models": ["shared-model"],
-                            "routes": ["/v1/chat/completions"],
-                        },
-                    ]
-                },
-            }
-        )
-    )
-
-    _, _, settings = await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
-
-    assert get_role_based_models(rbac_role="internal_user", general_settings=settings) == ["shared-model"]
-    assert get_role_based_routes(rbac_role="internal_user", general_settings=settings) == ["/v1/chat/completions"]
-    assert get_role_based_models(rbac_role="proxy_admin", general_settings=settings) == ["admin-only-model"]
-    assert get_role_based_routes(rbac_role="proxy_admin", general_settings=settings) == ["/v1/embeddings"]
-    assert get_role_based_models(rbac_role="team", general_settings=settings) is None
-
-
-@pytest.mark.asyncio
-async def test_load_config_without_role_permissions_leaves_every_role_unrestricted(tmp_path):
-    from litellm.proxy.auth.auth_checks import get_role_based_models, get_role_based_routes
-    from litellm.proxy.proxy_server import ProxyConfig
-
-    config_file: Final = tmp_path / "config.yaml"
-    config_file.write_text(yaml.dump({"model_list": [], "general_settings": {"max_parallel_requests": 7}}))
-
-    _, _, settings = await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
-
-    assert settings["max_parallel_requests"] == 7
-    assert get_role_based_models(rbac_role="internal_user", general_settings=settings) is None
-    assert get_role_based_routes(rbac_role="internal_user", general_settings=settings) is None
-
-
-@pytest.mark.asyncio
 async def test_load_config_rejects_malformed_role_permissions(tmp_path):
     from pydantic import ValidationError
 
@@ -4662,11 +4686,7 @@ class TestPriceDataReloadAPI:
         try:
             with patch(
                 "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-                new=AsyncMock(
-                    return_value=ModelCostMapReloaded(
-                        model_count=1
-                    )
-                ),
+                new=AsyncMock(return_value=ModelCostMapReloaded(model_count=1)),
             ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
@@ -4998,9 +5018,7 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_count=1
-                )
+                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5080,9 +5098,7 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_count=1
-                )
+                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5123,9 +5139,7 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_count=1
-                )
+                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
 
                 for _ in range(3):
                     for pod in pods:
@@ -5166,9 +5180,7 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_count=1
-                )
+                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
@@ -5201,9 +5213,7 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_count=1
-                )
+                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5242,9 +5252,7 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_count=1
-                )
+                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5391,9 +5399,7 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_count=1
-                )
+                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
                 mock_prisma.db.litellm_config.upsert = AsyncMock(
                     return_value=_reload_schedule_row({}, reload_revision=9)
                 )
@@ -8568,6 +8574,51 @@ async def test_update_general_settings_user_api_key_cache_max_size_resizes_the_r
     assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
 
 
+_CACHES_SPLIT_FROM_THE_AUTH_CACHE: Final = (
+    "hook_cache",
+    "mcp_state_cache",
+    "jwks_cache",
+    "ui_settings_cache",
+    "sso_flow_cache",
+    "budget_windows_absent_cache",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", _CACHES_SPLIT_FROM_THE_AUTH_CACHE)
+async def test_a_cache_split_from_the_auth_cache_still_follows_user_api_key_cache_max_size(name, monkeypatch):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = DualCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server_module, name, cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 300})
+
+    for index in range(250):
+        cache.set_cache(key=f"entry-{index}", value=index, local_only=True)
+    assert cache.get_cache(key="entry-0", local_only=True) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", _CACHES_SPLIT_FROM_THE_AUTH_CACHE)
+async def test_a_cache_split_from_the_auth_cache_still_follows_user_api_key_cache_ttl(name, monkeypatch, tmp_path):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\ngeneral_settings:\n  user_api_key_cache_ttl: 7\n")
+    cache = DualCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server_module, name, cache)
+
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    assert (cache.default_in_memory_ttl, cache.default_redis_ttl) == (7.0, 7.0)
+
+
 @pytest.mark.asyncio
 async def test_update_general_settings_clearing_user_api_key_cache_max_size_restores_the_default(monkeypatch):
     """Blanking the field in the dashboard deletes the key, so the cache must fall
@@ -9431,25 +9482,25 @@ async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_finalizes_after_unreserved_increments(monkeypatch):
+async def test_increment_spend_counters_finalizes_after_unreserved_increments(monkeypatch, native_budgets_on):
     import litellm.proxy.proxy_server as ps
     from litellm.caching.dual_cache import DualCache
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
-    counter_cache.set_local("spend:key:key-finalize-after-increments", 0.5)
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
+    counter_cache.set_local("spend:key:key-finalize-after-increments", 0.0)
+    budget_reservation = await native_reservation(
+        counter_cache,
+        UserAPIKeyAuth(token="key-finalize-after-increments"),
+        [
             {
                 "counter_key": "spend:key:key-finalize-after-increments",
                 "entity_type": "Key",
                 "entity_id": "key-finalize-after-increments",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
             }
         ],
-        "finalized": False,
-    }
+        0.5,
+    )
+    assert counter_cache.get_local("spend:key:key-finalize-after-increments") == pytest.approx(0.5)
     incremented_counters = []
 
     async def assert_reservation_not_finalized_yet(**kwargs):
@@ -9477,24 +9528,24 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments(mo
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_finalizes_none_cost_reservation(monkeypatch):
+async def test_increment_spend_counters_finalizes_none_cost_reservation(monkeypatch, native_budgets_on):
     import litellm.proxy.proxy_server as ps
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
-    counter_cache.set_local("spend:key:key-finalize-none-cost", 0.5)
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
+    counter_cache.set_local("spend:key:key-finalize-none-cost", 0.0)
+    budget_reservation = await native_reservation(
+        counter_cache,
+        UserAPIKeyAuth(token="key-finalize-none-cost"),
+        [
             {
                 "counter_key": "spend:key:key-finalize-none-cost",
                 "entity_type": "Key",
                 "entity_id": "key-finalize-none-cost",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
             }
         ],
-        "finalized": False,
-    }
+        0.5,
+    )
+    assert counter_cache.get_local("spend:key:key-finalize-none-cost") == pytest.approx(0.5)
     monkeypatch.setattr(ps, "spend_counter_store", counter_cache)
 
     await ps.increment_spend_counters(
@@ -9510,7 +9561,7 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter():
+async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(native_budgets_on):
     """When the reservation reconcile finds the counter in an inconsistent state
     (here: missing), it must NOT delete the counter and fail open (the old
     behavior, which left the counter unenforced after a Redis reload). It reseeds
@@ -9520,19 +9571,19 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     from litellm.proxy.proxy_server import increment_spend_counters
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
+    budget_reservation = await native_reservation(
+        counter_cache,
+        UserAPIKeyAuth(token="key-bad-reserved-counter"),
+        [
             {
                 "counter_key": "spend:key:key-bad-reserved-counter",
                 "entity_type": "Key",
                 "entity_id": "key-bad-reserved-counter",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
             }
         ],
-        "finalized": False,
-    }
+        0.5,
+    )
+    counter_cache.delete_local("spend:key:key-bad-reserved-counter")
 
     import litellm.proxy.proxy_server as ps
 
@@ -11121,50 +11172,45 @@ async def _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
     backend_logged_success: bool,
     backend_logged_failure: bool = False,
     phase_one_exit: str | None = None,
-) -> tuple[RateLimitStore, RequestRateLimiterStash]:
-    """Run the realtime endpoint with a real v3 limiter registered and the request's
-    stash already holding slot-1 of a two-slot counter, the state pre-call leaves
-    behind. Returns the limiter's cache and the stash so the test can read what the
-    endpoint did to the slot."""
+) -> tuple[RateLimitStore, RequestRateLimiterStash, str, dict[str, float]]:
+    """Run the realtime endpoint with a real v3 limiter registered after its pre-call took one slot of a
+    two-slot counter whose other slot is held by another session. Returns the limiter's store, the stash
+    and the slot id the pre-call took, so the test can read what the endpoint did to the slot."""
     from litellm.proxy import proxy_server as ps
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        PARALLEL_REQUEST_SLOT_TTL_SECONDS,
-        PROXY_MaxParallelRequestsHandler_v3,
-        _request_stash,
-    )
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PARALLEL_REQUEST_SLOT_TTL_SECONDS
     from litellm.proxy.utils import InternalUsageCache
+    from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter, get_request_stash
 
-    dual_cache: Final = DualCache()
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     scope: Final = RateLimitScope("api_key", "hashed-token")
-    limiter.rate_limits.set_local(
-        scope.gauge,
-        {"slot-1": 1.0, "slot-2": 2.0},
-        PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+    other_session: Final = {"slot-2": time.time()}
+    limiter.rate_limits.set_local(scope.gauge, other_session, PARALLEL_REQUEST_SLOT_TTL_SECONDS)
+    await limiter.async_pre_call_hook(
+        UserAPIKeyAuth(api_key="hashed-token", max_parallel_requests=2),
+        DualCache(),
+        {"model": "vertex_ai/gemini-live-2.5-flash"},
+        "_arealtime",
     )
-    stash: Final = RequestRateLimiterStash(parallel_slot={"slot_id": "slot-1", "gauges": (scope,)})
+    acquired: Final = get_request_stash()
+    assert acquired is not None and acquired.parallel_slot is not None
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
 
-    stash_token: Final = _request_stash.set(stash)
-    try:
-        hooks: Final = patch.dict(  # test-quality-ok: registers the real limiter the route's release reads
-            ps.proxy_logging_obj.proxy_hook_mapping, {"parallel_request_limiter": limiter}
+    hooks: Final = patch.dict(  # test-quality-ok: registers the real limiter the route's release reads
+        ps.proxy_logging_obj.proxy_hook_mapping, {"parallel_request_limiter": limiter}
+    )
+    expected_exit: Final = (
+        pytest.raises(asyncio.CancelledError) if phase_one_exit == "pre_call_cancelled" else contextlib.nullcontext()
+    )
+    with hooks, expected_exit:
+        await _lit6973_drive_realtime_session(
+            reservation,
+            backend_logged_success=backend_logged_success,
+            backend_logged_failure=backend_logged_failure,
+            phase_one_exit=phase_one_exit,
         )
-        expected_exit: Final = (
-            pytest.raises(asyncio.CancelledError)
-            if phase_one_exit == "pre_call_cancelled"
-            else contextlib.nullcontext()
-        )
-        with hooks, expected_exit:
-            await _lit6973_drive_realtime_session(
-                reservation,
-                backend_logged_success=backend_logged_success,
-                backend_logged_failure=backend_logged_failure,
-                phase_one_exit=phase_one_exit,
-            )
-    finally:
-        _request_stash.reset(stash_token)
-    return limiter.rate_limits, stash
+    stash: Final = get_request_stash()
+    assert stash is not None
+    return limiter.rate_limits, stash, acquired.parallel_slot["slot_id"], other_session
 
 
 @pytest.mark.asyncio
@@ -11178,12 +11224,12 @@ async def test_realtime_session_ending_without_llm_callbacks_releases_the_max_pa
     rejects the session, or the task is cancelled while still in pre-call) has to be
     released by the route itself, or the slot stays occupied until its TTL and the key's
     next session is refused with a 429."""
-    rate_limits, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
+    rate_limits, stash, _, other_session = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
         backend_logged_success=False, phase_one_exit=phase_one_exit
     )
 
     scope: Final = RateLimitScope("api_key", "hashed-token")
-    assert rate_limits.local((scope.gauge,)) == ({"slot-2": 2.0},)
+    assert rate_limits.local((scope.gauge,)) == (other_session,)
     assert stash.parallel_slot is None
 
 
@@ -11195,11 +11241,14 @@ async def test_successful_realtime_session_leaves_the_max_parallel_slot_for_the_
     limiter's integer in-memory fallback, double-decrement the counter so the key
     admits more sessions than max_parallel_requests allows. With the success stamp
     present the route leaves the slot and the stash alone."""
-    rate_limits, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(backend_logged_success=True)
+    rate_limits, stash, slot_id, _ = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
+        backend_logged_success=True
+    )
 
     scope: Final = RateLimitScope("api_key", "hashed-token")
-    assert rate_limits.local((scope.gauge,)) == ({"slot-1": 1.0, "slot-2": 2.0},)
-    assert stash.parallel_slot == {"slot_id": "slot-1", "gauges": (scope,)}
+    (gauge,) = rate_limits.local((scope.gauge,))
+    assert set(gauge or {}) == {slot_id, "slot-2"}
+    assert stash.parallel_slot == {"slot_id": slot_id, "gauges": (scope,)}
 
 
 @pytest.mark.asyncio
@@ -11209,13 +11258,14 @@ async def test_refused_realtime_session_leaves_the_max_parallel_slot_for_the_lim
     the success handler does. The route sees no success stamp, so it still settles the
     budget reservation, but it must leave the slot to that callback or the two releases
     race on the same acquisition."""
-    rate_limits, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
+    rate_limits, stash, slot_id, _ = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
         backend_logged_success=False, backend_logged_failure=True
     )
 
     scope: Final = RateLimitScope("api_key", "hashed-token")
-    assert rate_limits.local((scope.gauge,)) == ({"slot-1": 1.0, "slot-2": 2.0},)
-    assert stash.parallel_slot == {"slot_id": "slot-1", "gauges": (scope,)}
+    (gauge,) = rate_limits.local((scope.gauge,))
+    assert set(gauge or {}) == {slot_id, "slot-2"}
+    assert stash.parallel_slot == {"slot_id": slot_id, "gauges": (scope,)}
 
 
 @pytest.mark.asyncio
@@ -12083,6 +12133,150 @@ def test_db_config_sync_unregisters_a_callback_the_stored_config_no_longer_lists
 
     pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: []}})
     assert callback_name not in _runtime_callback_names()
+
+
+async def _shut_down(logger: GenericAPILogger) -> None:
+    logger.shutdown()
+    await logger._flush_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_keys", "kept_keys"),
+    [
+        (("success_callback",), ()),
+        (("success_callback", "failure_callback"), ("failure_callback",)),
+        (("success_callback", "failure_callback"), ("success_callback",)),
+    ],
+)
+async def test_db_config_sync_unregisters_a_generic_api_callback_after_its_headers_rotate(
+    monkeypatch: pytest.MonkeyPatch, configured_keys: tuple[str, ...], kept_keys: tuple[str, ...]
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    pc: Final = ps.ProxyConfig()
+    configured: Final = {"litellm_settings": {key: ["sink_logger"] for key in configured_keys}}
+
+    pc._add_callbacks_from_db_config(configured)
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    pc._add_callbacks_from_db_config(configured)
+    pc._add_callbacks_from_db_config({"litellm_settings": {key: ["sink_logger"] for key in kept_keys}})
+
+    def registered_authorizations(*list_names: str) -> list[str]:
+        callbacks: Final = itertools.chain.from_iterable(getattr(litellm, list_name) for list_name in list_names)
+        return [callback.headers["Authorization"] for callback in callbacks if isinstance(callback, GenericAPILogger)]
+
+    authorization_by_event: Final = {
+        "success_callback": registered_authorizations("success_callback", "_async_success_callback"),
+        "failure_callback": registered_authorizations("failure_callback", "_async_failure_callback"),
+    }
+    await asyncio.gather(*(_shut_down(logger) for logger in logger_cache.values()))
+    assert authorization_by_event == {key: ["Bearer new"] if key in kept_keys else [] for key in authorization_by_event}
+
+
+@pytest.mark.asyncio
+async def test_db_config_sync_frees_the_generic_api_logger_a_header_rotation_retired(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    pc: Final = ps.ProxyConfig()
+    configured: Final = {"litellm_settings": {"success_callback": ["sink_logger"]}}
+
+    pc._add_callbacks_from_db_config(configured)
+    retired: Final = weakref.ref(logger_cache["sink_logger"])
+    retired_flush: Final = logger_cache["sink_logger"]._flush_task
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    pc._add_callbacks_from_db_config(configured)
+    await asyncio.wait_for(retired_flush, timeout=5)
+    gc.collect()
+
+    await _shut_down(logger_cache["sink_logger"])
+    assert retired() is None
+
+
+@pytest.mark.asyncio
+async def test_db_config_sync_unregisters_a_generic_api_callback_rotated_between_syncs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    pc: Final = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["sink_logger"]}})
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    litellm.logging_callback_manager.add_litellm_success_callback("sink_logger")
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+
+    still_registered: Final = tuple(
+        callback
+        for callback in itertools.chain(litellm.success_callback, litellm._async_success_callback)
+        if isinstance(callback, GenericAPILogger)
+    )
+    await asyncio.gather(*(_shut_down(logger) for logger in logger_cache.values()))
+    assert still_registered == ()
+
+
+@pytest.mark.asyncio
+async def test_db_config_sync_keeps_a_file_callback_that_rotated_while_the_database_registered_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    litellm.logging_callback_manager.add_litellm_success_callback("sink_logger")
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    pc: Final = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["sink_logger"]}})
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+
+    still_registered: Final = tuple(
+        callback.headers["Authorization"]
+        for callback in itertools.chain(litellm.success_callback, litellm._async_success_callback)
+        if isinstance(callback, GenericAPILogger)
+    )
+    await asyncio.gather(*(_shut_down(logger) for logger in logger_cache.values()))
+    assert still_registered == ("Bearer new",)
 
 
 def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.MonkeyPatch):
@@ -13376,6 +13570,31 @@ def test_init_cache_redis_backend_reuses_cache_backend_over_environment():
     assert spend_redis is redis_backend
 
 
+def test_init_cache_accepts_default_redis_ttl_for_a_redis_response_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    server: Final = FakeServer()
+
+    class Pool(redis.asyncio.BlockingConnectionPool):
+        def __init__(self, **kwargs: object) -> None:  # kwargs-ok: forwarded to the redis pool
+            super().__init__(connection_class=FakeConnection, server=server, **kwargs)
+
+    monkeypatch.setattr(redis, "Redis", FakeRedis)
+    monkeypatch.setattr(redis.asyncio, "BlockingConnectionPool", Pool)
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "default_redis_ttl", None)
+    with (
+        _patched_coordination_redis_module_state(
+            spend_cache=DualCache(), config_cache=types.SimpleNamespace(redis_cache=None)
+        ),
+        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
+    ):
+        proxy_server_module.ProxyConfig()._init_cache(
+            cache_params={"type": "redis", "host": "redis.invalid", "port": "6379", "default_redis_ttl": 600}
+        )
+
+    assert litellm.cache is not None
+    assert litellm.cache.cache.default_ttl == 600
+
+
 class _EnvBuiltClusterCache(RedisClusterCache):
     """RedisClusterCache stand-in that records constructor kwargs and never
     opens a network connection."""
@@ -13950,10 +14169,12 @@ async def test_key_window_spend_row_is_enqueued_with_the_actual_cost(duration: s
     assert enqueued[0]["entity_id"] == "hashed-token"
     assert enqueued[0]["window_duration"] == duration
     assert enqueued[0]["spend"] == pytest.approx(0.25)
-    expected_start: Final = datetime(2028, 1, 1, tzinfo=timezone.utc) if duration == "12mo" else reset_at - timedelta(days=30)
-    assert enqueued[0]["window_start"] == expected_start.astimezone(timezone.utc).replace(
-        tzinfo=None
-    ).isoformat(timespec="microseconds")
+    expected_start: Final = (
+        datetime(2028, 1, 1, tzinfo=timezone.utc) if duration == "12mo" else reset_at - timedelta(days=30)
+    )
+    assert enqueued[0]["window_start"] == expected_start.astimezone(timezone.utc).replace(tzinfo=None).isoformat(
+        timespec="microseconds"
+    )
 
 
 @pytest.mark.asyncio
@@ -15723,10 +15944,10 @@ def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_
 
 
 async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_count(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -15734,7 +15955,9 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
     warm_tokenizer("claude-fable-5")
 
     response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.count_request_tokens(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
+        lambda: proxy_server_module.count_request_tokens(
+            TokenCountRequest(model="claude-fable-5", prompt=uncounted_text())
+        )
     )
 
     assert response.total_tokens > 0
@@ -15816,7 +16039,9 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
     litellm.utils._select_custom_tokenizer_helper.cache_clear()
     try:
         responses: Final = [
-            await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted", prompt="count me once"))
+            await proxy_server_module.count_request_tokens(
+                TokenCountRequest(model="self-hosted", prompt="count me once")
+            )
             for _ in range(3)
         ]
         assert from_pretrained.call_args_list == [mock.call("my-org/tokenizer", revision="main", token=None)]
@@ -15824,8 +16049,12 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         assert len({response.total_tokens for response in responses}) == 1
         assert responses[0].total_tokens > 0
 
-        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
-        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
+        await proxy_server_module.count_request_tokens(
+            TokenCountRequest(model="self-hosted-pinned", prompt="count me once")
+        )
+        await proxy_server_module.count_request_tokens(
+            TokenCountRequest(model="self-hosted-private", prompt="count me once")
+        )
         assert from_pretrained.call_args_list == [
             mock.call("my-org/tokenizer", revision="main", token=None),
             mock.call("my-org/tokenizer", revision="v2", token=None),
@@ -16151,6 +16380,7 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
     declared = {"public_key_ttl": "600", "team_id_jwt_field": "os.environ/JWT_TEAM_FIELD"}
     general_settings = {"litellm_jwtauth": declared}
     monkeypatch.setattr(proxy_server_module, "get_secret", lambda value: "resolved-team-field")
+    monkeypatch.setattr(proxy_server_module, "litellm_jwtauth", proxy_server_module.litellm_jwtauth)
 
     ProxyStartupEvent._initialize_jwt_auth(
         general_settings=general_settings,
@@ -16159,7 +16389,7 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
     )
 
     assert declared["team_id_jwt_field"] == "os.environ/JWT_TEAM_FIELD"
-    assert proxy_server_module.jwt_handler.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
+    assert proxy_server_module.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
 
 
 def test_spend_capture_rate_check_job_validates_the_boot_settings_and_reads_them_again_on_every_run(monkeypatch):

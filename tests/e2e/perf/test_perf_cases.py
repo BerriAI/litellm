@@ -154,6 +154,7 @@ def test_perf_case(
         redis_after=redis_after,
         redis_commands=monitor.commands,
         gateway_cpu_seconds=cpu.seconds,
+        gateway_cpu_coverage=cpu.coverage,
         telemetry_before=telemetry_before,
         telemetry_after=telemetry_after,
         peak_connections=connections.peak,

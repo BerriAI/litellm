@@ -13,11 +13,6 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
         "PROXY_DynamicRateLimitHandler",
     ),
     (
-        "litellm.proxy.hooks.dynamic_rate_limiter_v3",
-        "_PROXY_DynamicRateLimitHandlerV3",
-        "PROXY_DynamicRateLimitHandlerV3",
-    ),
-    (
         "litellm.proxy.common_utils.config_sync_pubsub",
         "_ConfigSyncPubSub",
         "ConfigSyncPubSub",
@@ -66,11 +61,6 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
         "litellm.proxy.hooks.parallel_request_limiter",
         "_PROXY_MaxParallelRequestsHandler",
         "PROXY_MaxParallelRequestsHandler",
-    ),
-    (
-        "litellm.proxy.hooks.parallel_request_limiter_v3",
-        "_PROXY_MaxParallelRequestsHandler_v3",
-        "PROXY_MaxParallelRequestsHandler_v3",
     ),
     (
         "litellm.proxy.hooks.sensitive_data_routing",
@@ -3172,13 +3162,6 @@ PROXY_ALIAS_CASES: Final = (
         "",
         "_PROXY_MaxParallelRequestsHandler_v3",
         "PROXY_MaxParallelRequestsHandler_v3",
-        False,
-    ),
-    (
-        "litellm.proxy.hooks.parallel_request_limiter_v3",
-        "_PROXY_MaxParallelRequestsHandler_v3",
-        "_create_rate_limit_descriptors",
-        "create_rate_limit_descriptors",
         False,
     ),
     (

@@ -210,8 +210,9 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
     ``ResponseAPIUsage`` for a synthetic guardrail-blocked /v1/responses stream.
 
     A mid-stream block carries the events received so far as a list; real usage
-    rides on the ``response.completed`` event's response when the upstream sent
-    one. Non-list originals defer to ``blocked_responses_api_usage``.
+    rides on the ``response.completed`` or ``response.incomplete`` event's
+    response when the upstream sent one. Non-list originals defer to
+    ``blocked_responses_api_usage``.
     """
     if not isinstance(original_response, list):
         return blocked_responses_api_usage(original_response)
@@ -219,7 +220,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
         (
             response
             for item in reversed(original_response)
-            if stream_item_field(item, "type") == "response.completed"
+            if stream_item_field(item, "type") in ("response.completed", "response.incomplete")
             and (response := stream_item_field(item, "response")) is not None
         ),
         None,
@@ -279,6 +280,10 @@ def filter_messages_by_skip_flags(
 
 def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -> bool:
     return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
+
+
+def effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply: object) -> bool:
+    return getattr(guardrail_to_apply, "scan_tool_calls_as_text", None) is True
 
 
 def role_out_of_guardrail_scope(
