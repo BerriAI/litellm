@@ -1072,7 +1072,7 @@ def test_next_turn_without_a_hop_forwards_the_reasoning_untouched(gateway: Gatew
         assert record.order_two == (), record
 
 
-def test_affinity_pin_keeps_the_targets_own_marked_reasoning_and_the_unmarked_history(gateway: Gateway) -> None:
+def test_affinity_pin_keeps_the_targets_own_marked_reasoning_and_strips_the_unmarked_blob(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         enable_affinity_check(scenario)
         group: Final = ordered_group(scenario, order_one=failing(), order_two=healthy_json())
@@ -1108,7 +1108,7 @@ def test_affinity_pin_keeps_the_targets_own_marked_reasoning_and_the_unmarked_hi
         assert own.get("type") == "reasoning" and own.get("summary") == marked["summary"], pinned
         assert str(own.get("id")).startswith(f"rs_{group.order_two_scenario}-"), pinned
         assert own.get("encrypted_content") == ORDER_TWO_BLOB, pinned
-        assert pinned[2] == unmarked, pinned
+        assert pinned[2] == STRIPPED_REASONING, pinned
         assert pinned[3:] == [ASSISTANT_ITEM, user_item("continue")], pinned
 
 
