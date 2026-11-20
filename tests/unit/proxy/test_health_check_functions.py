@@ -1405,5 +1405,18 @@ def test_public_wildcard_children_honor_background_model_groups(model_groups: se
     assert [c["model_name"] for c in children] == ([_WILDCARD_SERVED] if checked else [])
 
 
+def test_split_by_model_ids_passes_anything_without_a_listed_model_id_to_the_routing_part_untouched():
+    from litellm.proxy.health_check import split_by_model_ids
+
+    deployment: Final = {"model": "openai/explicit", "model_id": "explicit"}
+    child: Final = {"model": "openai/gpt-5.5", "model_id": "child"}
+
+    routing, children = split_by_model_ids(["healthy", deployment, child], frozenset({"child"}))
+
+    assert routing == ("healthy", deployment)
+    assert routing[1] is deployment
+    assert children == (child,)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

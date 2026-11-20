@@ -490,17 +490,23 @@ def deployment_ids(deployments: Iterable[Mapping[str, object]]) -> frozenset[str
     return frozenset(ident for deployment in deployments if (ident := _deployment_id(deployment)))
 
 
-_ENDPOINTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_ENDPOINTS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
-def split_by_model_ids(
-    endpoints: object, model_ids: AbstractSet[str]
-) -> tuple[tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
-    """``endpoints`` without, then with, a ``model_id`` in ``model_ids``."""
+def _endpoint_model_id(endpoint: object) -> str | None:
+    match endpoint:
+        case {"model_id": str(model_id)}:
+            return model_id
+        case _:
+            return None
+
+
+def split_by_model_ids(endpoints: object, model_ids: AbstractSet[str]) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    """``endpoints`` untouched, split into those without, then with, a ``model_id`` in ``model_ids``."""
     checked: Final = _ENDPOINTS_ADAPTER.validate_python(endpoints)
     return (
-        tuple(e for e in checked if e.get("model_id") not in model_ids),
-        tuple(e for e in checked if e.get("model_id") in model_ids),
+        tuple(e for e in checked if _endpoint_model_id(e) not in model_ids),
+        tuple(e for e in checked if _endpoint_model_id(e) in model_ids),
     )
 
 
