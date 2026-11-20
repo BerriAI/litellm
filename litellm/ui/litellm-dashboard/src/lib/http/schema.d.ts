@@ -36703,19 +36703,11 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** ImageProviderSpecificFields */
-        ImageProviderSpecificFields: {
-            /** Thought Signature */
-            thought_signature?: string;
-        } & {
-            [key: string]: unknown;
-        };
         /** ImageURLListItem */
         ImageURLListItem: {
             image_url: components["schemas"]["ImageURLObject"];
             /** Index */
             index: number;
-            provider_specific_fields?: components["schemas"]["ImageProviderSpecificFields"];
             /**
              * Type
              * @constant

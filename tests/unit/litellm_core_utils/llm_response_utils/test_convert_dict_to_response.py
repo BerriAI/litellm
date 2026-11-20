@@ -2356,8 +2356,12 @@ class TestNormalizeImagesForMessage:
         result = _normalize_images_for_message(images)
         assert result[0]["index"] == 5
 
-@pytest.mark.parametrize("image_fields", [{}, {"upstream_id": "img-1"}], ids=["empty", "without-signature"])
-def test_chat_response_keeps_image_provider_fields_without_thought_signature(image_fields: dict[str, str]) -> None:
+@pytest.mark.parametrize(
+    "image_fields",
+    [{}, {"upstream_id": "img-1"}, {"thought_signature": 42}],
+    ids=["empty", "without-signature", "non-string-signature"],
+)
+def test_chat_response_keeps_image_provider_fields_as_sent(image_fields: dict[str, object]) -> None:
     image: Final = {
         "type": "image_url",
         "image_url": {"url": "data:image/png;base64,QQ=="},

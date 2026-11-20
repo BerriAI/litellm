@@ -66,7 +66,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
-    ImageProviderSpecificFields,
     ImageURLListItem,
     ImageURLObject,
     OpenAIChatCompletionFinishReason,
@@ -79,6 +78,8 @@ from litellm.types.llms.vertex_ai import (
     FunctionCallingConfig,
     FunctionDeclaration,
     GeminiFinishReason,
+    GeminiImageProviderSpecificFields,
+    GeminiImageURLListItem,
     GeminiThinkingConfig,
     GenerateContentResponseBody,
     HttpxPartType,
@@ -283,11 +284,11 @@ def _generated_image_item(data_uri: str, thought_signature: str | None) -> Image
     image_url: Final = ImageURLObject(url=data_uri, detail="auto")
     if thought_signature is None:
         return ImageURLListItem(image_url=image_url, index=0, type="image_url")
-    return ImageURLListItem(
+    return GeminiImageURLListItem(
         image_url=image_url,
         index=0,
         type="image_url",
-        provider_specific_fields=ImageProviderSpecificFields(thought_signature=thought_signature),
+        provider_specific_fields=GeminiImageProviderSpecificFields(thought_signature=thought_signature),
     )
 
 
