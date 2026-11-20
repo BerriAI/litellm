@@ -44,9 +44,11 @@ from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
+    _safe_get_request_parsed_body,
     extract_nested_form_metadata,
     read_request_path_params,
     resolve_inference_model,
+    safe_get_request_query_params,
 )
 from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -1257,6 +1259,21 @@ def enforce_team_s3_bucket_allowlist(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Authentication Error, {rejection}")
 
 
+def _request_body_for_safety_check(
+    request: Request | None,
+    request_data: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Extract the actual request body for safety checks, excluding URL query parameters."""
+    if request is not None:
+        parsed_body: Final = _safe_get_request_parsed_body(request)
+        if parsed_body is not None:
+            return parsed_body
+        query_params: Final = safe_get_request_query_params(request)
+        if query_params:
+            return {k: v for k, v in request_data.items() if k not in query_params}
+    return request_data
+
+
 async def pre_db_read_auth_checks(
     request: Request,
     request_data: dict,
@@ -1287,7 +1304,7 @@ async def pre_db_read_auth_checks(
     )
     request.state.deferred_model_body_check = defer_model_checks  # rebind-ok: hand state to auth
     is_request_body_safe(
-        request_body=request_data,
+        request_body=_request_body_for_safety_check(request, request_data),
         general_settings=general_settings,
         llm_router=llm_router,
         model=request_data.get("model") or _model_from_route_path(route) or "",

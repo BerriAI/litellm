@@ -19,6 +19,8 @@ defaults to ``True`` so a config dict (raw, not Pydantic) without an
 ``auth`` key still requires authentication.
 """
 
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -27,7 +29,6 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.requests import Request
-
 
 from litellm.proxy._types import LiteLLMRoutes, PassThroughGenericEndpoint, ProxyException
 from litellm.proxy.auth.user_api_key_auth import pass_through_auth_off, pass_through_key
@@ -132,3 +133,142 @@ def test_mapped_pass_through_route_authenticates_the_litellm_user_api_key_header
     request: Final = Request({"type": "http", "headers": [(b"litellm_user_api_key", b"sk-proxy")]})
 
     assert pass_through_key(request, route, None, "provider-key") == "sk-proxy"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_oauth_client_id_in_query_string_forwarded_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received_urls: list[str] = []
+
+    class EchoHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            received_urls.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "ok"}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = HTTPServer(("127.0.0.1", 0), EchoHandler)
+    port: Final = server.server_port
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(
+            proxy_server,
+            "general_settings",
+            {
+                "allow_client_side_credentials": False,
+                "pass_through_endpoints": [
+                    {
+                        "path": "/MS_Office/upstream/authorize",
+                        "target": f"http://127.0.0.1:{port}/",
+                        "methods": ["GET"],
+                        "auth": False,
+                    }
+                ],
+            },
+        )
+
+        app: Final = FastAPI(exception_handlers={ProxyException: openai_exception_handler})
+        visited: Final[set[str]] = set()
+        endpoint: Final = PassThroughGenericEndpoint(
+            path="/MS_Office/upstream/authorize",
+            target=f"http://127.0.0.1:{port}/",
+            methods=["GET"],
+            auth=False,
+        )
+
+        await _register_pass_through_endpoint(
+            endpoint=endpoint,
+            app=app,
+            premium_user=False,
+            visited_endpoints=visited,
+        )
+
+        with TestClient(app) as client:
+            response: Final = client.get(
+                "/MS_Office/upstream/authorize?response_type=code&client_id=test-client"
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"status": "ok"}
+        assert received_urls == ["/?response_type=code&client_id=test-client"]
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_passthrough_client_id_in_request_body_still_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received_urls: list[str] = []
+
+    class EchoHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            received_urls.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "ok"}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = HTTPServer(("127.0.0.1", 0), EchoHandler)
+    port: Final = server.server_port
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(
+            proxy_server,
+            "general_settings",
+            {
+                "allow_client_side_credentials": False,
+                "pass_through_endpoints": [
+                    {
+                        "path": "/MS_Office/upstream/authorize",
+                        "target": f"http://127.0.0.1:{port}/",
+                        "methods": ["POST"],
+                        "auth": False,
+                    }
+                ],
+            },
+        )
+
+        app: Final = FastAPI(exception_handlers={ProxyException: openai_exception_handler})
+        visited: Final[set[str]] = set()
+        endpoint: Final = PassThroughGenericEndpoint(
+            path="/MS_Office/upstream/authorize",
+            target=f"http://127.0.0.1:{port}/",
+            methods=["POST"],
+            auth=False,
+        )
+
+        await _register_pass_through_endpoint(
+            endpoint=endpoint,
+            app=app,
+            premium_user=False,
+            visited_endpoints=visited,
+        )
+
+        with TestClient(app) as client:
+            response: Final = client.post(
+                "/MS_Office/upstream/authorize",
+                json={"client_id": "test-client"},
+            )
+
+        assert response.status_code == 401, response.text
+        assert "client_id is not allowed in request body" in response.text
+        assert received_urls == []
+    finally:
+        server.shutdown()
