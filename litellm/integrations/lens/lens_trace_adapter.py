@@ -49,7 +49,7 @@ class _Harness:
 
 _HARNESSES: Final = (
     _Harness(name="claude-code", integration="claude-code", user_agent_markers=("claude-cli", "claude-code")),
-    _Harness(name="codex", integration="openai-codex", user_agent_markers=("codex",)),
+    _Harness(name="codex-cli", integration="openai-codex", user_agent_markers=("codex",)),
     _Harness(name="opencode", integration="opencode"),
     _Harness(name="pi", integration="pi"),
 )
@@ -263,8 +263,9 @@ def _agent(user_agent: str | None, system_prompt: str) -> str | None:
     return "pi" if _PI_SYSTEM_PROMPT in system_prompt else named
 
 
-def _derived_session(key_hash: str | None, system_prompt: str, task: str) -> str:
-    digest: Final = hashlib.sha256("\x00".join((key_hash or "", system_prompt, task)).encode()).hexdigest()
+def _derived_session(key_hash: str | None, system_prompt: str, task: str, first_reply: str | None) -> str:
+    parts: Final = (key_hash or "", system_prompt, task, first_reply or "")
+    digest: Final = hashlib.sha256("\x00".join(parts).encode()).hexdigest()
     return f"derived-{digest[:32]}"
 
 
@@ -275,11 +276,40 @@ class _Metadata(LiteLLMBaseModel):
     user_api_key_hash: str | None = None
 
 
+class _Choice(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    message: _Item = _Item()
+
+
+class _Response(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    choices: tuple[_Choice, ...] = ()
+
+
 class _Payload(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     metadata: _Metadata = _Metadata()
     messages: object = None
+    response: object = None
+
+
+def _reply_mark(reply: _Item) -> str | None:
+    """What tells one conversation's first reply from another's: its first tool call id, else its text."""
+    called: Final = tuple(call.id for call in reply.tool_calls or () if call.id)
+    used: Final = tuple(block.id for block in _blocks(reply.content) if block.type == "tool_use" and block.id)
+    return next(iter((*called, *used)), None) or "".join(_texts(reply.content)).strip() or None
+
+
+def _first_reply_mark(messages: object, response: object) -> str | None:
+    """The first reply of the conversation: in the request once it has one, else this call's response."""
+    said: Final = next((item for item in _conversation(messages) if item.role == "assistant"), None)
+    if said is not None:
+        return _reply_mark(said)
+    answered: Final = _parsed(_Response, response)
+    return _reply_mark(answered.choices[0].message) if answered and answered.choices else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,7 +345,14 @@ def agent_call(standard_logging_payload: object) -> AgentCall:
         integration=integration,
         task=task,
         derived_session=(
-            _derived_session(payload.metadata.user_api_key_hash, system_prompt, task) if integration and task else None
+            _derived_session(
+                payload.metadata.user_api_key_hash,
+                system_prompt,
+                task,
+                _first_reply_mark(payload.messages, payload.response),
+            )
+            if integration and task
+            else None
         ),
     )
 

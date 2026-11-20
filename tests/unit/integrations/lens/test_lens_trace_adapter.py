@@ -20,8 +20,8 @@ _PWD = ToolExchange(call_id="call-pwd", name="Bash", arguments='{"command": "pwd
     ("user_agent", "expected"),
     [
         ("claude-cli/2.1.329 (external, sdk-cli)", "claude-code"),
-        ("codex_exec/0.171.0 (Ubuntu 22.04; x86_64)", "codex"),
-        ("Codex Desktop/1.0", "codex"),
+        ("codex_exec/0.171.0 (Ubuntu 22.04; x86_64)", "codex-cli"),
+        ("Codex Desktop/1.0", "codex-cli"),
         ("opencode/1.19.6 ai-sdk/provider-utils/4.0.46 runtime/bun/1.4.4", "opencode"),
         ("pi (linux 6.8.0; x64)", "pi"),
         ("OpenAI/Python 1.99.0", "openai"),
@@ -203,7 +203,7 @@ def _recorded_payload(agent: str) -> dict[str, object]:
     ("recording", "agent", "integration", "task"),
     [
         ("claude_code", "claude-code", "claude-code", "Count the words in notes.txt and report the number"),
-        ("codex", "codex", "openai-codex", "Count the words in notes.txt and report the number"),
+        ("codex", "codex-cli", "openai-codex", "Count the words in notes.txt and report the number"),
         ("opencode", "opencode", "opencode", '"Count the words in notes.txt and report the number"'),
         ("pi", "pi", "pi", "Count the words in notes.txt and report the number"),
     ],
@@ -225,9 +225,15 @@ def test_pi_is_recognised_by_its_system_prompt_because_it_sends_its_sdk_user_age
     assert agent_call({**payload, "messages": payload["messages"][1:]}).agent == "anthropic"
 
 
-def test_calls_of_one_task_derive_one_session_and_another_task_or_key_derives_another() -> None:
+def _first_call(later: dict[str, object], first_tool_call_id: str) -> dict[str, object]:
+    """The opening call of a recorded conversation: no reply in the request yet, the reply is the response."""
+    reply = {"role": "assistant", "content": "", "tool_calls": [{"id": first_tool_call_id, "function": {}}]}
+    return {**later, "messages": later["messages"][:2], "response": {"choices": [{"message": reply}]}}
+
+
+def test_calls_of_one_conversation_derive_one_session_and_another_task_or_key_derives_another() -> None:
     later = _recorded_payload("pi")
-    first = {**later, "messages": later["messages"][:2]}
+    first = _first_call(later, "toolu_01FuwdifsnyPSCzfzcMzYANw")
     other_task = {**later, "messages": [later["messages"][0], {"role": "user", "content": "Fix the build"}]}
     other_key = {**later, "metadata": {**later["metadata"], "user_api_key_hash": "other-key"}}
 
@@ -237,6 +243,29 @@ def test_calls_of_one_task_derive_one_session_and_another_task_or_key_derives_an
     assert agent_call(first).derived_session == session
     assert agent_call(other_task).derived_session not in (None, session)
     assert agent_call(other_key).derived_session not in (None, session)
+
+
+def test_the_same_prompt_run_again_is_a_new_session_because_its_first_reply_differs() -> None:
+    run = _recorded_payload("pi")
+    rerun_first_call = _first_call(run, "toolu_another_run")
+
+    assert agent_call(rerun_first_call).derived_session not in (None, agent_call(run).derived_session)
+
+
+def test_a_first_reply_with_no_tool_call_is_told_apart_by_its_text() -> None:
+    run = _recorded_payload("pi")
+    opening = run["messages"][:2]
+    answered = {**run, "messages": opening, "response": {"choices": [{"message": {"content": "2 words"}}]}}
+    follow_up = {
+        **run,
+        "messages": [*opening, {"role": "assistant", "content": [{"type": "text", "text": "2 words"}]}],
+    }
+    other_answer = {**answered, "response": {"choices": [{"message": {"content": "3 words"}}]}}
+
+    session = agent_call(answered).derived_session
+
+    assert agent_call(follow_up).derived_session == session
+    assert agent_call(other_answer).derived_session not in (None, session)
 
 
 def test_an_unknown_agent_gets_its_task_but_no_logo_and_no_derived_session() -> None:
