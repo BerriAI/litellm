@@ -12,7 +12,7 @@ use litellm_core_utils::{
 };
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-    ChatCompletionsUsage, ChatMessage,
+    ChatCompletionsUsage, ChatMessage, CompletionTokensDetails, PromptTokensDetails,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -271,6 +271,12 @@ fn host_usage_or_counts(usage: Value) -> ChatCompletionsUsage {
             completion_tokens: count("completion_tokens"),
             prompt_tokens: count("prompt_tokens"),
             total_tokens: count("total_tokens"),
+            completion_tokens_details: usage
+                .get("completion_tokens_details")
+                .and_then(|details| CompletionTokensDetails::deserialize(details).ok()),
+            prompt_tokens_details: usage
+                .get("prompt_tokens_details")
+                .and_then(|details| PromptTokensDetails::deserialize(details).ok()),
             ..ChatCompletionsUsage::default()
         }
     })
@@ -645,7 +651,24 @@ mod tests {
         json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "completion_tokens_details": "none"}),
         json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
     )]
-    fn a_usage_outside_the_contract_keeps_its_counts_instead_of_failing(
+    #[case::one_unreadable_details_object_keeps_the_other(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": 2}, "completion_tokens_details": {"reasoning_tokens": 2.5}
+        }),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 2}})
+    )]
+    #[case::unreadable_top_level_field_keeps_both_details(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "service_tier": 1,
+            "prompt_tokens_details": {"cached_tokens": 2}, "completion_tokens_details": {"reasoning_tokens": 1}
+        }),
+        json!({
+            "completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4,
+            "completion_tokens_details": {"reasoning_tokens": 1}, "prompt_tokens_details": {"cached_tokens": 2}
+        })
+    )]
+    fn a_usage_outside_the_contract_keeps_what_parses_instead_of_failing(
         #[case] usage: Value,
         #[case] expected: Value,
     ) {
