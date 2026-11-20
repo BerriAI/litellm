@@ -135,9 +135,9 @@ impl Endpoint {
 
 /// The `PGSSLKEY` file sqlx reads, handed to it as PKCS#8 PEM when native-tls cannot load it as it is: native-tls
 /// only loads a file that starts with a PKCS#8 PEM block, while libpq and rustls also load PKCS#1 and SEC1 keys. The
-/// `PGSSLCERT` file is read at the same moment, so a converted key keeps its certificate when the files are replaced
-/// later. A key native-tls loads, a file OpenSSL cannot read, and a key that needs a password are left for sqlx to
-/// read on each connection: OpenSSL gets an empty password instead of asking for it on the terminal.
+/// `PGSSLCERT` file is read at the same moment, so the two always match; the pool builds its options again when
+/// either file changes. A key native-tls loads, a file OpenSSL cannot read, and a key that needs a password are left
+/// for sqlx to read on each connection: OpenSSL gets an empty password instead of asking for it on the terminal.
 #[cfg(feature = "native-tls")]
 fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
     let read = |name: &str| std::env::var_os(name).and_then(|path| std::fs::read(path).ok());
@@ -155,6 +155,21 @@ fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
 #[cfg(not(feature = "native-tls"))]
 fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
     options
+}
+
+/// When the `PGSSLCERT` and `PGSSLKEY` files were last written and how long they are, or that they are missing, so a
+/// pool can tell when the client certificate it was built from changed.
+#[derive(PartialEq)]
+pub(crate) struct ClientFiles([Option<(std::time::SystemTime, u64)>; 2]);
+
+impl ClientFiles {
+    pub(crate) fn now() -> Self {
+        let stamp = |name: &str| {
+            let metadata = std::fs::metadata(std::env::var_os(name)?).ok()?;
+            Some((metadata.modified().ok()?, metadata.len()))
+        };
+        Self([stamp("PGSSLCERT"), stamp("PGSSLKEY")])
+    }
 }
 
 #[cfg(feature = "native-tls")]
