@@ -440,9 +440,6 @@ def test_batch_upload_turns_an_openai_chat_row_into_a_gemini_row():
         },
         seed=7,
         metadata={"run": "1"},
-        store=False,
-        logit_bias={"1": 2},
-        prompt_cache_key="k",
     )
 
     [uploaded] = _uploaded_rows([row])
@@ -457,9 +454,24 @@ def test_batch_upload_turns_an_openai_chat_row_into_a_gemini_row():
         _CAPITAL_SCHEMA,
         7,
     )
-    assert {"metadata", "store", "logit_bias", "prompt_cache_key"}.isdisjoint(
-        {**request, **request["generationConfig"]}
-    )
+    assert "metadata" not in json.dumps(request)
+
+
+@pytest.mark.parametrize("unsupported", [{"logit_bias": {"1": 2}}, {"prompt_cache_key": "k"}, {"store": False}])
+def test_batch_upload_rejects_a_param_gemini_chat_rejects(unsupported):
+    with pytest.raises(GeminiError, match=f"line 1 .*{next(iter(unsupported))}"):
+        _uploaded_rows([_chat_row("row-1", **unsupported)])
+
+
+@pytest.mark.parametrize(
+    "row_drop_params,deployment_params",
+    [(True, {}), (None, {"drop_params": True})],
+)
+def test_batch_upload_drops_unsupported_params_when_asked(row_drop_params, deployment_params):
+    flags = {} if row_drop_params is None else {"drop_params": row_drop_params}
+    with_unsupported = _chat_row("row-1", logit_bias={"1": 2}, prompt_cache_key="k", **flags)
+
+    assert _uploaded_rows([with_unsupported], litellm_params=deployment_params) == _uploaded_rows([_chat_row("row-1")])
 
 
 def test_batch_upload_maps_tools_to_function_declarations():

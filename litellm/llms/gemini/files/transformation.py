@@ -55,8 +55,8 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
 )
 from litellm.types.utils import LlmProviders, ModelResponse
+from litellm.utils import get_optional_params
 
-from ..chat.transformation import GoogleAIStudioGeminiConfig
 from ..common_utils import GeminiError, GeminiModelInfo
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -64,6 +64,7 @@ _RFC3339_PARTS: Final = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+
 _JSONL_NEWLINE: Final = b"\n"
 _CHAT_COMPLETIONS_BATCH_URL: Final = "/v1/chat/completions"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_ROW_PARAMS_NOT_SENT_TO_GEMINI: Final = frozenset({"model", "messages", "drop_params", "metadata"})
 
 
 def is_native_gemini_batch_output_row(row: Mapping[str, object]) -> bool:
@@ -90,18 +91,22 @@ def _gemini_batch_request_row(
     body: Final = _JSON_OBJECT.validate_python(openai_row["body"])
     body_model: Final = body.get("model")
     model: Final = batch_model or (body_model if isinstance(body_model, str) else "")
+    messages: Final = map_developer_role_to_system_role(
+        body.get("messages", [])  # pyright: ignore[reportArgumentType]  # validating would drop message fields
+    )
     optional_params: Final = _JSON_OBJECT.validate_python(
-        GoogleAIStudioGeminiConfig().map_openai_params(
-            non_default_params={key: value for key, value in body.items() if key not in ("model", "messages")},
-            optional_params={},
+        get_optional_params(
             model=model,
+            custom_llm_provider="gemini",
             drop_params=drops_unsupported_params(body.get("drop_params", deployment_drop_params)),
+            messages=messages,
+            **{  # pyright: ignore[reportArgumentType]  # batch JSONL bodies are untyped; get_optional_params checks each param as chat does
+                key: value for key, value in body.items() if key not in _ROW_PARAMS_NOT_SENT_TO_GEMINI
+            },
         )
     )
     request: Final = transform_request_body(
-        messages=map_developer_role_to_system_role(
-            body.get("messages", [])  # pyright: ignore[reportArgumentType]  # validating would drop message fields
-        ),
+        messages=messages,
         model=model,
         optional_params=optional_params,
         custom_llm_provider="gemini",
@@ -486,7 +491,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         url: Final = join_api_base(api_base, f"v1beta/{file_name}")
 
         # Add API key as header (Google AI Studio uses x-goog-api-key header)
-        params: Final[dict] = {}
+        params: Final[dict[str, str]] = {}
 
         return url, params
 
