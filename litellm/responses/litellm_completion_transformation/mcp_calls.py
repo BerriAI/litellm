@@ -17,7 +17,8 @@ from litellm.types.llms.openai import (
 
 from .custom_tools import serialize_tool_call_arguments
 
-MCP_CALL_ITEM_ID_PREFIX: Final = "mcp_"
+_MCP_CALL_ITEM_ID_PREFIX: Final = "mcp_"
+_DEFERRED_RESULT_ITEM_ID_SUFFIX: Final = "_result"
 
 
 class _McpServer(LiteLLMBaseModel):
@@ -73,6 +74,10 @@ def is_anthropic_mcp_call_id(call_id: str) -> bool:
     return call_id.startswith(ANTHROPIC_MCP_TOOL_USE_ID_PREFIX)
 
 
+def anthropic_mcp_call_id(item_id: str) -> str:
+    return item_id.removeprefix(_MCP_CALL_ITEM_ID_PREFIX).removesuffix(_DEFERRED_RESULT_ITEM_ID_SUFFIX)
+
+
 def _mcp_tool_use(call: object) -> McpToolUse | None:
     if not is_anthropic_mcp_call_id(str(message_field(call, "id") or "")):
         return None
@@ -111,7 +116,7 @@ def _result_text(result: McpToolResult) -> str:
 
 def build_mcp_call(call: McpToolUse, result: McpToolResult | None) -> McpCall:
     pending: Final = McpCall(
-        id=f"{MCP_CALL_ITEM_ID_PREFIX}{call.id}",
+        id=f"{_MCP_CALL_ITEM_ID_PREFIX}{call.id}",
         type="mcp_call",
         name=call.function.name,
         arguments=serialize_tool_call_arguments(call.function.arguments),
@@ -123,6 +128,11 @@ def build_mcp_call(call: McpToolUse, result: McpToolResult | None) -> McpCall:
     if result.is_error:
         return pending.model_copy(update={"status": "failed", "error": _result_text(result)})
     return pending.model_copy(update={"status": "completed", "output": _result_text(result)})
+
+
+def build_deferred_mcp_call(call: McpToolUse, result: McpToolResult | None) -> McpCall:
+    item: Final = build_mcp_call(call, result)
+    return item.model_copy(update={"id": f"{item.id}{_DEFERRED_RESULT_ITEM_ID_SUFFIX}"})
 
 
 def _results_of(messages: Sequence[object]) -> Mapping[str, McpToolResult]:
@@ -143,7 +153,7 @@ def mcp_calls_by_call_id(messages: Sequence[object]) -> Mapping[str, McpCall]:
 def deferred_mcp_calls(messages: Sequence[object], requested: Mapping[str, McpToolUse]) -> tuple[McpCall, ...]:
     own_call_ids: Final = frozenset(call.id for call in chain.from_iterable(map(mcp_tool_uses, messages)))
     return tuple(
-        build_mcp_call(requested[call_id], result)
+        build_deferred_mcp_call(requested[call_id], result)
         for call_id, result in _results_of(messages).items()
         if call_id not in own_call_ids and call_id in requested
     )
@@ -190,7 +200,7 @@ def replayed_mcp_call_message(input_item: Mapping[str, object]) -> ChatCompletio
     item: Final = _mcp_call_input_item(input_item)
     if item is None:
         return None
-    call_id: Final = item.id.removeprefix(MCP_CALL_ITEM_ID_PREFIX)
+    call_id: Final = anthropic_mcp_call_id(item.id)
     if not is_anthropic_mcp_call_id(call_id):
         return None
     server_tool_call: Final = ChatCompletionAssistantToolCall(
