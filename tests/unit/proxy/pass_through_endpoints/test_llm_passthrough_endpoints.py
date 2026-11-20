@@ -281,6 +281,10 @@ async def _call_gemini_pass_through(method: str, endpoint: str) -> object:
         ("GET", "v1beta/files%2Fabc123"),
         ("GET", "v1beta/files/abc123#fragment"),
         ("GET", "download/v1beta/files/abc123:download"),
+        ("GET", "v1beta/files//abc123"),
+        ("DELETE", "v1beta/files/other/../abc123"),
+        ("GET", "v1beta/files/other/%2e%2e/abc123"),
+        ("GET", "v1beta/files/./abc123"),
     ],
 )
 async def test_gemini_pass_through_refuses_a_file_the_caller_does_not_own(

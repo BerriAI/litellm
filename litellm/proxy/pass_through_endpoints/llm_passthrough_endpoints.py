@@ -534,14 +534,13 @@ async def gemini_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    await _enforce_gemini_passthrough_file_ownership(request.method, encoded_endpoint, user_api_key_dict)
-
     # Construct the full target URL using httpx, preserving any base path
     # prefix that the operator configured on base_target_url.
     base_url: Final = httpx.URL(base_target_url)
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
+    await _enforce_gemini_passthrough_file_ownership(request.method, updated_url.path, user_api_key_dict)
 
     # Add or update query parameters
     gemini_api_key: Final[str | None] = passthrough_endpoint_router.get_credentials(
