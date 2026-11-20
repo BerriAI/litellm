@@ -547,7 +547,9 @@ def gemini_image_candidate_count(
 ) -> Literal["forward", "drop"] | UnsupportedParamsError:
     n: Final = request_params.get("n")
     modalities: Final = request_params.get("modalities")
-    if not isinstance(n, int) or n <= 1 or not isinstance(modalities, list) or "image" not in modalities:
+    asks_for_several_candidates: Final = isinstance(n, int) and n > 1
+    asks_for_image_output: Final = isinstance(modalities, list) and "image" in modalities
+    if not (asks_for_several_candidates and asks_for_image_output):
         return "forward"
     if "n" in allowed_openai_params:
         return "forward"
