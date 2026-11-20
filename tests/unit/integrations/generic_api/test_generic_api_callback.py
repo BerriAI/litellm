@@ -1235,3 +1235,21 @@ def test_generic_api_logger_rejects_ssrf_endpoints(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(litellm, "user_url_validation", False)
     allowed: Final = GenericAPILogger.resolve_endpoint("http://127.0.0.1:8200/v1/sys")
     assert allowed == "http://127.0.0.1:8200/v1/sys"
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_blocks_redirect_to_private_ip() -> None:
+    from litellm.litellm_core_utils.url_utils import SSRFError
+
+    async def redirect_to_metadata(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(307, headers={"Location": "http://169.254.169.254/latest/meta-data/"})
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(redirect_to_metadata))
+    logger: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    with pytest.raises(SSRFError):
+        await logger._send_single_post("https://owned-logger.invalid", "{}")
+    await handler.close()

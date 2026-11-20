@@ -1,4 +1,5 @@
 import os
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Protocol
@@ -88,6 +89,10 @@ def _json_object_body(response: _JsonObjectSource) -> dict[str, object]:
 
 def _as_json_object(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
+
+
+def _encode_vault_path_segments(path: str) -> str:
+    return "/".join(urllib.parse.quote(segment, safe="") for segment in path.split("/"))
 
 
 class HashicorpSecretManager(BaseSecretManager):
@@ -320,11 +325,11 @@ class HashicorpSecretManager(BaseSecretManager):
 
         _url = f"{self.vault_addr}/v1/"
         if resolved_namespace:
-            _url += f"{resolved_namespace}/"
-        _url += f"{resolved_mount}/data/"
+            _url += f"{_encode_vault_path_segments(resolved_namespace)}/"
+        _url += f"{_encode_vault_path_segments(resolved_mount)}/data/"
         if resolved_path_prefix:
-            _url += f"{resolved_path_prefix}/"
-        _url += secret_name
+            _url += f"{_encode_vault_path_segments(resolved_path_prefix)}/"
+        _url += _encode_vault_path_segments(secret_name)
         return _url
 
     def _sanitize_plain_value(self, value: object) -> str | None:

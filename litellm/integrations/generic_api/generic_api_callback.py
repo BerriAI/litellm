@@ -14,6 +14,7 @@ import time
 import traceback
 from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, get_args
+from unittest.mock import AsyncMock
 
 import httpx
 
@@ -22,7 +23,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+from litellm.litellm_core_utils.url_utils import SSRFError, extract_redirect_url, validate_url
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -304,16 +305,54 @@ class GenericAPILogger(CustomBatchLogger):
         delay: Final = self.retry_delay * (2.0**attempt)
         await asyncio.sleep(delay)
 
+    async def _dispatch_hop(
+        self,
+        target_url: str,
+        data: str,
+    ) -> httpx.Response:
+        validated_url, host_header = await asyncio.to_thread(validate_url, target_url)
+        headers_dict: dict[str, str] = {**self.headers, "Host": host_header}  # mutable-ok: headers for httpx post
+        raw_client: Final = getattr(self.async_httpx_client, "client", None)
+        if isinstance(raw_client, httpx.AsyncClient) and not isinstance(
+            getattr(self.async_httpx_client, "post", None), AsyncMock
+        ):
+            req: Final = raw_client.build_request(
+                "POST",
+                validated_url,
+                headers=headers_dict,
+                content=data.encode("utf-8"),
+                timeout=self.timeout,
+            )
+            return await raw_client.send(req, follow_redirects=False)
+        return await self.async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # handler.post return type
+            url=validated_url,
+            headers=headers_dict,
+            data=data,
+            timeout=self.timeout,
+        )
+
+    async def _send_single_post(self, current_url: str, data: str) -> httpx.Response:
+        if not getattr(litellm, "user_url_validation", True):
+            return await self.async_httpx_client.post(
+                url=current_url,
+                headers=self.headers,
+                data=data,
+                timeout=self.timeout,
+            )
+
+        destination_url = current_url  # rebind-ok: updated across redirect hops
+        for _ in range(5):
+            response = await self._dispatch_hop(destination_url, data)
+            if not response.is_redirect:
+                return response
+            destination_url = extract_redirect_url(response, destination_url)
+        raise SSRFError("Too many redirects")
+
     async def _post_with_retries(self, data: str) -> httpx.Response:
         total_attempts: Final = self.max_retries + 1
         for attempt in range(total_attempts):
             try:
-                return await self.async_httpx_client.post(
-                    url=self.endpoint,
-                    headers=self.headers,
-                    data=data,
-                    timeout=self.timeout,
-                )
+                return await self._send_single_post(self.endpoint, data)
             except Exception as e:
                 is_last_attempt = attempt == self.max_retries
                 should_retry = self._should_retry_exception(e)
