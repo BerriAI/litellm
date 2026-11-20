@@ -1084,7 +1084,7 @@ def test_configured_caps_never_shrink_an_uncapped_hold(route: str, config_source
 def _priced_router(
     backend_models: tuple[str, ...],
     additional_drop_params: list[str] | None = None,
-    default_litellm_params: dict | None = None,
+    default_litellm_params: dict[str, list[str]] | None = None,
 ) -> Router:
     return Router(
         default_litellm_params=default_litellm_params,
@@ -1230,6 +1230,39 @@ def test_a_cap_named_in_additional_drop_params_cannot_lower_the_hold(
     assert uncapped is not None and kept is not None
     assert kept < uncapped
     assert dropped == pytest.approx(uncapped)
+
+
+@pytest.mark.parametrize("max_tokens", [1, 65536])
+@pytest.mark.parametrize(
+    ("deployment_drops", "router_drops", "request_drops"),
+    [
+        (None, ["max_tokens"], []),
+        (["max_tokens"], None, []),
+        (["max_tokens"], [], None),
+    ],
+)
+def test_a_cap_counts_when_the_drop_list_the_router_sends_keeps_it(
+    max_tokens: int,
+    deployment_drops: list[str] | None,
+    router_drops: list[str] | None,
+    request_drops: list[str] | None,
+) -> None:
+    body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": max_tokens}
+    plain: Final = estimate_request_max_cost(
+        request_body=body, route="/v1/chat/completions", llm_router=_priced_router(("openai/gpt-5.6",))
+    )
+    overridden: Final = estimate_request_max_cost(
+        request_body=body if request_drops is None else {**body, "additional_drop_params": request_drops},
+        route="/v1/chat/completions",
+        llm_router=_priced_router(
+            ("openai/gpt-5.6",),
+            additional_drop_params=deployment_drops,
+            default_litellm_params=None if router_drops is None else {"additional_drop_params": router_drops},
+        ),
+    )
+
+    assert plain is not None
+    assert overridden == pytest.approx(plain)
 
 
 def test_custom_handler_deployment_trusts_only_the_chat_cap_it_receives(monkeypatch: pytest.MonkeyPatch) -> None:

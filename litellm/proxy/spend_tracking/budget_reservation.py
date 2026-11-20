@@ -1308,12 +1308,14 @@ def _estimate_request_max_cost_for_model(
     input_tokens: int | None = None,
 ) -> float | None:
     pricing: Final = _get_model_pricing(model=model, llm_router=llm_router)
-    caps: Final = _valid_output_token_caps(request_body, router_dropped=_router_dropped_fields(llm_router))
-    surface: Final = _output_cap_surface(route, request_body)
+    body: Final = _WINDOW_OBJECT.validate_python(request_body)
+    caps: Final = _valid_output_token_caps(body)
+    surface: Final = _output_cap_surface(route, body)
     honored_fields: Final = _honored_output_token_fields(
         caps,
         surface=surface,
         serving=pricing.deployments or tuple(_ServingDeployment(model_info=info) for info in pricing.cost_infos),
+        caller_dropped=_caller_dropped_fields(body, llm_router),
     )
     requested_output_tokens: Final = _requested_output_tokens(caps, honored_fields=honored_fields, surface=surface)
     estimates: Final = [
@@ -1685,35 +1687,45 @@ def _request_output_token_caps(request_body: Mapping[str, object]) -> Mapping[st
     return MappingProxyType(dict((*top_level_caps, *nested_cap)))
 
 
-def _valid_output_token_caps(request_body: Mapping[str, object], router_dropped: frozenset[str]) -> Mapping[str, int]:
-    dropped: Final = drop_policy(request_body).additional_drop_params | router_dropped
+def _valid_output_token_caps(request_body: Mapping[str, object]) -> Mapping[str, int]:
     return MappingProxyType(
         {
             field: tokens
             for field, value in _request_output_token_caps(request_body).items()
-            if field not in dropped and (tokens := _non_negative_int(value)) is not None
+            if (tokens := _non_negative_int(value)) is not None
         }
     )
 
 
-def _router_dropped_fields(llm_router: Router | None) -> frozenset[str]:
+def _caller_dropped_fields(request_body: Mapping[str, object], llm_router: Router | None) -> frozenset[str] | None:
+    if "additional_drop_params" in request_body:
+        return drop_policy(request_body).additional_drop_params
     if llm_router is None:
-        return frozenset()
-    return drop_policy(RoutingContext(llm_router).default_litellm_params()).additional_drop_params
+        return None
+    router_defaults: Final = RoutingContext(llm_router).default_litellm_params()
+    if "additional_drop_params" not in router_defaults:
+        return None
+    return drop_policy(router_defaults).additional_drop_params
 
 
 def _honored_output_token_fields(
     caps: Mapping[str, int],
     surface: _OutputCapSurface,
     serving: Sequence[_ServingDeployment],
+    caller_dropped: frozenset[str] | None,
 ) -> frozenset[str]:
     return frozenset(
-        field for field in caps if all(_deployment_receives(field, surface, deployment) for deployment in serving)
+        field
+        for field in caps
+        if all(_deployment_receives(field, surface, deployment, caller_dropped) for deployment in serving)
     )
 
 
-def _deployment_receives(field: str, surface: _OutputCapSurface, deployment: _ServingDeployment) -> bool:
-    return field not in _deployment_dropped_fields(deployment) and _deployment_honors(field, surface, deployment)
+def _deployment_receives(
+    field: str, surface: _OutputCapSurface, deployment: _ServingDeployment, caller_dropped: frozenset[str] | None
+) -> bool:
+    dropped: Final = caller_dropped if caller_dropped is not None else _deployment_dropped_fields(deployment)
+    return field not in dropped and _deployment_honors(field, surface, deployment)
 
 
 def _deployment_dropped_fields(deployment: _ServingDeployment) -> frozenset[str]:
