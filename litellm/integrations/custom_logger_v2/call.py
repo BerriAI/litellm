@@ -12,6 +12,7 @@ class CallIds:
     trace_id: str | None = None
     session_id: str | None = None
     parent_call_id: str | None = None
+    connection_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +20,9 @@ class CallKind:
     call_type: str
     route: str | None = None
     stream: bool = False
+    synchronous: bool = False
+    endpoint_type: str | None = None
+    internal_origin: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

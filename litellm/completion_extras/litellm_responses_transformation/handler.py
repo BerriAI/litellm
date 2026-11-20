@@ -13,6 +13,8 @@ from typing import (
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
+from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
@@ -206,9 +208,7 @@ class ResponsesToCompletionBridgeHandler:
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
-        result: Final = responses(
-            **request_data,
-        )
+        result: Final = responses(**request_data, **PROMPT_MANAGEMENT_APPLIED)
 
         from litellm.types.utils import ModelResponse
 
@@ -255,7 +255,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, replays_responses_history
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -264,7 +264,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
-                replays_openai_history=custom_llm_provider == "openai",
+                replays_openai_history=replays_responses_history(custom_llm_provider),
                 streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
@@ -316,7 +316,9 @@ class ResponsesToCompletionBridgeHandler:
             request_data["cache"] = kwargs["cache"]
         result: Final = await aresponses(
             **request_data,
+            **PROMPT_MANAGEMENT_APPLIED,
             aresponses=True,
+            _agentic_loop_api_surface=CHAT_COMPLETION_AGENTIC_SURFACE,
         )
 
         from litellm.types.utils import ModelResponse
@@ -364,7 +366,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, replays_responses_history
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -373,7 +375,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
-                replays_openai_history=custom_llm_provider == "openai",
+                replays_openai_history=replays_responses_history(custom_llm_provider),
                 streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(

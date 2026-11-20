@@ -8,6 +8,7 @@ from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 if TYPE_CHECKING:
@@ -90,7 +91,8 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         )
 
         end_time: Final = datetime.now()
-        asyncio.create_task(
+        spawn_logging_task(
+            asyncio.get_running_loop(),
             PassThroughStreamingHandler.route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
@@ -101,7 +103,8 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
                 raw_bytes=self.collected_chunks,
                 end_time=end_time,
                 model=self.model,
-            )
+            ),
+            task_name="Google GenAI stream success log",
         )
 
 

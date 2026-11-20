@@ -141,3 +141,16 @@ export const teamMemberBudgetAlertSummary = (metadata: unknown): readonly string
   budgetAlertRowsFromMetadata(metadata, TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY).map((row) =>
     row.emails.length > 0 ? `${row.threshold}%: member, ${row.emails}` : `${row.threshold}%: member`,
   );
+
+export const teamBudgetAlertSummary = (metadata: unknown): readonly string[] =>
+  budgetAlertRowsFromMetadata(metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY).map(
+    (row) => `${row.threshold}%: ${row.emails}`,
+  );
+
+export const legacySoftBudgetRecipientsText = (stored: unknown): string => {
+  if (typeof stored === "string") return stored.trim();
+  if (Array.isArray(stored)) {
+    return stored.filter((email): email is string => typeof email === "string").join(", ");
+  }
+  return "";
+};

@@ -1,7 +1,9 @@
 import { useTranslation } from "react-i18next";
-import { cn } from "@/lib/cva.config";
+import { createParser, createSerializer, parseAsString, useQueryStates, type inferParserType } from "nuqs";
 import { uiHref } from "@/utils/uiHref";
 import type { CustomerUsageScope } from "./customerUsageApi";
+import { customerUsageDateParsers } from "./customerUsageRange";
+import { CustomerDetailNavigation } from "./CustomerDetailLayout";
 
 type CustomerHierarchyView = "usage" | "teams" | "members" | "budget_groups" | "settings";
 const LABELS = {
@@ -12,11 +14,37 @@ const LABELS = {
   settings: "customerPortal.hierarchy.settings",
 } as const;
 
-export function customerHierarchyHref(page: "usage" | "manage", scope: CustomerUsageScope): string {
-  const query = new URLSearchParams({ org: scope.org });
-  if (scope.team) query.set("team", scope.team);
-  if (scope.member) query.set("member", scope.member);
-  return `${uiHref(`customers/${page}`)}?${query}`;
+export const customerAppParsers = {
+  app_id: createParser({
+    parse: (value) => (value.length > 0 && !value.includes(",") ? value : null),
+    serialize: (value: string) => value,
+  }),
+};
+const hierarchyFilters = { ...customerUsageDateParsers, ...customerAppParsers };
+const hierarchyParsers = {
+  org: parseAsString,
+  team: parseAsString,
+  member: parseAsString,
+  ...hierarchyFilters,
+};
+const hierarchyHref = createSerializer(hierarchyParsers);
+const listHref = createSerializer(customerUsageDateParsers);
+
+export function customerHierarchyHref(
+  page: "usage" | "manage",
+  scope: CustomerUsageScope,
+  dates: Partial<inferParserType<typeof hierarchyFilters>> = {},
+): string {
+  return hierarchyHref(uiHref(`customers/${page}`), { ...scope, ...dates });
+}
+
+export function useCustomerHierarchyLinks() {
+  const [dates] = useQueryStates(hierarchyFilters);
+  return {
+    customerHierarchyHref: (page: "usage" | "manage", scope: CustomerUsageScope) =>
+      customerHierarchyHref(page, scope, dates),
+    customersHref: listHref(uiHref("customers"), dates),
+  };
 }
 
 export default function CustomerHierarchyNavigation({
@@ -27,32 +55,21 @@ export default function CustomerHierarchyNavigation({
   active: CustomerHierarchyView;
 }) {
   const { t } = useTranslation();
+  const { customerHierarchyHref } = useCustomerHierarchyLinks();
   let pages: readonly CustomerHierarchyView[] = ["usage", "teams", "members", "budget_groups", "settings"];
   if (scope.team) pages = ["usage", "members", "settings"];
   if (scope.member) pages = ["usage", "settings"];
-  return (
-    <nav aria-label={t("customerPortal.hierarchy.customerNavigation")} className="flex gap-6 border-b">
-      {pages.map((page) => {
-        const organizationMembers = page === "members" && !scope.team;
-        const explicitTab = page === "settings" || page === "budget_groups" || organizationMembers;
-        return (
-          <a
-            key={page}
-            href={
-              page === "usage"
-                ? customerHierarchyHref("usage", scope)
-                : `${customerHierarchyHref("manage", scope)}${explicitTab ? `&tab=${page}` : ""}`
-            }
-            aria-current={active === page ? "page" : undefined}
-            className={cn(
-              "border-b-2 border-transparent px-0.5 pb-3 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
-              active === page && "border-primary text-foreground",
-            )}
-          >
-            {t(LABELS[page])}
-          </a>
-        );
-      })}
-    </nav>
-  );
+  const items = pages.map((page) => {
+    const organizationMembers = page === "members" && !scope.team;
+    const explicitTab = page === "settings" || page === "budget_groups" || organizationMembers;
+    return {
+      href:
+        page === "usage"
+          ? customerHierarchyHref("usage", scope)
+          : `${customerHierarchyHref("manage", scope)}${explicitTab ? `&tab=${page}` : ""}`,
+      label: t(LABELS[page]),
+      active: active === page,
+    };
+  });
+  return <CustomerDetailNavigation label={t("customerPortal.hierarchy.customerNavigation")} items={items} />;
 }
