@@ -457,6 +457,7 @@ class RouterState:
     fallback_depth: int | None = None
     max_fallbacks: int | None = None
     attempted_targets: "AttemptedFallbackTargets | None" = None
+    caller_sent_params: tuple[str, ...] | None = field(default=None, metadata=wire("_caller_sent_params"))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

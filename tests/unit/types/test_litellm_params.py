@@ -278,6 +278,7 @@ INTERNAL_STATE_NAMES: Final = (
     "fallback_depth",
     "max_fallbacks",
     "attempted_targets",
+    "_caller_sent_params",
     "proxy_server_request",
     "secret_fields",
     "github_copilot_user_session",
