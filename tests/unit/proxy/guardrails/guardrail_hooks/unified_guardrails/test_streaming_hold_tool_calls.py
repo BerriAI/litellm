@@ -243,11 +243,20 @@ class _RecordingGuardrail(CustomGuardrail):
     """Records what the client had already received when the guardrail first scanned a tool call, or at its
     last scan when it never saw one. ``blocks_only_tool_calls`` lets the scans before the tool call pass."""
 
-    def __init__(self, released: Sequence[object], blocks: bool, blocks_only_tool_calls: bool = False) -> None:
+    def __init__(
+        self,
+        released: Sequence[object],
+        blocks: bool,
+        blocks_only_tool_calls: bool = False,
+        reads_response_for: str | None = None,
+    ) -> None:
         super().__init__(guardrail_name="hold-tool-calls-test", event_hook="post_call")
         self._released: Final = released
         self._blocks: Final = blocks
         self._blocks_only_tool_calls: Final = blocks_only_tool_calls
+        # An output item type this guardrail looks for in the whole response it is given, the way a guardrail
+        # that does not rely on the translation's inputs judges an item those inputs leave out.
+        self._reads_response_for: Final = reads_response_for
         self.released_at_scan: tuple[object, ...] | None = None
         self.scanned_a_tool_call = False
 
@@ -261,6 +270,9 @@ class _RecordingGuardrail(CustomGuardrail):
         # Most routes hand the tool call over as a tool call; Converse hands its arguments over as a text.
         carries_tool_call: Final = _mentions_tool_call(
             [{"tool_calls": inputs.get("tool_calls"), "texts": inputs.get("texts")}]
+        ) or (
+            self._reads_response_for is not None
+            and self._reads_response_for in json.dumps(request_data.get("response"), default=str)
         )
         if not self.scanned_a_tool_call:
             self.released_at_scan = tuple(self._released)
@@ -293,6 +305,7 @@ async def _relay(
     mode: str = "end_only",
     blocks_only_tool_calls: bool | None = None,
     scanned_a_tool_call: list[bool] | None = None,
+    reads_response_for: str | None = None,
 ) -> tuple[tuple[object, ...], tuple[object, ...], tuple[object, ...]]:
     """The stream's items, what the client had at scan time, and everything the client received.
 
@@ -309,6 +322,7 @@ async def _relay(
         released,
         blocks,
         blocks_only_tool_calls=mode != "end_only" if blocks_only_tool_calls is None else blocks_only_tool_calls,
+        reads_response_for=reads_response_for,
     )
     for setting, value in STREAM_MODES[mode].items():
         setattr(guardrail, setting, value)
@@ -652,3 +666,31 @@ def test_the_messages_translation_cuts_a_transport_read_at_its_last_whole_frame(
     # An event some providers hand over already parsed is a whole frame.
     parsed: Final = {"type": "message_stop"}
     assert translation.split_whole_stream_frames(None, parsed) == (parsed, None)
+
+
+@pytest.mark.parametrize("mode", ["end_only", "sampled", "background"])
+@pytest.mark.parametrize("item_type", sorted(_CLIENT_RUN_TOOL_CALL_ITEM_TYPES - {"function_call", "custom_tool_call"}))
+@pytest.mark.asyncio
+async def test_a_held_item_the_scan_key_does_not_carry_still_gets_an_end_of_stream_round(
+    mode: str, item_type: str
+) -> None:
+    """The Responses scan key carries only function and custom tool calls, so with one of the other items held
+    the end key equals the key of the round that scanned the text before it. That round must not make the
+    end-of-stream round redundant: a guardrail that reads the whole response judges the item there."""
+    guardrail_saw: Final[list[bool]] = []
+
+    _, _, received = await _relay(
+        "responses",
+        with_tool_call=True,
+        hold_tool_calls=True,
+        blocks=True,
+        mode=mode,
+        wire_items=_responses_items_with_client_run_item(item_type),
+        blocks_only_tool_calls=True,
+        scanned_a_tool_call=guardrail_saw,
+        reads_response_for=item_type,
+    )
+
+    assert guardrail_saw == [True], "the held item was released with no round after it arrived"
+    assert item_type not in "".join(_readable(chunk) for chunk in received)
+    assert BLOCK_MESSAGE in "".join(_readable(chunk) for chunk in received)

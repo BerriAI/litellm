@@ -31,6 +31,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import chat_completion, completion
 from litellm.proxy.utils import ProxyLogging
@@ -154,6 +155,7 @@ class _BlockEveryRequestAskingToBeLogged(CustomGuardrail):
     def __init__(self) -> None:
         super().__init__(guardrail_name="deny-list", event_hook=GuardrailEventHooks.pre_call, default_on=True)
         self.logged: tuple[str, ...] = ()
+        self.first_logged: Final = asyncio.Event()
 
     async def async_pre_call_hook(
         self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
@@ -170,11 +172,13 @@ class _BlockEveryRequestAskingToBeLogged(CustomGuardrail):
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         self.logged = (*self.logged, "failure")
+        self.first_logged.set()
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         self.logged = (*self.logged, "success")
+        self.first_logged.set()
 
 
 class _RejectEveryRequest(CustomLogger):
@@ -338,7 +342,10 @@ async def test_a_blocked_prompt_that_asks_to_be_logged_reaches_the_logging_callb
     blocker: Final = _BlockEveryRequestAskingToBeLogged()
 
     await _reply(path, body, blocker, released, None, route=path)
-    await asyncio.sleep(0.2)  # the stream wrapper logs its success event in a task of its own
+    # Every route logs its one event from a task of its own. Wait for that event, then for anything the
+    # logging worker still holds, so a second event would be counted too.
+    await asyncio.wait_for(blocker.first_logged.wait(), timeout=10)
+    await GLOBAL_LOGGING_WORKER.flush()
 
     assert blocker.logged == logged
 

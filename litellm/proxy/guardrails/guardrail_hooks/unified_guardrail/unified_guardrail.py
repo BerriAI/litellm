@@ -1346,9 +1346,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                     return
 
                 if holds_tool_calls:
-                    whole_frames, frame_tail = mappings[CallTypes(call_type)]().split_whole_stream_frames(
-                        frame_tail, item
-                    )
+                    # Typed, so the type checker knows what the split returns.
+                    framing_translation: BaseTranslation = mappings[CallTypes(call_type)]()
+                    whole_frames, frame_tail = framing_translation.split_whole_stream_frames(frame_tail, item)
                     responses_so_far.pop()
                     if whole_frames is None:
                         continue
@@ -1548,10 +1548,18 @@ class UnifiedLLMGuardrails(CustomLogger):
                     if holds_tool_calls and pending_end_of_stream_items
                     else responses_so_far
                 )
+                # The end-of-stream round is never skipped as redundant while a tool call is held: a scan key
+                # carries only what the translation fingerprints, so it can equal the last sampled round's key
+                # although a held item arrived since.
+                holds_a_tool_call: Final = holds_tool_calls and any(
+                    endpoint_translation.starts_client_tool_call(pending_item)
+                    for pending_item in pending_end_of_stream_items
+                )
                 end_scan_key: Final = endpoint_translation.get_streaming_scan_key(ended_responses)
                 verdict_settled = True
                 if (
-                    _is_redundant_scan(end_scan_key, last_scan_key)
+                    not holds_a_tool_call
+                    and _is_redundant_scan(end_scan_key, last_scan_key)
                     and not _owes_ended_scan(endpoint_translation, guardrail_to_apply, responses_so_far, last_scan_key)
                     and not background_scan_failed
                 ):

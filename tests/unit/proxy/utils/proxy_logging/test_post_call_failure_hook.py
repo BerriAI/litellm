@@ -160,17 +160,19 @@ def test_is_proxy_only_llm_api_missing_exception_raises(proxy_logging):
     ids=["asks-to-be-logged", "does-not-ask", "its-reply-stream-logs-a-success"],
 )
 async def test_a_reply_style_block_of_the_prompt_reaches_the_failure_callbacks_once_and_only_when_it_asks(
-    proxy_logging,
-    make_user_api_key_auth,
-    monkeypatch,
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
     log_as_failure: bool,
     reply_logs_success: bool,
     failure_events: int,
-):
-    recorded: Final[list[dict]] = []
+) -> None:
+    recorded: Final[list[dict[str, object]]] = []
 
     class _RecordingLogger(CustomLogger):
-        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        async def async_log_failure_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
             recorded.append(kwargs)
 
     monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
