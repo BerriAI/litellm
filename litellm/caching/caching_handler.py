@@ -143,12 +143,12 @@ def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object])
 
 
 def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
-    if cached_result.get("object") == "response":
+    obj: Final = cached_result.get("object")
+    if obj == "response":
         return False
     cached_id: Final = cached_result.get("id")
     if isinstance(cached_id, str) and cached_id.startswith("chatcmpl"):
         return True
-    obj: Final = cached_result.get("object")
     if isinstance(obj, str):
         return obj.startswith("chat.completion")
     return "choices" in cached_result
