@@ -13,11 +13,12 @@ import { UserReference } from "@/components/shared/UserReference";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
 import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
-import { editableModelExtraParams, editedModelInfoPricing, parseModelExtraParams } from "../utils/modelEditParams";
+import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
+import { useModelInfoEdits } from "./model_info/useModelInfoEdits";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
@@ -87,7 +88,6 @@ export default function ModelInfoView({
   const [isUpdateCredentialsModalOpen, setIsUpdateCredentialsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const modelInfoAtEditStart = useRef<Record<string, unknown>>({});
   const [existingCredential, setExistingCredential] = useState<CredentialItem | null>(null);
   const [showCacheControl, setShowCacheControl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -100,7 +100,7 @@ export default function ModelInfoView({
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Fetch model data using hook
-  const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(
+  const modelQuery = useModelsInfo(
     1,
     50,
     undefined,
@@ -115,6 +115,7 @@ export default function ModelInfoView({
     undefined,
     { useStoredParams: true },
   );
+  const { data: rawModelDataResponse, isLoading: isLoadingModel } = modelQuery;
   const { data: modelCostMapData } = useModelCostMap();
   const { data: modelHubData } = useModelHub();
   const { data: teams } = useTeams();
@@ -139,7 +140,8 @@ export default function ModelInfoView({
   }, [rawModelDataResponse, modelCostMapData]);
 
   // Keep modelData variable name for backwards compatibility
-  const modelData = transformedModelData;
+  const modelInfoEdits = useModelInfoEdits(transformedModelData, modelQuery.dataUpdatedAt, setIsEditing);
+  const modelData = modelInfoEdits.modelData;
 
   const aliasForTeam = (teamId: string | null | undefined): string | null =>
     teams?.find((team) => team.team_id === teamId)?.team_alias || null;
@@ -273,15 +275,10 @@ export default function ModelInfoView({
         return;
       }
 
-      const modelInfoPricing = editedModelInfoPricing(
-        parseModelExtraParams(values.model_info) ?? {},
-        modelInfoAtEditStart.current,
-        parsedExtraParams,
-        localModelData?.litellm_params ?? {},
-      );
+      const pricingEdits = modelInfoEdits.pricing(values.model_info, parsedExtraParams, localModelData);
       const updatedLitellmParams: Record<string, unknown> = {
         ...editableModelExtraParams(parsedExtraParams),
-        ...modelInfoPricing,
+        ...pricingEdits,
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
@@ -370,7 +367,7 @@ export default function ModelInfoView({
       }
 
       const paramsToRemove = Object.keys(editableModelExtraParams(localModelData?.litellm_params ?? {})).filter(
-        (key) => !Object.prototype.hasOwnProperty.call(parsedExtraParams, key) && !(key in modelInfoPricing),
+        (key) => !Object.prototype.hasOwnProperty.call(parsedExtraParams, key) && !(key in pricingEdits),
       );
       // Final guard: never PATCH a redacted secret. The /model/info snapshot that
       // seeds this form masks secrets;
@@ -404,6 +401,7 @@ export default function ModelInfoView({
       };
 
       setLocalModelData(updatedModelData);
+      modelInfoEdits.rememberSaved(updatedModelInfo);
 
       if (onModelUpdate) {
         onModelUpdate(updatedModelData);
@@ -725,13 +723,7 @@ export default function ModelInfoView({
                   )}
                   {canEditModel ? (
                     !isEditing && (
-                      <Button
-                        onClick={() => {
-                          modelInfoAtEditStart.current = { ...modelData?.model_info };
-                          setIsEditing(true);
-                        }}
-                        className="flex items-center"
-                      >
+                      <Button onClick={modelInfoEdits.startEditing} className="flex items-center">
                         {t("modelInfoView.settings.editSettings")}
                       </Button>
                     )

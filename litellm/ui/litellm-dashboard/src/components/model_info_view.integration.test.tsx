@@ -958,6 +958,23 @@ describe("ModelInfoView", () => {
     expect(resave).not.toHaveProperty("litellm_params_to_remove");
   });
 
+  it("keeps a saved Model Info edit when another field is saved before the model is refetched", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Model Info" }), {
+      target: { value: JSON.stringify({ ...defaultModelData.model_info, owner: "billing" }) },
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledOnce());
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledTimes(2));
+
+    expect(mockModelPatchUpdateCall.mock.calls[1][1].model_info.owner).toBe("billing");
+  });
+
   it("does not turn a rate the cost map changed while the form was open into an override", async () => {
     const displayedModel = {
       ...defaultModelData,
