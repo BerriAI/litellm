@@ -37,6 +37,17 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    tool_calls_with_server_tool_calls,
+    with_server_tool_call_arguments,
+    write_anthropic_server_tool_calls,
+)
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    claude_hosted_web_tool_arguments,
+    with_web_search_call_arguments,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -48,7 +59,9 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     Choices,
+    Delta,
     LLMResponseTypes,
+    Message,
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
@@ -975,7 +988,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _finalize_inspection(
         self,
         inspect_response: dict[str, object],
-        request_data: dict,
+        request_data: dict[str, object],
         context: _ScanContext,
         start_time: datetime,
         response_obj: object = None,
@@ -1101,7 +1114,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
                 self.on_flagged_action,
             )
 
-        if self.on_flagged_action == "block":
+        if self.on_flagged_action == "block" or self._redacts_json_input(action, context, request_data.get("input")):
             raise HTTPException(
                 status_code=400,
                 detail=self._build_block_payload(context, verdict),
@@ -1354,7 +1367,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _apply_redaction(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response_obj: object,
         context: _ScanContext,
         verdict: _CiscoVerdict,
@@ -1415,7 +1428,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _redact_chat_input(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         sanitized_text: str | None,
         sanitized_messages: list[dict[str, object]] | None,
     ) -> bool:
@@ -1427,6 +1440,9 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             # field, so drop it before rewriting the real conversation.
             sanitized_messages = sanitized_messages[:-1] or None
         uses_input: Final = "input" in request_data and "messages" not in request_data
+        request_input: Final[object] = request_data.get("input")
+        if self._carries_json_part(request_input):
+            return False
         has_instructions: Final = request_data.get("instructions") is not None
         instructions_redacted = False
         if has_instructions:
@@ -1447,7 +1463,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             return True
         if sanitized_text:
             if uses_input:
-                rewritten_input: Final = self._rewrite_responses_input_text(request_data.get("input"), sanitized_text)
+                rewritten_input: Final = self._rewrite_responses_input_text(request_input, sanitized_text)
                 if rewritten_input is not None:
                     request_data["input"] = rewritten_input
                     return True
@@ -1654,6 +1670,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     @classmethod
     def _clear_tool_call_arguments(cls, message: object) -> None:
         """Clear tool-call / function-call arguments after Cisco redaction."""
+        cls._clear_server_tool_call_arguments(message)
         tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
         for tc in tool_calls or []:
             fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
@@ -1663,9 +1680,26 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         )
         cls._clear_arguments_field(function_call)
 
+    @staticmethod
+    def _clear_server_tool_call_arguments(message: object) -> None:
+        cleared: Final = tuple(
+            with_server_tool_call_arguments(server_tool_call, "{}")
+            for server_tool_call in anthropic_server_tool_call_params(message)
+        )
+        match message:
+            case Message() | Delta():
+                write_anthropic_server_tool_calls(message, cleared)
+            case dict() if cleared:
+                message["provider_specific_fields"] = {  # rebind-ok: a redaction must land on the message it scanned
+                    **(message.get("provider_specific_fields") or {}),
+                    "server_tool_calls": list(cleared),
+                }
+            case _:
+                pass
+
     def _redact_responses_api_output(
         self,
-        output_items: list,
+        output_items: list[object],
         sanitized_text: str | None,
         sanitized_messages: list[dict[str, object]] | None,
     ) -> bool:
@@ -1677,7 +1711,10 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         if not replacement_text:
             return False
         applied = False
-        for item in output_items:
+        for index, item in enumerate(output_items):
+            if claude_hosted_web_tool_arguments(item):
+                output_items[index] = with_web_search_call_arguments(item, "{}")  # rebind-ok: in-place redaction
+                applied = True
             content = getattr(item, "content", None) or (item.get("content") if isinstance(item, dict) else None)
             if isinstance(content, list):
                 for part in content:
@@ -1720,6 +1757,16 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             elif isinstance(content, list):
                 out.append({"role": role, "content": content})
         return out or None
+
+    @classmethod
+    def _redacts_json_input(cls, action: str, context: _ScanContext, request_input: object) -> bool:
+        return action == _ACTION_REDACT and context.direction == "input" and cls._carries_json_part(request_input)
+
+    @staticmethod
+    def _carries_json_part(request_input: object) -> bool:
+        items: Final = parts_of(request_input)
+        nested: Final = chain.from_iterable(parts_of(message_field(item, "content")) for item in items)
+        return any(message_field(part, "type") == "input_json" for part in chain(items, nested))
 
     @staticmethod
     def _rewrite_responses_input_text(original_input: object, sanitized_text: str) -> object | None:
@@ -1989,6 +2036,9 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if part_type in CiscoAIDefenseGuardrail._TEXT_PART_TYPES and part.get("text"):
                     parts.append(str(part["text"]))
                     continue
+                if part_type == "input_json" and "data" in part:
+                    parts.append(json.dumps(part["data"], ensure_ascii=False))
+                    continue
                 nested = part.get("content")
                 if nested is not None:
                     nested_text = CiscoAIDefenseGuardrail._normalize_message_content(nested)
@@ -2038,8 +2088,9 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         output_items: Final = getattr(response, "output", None)
         if not isinstance(output_items, list):
             return []
+        typed_output_items: Final[Sequence[object]] = output_items
         output_parts: Final[list[str]] = []
-        for item in output_items:
+        for item in typed_output_items:
             get = item.get if isinstance(item, dict) else (lambda k: getattr(item, k, None))
             for part in get("content") or []:
                 pget = part.get if isinstance(part, dict) else (lambda k: getattr(part, k, None))
@@ -2053,6 +2104,8 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             direct = get("text")
             if isinstance(direct, str) and direct:
                 output_parts.append(direct)
+            if hosted_arguments := claude_hosted_web_tool_arguments(item):
+                output_parts.append(hosted_arguments)
         joined = " ".join(output_parts)
         return [{"role": "assistant", "content": joined}] if joined else []
 
@@ -2095,8 +2148,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     @classmethod
     def _extract_message_tool_argument_parts(cls, message: object) -> list[str]:
         parts: Final[list[str]] = []
-        tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
-        for tool_call in tool_calls or []:
+        for tool_call in tool_calls_with_server_tool_calls(message):
             args = cls._extract_tool_call_arguments(tool_call)
             if args:
                 parts.append(args)

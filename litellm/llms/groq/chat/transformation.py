@@ -326,7 +326,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
 
-        original_service_tier: Final = _ATTRIBUTE_VALUE.validate_python(getattr(model_response, "service_tier"))
+        original_service_tier: Final = _ATTRIBUTE_VALUE.validate_python(getattr(model_response, "service_tier", None))
         mapped_service_tier: Final[Literal["auto", "default", "flex"]] = self._map_groq_service_tier(
             original_service_tier=original_service_tier
         )

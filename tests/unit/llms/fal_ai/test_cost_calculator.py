@@ -3,9 +3,92 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.cost_calculator import default_video_cost_calculator
+from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
-from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthrough_cost
+from litellm.llms.fal_ai.cost_calculator import FAL_BILLABLE_UNITS_HEADER, cost_calculator, fal_ai_passthrough_cost
+from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.types.utils import ImageObject, ImageResponse
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"duration": "8", "resolution": "720p"}, 0.6),
+        ({"duration": 5, "resolution": "540p"}, 0.1),
+        ({"resolution": "720p"}, None),
+        ({"duration": 8}, None),
+        ({"duration": 8, "resolution": "1080p"}, None),
+        ({"duration": "invalid", "resolution": "720p"}, None),
+    ],
+)
+def test_passthrough_video_clip_pricing(body: dict[str, object], expected: float | None) -> None:
+    litellm.register_model(
+        {
+            "fal_ai/test-clip": {
+                "output_cost_per_video_clip": {
+                    "8s": {"720p": 0.6},
+                    "5s": {"720p": 0.3, "540p": 0.1},
+                }
+            }
+        },
+        persist_across_reloads=False,
+    )
+    assert fal_ai_passthrough_cost("test-clip", body) == expected
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"duration": "5", "resolution": "360p"}, 0.17),
+        ({"resolution": "360p"}, None),
+        ({"duration": "8", "resolution": "360p"}, None),
+    ],
+)
+def test_router_preserves_passthrough_clip_pricing_without_a_billable_unit_rate(
+    body: dict[str, object], expected: float | None
+) -> None:
+    prices: Final = {"5s": {"360p": 0.17}}
+    litellm.register_model(
+        {
+            "fal_ai/fal-ai/router-clip": {
+                "litellm_provider": "fal_ai",
+                "mode": "video_generation",
+                "output_cost_per_video_clip": prices,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    _router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "configured-clip",
+                "litellm_params": {"model": "fal_ai/fal-ai/router-clip", "api_key": "test-key"},
+                "model_info": {"mode": "video_generation", "output_cost_per_video_clip": prices},
+            }
+        ],
+        num_retries=0,
+    )
+    assert fal_ai_passthrough_cost("fal-ai/router-clip", body) == expected
+
+
+@pytest.mark.parametrize(
+    ("fallback", "expected"),
+    [
+        ({}, None),
+        ({"output_cost_per_video": 0.0}, 0.0),
+        ({"output_cost_per_video": 0.37}, 0.37),
+        ({"output_cost_per_image": 0.11}, 0.11),
+    ],
+)
+def test_passthrough_missing_duration_uses_existing_fallback(
+    fallback: dict[str, float], expected: float | None
+) -> None:
+    litellm.register_model(
+        {"fal_ai/test-clip-fallback": {"output_cost_per_video_clip": {"5s": {"720p": 0.3}}, **fallback}},
+        persist_across_reloads=False,
+    )
+    assert fal_ai_passthrough_cost("test-clip-fallback", {"resolution": "720p"}) == expected
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +114,26 @@ def _image_response_with_dimensions(dimensions: tuple[tuple[int, int], ...]) -> 
             for index, (width, height) in enumerate(dimensions)
         ]
     )
+
+
+@pytest.mark.parametrize("duration", [0.0, 8.0])
+@pytest.mark.parametrize("clip_prices", [None, {"5s": {"720p": 0.19}}])
+def test_catalog_flat_video_price_reaches_both_video_calculators(
+    monkeypatch: pytest.MonkeyPatch, duration: float, clip_prices: dict[str, dict[str, float]] | None
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/test-flat-video",
+        {
+            "litellm_provider": "fal_ai",
+            "mode": "video_generation",
+            "output_cost_per_video": 0.37,
+            "output_cost_per_video_clip": clip_prices,
+        },
+    )
+    assert video_generation_cost("fal-ai/test-flat-video", duration, "fal_ai") == pytest.approx(0.37)
+    assert default_video_cost_calculator("fal-ai/test-flat-video", duration, "fal_ai") == pytest.approx(0.37)
+    assert fal_ai_passthrough_cost("fal-ai/test-flat-video", {}) == pytest.approx(0.37)
 
 
 GPT_IMAGE_25_MODELS = (
@@ -98,9 +201,9 @@ def test_gpt_image_25_noncanonical_response_uses_nearest_keyed_row():
         image_response=_image_response_with_dimensions(((1536, 1024),)),
         optional_params={"quality": "low", "image_size": {"width": 1536, "height": 1024}},
     )
-    expected: Final = litellm.model_cost[
-        "fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"
-    ]["output_cost_per_image"]
+    expected: Final = litellm.model_cost["fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"][
+        "output_cost_per_image"
+    ]
     assert cost == expected
 
 
@@ -304,7 +407,9 @@ def test_passthrough_num_images_multiplies_the_per_image_rate(model):
     entry: Final = litellm.model_cost[f"fal_ai/{model}"]
     assert fal_ai_passthrough_cost(model, {"num_images": 3}) == 3 * entry["output_cost_per_image"] > 0
     assert (
-        fal_ai_passthrough_cost(model, {"resolution": "4K", "num_images": 2}) == 2 * entry["output_cost_per_image_4K"] > 0
+        fal_ai_passthrough_cost(model, {"resolution": "4K", "num_images": 2})
+        == 2 * entry["output_cost_per_image_4K"]
+        > 0
     )
 
 
@@ -316,3 +421,99 @@ def test_passthrough_without_a_positive_integer_num_images_charges_one_image(num
         == litellm.model_cost["fal_ai/fal-ai/nano-banana-2"]["output_cost_per_image"]
         > 0
     )
+
+
+BILLABLE_UNIT_MODELS: Final = ("google/nano-banana-2.1", "google/nano-banana-2.1/edit")
+
+
+def _image_response_with_headers(headers: dict[str, str], num_images: int = 1) -> ImageResponse:
+    response: Final = _image_response(num_images=num_images)
+    set_provider_response_headers_in_hidden_params(response, headers)
+    return response
+
+
+@pytest.mark.parametrize("model", BILLABLE_UNIT_MODELS)
+def test_reported_billable_units_set_the_cost_over_the_per_image_price(model: str) -> None:
+    unit_price: Final = litellm.model_cost[f"fal_ai/{model}"]["output_cost_per_billable_unit"]
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        custom_llm_provider="fal_ai",
+        completion_response=_image_response_with_headers({FAL_BILLABLE_UNITS_HEADER: "0.062173746"}, num_images=2),
+        optional_params={"resolution": "4K", "num_images": 2},
+    )
+    assert cost == pytest.approx(0.062173746 * unit_price)
+
+
+@pytest.mark.parametrize("headers", [{}, {FAL_BILLABLE_UNITS_HEADER: "nan"}, {FAL_BILLABLE_UNITS_HEADER: "-1"}])
+@pytest.mark.parametrize("model", BILLABLE_UNIT_MODELS)
+def test_unusable_billable_units_fall_back_to_the_resolution_price(model: str, headers: dict[str, str]) -> None:
+    entry: Final = litellm.model_cost[f"fal_ai/{model}"]
+    cost: Final = cost_calculator(
+        model=f"fal_ai/{model}",
+        image_response=_image_response_with_headers(headers, num_images=2),
+        optional_params={"resolution": "2K", "num_images": 2},
+    )
+    assert cost == 2 * entry["output_cost_per_image_2K"] > 0
+
+
+def test_billable_units_are_ignored_without_a_unit_price() -> None:
+    entry: Final = litellm.model_cost["fal_ai/fal-ai/nano-banana-2"]
+    assert "output_cost_per_billable_unit" not in entry
+    cost: Final = cost_calculator(
+        model="fal_ai/fal-ai/nano-banana-2",
+        image_response=_image_response_with_headers({FAL_BILLABLE_UNITS_HEADER: "7"}),
+        optional_params={},
+    )
+    assert cost == entry["output_cost_per_image"]
+
+
+def test_billable_unit_price_scales_the_reported_units(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/megapixel-billed-model",
+        {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 0.003},
+    )
+    cost: Final = cost_calculator(
+        model="fal_ai/fal-ai/megapixel-billed-model",
+        image_response=_image_response_with_headers({FAL_BILLABLE_UNITS_HEADER: "2"}, num_images=2),
+    )
+    assert cost == pytest.approx(0.006)
+
+
+def test_deployment_price_overrides_reported_billable_units() -> None:
+    cost: Final = cost_calculator(
+        model="fal_ai/google/nano-banana-2.1",
+        image_response=_image_response_with_headers({FAL_BILLABLE_UNITS_HEADER: "0.5"}, num_images=2),
+        model_info={"output_cost_per_image": 0.01},
+    )
+    assert cost == pytest.approx(0.02)
+
+
+@pytest.mark.parametrize(
+    ("deployment_prices", "headers", "expected"),
+    [
+        ({"output_cost_per_billable_unit": 2.0}, {FAL_BILLABLE_UNITS_HEADER: "0.5"}, 1.0),
+        (
+            {"output_cost_per_billable_unit": 2.0, "output_cost_per_image": 0.01},
+            {FAL_BILLABLE_UNITS_HEADER: "0.5"},
+            1.0,
+        ),
+        ({"output_cost_per_billable_unit": 2.0, "output_cost_per_image": 0.01}, {}, 0.02),
+    ],
+)
+def test_deployment_unit_price_replaces_the_catalog_unit_price(
+    deployment_prices: dict[str, float], headers: dict[str, str], expected: float
+) -> None:
+    cost: Final = cost_calculator(
+        model="fal_ai/google/nano-banana-2.1",
+        image_response=_image_response_with_headers(headers, num_images=2),
+        model_info=deployment_prices,
+    )
+    assert cost == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("model", BILLABLE_UNIT_MODELS)
+@pytest.mark.parametrize("body", ({}, {"resolution": "4K", "num_images": 2}))
+def test_passthrough_does_not_price_a_submission_billed_by_reported_units(model: str, body: dict[str, object]) -> None:
+    assert litellm.model_cost[f"fal_ai/{model}"]["output_cost_per_image"] > 0
+    assert fal_ai_passthrough_cost(model, body) is None

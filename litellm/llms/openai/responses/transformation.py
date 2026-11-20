@@ -21,10 +21,12 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    cache_control_as_prompt_cache_breakpoint,
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     drop_non_python_regex_patterns,
     flatten_combinators_and_drop_non_python_regex_patterns,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    cache_control_as_prompt_cache_breakpoint,
     prompt_cache_breakpoint_for_wire,
     whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
@@ -75,7 +77,9 @@ _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
 _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
-_PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
+_PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = frozenset(
+    {LlmProviders.AZURE, LlmProviders.BEDROCK, LlmProviders.BEDROCK_MANTLE, LlmProviders.OPENAI}
+)
 _ROLES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"system", "developer", "user"})
 _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"input_text", "input_image", "input_file"})
 _INPUT_PART_LIST_KEYS: Final = frozenset({"content", "output"})
@@ -340,6 +344,17 @@ def _delete_response_body(response: _DeleteResponse) -> _DeleteResponseBody:
 def _json_object_body(response: _JsonObjectResponse) -> dict[str, object]:
     """Decode a Responses API response body into its JSON object form."""
     return response.json()
+
+
+def list_input_items_query_params(
+    after: str | None, before: str | None, include: Sequence[str] | None, limit: int, order: Literal["asc", "desc"]
+) -> dict[str, object]:
+    optional: Final = (("after", after), ("before", before), ("include[]", list(include) if include else None))
+    return {
+        **{key: value for key, value in optional if value is not None},
+        "limit": limit,
+        "order": order,
+    }
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -1132,7 +1147,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return None
 
     @staticmethod
-    def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+    def parse_terminal_response_from_stream_chunks(all_chunks: Sequence[str]) -> ResponsesAPIResponse | None:
         terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks)
         return None if terminal_event is None else terminal_event.response
 
@@ -1314,18 +1329,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
-        params: Final[dict[str, object]] = {}
-        if after is not None:
-            params["after"] = after
-        if before is not None:
-            params["before"] = before
-        if include:
-            params["include"] = ",".join(include)
-        if limit is not None:
-            params["limit"] = limit
-        if order is not None:
-            params["order"] = order
-        return url, params
+        return url, list_input_items_query_params(after=after, before=before, include=include, limit=limit, order=order)
 
     def transform_list_input_items_response(
         self,

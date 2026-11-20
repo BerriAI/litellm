@@ -48,6 +48,7 @@ class BudgetLimitEntry(LiteLLMPydanticObjectBase):
     budget_duration: str
     max_budget: float
     reset_at: datetime | None = None
+    window_start: datetime | None = Field(default=None, description="Server-managed start of the current spend window.")
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
@@ -135,6 +136,10 @@ class LiteLLM_TeamTable(TeamBase):
 
 class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
     last_refreshed_at: float | None = None
+
+
+class LiteLLM_TeamRebuiltFromToken(LiteLLM_TeamTableCachedObj):  # frozen-ok: same mutability as its cached base
+    """Auth's stand-in, built from the key's fields when the team row was unreadable. It has no access groups."""
 
 
 class LiteLLM_DeletedTeamTable(LiteLLM_TeamTable):

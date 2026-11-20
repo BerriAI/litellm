@@ -222,6 +222,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/backend-api/codex/",),
     ),
     LazyFeature(
+        name="cursor_cli_passthrough",
+        module_path="litellm.proxy.pass_through_endpoints.cursor_cli_passthrough_endpoints",
+        path_prefixes=("/cursor-cli/",),
+    ),
+    LazyFeature(
         name="llm_passthrough",
         module_path="litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints",
         path_prefixes=(
@@ -243,6 +248,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/mistral/",
             "/nvidia_nim/",
             "/openai/",
+            "/opensearch/",
             "/openai_passthrough/",
             "/tinyfish/",
             "/transcribe",
@@ -371,8 +377,8 @@ class LazyFeatureMiddleware:
             fastapi_app.state.lazy_locks = {}
 
     @property
-    def _loaded(self) -> set:
-        return self._fastapi_app.state.lazy_loaded
+    def _loaded(self) -> set[str]:
+        return _lazy_loaded(self._fastapi_app)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.

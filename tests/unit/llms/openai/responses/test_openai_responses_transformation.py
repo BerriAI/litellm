@@ -17,6 +17,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
+from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
@@ -1350,7 +1352,15 @@ class TestOpenAIResponsesAPIConfig:
         )
         return list(bridged.output)
 
-    @pytest.mark.parametrize("config", [OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig()])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            OpenAIResponsesAPIConfig(),
+            AzureOpenAIResponsesAPIConfig(),
+            BedrockOpenAIResponsesConfig(),
+            BedrockMantleResponsesAPIConfig(),
+        ],
+    )
     def test_claude_reasoning_minted_by_the_bridge_is_dropped_before_the_history_reaches_openai(self, config):
         saved_claude_turn = json.loads(
             json.dumps([item.model_dump() for item in self._claude_turn_bridged_to_responses_output()])
@@ -1672,16 +1682,14 @@ class TestTransformListInputItemsRequest:
         expected_params = {
             "after": "cursor_after_123",
             "before": "cursor_before_456",
-            "include": "metadata,content",  # Should be comma-separated string
+            "include[]": ["metadata", "content"],
             "limit": 50,
             "order": "asc",
         }
         assert url == expected_url
         assert params == expected_params
 
-    def test_openai_transform_list_input_items_request_include_list_formatting(self):
-        """Test that include list is properly formatted as comma-separated string"""
-        # Execute
+    def test_openai_transform_list_input_items_request_sends_include_as_a_repeated_array_param(self):
         url, params = self.openai_config.transform_list_input_items_request(
             response_id=self.response_id,
             api_base=self.api_base,
@@ -1690,8 +1698,8 @@ class TestTransformListInputItemsRequest:
             include=["metadata", "content", "annotations"],
         )
 
-        # Assert
-        assert params["include"] == "metadata,content,annotations"
+        assert params["include[]"] == ["metadata", "content", "annotations"]
+        assert "include" not in params
 
     def test_openai_transform_list_input_items_request_none_values(self):
         """Test OpenAI implementation with None values for optional parameters"""
@@ -1726,8 +1734,8 @@ class TestTransformListInputItemsRequest:
             include=[],
         )
 
-        # Assert
-        assert "include" not in params  # Empty list should not be included
+        assert "include" not in params
+        assert "include[]" not in params
 
     def test_openai_transform_compact_response_api_request_query_params_preserved(self):
         """Test compact URL construction preserves query params and appends path."""
@@ -1828,7 +1836,7 @@ class TestTransformListInputItemsRequest:
         expected_params = {
             "after": "cursor_after_123",
             "before": "cursor_before_456",
-            "include": "metadata,content",
+            "include[]": ["metadata", "content"],
             "limit": 100,
             "order": "asc",
         }
@@ -1951,7 +1959,7 @@ class TestTransformListInputItemsRequest:
             headers=self.headers,
             include=["metadata"],
         )
-        assert params["include"] == "metadata"
+        assert params["include[]"] == ["metadata"]
 
     def test_url_construction_with_different_api_bases(self):
         """Test URL construction with different API base formats"""
