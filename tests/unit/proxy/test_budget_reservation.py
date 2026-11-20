@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -516,3 +517,129 @@ async def test_model_access_group_counter_accumulates_across_calls_without_a_res
     )
     assert counter_cache.get_local(counter_key) == pytest.approx(2.0)
     assert counter_cache.get_local(model_access_group_counter("")) is None
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_a_second_cancellation_while_shielded():
+    # A second CancelledError arriving while the shielded reconcile is in flight must not
+    # propagate: the reconcile keeps running detached regardless, and there is nothing more
+    # for this call to do but return.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-twice"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=asyncio.CancelledError()),
+    ):
+        # must return without raising, and without taking the finalize-on-failure path either:
+        # a second cancellation isn't a failure, it's the reconcile still running in the background
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_invalidate_failure_after_reconcile_fails():
+    # If both the reconcile and the invalidate fallback fail (e.g. a persistent
+    # outage), there is nothing left to try: the failure must be logged and swallowed,
+    # not propagated, and the reservation still ends up finalized so it is not reprocessed.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-double-failure"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with (
+        patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new=AsyncMock(side_effect=RuntimeError("redis down")),
+        ),
+        patch(  # test-quality-ok: invalidate_budget_reservation_counters is a module function, no DI seam for this test
+            "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+            new=AsyncMock(side_effect=RuntimeError("redis still down")),
+        ),
+    ):
+        # must return without raising
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_invalidates_counter_when_reconcile_fails(
+    spend_counter_state,
+):
+    """
+    Regression for #30460 Path 1: if reconcile fails on the cancel path (e.g. a
+    Redis outage), the pre-charge must not be left stuck in the counter with
+    nothing left to correct it. This mirrors what
+    release_or_invalidate_budget_reservation already does on the non-cancel
+    release path: drop the counter so the next read reseeds from the DB instead
+    of enforcing the stale reservation until the TTL.
+    """
+    counters, _key_cache = spend_counter_state
+    counter_key = "spend:key:key-cancel-redis-down"
+    counters.redis = {counter_key: 3.0}
+    counters.memory[counter_key] = 3.0
+
+    reservation = {
+        "reserved_cost": 3.0,
+        "input_cost": 0.5,
+        "finalized": False,
+        "entries": [{"counter_key": counter_key, "reserved_cost": 3.0, "applied_adjustment": 0.0}],
+    }
+
+    with patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=TimeoutError("redis timeout")),
+    ):
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert counter_key not in counters.redis
+    assert counter_key not in counters.memory
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_does_not_refund_twice_when_reconcile_times_out_after_applying(
+    spend_counter_state,
+):
+    """
+    Regression for the duplicate-refund race (veria-ai finding on
+    budget_reservation.py): a reconcile can apply its refund and still surface a
+    timeout, so the caller can't tell whether it landed. Re-applying it would
+    subtract this reservation's refund a second time. The failed reconcile must
+    not be retried, even when the fallback counter delete fails too, and a
+    second cancel of the same reservation must be a no-op.
+    """
+    counters, _key_cache = spend_counter_state
+    counter_key = "spend:key:key-cancel-timeout-after-apply"
+    counters.redis = {counter_key: 5.0}
+    counters.failing = frozenset({"delete"})
+
+    reservation = {
+        "reserved_cost": 3.0,
+        "input_cost": 0.5,
+        "finalized": False,
+        "entries": [{"counter_key": counter_key, "reserved_cost": 3.0, "applied_adjustment": 0.0}],
+    }
+
+    async def _apply_then_time_out(budget_reservation, actual_cost):
+        counters.redis[counter_key] -= budget_reservation["reserved_cost"] - actual_cost
+        raise TimeoutError("redis timeout")
+
+    reconcile = AsyncMock(side_effect=_apply_then_time_out)
+    with patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=reconcile,
+    ):
+        await release_budget_reservation_on_cancel(reservation)
+        await release_budget_reservation_on_cancel(reservation)
+
+    # 5.0 - (3.0 - 0.5), applied once; a second application would leave 2.5 lower
+    assert counters.redis[counter_key] == pytest.approx(2.5)
+    assert reconcile.await_count == 1
+    assert reservation["finalized"] is True
