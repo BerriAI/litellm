@@ -1,4 +1,5 @@
 from datetime import datetime, time, timezone
+from typing import Final
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -176,17 +177,17 @@ def test_get_budget_reset_time_honors_global_budget_reset_time():
 
 
 @pytest.mark.parametrize("duration", ["2d", "10d", "2w"])
-def test_new_custom_day_window_starts_at_creation_before_reset_time(duration):
-    settings = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
-    now = datetime(2025, 6, 10, 3, 0, tzinfo=timezone.utc)
-    fields = get_budget_window_reset_fields(duration, settings=settings, now=now)
+def test_new_custom_day_window_starts_at_creation_before_reset_time(duration: str) -> None:
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    now: Final = datetime(2025, 6, 10, 3, 0, tzinfo=timezone.utc)
+    fields: Final = get_budget_window_reset_fields(duration, settings=settings, now=now)
     assert datetime.fromisoformat(fields["window_start"]) == now
     assert datetime.fromisoformat(fields["reset_at"]) == compute_budget_reset_at(duration, settings, now)
 
 
 @pytest.mark.parametrize("duration", ["1d", "7d", "2d"])
-def test_new_window_keeps_scheduled_start_once_reset_time_passed(duration):
-    settings = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
-    now = datetime(2025, 6, 10, 7, 0, tzinfo=timezone.utc)
-    fields = get_budget_window_reset_fields(duration, settings=settings, now=now)
+def test_new_window_keeps_scheduled_start_once_reset_time_passed(duration: str) -> None:
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    now: Final = datetime(2025, 6, 10, 7, 0, tzinfo=timezone.utc)
+    fields: Final = get_budget_window_reset_fields(duration, settings=settings, now=now)
     assert datetime.fromisoformat(fields["window_start"]) < now
