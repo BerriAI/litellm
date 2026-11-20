@@ -6,8 +6,11 @@ from typing import Final, Literal
 from openai.types.responses.response_output_item import McpCall
 from pydantic import ConfigDict, ValidationError
 
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
-from litellm.types.llms.anthropic import ANTHROPIC_MCP_TOOL_USE_ID_PREFIX
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    is_anthropic_mcp_tool_use,
+    message_field,
+    parts_of,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     ChatCompletionAssistantToolCall,
@@ -70,12 +73,8 @@ class _McpCallInputItem(LiteLLMBaseModel):
     error: str | None = None
 
 
-def is_anthropic_mcp_call_id(call_id: str) -> bool:
-    return call_id.startswith(ANTHROPIC_MCP_TOOL_USE_ID_PREFIX)
-
-
 def _is_mcp_server_tool_call(call: object) -> bool:
-    return is_anthropic_mcp_call_id(str(message_field(call, "id") or ""))
+    return is_anthropic_mcp_tool_use(str(message_field(call, "id") or ""))
 
 
 def without_mcp_server_tool_calls(provider_fields: Mapping[str, object]) -> Mapping[str, object]:
@@ -93,7 +92,7 @@ def anthropic_mcp_call_id(item_id: str) -> str:
 
 
 def _mcp_tool_use(call: object) -> McpToolUse | None:
-    if not is_anthropic_mcp_call_id(str(message_field(call, "id") or "")):
+    if not is_anthropic_mcp_tool_use(str(message_field(call, "id") or "")):
         return None
     try:
         return McpToolUse.model_validate(call)
@@ -215,7 +214,7 @@ def replayed_mcp_call_message(input_item: Mapping[str, object]) -> ChatCompletio
     if item is None:
         return None
     call_id: Final = anthropic_mcp_call_id(item.id)
-    if not is_anthropic_mcp_call_id(call_id):
+    if not is_anthropic_mcp_tool_use(call_id):
         return None
     server_tool_call: Final = ChatCompletionAssistantToolCall(
         id=call_id,

@@ -2163,6 +2163,45 @@ def test_streamed_mcp_tool_use_is_preserved_as_a_server_tool_call(
     ]
 
 
+@pytest.mark.parametrize("tool_name", ["web_search", "web_fetch"])
+def test_streamed_mcp_tool_named_like_a_hosted_web_tool_is_not_a_web_search_call(tool_name: str) -> None:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {"id": "msg_01", "model": "claude-opus-5-5", "usage": {"input_tokens": 9}},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_01Search",
+                "name": tool_name,
+                "server_name": "search",
+                "input": {"query": "Paris"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcptoolu_01Search",
+                "is_error": False,
+                "content": [{"type": "text", "text": "Paris is in France."}],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        _message_delta("end_turn"),
+    )
+    choice: Final = _assemble_stream(events).choices[0]
+    assert isinstance(choice, Choices)
+
+    assert message_field(choice.message.provider_specific_fields, "web_search_calls") is None
+    assert [call["id"] for call in anthropic_server_tool_call_params(choice.message)] == ["mcptoolu_01Search"]
+
+
 def test_current_content_block_type_tracking():
     """
     Test that current_content_block_type is properly tracked and reset.

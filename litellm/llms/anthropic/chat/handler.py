@@ -1083,7 +1083,10 @@ class ModelResponseIterator:
                         )
                         tool_input: Final = content_block_start["content_block"].get("input", {})
                         self._server_tool_inputs[self._current_server_tool_id] = tool_input
-                        if _stream_tool_name in HOSTED_WEB_TOOL_NAMES:
+                        if (
+                            self.current_content_block_type == "server_tool_use"
+                            and _stream_tool_name in HOSTED_WEB_TOOL_NAMES
+                        ):
                             self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
                                 self._current_server_tool_id,
                                 tool_input,

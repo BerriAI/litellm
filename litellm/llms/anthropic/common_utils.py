@@ -2694,7 +2694,19 @@ def without_anthropic_server_tool_calls(holder: Message, tool_ids: frozenset[str
             if fields.get("web_search_calls") is not None
             else {}
         ),
+        **{
+            key: _server_tool_results_without(fields[key], tool_ids)
+            for key in ("web_search_results", "tool_results")
+            if fields.get(key) is not None
+        },
     }
+
+
+def _server_tool_results_without(results: object, tool_ids: frozenset[str]) -> object:
+    items: Final = validated_object_list(results)
+    if items is None:
+        return results
+    return [result for result in items if message_field(result, "tool_use_id") not in tool_ids]
 
 
 def _web_search_calls_without(calls: object, tool_ids: frozenset[str]) -> object:

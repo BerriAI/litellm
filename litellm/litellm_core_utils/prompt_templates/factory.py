@@ -31,10 +31,15 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     require_attributes,
 )
-from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import mcp_replay_plan, mcp_server_name
+from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import (
+    is_mcp_block,
+    mcp_replay_plan,
+    mcp_server_name,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
+    is_anthropic_mcp_tool_use,
     is_anthropic_server_tool_use,
     is_anthropic_tool_search_use,
     message_field,
@@ -2414,7 +2419,7 @@ def convert_to_anthropic_tool_invoke(
         )
         mcp_server_name_of_tool = mcp_server_name(tool)
         is_mcp_tool_result = server_tool_result is not None and server_tool_result.get("type") == "mcp_tool_result"
-        if mcp_server_name_of_tool is not None or is_mcp_tool_result:
+        if mcp_server_name_of_tool is not None or is_mcp_tool_result or is_anthropic_mcp_tool_use(tool_id):
             if mcp_server_name_of_tool is None:
                 continue
             _reject_split_server_tool_call(tool_inputs, tool_name)
@@ -3750,7 +3755,7 @@ def anthropic_messages_pt(
                             assistant_content.append(cast(AnthropicMessagesTextParam, _cached_message))
                         # handle server_tool_use blocks (tool search, web search, etc.)
                         # Pass through as-is since these are Anthropic-native content types
-                        elif _is_replayed_server_tool_block(m):
+                        elif _is_replayed_server_tool_block(m) and (replays_mcp_calls or not is_mcp_block(m)):
                             assistant_content.append(m)
                 elif (
                     "content" in assistant_content_block

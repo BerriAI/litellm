@@ -1472,6 +1472,59 @@ class TestToolPermissionGuardrail:
 
         assert result.choices[0].message.provider_specific_fields["web_search_calls"] == []
 
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_removes_the_results_of_denied_server_tool_calls(self):
+        rewriting: Final = ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+        mcp_call: Final = {
+            "id": "mcptoolu_01Wiki",
+            "type": "function",
+            "function": {
+                "name": "read_wiki_structure",
+                "arguments": "{}",
+                "provider_specific_fields": {"server_name": "deepwiki"},
+            },
+        }
+        unrelated_result: Final = {"type": "code_execution_tool_result", "tool_use_id": "srvtoolu_01Kept", "content": {}}
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={
+                        "content": "Reading.",
+                        "tool_calls": [_ALLOWED_BASH_CALL],
+                        "provider_specific_fields": {
+                            "server_tool_calls": [_SERVER_WEB_SEARCH_CALL, mcp_call],
+                            "web_search_results": [
+                                {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01Search", "content": []}
+                            ],
+                            "tool_results": [
+                                {
+                                    "type": "mcp_tool_result",
+                                    "tool_use_id": "mcptoolu_01Wiki",
+                                    "content": [{"type": "text", "text": "wiki page"}],
+                                },
+                                unrelated_result,
+                            ],
+                        },
+                    },
+                )
+            ]
+        )
+
+        with patch.object(rewriting, "should_run_guardrail", return_value=True):
+            result: Final = await rewriting.async_post_call_success_hook(
+                data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+        fields: Final = result.choices[0].message.provider_specific_fields
+        assert (fields["server_tool_calls"], fields["web_search_results"]) == ([], [])
+        assert fields["tool_results"] == [unrelated_result]
+
     def test_modify_response_with_permission_errors_keeps_custom_tool_call_in_another_choice(self):
         denied_call = ChatCompletionMessageToolCall(
             id="call_bash", type="function", function=Function(name="Bash", arguments="{}")

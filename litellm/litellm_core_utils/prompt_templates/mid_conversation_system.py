@@ -38,6 +38,7 @@ from typing import Final, Literal, TypeAlias, TypeVar
 from pydantic import ValidationError
 
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_MCP_TOOL_USE_ID_PREFIX,
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
     AnthropicMessagesSystemMessageParam,
@@ -296,6 +297,10 @@ def _separate_thinking_blocks_render(message: object) -> bool:
 
 def is_anthropic_server_tool_use(tool_id: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+
+
+def is_anthropic_mcp_tool_use(tool_id: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_MCP_TOOL_USE_ID_PREFIX)
 
 
 def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:

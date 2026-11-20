@@ -4182,6 +4182,29 @@ def test_mcp_pair_without_a_server_name_is_skipped_on_replay(server_name: str | 
     assert replayed[1]["content"] == [{"type": "text", "text": "Repository overview"}]
 
 
+@pytest.mark.parametrize("server_name", [None, ""])
+def test_unanswered_mcp_call_without_a_server_name_is_skipped_when_its_turn_is_continued(
+    server_name: str | None,
+) -> None:
+    message: Final = _parsed_assistant_message(
+        [
+            {"type": "text", "text": "Reading the wiki."},
+            {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_01Wiki",
+                "name": "read_wiki_structure",
+                "input": {},
+                **({"server_name": server_name} if server_name is not None else {}),
+            },
+        ],
+        "pause_turn",
+    )
+
+    replayed: Final = _replayed({"role": "user", "content": "Read the repository"}, message.model_dump())
+
+    assert replayed[1]["content"] == [{"type": "text", "text": "Reading the wiki."}]
+
+
 _DEFERRED_MCP_CHAT_TOOLS: Final = [
     {
         "type": "mcp",
@@ -11452,14 +11475,17 @@ _HISTORY_MCP_RESULT: Final = {
 _HISTORY_MCP_ANSWER: Final = {"type": "text", "text": "The wiki has one page."}
 
 
-def _sent_mcp_history_turn(config_class: type[AnthropicConfig]) -> object:
+def _sent_mcp_history_turn(config_class: type[AnthropicConfig], native_content: bool) -> object:
+    content: Final = [_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER]
     sent: Final = config_class().transform_request(
         model="claude-haiku-5-5",
         messages=[
             {"role": "user", "content": "List the wiki pages of facebook/react."},
-            _parsed_assistant_message(
-                [_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER], "end_turn"
-            ).model_dump(),
+            (
+                {"role": "assistant", "content": content}
+                if native_content
+                else _parsed_assistant_message(content, "end_turn").model_dump()
+            ),
             {"role": "user", "content": "Which page covers the reconciler?"},
         ],
         optional_params={},
@@ -11469,17 +11495,21 @@ def _sent_mcp_history_turn(config_class: type[AnthropicConfig]) -> object:
     return sent["messages"][1]["content"]
 
 
+@pytest.mark.parametrize("native_content", [False, True], ids=["parsed-message", "native-content"])
 @pytest.mark.parametrize("config_class", [AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig])
-def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config_class):
-    sent: Final = _sent_mcp_history_turn(config_class)
+def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config_class, native_content):
+    sent: Final = _sent_mcp_history_turn(config_class, native_content)
 
     assert isinstance(sent, list) and len(sent) == 3
     assert all(block in sent for block in (_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER))
 
 
+@pytest.mark.parametrize("native_content", [False, True], ids=["parsed-message", "native-content"])
 @pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
-def test_claude_routes_without_the_mcp_connector_send_only_the_text_of_an_mcp_turn_from_history(config_class, route):
-    assert _sent_mcp_history_turn(config_class) == [_HISTORY_MCP_ANSWER]
+def test_claude_routes_without_the_mcp_connector_send_only_the_text_of_an_mcp_turn_from_history(
+    config_class, route, native_content
+):
+    assert _sent_mcp_history_turn(config_class, native_content) == [_HISTORY_MCP_ANSWER]
 
 
 _KEPT_SEARCH_CALL: Final = {
