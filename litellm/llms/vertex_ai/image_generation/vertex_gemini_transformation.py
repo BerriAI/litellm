@@ -66,6 +66,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "n",
             "size",
             "imageConfig",
+            "image_config",
             "aspectRatio",
             "aspect_ratio",
             "imageSize",
@@ -99,7 +100,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
                         mapped_params["imageSize"] = v
-                    elif k == "imageConfig":
+                    elif k in ("imageConfig", "image_config"):
                         if isinstance(v, str):
                             try:
                                 v = json.loads(v)
@@ -114,7 +115,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                             )
                         else:
                             verbose_logger.warning("imageConfig must be a dict, got %s — ignoring.", type(v).__name__)
-                    elif k not in ("tools", "web_search_options", "imageConfig"):
+                    elif k not in ("tools", "web_search_options", "imageConfig", "image_config"):
                         mapped_params[k] = v
                 elif not drop_params:
                     raise litellm.UnsupportedParamsError(

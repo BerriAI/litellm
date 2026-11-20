@@ -4,6 +4,7 @@
 2. The edit adapter accepts and carries aspect_ratio, image_size, and imageConfig.
 3. An edit mask is rejected when the model does not support it and drop_params=False.
 4. Valid controls and aspect ratio mappings (e.g. 1792x1024 -> 16:9, 1536x1024 -> 3:2) are preserved.
+5. Generation and edit accept the same spellings for the shared image controls.
 """
 
 import json
@@ -185,5 +186,28 @@ def test_edit_preserves_nested_image_config_over_size():
     image_config = json.loads(body)["generationConfig"].get("image_config", {})
     assert image_config.get("aspect_ratio") == "9:16"
     assert image_config.get("image_size") == "2K"
+
+
+# 5. Generation and edit must accept the same spellings, so the two routes cannot diverge again.
+@pytest.mark.parametrize(
+    "key",
+    ["aspectRatio", "aspect_ratio", "imageSize", "image_size", "imageConfig", "image_config"],
+)
+def test_both_routes_accept_the_same_control_spellings(key):
+    generation = VertexAIGeminiImageGenerationConfig().get_supported_openai_params(MODEL)
+    edit = VertexAIGeminiImageEditConfig().get_supported_openai_params(MODEL)
+    assert key in generation, f"generation does not accept {key}"
+    assert key in edit, f"edit does not accept {key}"
+
+
+def test_generation_accepts_snake_case_image_config():
+    generation = VertexAIGeminiImageGenerationConfig()
+    mapped = generation.map_openai_params(
+        {"image_config": {"aspectRatio": "9:16", "imageSize": "2K"}},
+        {},
+        MODEL,
+        drop_params=False,
+    )
+    assert mapped["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "2K"}
 
 
