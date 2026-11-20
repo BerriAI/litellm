@@ -22,6 +22,10 @@ from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET, as_dict
 if TYPE_CHECKING:
     from litellm.router_rust.invoke.endpoints import EndpointCore, Plan
 
+# The slot limit is per-deployment state, not cached data, so it must not expire while calls
+# hold it. An expired entry rebuilds a fresh counter and admits a second full cap.
+_LIMIT_TTL_SECONDS: Final = 10 * 365 * 24 * 60 * 60
+
 # The attempt helpers that run inside `_deployment_slot` (`_acompletion` holds the same slot
 # itself). Sync helpers, rerank, moderation and the search helper hold none.
 _SLOTTED_KINDS: Final = frozenset(
@@ -45,8 +49,7 @@ _SLOTTED_KINDS: Final = frozenset(
 def max_parallel_requests_limit(
     core: "EndpointCore", deployment: Mapping[str, object], kwargs: Mapping[str, object]
 ) -> object:
-    """`_get_client(client_type="max_parallel_requests")`: the cached limit, built on first use
-    (`InitalizeCachedClient.set_max_parallel_requests_client`)."""
+    """`_get_client(client_type="max_parallel_requests")`: the cached limit, built on first use."""
     from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
     from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
     from litellm.utils import calculate_max_parallel_requests
@@ -74,6 +77,7 @@ def max_parallel_requests_limit(
                 model_group=str(deployment.get("model_name", "")),
             ),
             local_only=True,
+            ttl=_LIMIT_TTL_SECONDS,
         )
     return cache.get_cache(key=key, local_only=True, parent_otel_span=span)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]  # see above
 

@@ -12873,6 +12873,59 @@ async def test_router_max_parallel_requests_admits_the_cap_and_rejects_the_rest_
 
 
 @pytest.mark.asyncio
+async def test_router_max_parallel_requests_cap_holds_after_cache_expiry_while_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    tracker: Final = _InFlightTracker()
+    router: Final = _max_parallel_router(max_parallel_requests=2)
+    start: Final = time.time()
+    monkeypatch.setattr(  # test-quality-ok: the cache clock is the injected seam for time-dependent behaviour
+        router._core_ctx.health().store.in_memory_cache, "_clock", lambda: start
+    )
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        tracker.enter()
+        await asyncio.sleep(1.0)
+        tracker.exit()
+        return httpx.Response(
+            200,
+            json={
+                "id": "c",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "x"}, "finish_reason": "stop"}],
+            },
+        )
+
+    async def one_call() -> str:
+        try:
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+        except litellm.RateLimitError as e:
+            return f"rejected:{e.status_code}"
+        return "ok"
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(side_effect=upstream)
+        first_batch: Final = [asyncio.create_task(one_call()) for _ in range(2)]
+        deadline: Final = time.time() + 5
+        while tracker.current < 2:
+            if time.time() > deadline:
+                pytest.fail("first batch never reached the upstream")
+            await asyncio.sleep(0.05)
+        monkeypatch.setattr(router._core_ctx.health().store.in_memory_cache, "_clock", lambda: start + 601)
+        second_batch: Final = [asyncio.create_task(one_call()) for _ in range(2)]
+        outcomes: Final = await asyncio.wait_for(asyncio.gather(*first_batch, *second_batch), timeout=10)
+
+    assert outcomes.count("ok") == 2
+    assert outcomes.count("rejected:429") == 2
+    assert route.call_count == 2
+    assert tracker.peak == 2
+    assert tracker.current == 0
+
+
+@pytest.mark.asyncio
 async def test_router_max_parallel_requests_slot_held_until_stream_closed_then_released(
     monkeypatch: pytest.MonkeyPatch,
 ):
