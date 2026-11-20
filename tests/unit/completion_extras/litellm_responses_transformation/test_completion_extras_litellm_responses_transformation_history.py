@@ -276,7 +276,8 @@ def test_next_turn_replays_every_item_phase_and_boundary_once_in_order(stream: b
 
     sent: Final = _next_turn_input(assistant, model=model)
 
-    assert assistant["content"] == "Checking the weather.Paris: light rain."
+    assert assistant["content"] == "Paris: light rain."
+    assert str(assistant["reasoning_content"]).startswith("Checking the weather.")
     assert _replayed_fields(assistant)["phase"] == "final_answer"
     assert sent[1:-1] == list(REPLAYED)
     assert sent[-1]["type"] == "function_call_output"
@@ -302,8 +303,8 @@ def _edit_arguments(message: Mapping[str, object]) -> Mapping[str, object]:
     ("edit", "expected_text", "expected_phase", "expected_arguments"),
     [
         (_edit_content, "Checking the weather. Paris: heavy rain.", "final_answer", '{"city":"Paris"}'),
-        (_edit_phase, "Checking the weather.Paris: light rain.", "commentary", '{"city":"Paris"}'),
-        (_edit_arguments, "Checking the weather.Paris: light rain.", "final_answer", '{"city":"Lyon"}'),
+        (_edit_phase, "Paris: light rain.", "commentary", '{"city":"Paris"}'),
+        (_edit_arguments, "Paris: light rain.", "final_answer", '{"city":"Lyon"}'),
     ],
     ids=["content", "phase", "arguments"],
 )
@@ -354,7 +355,7 @@ def test_missing_or_corrupt_replay_metadata_falls_back_to_the_chat_fields(
     sent: Final = _next_turn_input({**assistant, "provider_specific_fields": corrupt(_replayed_fields(assistant))})
 
     assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
-    assert sent[3]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
+    assert sent[3]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
     assert sent[3]["phase"] == "final_answer"
 
 
@@ -460,7 +461,7 @@ def test_a_cached_turn_replayed_as_a_stream_labels_each_text_chunk_with_its_mess
 ) -> None:
     chunks: Final = _cached_chunks(model, reasoning)
 
-    assert _phase_runs(chunks) == [("commentary", "Checking the weather."), ("final_answer", "Paris: light rain.")]
+    assert _phase_runs(chunks) == [("final_answer", "Paris: light rain.")]
     rebuilt: Final = litellm.stream_chunk_builder(list(chunks)).choices[0].message
     assert rebuilt.provider_specific_fields == _assistant_turn(OUTPUT, stream=False, model=model)["provider_specific_fields"]
 
@@ -573,7 +574,8 @@ def test_an_interrupted_stream_records_no_replay() -> None:
     received: Final = _streamed_chunks(OPENAI_MODEL, terminal_event=None)
     assistant: Final = litellm.stream_chunk_builder(list(received), messages=[USER]).choices[0].message.model_dump()
 
-    assert assistant["content"] == "Checking the weather.Paris: light rain."
+    assert assistant["content"] == "Paris: light rain."
+    assert assistant["reasoning_content"] == "Checking the weather."
     assert _replayed_fields(assistant) == {}
 
 
@@ -583,26 +585,22 @@ def _text_chunk_phases(chunks: Sequence[object]) -> list[tuple[object, object]]:
 
 
 @pytest.mark.parametrize(
-    ("model", "commentary_phase", "answer_phase"),
-    [
-        (OPENAI_MODEL, "commentary", "final_answer"),
-        (AZURE_MODEL, "commentary", "final_answer"),
-        (XAI_MODEL, None, None),
-    ],
+    ("model", "answer_phase"),
+    [(OPENAI_MODEL, "final_answer"), (AZURE_MODEL, "final_answer"), (XAI_MODEL, None)],
     ids=["openai", "azure", "xai"],
 )
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-async def test_each_streamed_text_chunk_carries_the_phase_of_its_message(
-    model: str, commentary_phase: str | None, answer_phase: str | None, use_async: bool, monkeypatch: pytest.MonkeyPatch
+async def test_each_streamed_answer_chunk_carries_its_phase_and_commentary_streams_as_reasoning(
+    model: str, answer_phase: str | None, use_async: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     chunks: Final = await _async_streamed_chunks(model) if use_async else _streamed_chunks(model)
 
-    assert _text_chunk_phases(chunks) == [
-        ("Checking the weather.", commentary_phase),
-        ("Paris: ", answer_phase),
-        ("light rain.", answer_phase),
-    ]
+    assert _text_chunk_phases(chunks) == [("Paris: ", answer_phase), ("light rain.", answer_phase)]
+    reasoning: Final = "".join(
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in chunks if chunk.choices
+    )
+    assert reasoning == "Checking the weather."
 
 
 def _openai_sdk_message(chunks: Sequence[object]) -> dict[str, object]:
@@ -712,8 +710,24 @@ def test_a_resealed_record_that_does_not_fit_the_chat_fields_falls_back(items: S
     sent: Final = _next_turn_input(_resealed(assistant, items))
 
     assert _types(sent[1:-1]) == ["message", "function_call"]
-    assert sent[1]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
+    assert sent[1]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
 
+
+
+def test_a_record_written_before_commentary_moved_out_of_content_still_replays() -> None:
+    assistant: Final = _assistant_turn(OUTPUT, stream=False)
+    earlier_turn: Final = {**assistant, "content": "Checking the weather.Paris: light rain."}
+    earlier_record: Final = (
+        {"type": "message", "parts": [21], "phase": "commentary"},
+        {"type": "reasoning", "index": 0},
+        {"type": "reasoning", "index": 1},
+        {"type": "function_call", "index": 0},
+        {"type": "message", "parts": [7, 11], "phase": "final_answer"},
+    )
+
+    sent: Final = _next_turn_input(_resealed(earlier_turn, earlier_record))
+
+    assert sent[1:-1] == list(REPLAYED)
 
 PATCH_CALL: Final = {
     "type": "custom_tool_call",

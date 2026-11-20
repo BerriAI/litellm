@@ -4,6 +4,8 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 
 import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from functools import reduce
 from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
@@ -29,12 +31,14 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
     PHASE_FIELD,
     Phase,
     UnknownPhase,
+    fills_turn,
     message_item_phase,
     output_message_text,
     reasoning_input_item,
     replay_fields,
     replay_items,
     requested_phase,
+    turn_moves_commentary,
 )
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
@@ -723,6 +727,20 @@ def _message_reasoning_items(message: "Message") -> Sequence[ChatCompletionReaso
     return reasoning_items or ()
 
 
+def _phase_field(item: object) -> Mapping[str, object]:
+    phase: Final = message_item_phase(item)
+    return {PHASE_FIELD: phase} if phase is not None else {}
+
+
+def _is_commentary(message: "Message") -> bool:
+    fields: Final[Mapping[str, object] | None] = getattr(message, "provider_specific_fields", None)
+    return (fields or {}).get(PHASE_FIELD) == "commentary"
+
+
+def _reasoning_and_moved_text(message: "Message", moved: bool) -> tuple[str | None, str | None]:
+    return _message_reasoning_content(message), str(message.content or "") if moved else None
+
+
 def _shifted_annotations(messages: Sequence["Message"], offsets: Sequence[int]) -> Iterator[ChatCompletionAnnotation]:
     for message, offset in zip(messages, offsets):
         for annotation in _message_annotations(message):
@@ -736,20 +754,27 @@ def _fold_choices_into_one(
     trailing_reasoning_items: Sequence[_BuiltReasoningItem],
     tool_search_items: Sequence[Mapping[str, object]],
     structured_output: bool = False,
+    moved_commentary: bool = False,
 ) -> "Choices":
     """Clients that only read choices[0] must still see every text and tool call.
 
     Under a structured ``response_format`` each message item is a complete document, so
     ``content`` is the first one, the same item the openai SDK returns as ``output_parsed``.
+    A moved commentary message is a preamble, so its text joins ``reasoning_content`` in output order.
     """
     from litellm.types.utils import Choices, Message
 
     messages: Final = tuple(choice.message for choice in choices)
-    content_messages: Final = messages[:1] if structured_output else messages
+    moved: Final = tuple(moved_commentary and _is_commentary(message) for message in messages)
+    answers: Final = tuple(message for message, is_moved in zip(messages, moved) if not is_moved)
+    content_messages: Final = messages[:1] if structured_output else answers
     texts: Final = tuple(str(message.content or "") for message in content_messages)
     offsets: Final = (0, *accumulate(len(text) for text in texts))
     annotations: Final = tuple(_shifted_annotations(content_messages, offsets))
-    reasoning_contents: Final = (*(_message_reasoning_content(m) for m in messages), trailing_reasoning_content)
+    reasoning_contents: Final = (
+        *chain.from_iterable(map(_reasoning_and_moved_text, messages, moved)),
+        trailing_reasoning_content,
+    )
     reasoning_items: Final = (
         *chain.from_iterable(_message_reasoning_items(m) for m in messages),
         *trailing_reasoning_items,
@@ -757,7 +782,7 @@ def _fold_choices_into_one(
     return Choices(
         message=Message(
             role=messages[0].role if messages else "assistant",
-            content="".join(texts) if messages else None,
+            content="".join(texts) if content_messages else None,
             annotations=list(annotations) or None,
             tool_calls=list(tool_calls) or None,
             reasoning_content=" ".join(value for value in reasoning_contents if value) or None,
@@ -770,11 +795,22 @@ def _fold_choices_into_one(
 
 
 def _with_replay_fields(
-    choice: "Choices", output_items: Sequence[object], *, completed: bool, structured_output: bool
+    choice: "Choices",
+    output_items: Sequence[object],
+    *,
+    completed: bool,
+    structured_output: bool,
+    moved_commentary: bool,
 ) -> "Choices":
     fields: Final = {
         **(choice.message.provider_specific_fields or {}),
-        **replay_fields(output_items, choice.message, completed=completed, first_message_only=structured_output),
+        **replay_fields(
+            output_items,
+            choice.message,
+            completed=completed,
+            first_message_only=structured_output,
+            moved_commentary=moved_commentary,
+        ),
     }
     message: Final = choice.message.model_copy(update={"provider_specific_fields": fields or None})
     return choice.model_copy(update={"message": message})
@@ -791,19 +827,27 @@ def completed_stream_history(
     *,
     completed: bool,
     structured_output: bool,
+    splits_commentary: bool = False,
 ) -> dict[str, object] | None:  # mutable-ok: Delta.provider_specific_fields is typed as a dict
     items: Final = _STREAMED_OUTPUT_ITEMS.validate_python(output_payload)
+    moved_commentary: Final = splits_commentary and not structured_output and turn_moves_commentary(items)
     calls: Final = tuple(item for item in items if item.get("type") in ("function_call", "custom_tool_call"))
     streamed_message: Final = {
         "role": "assistant",
-        "content": output_message_text(items, first_message_only=structured_output),
+        "content": output_message_text(items, first_message_only=structured_output, moved_commentary=moved_commentary),
         "tool_calls": [tool_call_dict_from_output_item(call, index) for index, call in enumerate(calls)],
         "reasoning_items": list(_reasoning_items_from_output_items(items)),
         "provider_specific_fields": tool_search_fields,
     }
     fields: Final = {
         **(tool_search_fields or {}),
-        **replay_fields(items, streamed_message, completed=completed, first_message_only=structured_output),
+        **replay_fields(
+            items,
+            streamed_message,
+            completed=completed,
+            first_message_only=structured_output,
+            moved_commentary=moved_commentary,
+        ),
     }
     return fields or None
 
@@ -1078,6 +1122,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             role=item.get("role", "assistant"),
                             content=response_text if response_text else "",
                             annotations=annotations,
+                            provider_specific_fields=dict(_phase_field(item)),
                         )
                         choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
@@ -1512,6 +1557,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         replay_openai_history: bool = False,
         completed: bool = False,
         keeps_every_reasoning_item: bool = False,
+        splits_commentary: bool = True,
     ) -> list["Choices"]:
         """
         Convert Responses API output items to chat completion choices.
@@ -1524,6 +1570,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             replay_openai_history: Record the output's item sequence for the next turn
             completed: The response finished, so its item sequence is whole
             keeps_every_reasoning_item: Keep each reasoning item before an answer, not only the last
+            splits_commentary: Move commentary-phase message text into reasoning_content
 
         Returns:
             List of Choices objects
@@ -1586,6 +1633,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             list[ChatCompletionReasoningItem] | None,
                             (list(pending_reasoning_items) or None),
                         ),
+                        provider_specific_fields=dict(_phase_field(item)),
                     )
 
                     choices.append(
@@ -1657,6 +1705,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     output_items, "stop", tool_search_items=tool_search_items
                 )
             ]
+        moved_commentary: Final = splits_commentary and not structured_output and turn_moves_commentary(output_items)
         folded: Final = _fold_choices_into_one(
             choices=choices,
             tool_calls=accumulated_tool_calls,
@@ -1664,10 +1713,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             trailing_reasoning_items=pending_reasoning_items,
             tool_search_items=tool_search_items,
             structured_output=structured_output,
+            moved_commentary=moved_commentary,
         )
         if not replay_openai_history:
             return [folded]
-        return [_with_replay_fields(folded, output_items, completed=completed, structured_output=structured_output)]
+        return [
+            _with_replay_fields(
+                folded,
+                output_items,
+                completed=completed,
+                structured_output=structured_output,
+                moved_commentary=moved_commentary,
+            )
+        ]
 
     @staticmethod
     def _build_empty_choice(
@@ -1808,6 +1866,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ),
             completed=raw_response.status == "completed",
             keeps_every_reasoning_item=serves_anthropic_messages(logging_obj),
+            splits_commentary=not serves_anthropic_messages(logging_obj),
         )
 
         response_is_incomplete: Final = raw_response.status == "incomplete" or (
@@ -2261,6 +2320,66 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return status_mapping.get(status, "stop")
 
 
+_STREAM_END_EVENTS: Final = frozenset(
+    {
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
+        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
+        ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
+        ResponsesAPIStreamEvents.ERROR.value,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _HeldText:
+    commentary: bool
+    starts_part: bool
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ReleasedText:
+    content: str | None
+    reasoning: str
+
+
+def _reasoning_text(chunk: Mapping[str, object]) -> _HeldText | None:
+    match _responses_event_type(chunk):
+        case "response.reasoning_summary_part.added":
+            return _HeldText(commentary=False, starts_part=True, text="")
+        case "response.reasoning_summary_text.delta" if isinstance(text := chunk.get("delta"), str) and text:
+            return _HeldText(commentary=False, starts_part=False, text=text)
+        case _:
+            return None
+
+
+def _with_held_text(joined: tuple[str, bool], part: _HeldText) -> tuple[str, bool]:
+    text, streamed = joined
+    separator: Final = " " if part.starts_part and streamed else ""
+    return text + separator + part.text, streamed or bool(part.text)
+
+
+def _joined_reasoning(parts: Sequence[_HeldText], streamed: bool) -> tuple[str, bool]:
+    """Spaces parts like the stream spaces reasoning summary parts and the non-stream fold joins texts."""
+    return reduce(_with_held_text, parts, ("", streamed))
+
+
+def _with_released_text(translated: "ModelResponseStream", released: _ReleasedText | None) -> "ModelResponseStream":
+    if released is None:
+        return translated
+    choice: Final = translated.choices[0]
+    update: Final = {
+        **({"content": released.content} if released.content else {}),
+        **(
+            {"reasoning_content": released.reasoning + (getattr(choice.delta, "reasoning_content", None) or "")}
+            if released.reasoning
+            else {}
+        ),
+    }
+    delta: Final = choice.delta.model_copy(update=update)
+    return translated.model_copy(update={"choices": [choice.model_copy(update={"delta": delta})]})
+
+
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(
         self,
@@ -2278,8 +2397,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
         self._structured_output: Final = structured_output
+        self._splits_commentary: Final = not structured_output and not streams_reasoning_signatures
         self._first_message_item_done: bool = False
         self._message_phases: Mapping[int, Phase] = MappingProxyType({})
+        self._commentary_parts: frozenset[tuple[object, object]] = frozenset()
+        self._held: tuple[_HeldText, ...] = ()
+        self._turn_filled: bool = False
         self._reasoning_summary_streamed: bool = False
         self._summary_streamed_outputs: frozenset[int | None] = frozenset()
         self._tool_arguments_streamed_outputs: frozenset[int] = frozenset()
@@ -2327,6 +2450,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         structured_output: bool = False,
         item_phase: Phase | None = None,
         reasoning_summary_streamed: bool = False,
+        splits_commentary: bool = False,
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -2338,6 +2462,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             structured_output: Only the first message item became content
             item_phase: Phase of the message item this chunk belongs to
             reasoning_summary_streamed: Whether earlier chunks already streamed reasoning summary text
+            splits_commentary: Commentary message text was streamed as reasoning_content
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
@@ -2575,6 +2700,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                     tool_search_fields,
                                     completed=event_type == "response.completed",
                                     structured_output=structured_output,
+                                    splits_commentary=splits_commentary,
                                 )
                                 if replays_openai_history
                                 else tool_search_fields
@@ -2620,6 +2746,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
         self._remember_message_phase(chunk)
+        released: Final = self._release_held(chunk)
+        held: Final = self._hold(chunk)
+        commentary_chunk: Final = self._empty_content_chunk() if held else self._commentary_reasoning_chunk(chunk)
         reasoning_chunk: Final = (
             _reasoning_done_stream_chunk(chunk, self._summary_streamed_outputs)
             if self._streams_reasoning_signatures
@@ -2632,7 +2761,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             else None
         )
         translated: Final = (
-            self._empty_content_chunk()
+            commentary_chunk
+            if commentary_chunk is not None
+            else self._empty_content_chunk()
             if self._is_text_delta_after_structured_answer(chunk)
             else reasoning_chunk
             if reasoning_chunk is not None
@@ -2643,18 +2774,73 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 tool_call_index_map=self._tool_call_index_map,
                 replays_openai_history=self._replays_openai_history,
                 structured_output=self._structured_output,
-                item_phase=self._item_phase(chunk),
+                item_phase=self._item_phase(chunk) if self._replays_openai_history else None,
                 reasoning_summary_streamed=self._reasoning_summary_streamed,
+                splits_commentary=self._splits_commentary,
             )
         )
         if unstreamed_tool_arguments or _starts_streaming_tool_arguments(chunk):
             self._tool_arguments_streamed_outputs = self._tool_arguments_streamed_outputs | {output_index}
         if self._structured_output and _is_message_item_done(chunk):
             self._first_message_item_done = True
-        if _responses_event_type(chunk) == "response.reasoning_summary_text.delta" and chunk.get("delta"):
+        if not held and _responses_event_type(chunk) == "response.reasoning_summary_text.delta" and chunk.get("delta"):
             self._reasoning_summary_streamed = True
             self._summary_streamed_outputs = self._summary_streamed_outputs | {_stream_output_index(chunk)}
-        return self._with_served_service_tier(self._with_stream_scoped_id(translated))
+        finished: Final = _with_released_text(translated, released)
+        return self._with_served_service_tier(self._with_stream_scoped_id(finished))
+
+    def _commentary_text(self, chunk: Mapping[str, object]) -> "_HeldText | None":
+        if not self._splits_commentary or self._item_phase(chunk) != "commentary":
+            return None
+        if _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value:
+            return None
+        text: Final = chunk.get("delta")
+        if not isinstance(text, str) or not text:
+            return None
+        part: Final = (chunk.get("output_index"), chunk.get("content_index"))
+        starts_part: Final = part not in self._commentary_parts
+        self._commentary_parts = self._commentary_parts | {part}
+        return _HeldText(commentary=True, starts_part=starts_part, text=text)
+
+    def _hold(self, chunk: Mapping[str, object]) -> bool:
+        """Until an answer or a tool call follows, commentary may be the whole reply, so it and the
+        reasoning streamed after it wait for the event that decides where the commentary belongs."""
+        if self._turn_filled:
+            return False
+        commentary: Final = self._commentary_text(chunk)
+        reasoning: Final = _reasoning_text(chunk) if self._held and commentary is None else None
+        held: Final = commentary or reasoning
+        if held is None:
+            return False
+        self._held = (*self._held, held)
+        return True
+
+    def _release_held(self, chunk: Mapping[str, object]) -> "_ReleasedText | None":
+        event_type: Final = _responses_event_type(chunk)
+        fills: Final = event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value and fills_turn(chunk.get("item"))
+        self._turn_filled = self._turn_filled or fills
+        if not self._held or not (fills or event_type in _STREAM_END_EVENTS):
+            return None
+        held: Final = self._held
+        self._held = ()
+        reasoning_held: Final = held if fills else tuple(part for part in held if not part.commentary)
+        reasoning, streamed = _joined_reasoning(reasoning_held, self._reasoning_summary_streamed)
+        self._reasoning_summary_streamed = streamed
+        content: Final = None if fills else "".join(part.text for part in held if part.commentary)
+        return _ReleasedText(content=content, reasoning=reasoning)
+
+    def _commentary_reasoning_chunk(self, chunk: Mapping[str, object]) -> "ModelResponseStream | None":
+        """Commentary after an answer or a tool call streams as reasoning_content right away."""
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        commentary: Final = self._commentary_text(chunk) if self._turn_filled else None
+        if commentary is None:
+            return None
+        reasoning, streamed = _joined_reasoning((commentary,), self._reasoning_summary_streamed)
+        self._reasoning_summary_streamed = streamed
+        return ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=reasoning), finish_reason=None)]
+        )
 
     def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:
         """Under a structured response_format the first message item is the whole answer, so
@@ -2672,10 +2858,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason=None)])
 
     def _remember_message_phase(self, chunk: Mapping[str, object]) -> None:
-        if (
-            not self._replays_openai_history
-            or _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value
-        ):
+        if _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value:
             return
         output_index: Final = chunk.get("output_index")
         phase: Final = message_item_phase(chunk.get("item"))
