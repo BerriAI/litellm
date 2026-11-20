@@ -859,7 +859,7 @@ def _dispatched_model_name(model: str, custom_llm_provider: str) -> str:
     return strip_responses_routing_prefix(provider_model)
 
 
-def _will_bridge_to_chat_completions(
+def will_bridge_to_chat_completions(
     model: str,
     custom_llm_provider: str | None,
     use_chat_completions_api: bool,
@@ -903,7 +903,7 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
         or declared_authenticating_provider(model)
         or litellm.get_llm_provider(model=model, api_base=api_base, litellm_params=litellm_params)[1]
     )
-    return not _will_bridge_to_chat_completions(
+    return not will_bridge_to_chat_completions(
         model,
         provider,
         bool(kwargs.get("use_chat_completions_api"))
@@ -1092,7 +1092,7 @@ async def aresponses(
             hook_api_base: Final = _api_base_kwarg(kwargs)
             with _prompt_management_sees_a_provisional_message_list(
                 kwargs,
-                bridged=_will_bridge_to_chat_completions(
+                bridged=will_bridge_to_chat_completions(
                     model,
                     custom_llm_provider,
                     bool(kwargs.get("use_chat_completions_api"))
@@ -1302,7 +1302,7 @@ def _apply_prompt_management_to_responses_call(
     ):
         with _prompt_management_sees_a_provisional_message_list(
             kwargs,
-            bridged=_will_bridge_to_chat_completions(
+            bridged=will_bridge_to_chat_completions(
                 model,
                 custom_llm_provider,
                 use_chat_completions_api,

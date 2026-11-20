@@ -15,6 +15,7 @@ import litellm
 from litellm.caching import DualCache
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.proxy import proxy_server
+from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -27,6 +28,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
+    DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,
     _get_budget_counters,
     _get_team_member_budget_counter,
     count_request_input_tokens,
@@ -1150,6 +1152,79 @@ def test_chat_max_completion_tokens_without_router_follows_the_model_supported_p
     assert (completion_capped < uncapped) is completion_cap_lowers_hold
 
 
+@pytest.mark.parametrize(
+    "backend_models",
+    [("v0/v0-1.0-md",), ("anthropic/claude-haiku-5-5", "v0/v0-1.0-md")],
+)
+def test_chat_max_tokens_cannot_lower_the_hold_when_a_deployment_drops_it(backend_models: tuple[str, ...]) -> None:
+    uncapped, completion_capped, max_tokens_capped = _chat_estimates(_priced_router(backend_models), "priced-model")
+
+    assert uncapped is not None
+    assert max_tokens_capped == pytest.approx(uncapped)
+    assert completion_capped == pytest.approx(uncapped)
+
+
+@pytest.mark.parametrize(
+    ("backend_models", "cap", "lowers_hold"),
+    [
+        (("gemini/gemini-2.5-pro",), {"max_output_tokens": 1}, True),
+        (("vertex_ai/gemini-2.5-pro",), {"max_output_tokens": 1}, True),
+        (("bedrock/converse/anthropic.claude-haiku-5-5",), {"maxTokens": 1}, True),
+        (("openai/gpt-5.6",), {"max_output_tokens": 1}, False),
+        (("anthropic/claude-haiku-5-5",), {"max_output_tokens": 1}, False),
+        (("gemini/gemini-2.5-pro", "openai/gpt-5.6"), {"max_output_tokens": 1}, False),
+        (("bedrock/converse/anthropic.claude-haiku-5-5",), {"inferenceConfig": {"maxTokens": 1}}, False),
+    ],
+)
+def test_chat_provider_native_cap_lowers_the_hold_only_when_every_deployment_reads_it(
+    backend_models: tuple[str, ...], cap: Mapping[str, object], lowers_hold: bool
+) -> None:
+    router: Final = _priced_router(backend_models)
+    body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}]}
+    uncapped: Final = estimate_request_max_cost(request_body=body, route="/v1/chat/completions", llm_router=router)
+    capped: Final = estimate_request_max_cost(
+        request_body={**body, **cap}, route="/v1/chat/completions", llm_router=router
+    )
+
+    assert uncapped is not None and capped is not None
+    assert (capped < uncapped) is lowers_hold
+
+
+def test_custom_handler_deployment_trusts_only_the_chat_cap_it_receives(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "budget-hold-custom", "custom_handler": litellm.CustomLLM()}]
+    )
+    uncapped, completion_capped, max_tokens_capped = _chat_estimates(
+        _priced_router(("budget-hold-custom/priced-model",)), "priced-model"
+    )
+    max_output_capped: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], "max_output_tokens": 1},
+        route="/v1/chat/completions",
+        llm_router=_priced_router(("budget-hold-custom/priced-model",)),
+    )
+
+    assert uncapped is not None and max_tokens_capped is not None
+    assert max_tokens_capped < uncapped
+    assert completion_capped == pytest.approx(uncapped)
+    assert max_output_capped == pytest.approx(uncapped)
+
+
+@pytest.mark.parametrize("ceiling", [0, -1])
+def test_non_positive_model_ceiling_reserves_the_default_output_cap(ceiling: int) -> None:
+    body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    def estimate(max_output_tokens: int) -> float | None:
+        return estimate_request_max_cost(
+            request_body=body,
+            route="/v1/chat/completions",
+            llm_router=_router_for_backend("openai/gpt-5.6", max_output_tokens=max_output_tokens),
+        )
+
+    assert estimate(ceiling) == pytest.approx(estimate(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK))
+
+
 def test_unpriced_model_reserves_nothing_so_read_time_enforcement_applies() -> None:
     body: Final = {"model": "unpriced-model-for-reservation", "messages": [{"role": "user", "content": "hi"}]}
 
@@ -1629,6 +1704,87 @@ def test_mixed_native_and_bridged_responses_group_reserves_worst_case() -> None:
     assert decoy_small == pytest.approx(uncapped)
     assert high_completion == pytest.approx(high_output)
     assert paired_low_output_high_completion == pytest.approx(high_output)
+
+
+@pytest.mark.parametrize("cap_field", ["max_tokens", "max_completion_tokens"])
+@pytest.mark.parametrize(
+    ("backend_models", "lowers_hold"),
+    [
+        (("anthropic/claude-haiku-5-5",), True),
+        (("openai/chat_completions/gpt-5.6",), True),
+        (("openai/gpt-5.6",), False),
+        (("anthropic/claude-haiku-5-5", "openai/gpt-5.6"), False),
+        (("v0/v0-1.0-md",), False),
+    ],
+)
+def test_responses_chat_cap_lowers_the_hold_only_when_every_deployment_bridges_and_reads_it(
+    cap_field: str, backend_models: tuple[str, ...], lowers_hold: bool
+) -> None:
+    router: Final = _priced_router(backend_models)
+    body: Final = {"model": "priced-model", "input": "hi"}
+    uncapped: Final = estimate_request_max_cost(request_body=body, route="/v1/responses", llm_router=router)
+    capped: Final = estimate_request_max_cost(
+        request_body={**body, cap_field: 1}, route="/v1/responses", llm_router=router
+    )
+
+    assert uncapped is not None and capped is not None
+    assert (capped < uncapped) is lowers_hold
+
+
+_CHAT_BODY: Final[Mapping[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
+_INPUT_BODY: Final[Mapping[str, object]] = {"input": "hi"}
+
+
+@pytest.mark.parametrize(
+    ("route", "backend_model", "shape", "cap_field", "raised_to_minimum"),
+    [
+        ("/v1/responses", "openai/gpt-5.6", _INPUT_BODY, "max_output_tokens", True),
+        ("/cursor/chat/completions", "openai/gpt-5.6", _INPUT_BODY, "max_output_tokens", True),
+        ("/v1/responses", "anthropic/claude-haiku-5-5", _INPUT_BODY, "max_tokens", False),
+        ("/v1/chat/completions", "gemini/gemini-2.5-pro", _CHAT_BODY, "max_output_tokens", False),
+    ],
+)
+def test_only_a_responses_max_output_tokens_below_the_forwarded_minimum_holds_the_minimum(
+    route: str, backend_model: str, shape: Mapping[str, object], cap_field: str, raised_to_minimum: bool
+) -> None:
+    router: Final = _priced_router((backend_model,))
+
+    def estimate(tokens: int) -> float | None:
+        return estimate_request_max_cost(
+            request_body={"model": "priced-model", **shape, cap_field: tokens}, route=route, llm_router=router
+        )
+
+    one_token_hold: Final = estimate(1)
+    minimum_hold: Final = estimate(OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS)
+
+    assert one_token_hold is not None and minimum_hold is not None
+    assert (one_token_hold == pytest.approx(minimum_hold)) is raised_to_minimum
+    assert one_token_hold <= minimum_hold
+
+
+@pytest.mark.parametrize(
+    ("route", "shape", "cap", "lowers_hold"),
+    [
+        ("/cursor/chat/completions", _INPUT_BODY, {"max_tokens": 1}, False),
+        ("/cursor/chat/completions", _INPUT_BODY, {"max_output_tokens": 1}, True),
+        ("/cursor/chat/completions", _CHAT_BODY, {"inferenceConfig": {"maxTokens": 1}}, False),
+        ("/cursor/chat/completions", _CHAT_BODY, {"max_tokens": 1}, True),
+        ("/claude_code_gateway/v1/messages", _CHAT_BODY, {"max_completion_tokens": 1}, False),
+        ("/claude_code_gateway/v1/messages", _CHAT_BODY, {"max_tokens": 1}, True),
+        ("/v1beta/interactions", _INPUT_BODY, {"max_tokens": 1}, False),
+        ("/v1beta/interactions", _INPUT_BODY, {"max_output_tokens": 1}, False),
+    ],
+)
+def test_routes_outside_the_call_type_map_trust_only_the_cap_they_forward(
+    route: str, shape: Mapping[str, object], cap: Mapping[str, object], lowers_hold: bool
+) -> None:
+    router: Final = _priced_router(("openai/gpt-5.6",))
+    body: Final = {"model": "priced-model", **shape}
+    uncapped: Final = estimate_request_max_cost(request_body=body, route=route, llm_router=router)
+    capped: Final = estimate_request_max_cost(request_body={**body, **cap}, route=route, llm_router=router)
+
+    assert uncapped is not None and capped is not None
+    assert (capped < uncapped) is lowers_hold
 
 
 @pytest.mark.asyncio
