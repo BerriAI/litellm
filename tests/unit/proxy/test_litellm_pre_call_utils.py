@@ -8596,11 +8596,14 @@ async def test_key_cache_metadata_only_keeps_request_controls_the_key_allows(
             "max-age=0,no-cache", None, [], {"no-cache": True}, id="directives-without-a-space-after-the-comma"
         ),
         pytest.param("NO-STORE", None, [], {"no-store": True}, id="no-store-skips-the-cache-write"),
-        pytest.param("no-store", {"no-cache": False}, [], {"no-cache": False, "no-store": True}, id="body-controls-win"),
+        pytest.param(
+            "no-store", {"no-cache": False}, [], {"no-cache": False, "no-store": True}, id="body-controls-win"
+        ),
         pytest.param(
             "no-cache, no-store", None, ["no-store"], {"no-store": True}, id="key-allowed-directives-are-kept"
         ),
         pytest.param("no-cache", None, ["ttl"], None, id="key-disallowed-directives-are-ignored-not-rejected"),
+        pytest.param("s-maxage=60, no-store", None, [], {"no-store": True}, id="s-maxage-leaves-the-body-ttl-alone"),
     ],
 )
 async def test_cache_control_header_reaches_the_request_cache(
@@ -8620,19 +8623,9 @@ async def test_cache_control_header_reaches_the_request_cache(
     assert updated["ttl"] == 300
 
 
-@pytest.mark.asyncio
-async def test_cache_control_header_s_maxage_sets_the_cache_entry_ttl():
-    updated: Final = await _add_data_with_cache_control_header(
-        "S-MaxAge=60,no-store", {"ttl": 300}, UserAPIKeyAuth(api_key="hashed-key")
-    )
-
-    assert float(updated["ttl"]) == 60
-    assert updated["cache"] == {"no-store": True}
-
-
 async def _add_data_with_cache_control_header(
     cache_control_header: str, request_fields: dict[str, object], key: UserAPIKeyAuth
-) -> dict:
+) -> dict[str, object]:
     return await add_litellm_data_to_request(
         data={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}], **request_fields},
         request=Request(

@@ -3117,8 +3117,6 @@ async def add_litellm_data_to_request(
     cache_control_header: Final[str | None] = _headers.get("cache-control")
     if cache_control_header:
         cache_dict: Final = parse_cache_control(cache_control_header)
-        if cache_dict.get("s-maxage") is not None:
-            data["ttl"] = cache_dict["s-maxage"]
         header_cache_controls: Final = _header_cache_controls(cache_dict, user_api_key_dict.allowed_cache_controls)
         if header_cache_controls:
             request_cache: Final = data.get("cache")
