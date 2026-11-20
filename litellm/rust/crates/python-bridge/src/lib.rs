@@ -357,4 +357,30 @@ mod tests {
             format!("{:?}", crate::tls_provider::openssl_provider())
         );
     }
+
+    #[cfg(feature = "fips")]
+    #[rstest::rstest]
+    fn http_clients_verify_with_the_installed_openssl_provider() {
+        Python::initialize();
+        Python::attach(|py| {
+            native_module(py);
+        });
+        let settings =
+            litellm_http::HttpSettings::from_layers([litellm_http::HttpSettingsLayer::default()]);
+        let config = litellm_http::Resolution::from(&settings).config;
+
+        let tls = rustls::ClientConfig::try_from(&config)
+            .expect("the default HTTP settings build a TLS config");
+
+        assert_eq!(
+            format!(
+                "{:?}",
+                tls.crypto_provider().signature_verification_algorithms
+            ),
+            format!(
+                "{:?}",
+                crate::tls_provider::openssl_provider().signature_verification_algorithms
+            )
+        );
+    }
 }
