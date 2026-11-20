@@ -51,7 +51,6 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import broadcast_
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,
-    compute_customer_budget_reset_at,
     get_budget_reset_settings,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -1915,11 +1914,7 @@ class ResetBudgetJob:
 
     @staticmethod
     def _next_window_reset(
-        window: Mapping[str, object],
-        now: datetime,
-        reset_settings: BudgetResetSettings,
-        *,
-        customer_limits: bool = False,
+        window: Mapping[str, object], now: datetime, reset_settings: BudgetResetSettings
     ) -> datetime | None:
         reset_at_str: Final = window.get("reset_at")
         budget_duration: Final = window.get("budget_duration")
@@ -1929,8 +1924,6 @@ class ResetBudgetJob:
         saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
         if _as_utc(saved_reset_at) > _as_utc(now):
             return None
-        if customer_limits and budget_duration not in ("1mo", "12mo"):
-            return compute_customer_budget_reset_at(budget_duration, reset_settings, now)
         return compute_budget_reset_at(
             budget_duration=budget_duration, settings=reset_settings, now=now if annual else None
         )
@@ -2084,10 +2077,7 @@ class ResetBudgetJob:
         windows: Final = (
             _WINDOW_LIMITS.validate_json(raw) if isinstance(raw, str) else _WINDOW_LIMITS.validate_python(raw)
         )
-        resets: Final = tuple(
-            self._next_window_reset(window, now, self.reset_settings, customer_limits=source.counters is None)
-            for window in windows
-        )
+        resets: Final = tuple(self._next_window_reset(window, now, self.reset_settings) for window in windows)
         if all(reset_at is None for reset_at in resets):
             return
         if source.counters is not None:

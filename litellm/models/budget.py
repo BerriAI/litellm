@@ -57,14 +57,12 @@ def carry_budget_limit_resets(
 def initialize_budget_limits(
     limits: tuple[BudgetLimit, ...], settings: "BudgetResetSettings", now: datetime
 ) -> tuple[BudgetLimit, ...]:
-    from litellm.proxy.common_utils.timezone_utils import compute_customer_budget_reset_at
+    from litellm.proxy.common_utils.timezone_utils import compute_budget_reset_at
 
     return tuple(
         limit
         if limit.reset_at is not None
-        else limit.model_copy(
-            update={"reset_at": compute_customer_budget_reset_at(limit.budget_duration, settings, now)}
-        )
+        else limit.model_copy(update={"reset_at": compute_budget_reset_at(limit.budget_duration, settings, now)})
         for limit in limits
     )
 

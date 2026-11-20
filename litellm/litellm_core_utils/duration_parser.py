@@ -159,24 +159,6 @@ def get_next_standardized_reset_time(
         return base_midnight + timedelta(days=1)
 
 
-def get_customer_budget_reset_time(
-    duration: str,
-    current_time: datetime,
-    timezone_str: str = "UTC",
-    reset_time_of_day: time = time(0, 0),
-) -> datetime:
-    reset: Final = get_next_standardized_reset_time(duration, current_time, timezone_str, reset_time_of_day)
-    unit: Final = _parse_duration(normalize_duration(duration))[1]
-    if duration in ("1mo", "12mo") or unit not in ("d", "w", "mo"):
-        return reset
-    first_occurrence: Final = reset.replace(fold=0)
-    if first_occurrence.astimezone(timezone.utc) > _setup_timezone(current_time, timezone_str)[0].astimezone(
-        timezone.utc
-    ):
-        return first_occurrence
-    return get_next_standardized_reset_time(duration, first_occurrence, timezone_str, reset_time_of_day).replace(fold=0)
-
-
 def _shift_months(moment: datetime, months: int) -> datetime:
     """`moment` moved by `months` calendar months, back when negative, clamped to the target month's last day."""
     total_months: Final = moment.year * 12 + moment.month - 1 + months
