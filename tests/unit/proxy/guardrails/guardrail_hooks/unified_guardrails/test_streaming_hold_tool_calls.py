@@ -88,6 +88,20 @@ def _text_completion_items(with_tool_call: bool) -> tuple[object, ...]:
     return (chunk("Let me "), chunk("clean that up."), chunk("", finish_reason="stop"))
 
 
+def _gemini_items(with_tool_call: bool) -> tuple[object, ...]:
+    """A native Gemini ``:streamGenerateContent`` stream. Its translation does not tell a tool call apart."""
+
+    def chunk(part: dict[str, object], finish_reason: str | None = None) -> dict[str, object]:
+        candidate: Final[dict[str, object]] = {"content": {"role": "model", "parts": [part]}, "index": 0}
+        return {"candidates": [candidate if finish_reason is None else {**candidate, "finishReason": finish_reason}]}
+
+    text: Final = (chunk({"text": "Let me "}), chunk({"text": "clean that up."}))
+    if not with_tool_call:
+        return (*text, chunk({"text": ""}, finish_reason="STOP"))
+    call: Final = {"functionCall": {"name": TOOL_NAME, "args": json.loads(TOOL_ARGUMENTS)}}
+    return (*text, chunk(call, finish_reason="STOP"))
+
+
 def _sse(event: str, data: dict[str, object]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
@@ -237,6 +251,7 @@ MODES_AND_ROUTES: Final = (
 )
 ALL_ROUTES: Final = tuple(ROUTES)
 ROUTES["text"] = ("/v1/completions", _text_completion_items, 2)
+ROUTES["gemini"] = ("/v1beta/models/gemini-2.5-flash:streamGenerateContent", _gemini_items, 2)
 
 
 class _RecordingGuardrail(CustomGuardrail):
@@ -306,18 +321,20 @@ async def _relay(
     blocks_only_tool_calls: bool | None = None,
     scanned_a_tool_call: list[bool] | None = None,
     reads_response_for: str | None = None,
+    released_into: list[object] | None = None,
 ) -> tuple[tuple[object, ...], tuple[object, ...], tuple[object, ...]]:
     """The stream's items, what the client had at scan time, and everything the client received.
 
     ``wire_items`` replaces the route's stream, for the same stream cut differently by the transport. ``mode`` is
     how the guardrail scans the stream, one of ``STREAM_MODES``; every mode but ``end_only`` scans more than once,
     so there the guardrail blocks only a scan that carries the tool call, unless ``blocks_only_tool_calls`` says
-    otherwise. ``scanned_a_tool_call`` receives whether any scan carried the tool call."""
+    otherwise. ``scanned_a_tool_call`` receives whether any scan carried the tool call. ``released_into`` receives
+    what the client was sent, for a route that ends a blocked stream by raising."""
     route, build, _ = ROUTES[endpoint]
     wire: Final = build(with_tool_call) if wire_items is None else wire_items
     pass_through: Final = endpoint in PASS_THROUGH_ROUTES
     items: Final[list[object]] = []
-    released: Final[list[object]] = []
+    released: Final[list[object]] = [] if released_into is None else released_into
     guardrail: Final = _RecordingGuardrail(
         released,
         blocks,
@@ -694,3 +711,47 @@ async def test_a_held_item_the_scan_key_does_not_carry_still_gets_an_end_of_stre
     assert guardrail_saw == [True], "the held item was released with no round after it arrived"
     assert item_type not in "".join(_readable(chunk) for chunk in received)
     assert BLOCK_MESSAGE in "".join(_readable(chunk) for chunk in received)
+
+
+GEMINI_MODES: Final = pytest.mark.parametrize("mode", ["end_only", "sampled", "background"])
+
+
+@GEMINI_MODES
+@pytest.mark.asyncio
+async def test_a_route_that_cannot_tell_a_tool_call_apart_holds_its_whole_stream_for_the_verdict(mode: str) -> None:
+    """The native Gemini translation has no tool-call detection, so with the flag on nothing of its stream is
+    released before the end-of-stream verdict, the function call included."""
+    items, at_scan, received = await _relay(
+        "gemini", with_tool_call=True, hold_tool_calls=True, blocks=False, mode=mode, blocks_only_tool_calls=False
+    )
+
+    assert at_scan == ()
+    assert received == items
+
+
+@GEMINI_MODES
+@pytest.mark.asyncio
+async def test_a_blocked_stream_on_such_a_route_reaches_the_client_with_nothing_released(mode: str) -> None:
+    """This route has no block frames of its own, so a block ends the stream by raising, as it does today."""
+    released: Final[list[object]] = []
+
+    with pytest.raises(ModifyResponseException):
+        await _relay(
+            "gemini",
+            with_tool_call=True,
+            hold_tool_calls=True,
+            blocks=True,
+            mode=mode,
+            blocks_only_tool_calls=False,
+            released_into=released,
+        )
+
+    assert released == []
+
+
+@pytest.mark.asyncio
+async def test_without_the_flag_a_route_that_cannot_tell_a_tool_call_apart_streams_as_before() -> None:
+    items, at_scan, received = await _relay("gemini", with_tool_call=True, hold_tool_calls=False, blocks=False)
+
+    assert _mentions_tool_call(at_scan)
+    assert received == items

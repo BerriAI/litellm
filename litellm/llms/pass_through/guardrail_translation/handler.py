@@ -354,6 +354,8 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         return translation.get_streaming_scan_key(responses_so_far) if translation is not None else None
 
     def starts_client_tool_call(self, item: object) -> bool:
+        """The answer of the provider translation that reads this event stream. A stream no translation reads is
+        not scanned at all, so there is no verdict to hold it for."""
         translation: Final = self._event_stream_translation((item,))
         return translation is not None and translation.starts_client_tool_call(item)
 

@@ -220,8 +220,12 @@ class BaseTranslation(ABC):
 
     def starts_client_tool_call(self, item: object) -> bool:
         """Whether this one stream item starts or carries a tool call the client runs. Read from the item alone,
-        so holding tool calls for a guardrail's end-of-stream verdict never re-walks the stream."""
-        return False
+        so holding tool calls for a guardrail's end-of-stream verdict never re-walks the stream.
+
+        The base answer is True: a translation that cannot tell a tool call apart holds its whole stream for the
+        verdict, so a guardrail that asks for the hold never has one released early. A translation whose stream
+        carries no tool calls answers False."""
+        return True
 
     def split_whole_stream_frames(self, carried: object | None, item: object) -> tuple[object | None, object | None]:
         """Cut a stream item at the last frame boundary of the wire format. Returns the whole frames in ``carried``
