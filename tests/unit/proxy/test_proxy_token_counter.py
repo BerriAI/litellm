@@ -3418,3 +3418,135 @@ def test_count_routes_send_no_user_profile_id_for_a_model_that_is_not_claude(
 
     assert response.status_code == 200, response.text
     assert response.json()[count_field] == 41
+
+
+def _count_on_bedrock_mantle(
+    path: str,
+    body: Mapping[str, JsonValue],
+    bedrock: Callable[[httpx.Request], httpx.Response],
+    model_info: Mapping[str, JsonValue],
+    client_headers: Mapping[str, str],
+    key_metadata: Mapping[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> httpx.Response:
+    from fastapi.testclient import TestClient
+
+    from litellm.llms.bedrock.count_tokens import handler as bedrock_count_tokens_handler
+    from litellm.llms.bedrock.count_tokens import mantle_handler as bedrock_mantle_count_tokens_handler
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "provider-counted",
+                    "litellm_params": {
+                        "model": "bedrock/mantle/anthropic.claude-sonnet-5-5",
+                        "aws_access_key_id": "AKIATESTACCESSKEY",
+                        "aws_secret_access_key": "test-secret",
+                        "aws_region_name": "us-east-1",
+                    },
+                    "model_info": dict(model_info),
+                }
+            ]
+        ),
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key="sk-test", metadata=dict(key_metadata)),
+    )
+    with (
+        patch.object(bedrock_count_tokens_handler, "get_async_httpx_client", return_value=client),
+        patch.object(bedrock_mantle_count_tokens_handler, "get_async_httpx_client", return_value=client),
+    ):
+        return TestClient(app, raise_server_exceptions=False).post(path, json=dict(body), headers=dict(client_headers))
+
+
+@pytest.mark.parametrize(("path", "body", "count_field"), _HELLO_COUNT_ROUTES)
+def test_count_routes_send_the_pinned_user_profile_id_in_the_mantle_count_body_mantle_inference_sends(
+    path: str, body: Mapping[str, JsonValue], count_field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        if request.url.host != "bedrock-mantle.us-east-1.api.aws":
+            return httpx.Response(
+                400, json={"message": "The provided model doesn't support counting tokens."}, request=request
+            )
+        received: Final = json.loads(request.content).get("user_profile_id")
+        if received == "uprof_pinned":
+            return httpx.Response(200, json={"input_tokens": 41}, request=request)
+        return httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+            request=request,
+        )
+
+    response: Final = _count_on_bedrock_mantle(
+        path,
+        body,
+        bedrock,
+        {},
+        {"anthropic-user-profile-id": "uprof_client"},
+        {"anthropic_user_profile_id": "uprof_pinned"},
+        monkeypatch,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()[count_field] == 41
+
+
+class _MantleRejectingTheUserProfileId:
+    def __init__(self) -> None:
+        self.sent_profile_ids: tuple[JsonValue, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.sent_profile_ids = (*self.sent_profile_ids, json.loads(request.content).get("user_profile_id"))
+        return httpx.Response(
+            400,
+            json={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "user_profile_id: must be a well-formed ID"},
+            },
+            request=request,
+        )
+
+
+@pytest.mark.parametrize(
+    ("client_headers", "sent_profile_id", "region_hints"),
+    (({"anthropic-user-profile-id": "uprof_malformed"}, "uprof_malformed", 0), ({}, None, 1)),
+    ids=("user_profile_id_forwarded", "no_user_profile_id"),
+)
+def test_a_mantle_count_rejecting_the_forwarded_user_profile_id_answers_without_the_region_hint(
+    client_headers: Mapping[str, str],
+    sent_profile_id: str | None,
+    region_hints: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bedrock: Final = _MantleRejectingTheUserProfileId()
+
+    response: Final = _count_on_bedrock_mantle(
+        "/v1/messages/count_tokens",
+        {"model": "provider-counted", "messages": [{"role": "user", "content": "Read the README"}]},
+        bedrock,
+        {
+            "token_count_model": {
+                "model": "anthropic.claude-sonnet-5-5",
+                "litellm_provider": "bedrock_mantle",
+                "region": "us-west-2",
+            }
+        },
+        client_headers,
+        {},
+        monkeypatch,
+    )
+
+    assert response.status_code == 400, response.text
+    assert bedrock.sent_profile_ids == (sent_profile_id,)
+    assert response.text.count("counts tokens with anthropic.claude-sonnet-5-5 in us-west-2") == region_hints

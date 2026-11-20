@@ -14219,6 +14219,20 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 
 
+def _count_user_profile_id(
+    pinned_user_profile_id: str | None,
+    client_user_profile_id: str | None,
+    deployment_litellm_params: Mapping[str, object],
+) -> str | None:
+    if not names_a_claude_model(str(deployment_litellm_params.get("model") or "")):
+        return None
+    return (
+        pinned_user_profile_id
+        or anthropic_user_profile_id_in_headers(deployment_litellm_params)
+        or client_user_profile_id
+    )
+
+
 def _with_user_profile_id(
     counter: BaseTokenCounter | None,
     pinned_user_profile_id: str | None,
@@ -14227,23 +14241,19 @@ def _with_user_profile_id(
 ) -> BaseTokenCounter | None:
     from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
     from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
+    from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 
-    counts_claude: Final = names_a_claude_model(str(deployment_litellm_params.get("model") or ""))
-    user_profile_id: Final = (
-        (
-            pinned_user_profile_id
-            or anthropic_user_profile_id_in_headers(deployment_litellm_params)
-            or client_user_profile_id
-        )
-        if counts_claude
-        else None
+    user_profile_id: Final = _count_user_profile_id(
+        pinned_user_profile_id, client_user_profile_id, deployment_litellm_params
     )
     match counter:
         case AnthropicTokenCounter() if user_profile_id:
             return AnthropicTokenCounter(user_profile_id=user_profile_id)
         case AzureAIAnthropicTokenCounter() if user_profile_id:
             return AzureAIAnthropicTokenCounter(user_profile_id=user_profile_id)
+        case BedrockTokenCounter() if user_profile_id:
+            return BedrockTokenCounter(user_profile_id=user_profile_id)
         case VertexAITokenCounter() if user_profile_id:
             return VertexAITokenCounter(user_profile_id=user_profile_id)
         case _:
@@ -14365,6 +14375,7 @@ async def _provider_token_count(
     model_to_use: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
+    sends_user_profile_id: bool = False,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
@@ -14387,7 +14398,7 @@ async def _provider_token_count(
         return counted.model_copy(update={"count_source": "token_count_model", "model_used": count_model.model})
     failure: Final = (
         counted
-        if count_model is None or count_model.region is None
+        if count_model is None or count_model.region is None or (sends_user_profile_id and counted.status_code == 400)
         else counted.with_hint(
             f"This model counts tokens with {count_model.model} in {count_model.region}. "
             "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
@@ -14860,6 +14871,14 @@ async def count_request_tokens(
             model_to_use=model_to_use,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
+            sends_user_profile_id=deployment is not None
+            and bool(
+                _count_user_profile_id(
+                    pinned_user_profile_id,
+                    client_user_profile_id,
+                    _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})),
+                )
+            ),
         )
     )
     if isinstance(ladder, TokenCountResponse):
