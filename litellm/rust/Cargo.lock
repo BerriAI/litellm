@@ -4801,6 +4801,7 @@ dependencies = [
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-testing",
+ "litellm-router-core",
  "litellm-secret-value",
  "litellm-tracing",
  "parking_lot",
