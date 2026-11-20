@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from http import HTTPStatus
 from typing import Final
 
 import httpx
@@ -75,7 +76,7 @@ async def _accepts_gateway_traces(client: httpx.AsyncClient) -> bool:
         )
     except httpx.HTTPError:
         return True
-    if response.status_code != httpx.codes.NOT_FOUND:
+    if response.status_code != HTTPStatus.NOT_FOUND:
         return True
     verbose_proxy_logger.warning(
         "Lens does not accept gateway traces, so model calls reach it as cost only. Upgrade Lens to see them as traces."
