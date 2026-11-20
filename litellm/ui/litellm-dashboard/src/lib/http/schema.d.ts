@@ -75043,7 +75043,18 @@ export interface operations {
     };
     get_response_input_items_openai_v1_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -78929,7 +78940,18 @@ export interface operations {
     };
     get_response_input_items_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -91076,7 +91098,18 @@ export interface operations {
     };
     get_response_input_items_v1_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
