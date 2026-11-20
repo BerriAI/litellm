@@ -1054,3 +1054,63 @@ async def test_storage_rejects_remote_query_help_that_drifts_from_the_contract(d
     ) as client:
         with pytest.raises(RuntimeError, match="invalid response"):
             await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret")
+
+
+@pytest.mark.asyncio
+async def test_connected_gateway_sends_model_calls_to_lens_without_claiming_the_proxy_otel_logger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+
+    def lens_exporters() -> tuple[tuple[str, str | None, str | None, str], ...]:
+        return tuple(
+            (spec.kind, spec.traces_endpoint, spec.headers, callback.config.capture_message_content)
+            for callback in litellm.callbacks
+            if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "lens"
+            for spec in callback.config.exporters
+        )
+
+    async with manage_tracing(True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage))):
+        assert lens_exporters() == (
+            (
+                "otlp_http",
+                "http://lens.test/internal/traces",
+                "Authorization=Bearer test-service-token-with-32-characters",
+                "span_only",
+            ),
+        )
+        assert proxy_server.open_telemetry_logger is None
+        assert not any(isinstance(callback, OpenTelemetryV2) for callback in litellm.service_callback)
+    assert lens_exporters() == ()
+
+
+@pytest.mark.asyncio
+async def test_lens_without_a_gateway_trace_route_still_gets_cost_but_no_trace_exports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.tracing.exporter import LensExporter
+    from litellm.tracing.remote import LensConnection
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
+
+    def old_lens(connection: LensConnection) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=connection.url,
+            transport=httpx.MockTransport(
+                lambda request: Response(404 if request.url.path == "/internal/traces" else 200)
+            ),
+        )
+
+    async with manage_tracing(True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage)), None, old_lens):
+        registered: Final = tuple(type(callback) for callback in litellm.callbacks)
+    assert LensExporter in registered
+    assert not any(issubclass(callback, OpenTelemetryV2) for callback in registered)
