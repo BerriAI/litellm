@@ -18,6 +18,7 @@ from typing import (
     TypeVar,
 )
 
+from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
@@ -111,6 +112,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.types.services import ServiceTypes
 
 CustomerSpendEntity: TypeAlias = Literal["member", "team", "org"]
+_WINDOW_LIMITS: Final = TypeAdapter(tuple[dict[str, object], ...])
 
 
 class _CustomerOrgRow(Protocol):
@@ -2055,21 +2057,35 @@ class ResetBudgetJob:
             reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
         )
         for row in rows:
-            raw = row["budget_limits"]
-            if not raw:
-                continue
-            row_id: str = row[source.id_column]
-            windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
-            changed = False
-            for window in windows:
-                if source.counters is None:
-                    next_reset_at = ResetBudgetJob._next_window_reset(window, now, self.reset_settings)
-                    if next_reset_at is not None:
-                        window["reset_at"] = next_reset_at.isoformat()
-                        changed = True
+            await self._reset_window_row(source, row, now, spend_counter_store)
+
+        if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
+            return None
+        return rows[-1][source.id_column]
+
+    async def _reset_window_row(
+        self,
+        source: _WindowSource,
+        row: Mapping[str, object],
+        now: datetime,
+        spend_counter_store: SpendCounterStore,
+    ) -> None:
+        raw: Final = row["budget_limits"]
+        if not raw:
+            return
+        row_id: Final = str(row[source.id_column])
+        windows: Final = (
+            _WINDOW_LIMITS.validate_json(raw) if isinstance(raw, str) else _WINDOW_LIMITS.validate_python(raw)
+        )
+        resets: Final = tuple(self._next_window_reset(window, now, self.reset_settings) for window in windows)
+        if all(reset_at is None for reset_at in resets):
+            return
+        if source.counters is not None:
+            entity_type, window_counter = source.counters
+            for window, reset_at in zip(windows, resets):
+                if reset_at is None:
                     continue
-                entity_type, window_counter = source.counters
-                if await ResetBudgetJob._reset_expired_window(
+                await ResetBudgetJob._reset_expired_window(
                     window,
                     window_counter(row_id, str(window["budget_duration"])),
                     spend_counter_store,
@@ -2078,17 +2094,19 @@ class ResetBudgetJob:
                     prisma_client=self.prisma_client,
                     entity_type=entity_type,
                     entity_id=row_id,
-                ):
-                    changed = True
-            if changed:
-                await self._with_db_write_retry(
-                    lambda: source.write(self.prisma_client, row_id, json.dumps(windows)),
-                    reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
                 )
-
-        if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
-            return None
-        return rows[-1][source.id_column]
+        payload: Final = json.dumps(
+            windows
+            if source.counters is not None
+            else tuple(
+                {**window, "reset_at": reset_at.isoformat()} if reset_at is not None else window
+                for window, reset_at in zip(windows, resets)
+            )
+        )
+        await self._with_db_write_retry(
+            lambda: source.write(self.prisma_client, row_id, payload),
+            reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
+        )
 
     @staticmethod
     async def _reset_budget_common(

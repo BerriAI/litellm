@@ -5212,12 +5212,13 @@ class _FrozenClock(datetime):
 _FROZEN_NOW: Final = _FrozenClock(2024, 6, 15, 10, 30, tzinfo=timezone.utc)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def frozen_reset_clock(monkeypatch: pytest.MonkeyPatch) -> datetime:
     from litellm.proxy.common_utils import timezone_utils
 
     monkeypatch.setattr(reset_budget_job_module, "datetime", _FrozenClock)
     monkeypatch.setattr(timezone_utils, "datetime", _FrozenClock)
+    monkeypatch.setattr(sys.modules[__name__], "datetime", _FrozenClock)
     return _FROZEN_NOW
 
 
