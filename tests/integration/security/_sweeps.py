@@ -101,7 +101,8 @@ ROUTE_DENY_LIST: Final = MappingProxyType(
         "/sso/saml/login": "starts an external SAML redirect flow",
         "/sso/debug/login": "starts an external SSO redirect flow",
         "/sso/debug/callback": "external SSO redirect target",
-        "/fallback/login": "HTML login page",
+        "/fallback/login": "redirects to the dashboard login page",
+        "/login/resume": "redirects a signed-in browser to its stored return_to",
         "/plugin-proxy/{plugin_name}/{path:path}": "reverse proxy to a plugin process",
         "/openai_passthrough/{endpoint:path}": "forwards to a provider, not a proxy read",
         "/get/latest_release_info": "fetches the latest release from api.github.com",
@@ -134,9 +135,7 @@ PARAMETER_ALIASES: Final = MappingProxyType(
     {
         "/models/{model_id}": {"model_id": "model"},
         "/v1/models/{model_id}": {"model_id": "model"},
-        "/management/v1/customer_budget_increase_requests/{request_id}": {
-            "request_id": "budget_increase_request_id"
-        },
+        "/management/v1/customer_budget_increase_requests/{request_id}": {"request_id": "budget_increase_request_id"},
     }
 )
 NOT_FOUND_EXPECTED: Final = MappingProxyType(
