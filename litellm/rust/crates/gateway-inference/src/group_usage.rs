@@ -11,6 +11,7 @@ use axum::{
 };
 use litellm_redis_store::{Number, router_usage::Kind};
 use litellm_router_core::{Deployment, UsageWindow, health::current_minute};
+use serde_json::Value;
 
 use crate::{Gateway, headers::Routing, routing::Host, routing_cache::counter};
 
@@ -22,11 +23,17 @@ const REQUESTS: [&str; 2] = [
 
 /// A deployment's configured limit, which `_set_model_group_info` adds up over the group.
 fn limit(deployment: &Deployment, kind: Kind) -> Option<Number> {
-    let value = deployment.raw_params.get(<&str>::from(kind))?;
-    value
-        .as_i64()
-        .map(Number::Int)
-        .or_else(|| value.as_f64().map(Number::Float))
+    configured(deployment.raw_params.get(<&str>::from(kind))?)
+}
+
+/// A limit as the proxy's `int | None` param holds it: a whole number, however it is written.
+/// One with a fraction, which the proxy refuses to load, stays as written.
+fn configured(value: &Value) -> Option<Number> {
+    let whole = |limit: f64| (limit.fract() == 0.0).then_some(Number::Int(limit as i64));
+    value.as_i64().map(Number::Int).or_else(|| {
+        let limit = value.as_f64()?;
+        Some(whole(limit).unwrap_or(Number::Float(limit)))
+    })
 }
 
 fn total(deployments: &[Arc<Deployment>], kind: Kind) -> Option<Number> {
@@ -44,10 +51,11 @@ pub struct GroupLimits {
     pub rpm: Option<i64>,
 }
 
-/// The limits of the model group `name` in `router`, by the name a request asks for it under.
-/// `None` when `name` is no model group.
+/// The limits of the model group `name` in `router`, by the name a request asks for it under:
+/// the group's own, or a `model_group_alias` of it. `None` when `name` is neither.
 pub fn group_limits(router: &litellm_router_core::Router, name: &str) -> Option<GroupLimits> {
-    let deployments = router.registry().group(name)?;
+    let registry = router.registry();
+    let deployments = registry.group(registry.alias_of(name).unwrap_or(name))?;
     Some(GroupLimits {
         tpm: whole(&deployments, Kind::Tpm),
         rpm: whole(&deployments, Kind::Rpm),
@@ -153,4 +161,24 @@ pub(crate) async fn told<H: Host>(
         }
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    #[rstest]
+    #[case::a_whole_number(json!(1000), Some(Number::Int(1000)))]
+    #[case::a_whole_number_written_with_a_fraction(json!(1000.0), Some(Number::Int(1000)))]
+    #[case::a_fraction(json!(0.5), Some(Number::Float(0.5)))]
+    #[case::text(json!("1000"), None)]
+    fn a_limit_is_the_whole_number_the_proxy_makes_of_it(
+        #[case] written: Value,
+        #[case] read: Option<Number>,
+    ) {
+        assert_eq!(configured(&written), read);
+    }
 }

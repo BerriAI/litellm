@@ -86,7 +86,12 @@ pub async fn build_inference(
     let (router, shaping) = boot::router(config, &catalog).await?;
     let limits = parallel_request_limiter::Settings::read(config, environment);
     let counters = parallel_request_limiter::counters(redis.coordination.clone());
-    let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
+    let key_limiter = KeyLimiter::new(
+        limits,
+        counters.clone(),
+        router.clone(),
+        model_capacity::Borrowing::read(config),
+    );
     let licensed = resources.environment.get(LICENSE).is_some();
     let model_capacity = model_capacity::Settings::read(config, limits, licensed).map(|read| {
         let active = ActiveTeams::new(redis.coordination.clone().map(|client| Remote {

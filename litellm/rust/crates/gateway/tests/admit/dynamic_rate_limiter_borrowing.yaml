@@ -1,5 +1,7 @@
-# A per-model limit that borrows a model's idle capacity holds tokens before the call, which the
-# native app does not do, so a config that lists who borrows goes to Python.
+# A key whose own per-model limit borrows a model group's idle capacity is served natively: the
+# dynamic rate limiter holds it to that limit once the group is saturated. A team or a customer
+# organization that borrows is a caller only Python authenticates, and a group that can fall back
+# to another goes to Python, which asks the limiter before each fallback.
 config:
   model_list:
     - model_name: claude
@@ -7,18 +9,57 @@ config:
         model: anthropic/claude-haiku-5-5
         api_key: provider-key
         tpm: 100000
+    - model_name: backed
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        tpm: 100000
+    - model_name: spare
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        tpm: 100000
+  router_settings:
+    fallbacks:
+      - backed: [spare]
   litellm_settings:
     callbacks: [dynamic_rate_limiter_v3]
     priority_reservation_settings:
       model_limit_borrowing_config:
-        borrow_idle_capacity: [key]
+        borrow_idle_capacity: [key, team, customer_organization]
+        max_borrow_multiple: 2
   general_settings:
     master_key: gateway-key
 
+keys:
+  sk-any: []
+
 requests:
-  - name: plain
+  - name: the master key
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a virtual key
+    headers: {authorization: Bearer sk-any}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a customer organization's call
+    headers: {authorization: Bearer sk-any, x-litellm-customer-org-alias: org-a}
+    body: {model: claude, max_tokens: 16, messages: []}
     expect: python
-    reason: settings
-    over: litellm_settings.priority_reservation_settings
+    reason: headers
+    over: proxy_header
+
+  - name: a group that can fall back to another
+    headers: {authorization: Bearer sk-any}
+    body: {model: backed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: router_settings fallback under borrow_idle_capacity
+
+  - name: the group it falls back to
+    headers: {authorization: Bearer sk-any}
+    body: {model: spare, max_tokens: 16, messages: []}
+    expect: rust

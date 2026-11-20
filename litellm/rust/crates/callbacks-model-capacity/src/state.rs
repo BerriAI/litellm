@@ -64,6 +64,13 @@ impl Stash {
     pub fn share_mut(&mut self, kind: BorrowerKind) -> &mut ShareState {
         &mut self.borrowing[kind.index()]
     }
+
+    /// Whether a borrower's share or ceiling still holds tokens the admitted call reserved.
+    pub fn holds_tokens(&self) -> bool {
+        self.borrowing
+            .iter()
+            .any(|share| share.reserved_tokens != 0 || share.cap_reserved_tokens != 0)
+    }
 }
 
 impl ShareState {

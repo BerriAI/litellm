@@ -37,7 +37,7 @@ use litellm_router_core::Router;
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 
-use super::Registered;
+use super::{Registered, model_capacity::Borrowing};
 
 /// The name Python registers the hook under.
 pub(crate) const NAME: &str = "parallel_request_limiter";
@@ -269,6 +269,8 @@ pub struct KeyLimiter {
     token_type: TokenRateLimitType,
     /// Tells the model group `model_group_alias` gives the model a body names.
     router: Router,
+    /// Whether a key's per-model limit is a share the dynamic rate limiter holds instead.
+    borrowing: Borrowing,
 }
 
 fn manifest() -> Manifest {
@@ -314,12 +316,18 @@ fn written(sent: &Map<String, Value>, capped: Map<String, Value>) -> Map<String,
 }
 
 impl KeyLimiter {
-    pub fn new(settings: Settings, counters: Arc<RateLimits>, router: Router) -> Arc<Self> {
+    pub fn new(
+        settings: Settings,
+        counters: Arc<RateLimits>,
+        router: Router,
+        borrowing: Borrowing,
+    ) -> Arc<Self> {
         Arc::new(Self {
             manifest: manifest(),
             limiter: ParallelRequestLimiter::new(settings.engine(counters)),
             token_type: settings.token_type,
             router,
+            borrowing,
         })
     }
 
@@ -377,6 +385,12 @@ impl KeyLimiter {
                 .collect(),
             groups: model
                 .map(|model| (model.requested.clone(), Some(model.group.clone())))
+                .into_iter()
+                .collect(),
+            borrows_key: self.borrowing.keys(),
+            dynamic_covered: model
+                .filter(|model| self.borrowing.covers(&self.router, &model.group))
+                .map(|model| model.group.clone())
                 .into_iter()
                 .collect(),
             ..Lookups::default()

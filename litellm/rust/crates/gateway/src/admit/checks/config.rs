@@ -5,8 +5,7 @@
 use axum::http::request::Parts;
 use litellm_callbacks_model_capacity::NAME as MODEL_CAPACITY;
 use litellm_config::{
-    Config, Environment, GeneralSettings, LiteLlmSettings, PriorityReservationSettings,
-    RouterSettings, Value,
+    Config, Environment, GeneralSettings, LiteLlmSettings, RouterSettings, Value,
 };
 
 use super::{
@@ -296,21 +295,13 @@ fn other_callbacks(callbacks: &Option<Vec<Value>>) -> bool {
         .any(|callback| callback.as_str() != Some(MODEL_CAPACITY))
 }
 
-/// A per-model limit that borrows a model's idle capacity, which the dynamic rate limiter holds
-/// tokens for before the call. The native app serves no caller that holds one.
-fn borrows(settings: &Option<PriorityReservationSettings>) -> bool {
-    settings.as_ref().is_some_and(|settings| {
-        !settings
-            .model_limit_borrowing_config
-            .borrow_idle_capacity
-            .is_empty()
-    })
-}
-
 /// `drop_params` is honored whichever of the config and its variable set it, and
 /// `use_chat_completions_url_for_anthropic_messages` is [`messages_only`]. `callbacks` is honored
 /// when it names only the dynamic rate limiter, which reads `priority_reservation` and its
-/// settings. The others the native app does not read only shape another route or the UI.
+/// settings. Of those, a team or a customer organization that borrows or takes a slice of its
+/// class only shapes a caller `admit` never admits, since neither the master key nor a key the
+/// native app serves belongs to one. The others the native app does not read only shape another
+/// route or the UI.
 fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let LiteLlmSettings {
         ssl_verify: _,
@@ -332,7 +323,7 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         blog_posts_url: _,
         autorouter_presets_url: _,
         priority_reservation: _,
-        priority_reservation_settings,
+        priority_reservation_settings: _,
         modify_params,
         enable_anthropic_prompt_caching,
         reasoning_auto_summary,
@@ -366,7 +357,7 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             enable_anthropic_prompt_caching,
             reasoning_auto_summary,
         ],
-        by: [callbacks => other_callbacks, priority_reservation_settings => borrows]
+        by: [callbacks => other_callbacks]
     )
     .chain(unknown("litellm_settings.", additional_fields))
     .map(|key| spelled(config, key))

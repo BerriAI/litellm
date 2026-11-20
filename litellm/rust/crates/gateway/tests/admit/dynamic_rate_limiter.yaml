@@ -1,5 +1,6 @@
 # `dynamic_rate_limiter_v3` is the one callback the native app runs: it shares a model group's tpm
-# and rpm out by priority, and splits a priority class among its active keys when asked.
+# and rpm out by priority, and splits a priority class among its active keys when asked. A team or
+# a customer member that takes a slice is a caller only Python authenticates.
 config:
   model_list:
     - model_name: claude
@@ -18,7 +19,11 @@ config:
       saturation_threshold: 0.6
       saturation_check_cache_ttl: 10
       priority_class_share_config:
-        split_equally_among_active: [key]
+        split_equally_among_active: [key, team, customer_member]
+  router_settings:
+    model_group_alias:
+      sonnet: claude
+      quiet: {model: claude, hidden: true}
   general_settings:
     master_key: gateway-key
 
@@ -35,3 +40,24 @@ requests:
     headers: {authorization: Bearer sk-any}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: rust
+
+  - name: a customer member's call
+    headers: {authorization: Bearer sk-any, x-litellm-customer-member-id: member-a}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+    over: proxy_header
+
+  - name: an alias, which is counted against its group's limits
+    headers: {authorization: Bearer sk-any}
+    body: {model: sonnet, max_tokens: 16, messages: []}
+    expect: rust
+
+  # The proxy's limiter reads no group for a hidden alias and leaves the call uncounted, and the
+  # native router does not keep which aliases are hidden.
+  - name: a hidden alias
+    headers: {authorization: Bearer sk-any}
+    body: {model: quiet, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: router_settings.model_group_alias

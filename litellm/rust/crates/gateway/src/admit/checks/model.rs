@@ -13,6 +13,7 @@ use super::{
     Admit, Reason, Refused,
     fields::{IsSet, other, unknown},
 };
+use crate::callbacks::model_capacity;
 
 /// The providers the Python proxy itself serves `/v1/messages` through the Rust route for, as
 /// `RULES` in `litellm/rust_bridge/catalog.py` lists them. Python answers any other provider
@@ -26,6 +27,25 @@ const HONORED_EXTRA_PARAMS: [&str; 1] = ["weight"];
 /// models a caller other than the master key may call.
 const HONORED_MODEL_INFO: [&str; 2] = ["id", "access_groups"];
 
+const MODEL_GROUP_ALIAS: &str = "router_settings.model_group_alias";
+/// A group that can fall back to another while keys borrow idle capacity. The proxy asks the
+/// dynamic rate limiter before each fallback, which holds the key to its share on that group,
+/// and the native router asks no callback yet.
+const BORROWED_FALLBACK: &str = "router_settings fallback under borrow_idle_capacity";
+
+/// An alias written with `hidden: true` under the dynamic rate limiter. The proxy's limiter reads
+/// no group for it and leaves the call uncounted, and the native router does not keep which
+/// aliases are hidden, so it would count the call.
+fn uncounted_alias(admit: &Admit, model: &str) -> bool {
+    let hidden = admit
+        .config
+        .router_settings
+        .model_group_alias
+        .as_ref()
+        .and_then(|aliases| aliases.get(model)?.get("hidden")?.as_bool());
+    hidden == Some(true) && model_capacity::Settings::named(&admit.config)
+}
+
 pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let (Some(groups), Some(model)) = (&admit.groups, fields.get("model").and_then(Value::as_str))
     else {
@@ -35,8 +55,12 @@ pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason
     if !groups.holds(group) {
         return Some(Reason::new(Refused::Model, "unknown_model"));
     }
-    groups
-        .reached(group)
+    if uncounted_alias(admit, model) {
+        return Some(Reason::new(Refused::Model, MODEL_GROUP_ALIAS));
+    }
+    let reached = groups.reached(group);
+    let borrowed = reached.len() > 1 && model_capacity::Borrowing::read(&admit.config).keys();
+    reached
         .into_iter()
         .find_map(|reached| match (groups.holds(reached), reached == group) {
             (false, _) => Some(format!("router_settings fallback to {reached}").into()),
@@ -44,6 +68,7 @@ pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason
             (true, false) => unserved(admit, reached)
                 .map(|over| format!("router_settings fallback to {reached}: {over}").into()),
         })
+        .or_else(|| borrowed.then(|| BORROWED_FALLBACK.into()))
         .map(|over| Reason::new(Refused::Model, over))
 }
 
@@ -115,9 +140,19 @@ fn is_not_positive(timeout: &Option<Spelled<f64>>) -> bool {
     matches!(timeout, Some(Spelled::Value(seconds)) if *seconds <= 0.0)
 }
 
-/// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` gets its
-/// credential from a flow the proxy can host and the gateway may not, as Entra and workload
-/// identity are.
+/// A `tpm` or `rpm` the native app does not read as the proxy does: text, which the proxy turns
+/// into a number, or a number with a fraction, which it refuses to load.
+fn is_no_whole_number(limit: &Option<Spelled<f64>>) -> bool {
+    match limit {
+        Some(Spelled::Value(limit)) => limit.fract() != 0.0,
+        Some(Spelled::Text(_)) => true,
+        None => false,
+    }
+}
+
+/// `rpm` and `tpm` are honored as the shuffle's weights and as what their model group serves a
+/// minute. A deployment with no `api_key` gets its credential from a flow the proxy can host and
+/// the gateway may not, as Entra and workload identity are.
 fn params(params: &LitellmParams) -> Vec<Box<str>> {
     let LitellmParams {
         model: _,
@@ -125,8 +160,8 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         aws: _,
         vertex: _,
         custom_llm_provider: _,
-        tpm: _,
-        rpm: _,
+        tpm,
+        rpm,
         drop_params: _,
         aws_bedrock_project_id: _,
         claude_platform: _,
@@ -180,7 +215,8 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
             litellm_credential_name,
             provider_affinity_header,
         ],
-        on: [use_in_pass_through, use_chat_completions_api]
+        on: [use_in_pass_through, use_chat_completions_api],
+        by: [tpm => is_no_whole_number, rpm => is_no_whole_number]
     )
     .chain(unsent)
     .chain(other(
@@ -367,6 +403,8 @@ mod tests {
         "      stream_timeout: -1\n",
         "model_list.litellm_params.stream_timeout"
     )]
+    #[case::a_limit_spelled_as_text("      tpm: \"1000\"\n", "model_list.litellm_params.tpm")]
+    #[case::a_limit_that_is_no_whole_number("      rpm: 0.5\n", "model_list.litellm_params.rpm")]
     #[case::model_info_beyond_the_id(
         "    model_info:\n      id: claude-a\n      base_model: claude-haiku-5-5\n",
         "model_list.model_info.base_model"
@@ -422,5 +460,29 @@ mod tests {
         ];
 
         assert_eq!(one_deployment(DEPLOYMENT, deployed).as_deref(), over);
+    }
+
+    /// The proxy takes a group's `tpm` and `rpm` from the cost map when no deployment sets one,
+    /// and the gateway only reads the deployments. That holds while the cost map sets neither for
+    /// a provider the native app serves. A row that starts to set one sends its group to Python
+    /// here before its provider may stay listed.
+    #[rstest]
+    fn the_cost_map_sets_no_tpm_or_rpm_for_a_provider_the_native_app_serves() {
+        let cost_map: Map<String, Value> =
+            serde_json::from_slice(litellm_model_catalog::BUNDLED_REGISTRY).unwrap();
+        let served = MESSAGES_PROVIDERS.map(<&str>::from);
+
+        let limited: Vec<&String> = cost_map
+            .iter()
+            .filter(|(_, row)| {
+                row["litellm_provider"]
+                    .as_str()
+                    .is_some_and(|provider| served.contains(&provider))
+            })
+            .filter(|(_, row)| !row["tpm"].is_null() || !row["rpm"].is_null())
+            .map(|(model, _)| model)
+            .collect();
+
+        assert_eq!(limited, Vec::<&String>::new());
     }
 }

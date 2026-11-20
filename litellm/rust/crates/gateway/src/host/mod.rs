@@ -9,7 +9,8 @@ mod capacity;
 mod router;
 
 pub use boot::NativeBootHost;
-pub use capacity::NativeCapacityHost;
+pub(crate) use capacity::cap_output;
+pub use capacity::{Asked, NativeCapacityHost};
 pub use router::NativeRouterHost;
 
 use std::sync::Arc;

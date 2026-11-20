@@ -9,11 +9,18 @@
 //! master key included, and the statuses it publishes are the answer the key limiter, registered
 //! after it, starts its own from.
 //!
-//! Accepted differences: a route that tells no usage, every one but `/v1/messages`, settles no
-//! tokens. The share and throttle metrics are Prometheus's, which is a callback of its own. A
-//! per-model limit that borrows idle capacity is never held here, since `admit` leaves a config
-//! that lists one to Python. A refusal carries its message once: the proxy's error body repeats it
-//! under `provider_specific_fields`, which is only how its `HTTPException` is converted.
+//! A key's own per-model limit is a share that borrows the group's idle capacity when
+//! `priority_reservation_settings.model_limit_borrowing_config.borrow_idle_capacity` lists `key`:
+//! the key limiter leaves that limit alone, and here the key is held to it only once the group is
+//! saturated, and to `max_borrow_multiple` times it before. A share that holds tokens reserves
+//! what the body asks for before the call and settles it to what the call used.
+//!
+//! Accepted differences: a route that tells no usage settles no tokens, so what a share reserved
+//! for it is given back. `/v1/messages`, chat completions and Responses tell theirs, OCR counts
+//! none and transcription tells none yet. The share and throttle metrics are Prometheus's, which
+//! is a callback of its own. A refusal carries its message once: the proxy's
+//! error body repeats it under `provider_specific_fields`, which is only how its `HTTPException`
+//! is converted.
 
 use std::{
     sync::{
@@ -29,15 +36,19 @@ use litellm_callbacks::{
     Patch, Scalar, Selection, Subscription, UsageRecord, Verdict, typed,
 };
 use litellm_callbacks_model_capacity::{
-    CapacityError, ClassShareEntity, Engine, Fact, Facts, GroupInfo, KeyFacts, LoggedGroup, NAME,
-    PreCall, Priority, Request as CapacityRequest, SaturationFallback, Settings as EngineSettings,
-    Settlement, SharedStash, StoreLimiter, TokenRateLimitType, UsageTokens,
+    BorrowerKind, BorrowingLimits, CapacityError, ClassShareEntity, Engine, Fact, Facts, GroupInfo,
+    KeyFacts, LoggedGroup, NAME, PreCall, Priority, Request as CapacityRequest, SaturationFallback,
+    Settings as EngineSettings, Settlement, SharedStash, StoreLimiter, TokenRateLimitType,
+    UsageTokens,
 };
 use litellm_callbacks_parallel_request_limiter::{
     PolicyFacts, TokenRateLimitType as LimiterTokenType,
 };
-use litellm_config::{Config, PriorityReservation};
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_config::{BorrowingEntity, Config, PriorityReservation};
+use litellm_gateway_auth::{
+    AuthenticatedRequest,
+    keys::{KeyLimits, ModelLimits},
+};
 use litellm_gateway_inference::group_limits;
 use litellm_python_compat::json::loaded_str;
 use litellm_redis_store::{RequestRedis, active_teams::ActiveTeams, rate_limits::RateLimits};
@@ -45,7 +56,7 @@ use litellm_router_core::Router;
 use serde_json::{Map, Value, json};
 
 use super::{Registered, parallel_request_limiter};
-use crate::host::NativeCapacityHost;
+use crate::host::{Asked, NativeCapacityHost, cap_output};
 
 /// The settlement flushes its own post-call batch, so this deadline never sends it.
 const POST_CALL_DEADLINE: Duration = Duration::from_secs(1);
@@ -56,6 +67,46 @@ const POST_CALL_DEADLINE: Duration = Duration::from_secs(1);
 pub struct Settings {
     engine: EngineSettings,
     limits: parallel_request_limiter::Settings,
+    borrowing: Borrowing,
+}
+
+/// `model_limit_borrowing_config` as it reaches a caller the gateway serves: whether a key's own
+/// per-model limits are shares that borrow idle capacity, and how far past one it may run. A team
+/// or a customer organization that borrows is no caller the gateway authenticates.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Borrowing {
+    keys: bool,
+    max_borrow_multiple: Option<f64>,
+}
+
+impl Borrowing {
+    /// Nobody borrows unless `litellm_settings.callbacks` names `dynamic_rate_limiter_v3`, since
+    /// the proxy's `dynamic_rate_limiter_covers` covers no model without it.
+    pub fn read(config: &Config) -> Self {
+        let litellm = &config.litellm_settings;
+        match &litellm.priority_reservation_settings {
+            Some(settings) if Settings::named(config) => {
+                let written = &settings.model_limit_borrowing_config;
+                Self {
+                    keys: written.borrow_idle_capacity.contains(&BorrowingEntity::Key),
+                    max_borrow_multiple: written.max_borrow_multiple,
+                }
+            }
+            _ => Self::default(),
+        }
+    }
+
+    pub(crate) fn keys(self) -> bool {
+        self.keys
+    }
+
+    /// `dynamic_rate_limiter_covers`: whether a key's limit on `group` is a share held here and
+    /// not by the key limiter, which is so for a model group that sets `tpm` or `rpm`.
+    pub(crate) fn covers(self, router: &Router, group: &str) -> bool {
+        self.keys
+            && group_limits(router, group)
+                .is_some_and(|limits| limits.tpm.is_some() || limits.rpm.is_some())
+    }
 }
 
 fn reserved(reservation: &PriorityReservation) -> Value {
@@ -79,6 +130,16 @@ fn class_share_entity(entity: litellm_config::ClassShareEntity) -> ClassShareEnt
 }
 
 impl Settings {
+    /// Whether `litellm_settings.callbacks` names `dynamic_rate_limiter_v3`.
+    pub(crate) fn named(config: &Config) -> bool {
+        config
+            .litellm_settings
+            .callbacks
+            .iter()
+            .flatten()
+            .any(|callback| callback.as_str() == Some(NAME))
+    }
+
     /// `None` unless `litellm_settings.callbacks` names `dynamic_rate_limiter_v3`. The window and
     /// the tokens a limit counts are the key limiter's. `licensed` is whether `LITELLM_LICENSE` is
     /// set at all, which is all the proxy asks before it honors a reserved priority.
@@ -88,11 +149,6 @@ impl Settings {
         licensed: bool,
     ) -> Option<Self> {
         let litellm = &config.litellm_settings;
-        let named = litellm
-            .callbacks
-            .iter()
-            .flatten()
-            .any(|callback| callback.as_str() == Some(NAME));
         let written = litellm
             .priority_reservation_settings
             .clone()
@@ -123,15 +179,22 @@ impl Settings {
             licensed,
             policy: PolicyFacts::default(),
         };
-        named.then_some(Self { engine, limits })
+        Self::named(config).then_some(Self {
+            engine,
+            limits,
+            borrowing: Borrowing::read(config),
+        })
     }
 }
 
 /// The proxy's `dynamic_rate_limiter_v3` over the limiter's counters.
 pub struct ModelCapacity {
     manifest: Manifest,
-    engine: Engine,
+    limiter: Arc<StoreLimiter>,
+    /// The registry of callers a priority class's share is split among.
+    active: Arc<ActiveTeams>,
     settings: EngineSettings,
+    borrowing: Borrowing,
     /// Tells what a model group's deployments serve a minute.
     router: Router,
 }
@@ -144,8 +207,8 @@ fn manifest() -> Manifest {
         },
         subscriptions: vec![
             Subscription {
-                reads: FieldSet::of(&[Field::Model]),
-                writes: FieldSet::of(&[Field::RateLimitStatuses]),
+                reads: FieldSet::of(&[Field::Model, Field::RequestBody]),
+                writes: FieldSet::of(&[Field::RateLimitStatuses, Field::OptionalParams]),
                 may_abort: true,
                 ..Subscription::on(Hook::PreCall)
             },
@@ -154,6 +217,7 @@ fn manifest() -> Manifest {
                 writes: FieldSet::of(&[Field::ResponseHeaders]),
                 ..Subscription::on(Hook::ResponseHeaders)
             },
+            Subscription::on(Hook::PostCallFailure),
             Subscription {
                 reads: FieldSet::of(&[Field::Outcome, Field::Usage, Field::LoggedModelGroup]),
                 ..Subscription::on(Hook::AttemptEnded)
@@ -166,8 +230,11 @@ fn manifest() -> Manifest {
 /// One request as the engine counts it: who it counts under, and what the hooks it ran left for
 /// the ones after them.
 pub struct Counted {
+    capacity: Arc<ModelCapacity>,
     key: KeyFacts,
     priority: Option<Arc<str>>,
+    /// The key's own per-model limits, which are its shares when keys borrow.
+    limits: KeyLimits,
     stash: SharedStash,
     /// The pre-call hook counted the call against a model group, so its tokens settle there.
     admitted: AtomicBool,
@@ -176,11 +243,14 @@ pub struct Counted {
 }
 
 impl Counted {
-    fn of(identity: &AuthenticatedRequest) -> Self {
+    fn of(capacity: Arc<ModelCapacity>, identity: &AuthenticatedRequest) -> Self {
         let priority = identity.caller().authentication().priority.clone();
+        let caller = parallel_request_limiter::Caller::of(identity);
         Self {
+            capacity,
+            limits: caller.limits,
             key: KeyFacts {
-                api_key: Some(parallel_request_limiter::Caller::of(identity).api_key),
+                api_key: Some(caller.api_key),
                 priority: priority.as_deref().map(|priority| Priority {
                     value: json!(priority),
                     hash_error: None,
@@ -192,6 +262,36 @@ impl Counted {
             admitted: AtomicBool::new(false),
             complete: AtomicBool::new(false),
         }
+    }
+}
+
+/// A stream the client left tells no hook, so what its share still holds for it is given back
+/// here.
+impl Drop for Counted {
+    fn drop(&mut self) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if self.stash.lock().holds_tokens() {
+            let (capacity, stash) = (self.capacity.clone(), self.stash.clone());
+            runtime.spawn(async move { capacity.give_back(&stash).await });
+        }
+    }
+}
+
+/// `RateLimitedModel.limit_in`: the limit under the name asked for, else under its group.
+fn limit_in(limits: &ModelLimits, requested: &str, group: &str) -> Option<i64> {
+    limits.get(requested).or_else(|| limits.get(group)).copied()
+}
+
+/// The members of `capped` that `sent` does not hold the same, which is the output cap written.
+fn written(sent: &Map<String, Value>, capped: Value) -> Map<String, Value> {
+    match capped {
+        Value::Object(capped) => capped
+            .into_iter()
+            .filter(|(name, value)| sent.get(name) != Some(value))
+            .collect(),
+        _ => Map::new(),
     }
 }
 
@@ -219,17 +319,93 @@ impl ModelCapacity {
     ) -> Arc<Self> {
         Arc::new(Self {
             manifest: manifest(),
-            engine: Engine {
-                limiter: Arc::new(StoreLimiter::new(settings.limits.engine(counters), None)),
-                host: Arc::new(NativeCapacityHost::new(active)),
-            },
+            limiter: Arc::new(StoreLimiter::new(settings.limits.engine(counters), None)),
+            active: Arc::new(active),
             settings: settings.engine,
+            borrowing: settings.borrowing,
             router,
         })
     }
 
     pub(crate) fn registered(self: &Arc<Self>) -> Registered {
-        Registered::for_caller(self.clone(), Counted::of)
+        let capacity = self.clone();
+        Registered::for_caller(self.clone(), move |identity| {
+            Counted::of(capacity.clone(), identity)
+        })
+    }
+
+    /// The engine for one hook, whose host reads the call that hook is about. `asked` is the
+    /// body a share that holds tokens estimates.
+    fn engine(&self, asked: Option<Asked>) -> Engine {
+        Engine {
+            limiter: self.limiter.clone(),
+            host: Arc::new(NativeCapacityHost::new(self.active.clone(), asked)),
+        }
+    }
+
+    /// `model_limit_borrowers`: the key's own limit on `model` as a share that borrows, when keys
+    /// borrow and the dynamic rate limiter covers the model's group.
+    fn borrowers(&self, counted: &Counted, model: &str) -> Vec<BorrowingLimits> {
+        let registry = self.router.registry();
+        let group = registry.alias_of(model).unwrap_or(model);
+        let limit = |limits: &ModelLimits| limit_in(limits, model, group);
+        let (tpm, rpm) = (
+            limit(&counted.limits.model_tpm),
+            limit(&counted.limits.model_rpm),
+        );
+        let Some(api_key) = &counted.key.api_key else {
+            return Vec::new();
+        };
+        if (tpm.is_none() && rpm.is_none()) || !self.borrowing.covers(&self.router, group) {
+            return Vec::new();
+        }
+        vec![BorrowingLimits {
+            kind: BorrowerKind::Key,
+            entity_id: api_key.clone(),
+            alias: None,
+            group: group.to_owned(),
+            tpm,
+            rpm,
+            max_borrow_multiple: self.borrowing.max_borrow_multiple,
+        }]
+    }
+
+    /// The output cap the proxy writes into the body of an admitted call whose share holds
+    /// tokens, as the params it adds.
+    fn output_cap(counted: &Counted, sent: Option<&Value>) -> Map<String, Value> {
+        let cap = counted.stash.lock().output_cap.take();
+        let (Some((tpm_share, call_type)), Some(Value::Object(sent))) = (cap, sent) else {
+            return Map::new();
+        };
+        let mut capped = Value::Object(sent.clone());
+        match cap_output(
+            &mut capped,
+            call_type.as_deref().unwrap_or_default(),
+            tpm_share,
+        ) {
+            Ok(()) => written(sent, capped),
+            Err(_) => Map::new(),
+        }
+    }
+
+    /// Gives back what the call's shares still hold for it: `release_admission`, on the
+    /// post-call batch the proxy's failure hook rides.
+    async fn give_back(&self, stash: &SharedStash) {
+        if !stash.lock().holds_tokens() {
+            return;
+        }
+        let request = RequestRedis::new(tokio::runtime::Handle::current(), POST_CALL_DEADLINE);
+        let released = self
+            .engine(None)
+            .release_admission(&self.settings, stash, Some(&request))
+            .await;
+        request.flush_post().await;
+        if let Err(error) = released {
+            tracing::error!(
+                "[Non-Blocking] Error in async_post_call_failure_hook callback: {}",
+                error.python_message()
+            );
+        }
     }
 
     /// What `model`'s group serves a minute. `None` for a name that is no model group, which the
@@ -251,8 +427,14 @@ impl ModelCapacity {
         let Some(group) = self.group(&model) else {
             return Ok(None);
         };
+        let sent = input.fields.raw(Field::RequestBody)?;
+        let borrowers = self.borrowers(counted, &model);
+        let asked = sent.filter(|_| !borrowers.is_empty()).map(|sent| Asked {
+            body: sent.clone(),
+            counted: self.settings.rate_limit_type,
+        });
         let facts = Facts {
-            borrowing: Some(Fact::Ok(Vec::new())),
+            borrowing: Some(Fact::Ok(borrowers)),
             ..Facts::default()
         };
         let request = CapacityRequest {
@@ -264,12 +446,19 @@ impl ModelCapacity {
             redis: None,
             facts: &facts,
         };
-        match self.engine.pre_call(&request, &model, &group).await {
+        match self.engine(asked).pre_call(&request, &model, &group).await {
             PreCall::Allow(published) => {
                 counted.admitted.store(true, Ordering::Release);
-                Ok(published.map(|published| {
-                    Verdict::Patch(Patch::default().set(Field::RateLimitStatuses, json!(published)))
-                }))
+                let statuses = published.map_or_else(Patch::default, |published| {
+                    Patch::default().set(Field::RateLimitStatuses, json!(published))
+                });
+                let cap = Self::output_cap(counted, sent);
+                let patch = if cap.is_empty() {
+                    statuses
+                } else {
+                    statuses.merge(Field::OptionalParams, cap)
+                };
+                Ok((!patch.ops.is_empty()).then_some(Verdict::Patch(patch)))
             }
             PreCall::Refuse(refusal) => Ok(Some(Verdict::Abort(refusal.into_abort()))),
             PreCall::Raise(error) => Ok(Some(Verdict::Abort(unverifiable(&error)))),
@@ -286,7 +475,8 @@ impl ModelCapacity {
     }
 
     /// The success log's half: the tokens the call used are added to the group's saturation and
-    /// to its priority's counter, on the post-call batch the proxy's settlement rides.
+    /// to its priority's counter, and what a share reserved is settled to them, on the post-call
+    /// batch the proxy's settlement rides.
     async fn settle(&self, counted: &Counted, used: &UsageRecord, model_group: String) {
         let used = UsageTokens {
             prompt_tokens: tokens(&used.prompt_tokens),
@@ -311,7 +501,7 @@ impl ModelCapacity {
         };
         let request = RequestRedis::new(tokio::runtime::Handle::current(), POST_CALL_DEADLINE);
         let settled = self
-            .engine
+            .engine(None)
             .settle_success(
                 &self.settings,
                 Some(&counted.stash),
@@ -330,8 +520,9 @@ impl ModelCapacity {
         }
     }
 
-    /// A call the route told no usage of settles nothing: no caller the gateway serves holds a
-    /// reservation to give back, since a limit that borrows belongs to a config Python serves.
+    /// A failed call is settled by the failure hook before this, which gives back all it held. A
+    /// call the route told no usage of settles nothing, and what a share holds for it is given
+    /// back when its state is dropped.
     async fn log(&self, input: &HookInput, counted: &Counted) -> HookOutput {
         let succeeded = input.fields.get::<typed::Outcome>()? == Some(Outcome::Success);
         if !succeeded || !counted.admitted.load(Ordering::Acquire) {
@@ -382,6 +573,10 @@ impl Callback for ModelCapacity {
                         Field::ResponseHeaders,
                         Self::priority_headers(counted),
                     ))))
+                }
+                Hook::PostCallFailure => {
+                    self.give_back(&counted.stash).await;
+                    Ok(None)
                 }
                 Hook::AttemptEnded => self.log(input, counted).await,
                 _ => Ok(None),
