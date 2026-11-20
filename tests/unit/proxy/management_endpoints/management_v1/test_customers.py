@@ -348,6 +348,8 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
         ("PATCH", "/customer_organization_budget_groups", {}),
         ("GET", "/app_customer_organization_budget_groups", None),
         ("PATCH", "/app_customer_organization_budget_groups", {}),
+        ("GET", "/app_budget_groups", None),
+        ("PATCH", "/app_budget_groups", {}),
         ("GET", "/customer_organizations/id", None),
         ("PATCH", "/customer_organizations/id", {}),
         ("DELETE", "/customer_organizations/id", None),
@@ -2431,10 +2433,14 @@ def test_explicit_organization_budget_selection_overrides_the_default(selection:
         assert created.json()["budget_is_shared"] is False
 
 
-def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions() -> None:
+@pytest.mark.parametrize("catalog", ("app_budget_groups", "app_customer_organization_budget_groups"))
+def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions(catalog: str) -> None:
     http: Final = client()
     organization: Final = organization_groups(http, {"name": "Standard", "tpm_limit": 1000})
-    path: Final = "/management/v1/app_customer_organization_budget_groups"
+    path: Final = f"/management/v1/{catalog}"
+    other_catalog: Final = (
+        "app_customer_organization_budget_groups" if catalog == "app_budget_groups" else "app_budget_groups"
+    )
     empty: Final = http.get(path).json()
     assert empty["default_budgets"] == []
     created: Final = http.patch(
@@ -2446,6 +2452,7 @@ def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions(
         },
     )
     assert created.status_code == 200, created.text
+    assert http.get(f"/management/v1/{other_catalog}").json() == empty
     app: Final = BudgetGroups.model_validate_json(created.content)
     rejected_default: Final = http.patch(
         path,

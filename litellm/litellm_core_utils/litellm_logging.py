@@ -127,6 +127,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
+    claude_subscription_usage,
     decoded_json_object,
     finite_cost,
     get_parent_otel_span_from_kwargs,
@@ -394,7 +395,13 @@ else:
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(
-    ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY, "is_silent_experiment")
+    (
+        "used_client_oauth_token",
+        "claude_subscription_usage",
+        "usage_object",
+        KUBERNETES_POD_ROUTING_KEY,
+        "is_silent_experiment",
+    )
 )
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
@@ -2605,6 +2612,16 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if resolved_cache_hit is True:
             return 0.0
+
+        subscription_usage: Final = claude_subscription_usage(self.model_call_details, result)
+        if subscription_usage is not None and not subscription_usage["is_overage"]:
+            self.cost_breakdown = None
+            subscription_additional_cost: Final[object] = self.model_call_details.get("additional_response_cost")
+            return (
+                subscription_additional_cost
+                if isinstance(subscription_additional_cost, (int, float)) and subscription_additional_cost > 0
+                else 0.0
+            )
 
         if isinstance(result, (OpenAIStream, OpenAIAsyncStream)):
             return None
@@ -8942,7 +8959,7 @@ def get_standard_logging_object_payload(
         )
         # clean up litellm metadata
         selected_provider: Final = kwargs.get("custom_llm_provider")
-        clean_metadata: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        base_metadata: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata,
             litellm_params=litellm_params,
             prompt_integration=kwargs.get("prompt_integration", None),
@@ -8956,6 +8973,11 @@ def get_standard_logging_object_payload(
             custom_llm_provider=selected_provider if isinstance(selected_provider, str) else None,
             is_silent_experiment=logging_obj.is_silent_experiment is True,
         )
+        subscription_details: Final = {**logging_obj.model_call_details, **_METADATA_MAPPING.validate_python(kwargs)}
+        clean_metadata: Final[StandardLoggingMetadata] = {
+            **base_metadata,
+            "claude_subscription_usage": claude_subscription_usage(subscription_details, init_response_obj),
+        }
         _request_body: Final = proxy_server_request.get("body", {})
         end_user_id: Final = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
             "user", None
