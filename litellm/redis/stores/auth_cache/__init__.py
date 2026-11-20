@@ -97,12 +97,11 @@ class AuthCacheStore:
         await self._handle.set_many(entries, _redis_ttl(ttl), _built_request())
 
     @with_service_target(AUTH_CACHE_TARGET)
-    async def write_back(self, entries: Sequence[WriteBack]) -> None:
-        """Memory now; inside a request the SETs ride its pre-call batch and go out with the next flush, else in a
-        round trip of their own. An entry without a TTL keeps ``default_in_memory_ttl`` in memory and the connection's
-        default TTL in Redis."""
+    async def write_back(self, entries: Sequence[WriteBack], *, batch: Batch = Batch.PRE_CALL) -> None:
+        """Memory now; the SETs use the selected batch or go out immediately with ``Batch.NONE``.
+        An entry without a TTL keeps the default memory and Redis TTLs."""
         await self._handle.write_back(
-            tuple((key, value, _redis_ttl(ttl)) for key, value, ttl in entries), route(Batch.PRE_CALL).send
+            tuple((key, value, _redis_ttl(ttl)) for key, value, ttl in entries), route(batch).send
         )
 
     @with_service_target(AUTH_CACHE_TARGET)
@@ -115,10 +114,9 @@ class AuthCacheStore:
         self._handle.delete_sync(keys)
 
     @with_service_target(AUTH_CACHE_TARGET)
-    async def read_missing(self, keys: Sequence[str]) -> Mapping[str, object]:
-        """One read of ``keys`` (already missing in memory), on the request's pre-call batch inside a request, which
-        then notes the keys Redis lacks. Absent keys map to None; raises when Redis failed."""
-        target: Final = route(Batch.PRE_CALL)
+    async def read_missing(self, keys: Sequence[str], *, batch: Batch = Batch.PRE_CALL) -> Mapping[str, object]:
+        """Read ``keys`` in Redis using the selected batch. Absent keys map to None; raises when Redis failed."""
+        target: Final = route(batch)
         pending: Final = self._handle.get_many(keys, target.send)
         if pending is None:
             return MappingProxyType({})
