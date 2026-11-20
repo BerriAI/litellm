@@ -934,3 +934,31 @@ class TestOllamaAuthHeaders:
                 pytest.fail(
                     f"Ollama completion with ollama.com without api_key failed: {e}"
                 )
+
+    def test_get_server_api_base_strips_openai_routes_and_v1(self):
+        """get_server_api_base should strip /v1, /chat/completions and Ollama native routes to reach the Ollama server root."""
+        assert OllamaModelInfo.get_server_api_base("http://real-host:11434/v1/") == "http://real-host:11434"
+        assert OllamaModelInfo.get_server_api_base("http://real-host:11434/v1") == "http://real-host:11434"
+        assert OllamaModelInfo.get_server_api_base("http://real-host:11434/v1/chat/completions") == "http://real-host:11434"
+        assert OllamaModelInfo.get_server_api_base("http://real-host:11434/api/show") == "http://real-host:11434"
+        assert OllamaModelInfo.get_server_api_base("http://real-host:11434/api/generate") == "http://real-host:11434"
+        assert OllamaModelInfo.get_server_api_base("http://real-host:11434") == "http://real-host:11434"
+
+    def test_get_runtime_model_info_uses_explicit_api_base(self, monkeypatch):
+        """get_runtime_model_info should hit the explicit api_base instead of falling back to OLLAMA_API_BASE."""
+        captured_urls = []
+
+        class MockClient:
+            @staticmethod
+            def post(url, json, headers):
+                captured_urls.append(url)
+                return DummyResponse({"model_info": {"general.architecture": "llama"}}, status_code=200)
+
+        monkeypatch.setenv("OLLAMA_API_BASE", "http://decoy-host:11434")
+        monkeypatch.setattr(litellm, "module_level_client", MockClient())
+
+        info = OllamaModelInfo()
+        res = info.get_runtime_model_info("d3:4b", api_base="http://real-host:11434/v1/")
+        assert len(captured_urls) == 1
+        assert captured_urls[0] == "http://real-host:11434/api/show"
+        assert res["litellm_provider"] == "ollama"

@@ -106,10 +106,15 @@ class TypeSafeDecisionsConfig(BaseDecisionsConfig):
         )
 
     def supports_box_questions(
-        self, model: str, custom_llm_provider: str, headers: Mapping[str, str], deployment_flag: bool | None
+        self,
+        model: str,
+        custom_llm_provider: str,
+        headers: Mapping[str, str],
+        deployment_flag: bool | None,
+        api_base: str | None = None,
     ) -> bool:
         return self.supports_assets(headers) and super().supports_box_questions(
-            model, custom_llm_provider, headers, deployment_flag
+            model, custom_llm_provider, headers, deployment_flag, api_base=api_base
         )
 
     def transform_decisions_request(
