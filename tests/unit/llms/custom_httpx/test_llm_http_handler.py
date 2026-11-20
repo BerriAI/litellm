@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextlib import asynccontextmanager
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpcore
@@ -5414,6 +5414,80 @@ async def test_async_realtime_bridges_a_soniox_transcription_through_the_wrapped
     ]
     assert events[-1]["transcript"] == "Hello"
     assert events[-1]["usage"] == {"type": "duration", "seconds": 1.2}
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_soniox_push_to_talk_stays_push_to_talk_under_a_transcript_guardrail_without_intent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.llms.base_llm.realtime.transformation import RealtimeBackend
+    from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
+    from litellm.types.guardrails import GuardrailEventHooks
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    class _TranscriptGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict[str, object],
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            return inputs
+
+    upstream: Final = _FakeSonioxSocket()
+
+    class _SonioxOverScriptedUpstream(SonioxRealtimeConfig):
+        async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend:
+            return upstream
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _TranscriptGuardrail(
+                guardrail_name="transcript-filter",
+                event_hook=GuardrailEventHooks.realtime_input_transcription,
+                default_on=True,
+            )
+        ],
+    )
+    audio: Final = b"\x00\x01" * 800
+    client_ws: Final = _ScriptedClientWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "transcription", "audio": {"input": {"turn_detection": None}}},
+                }
+            ),
+            json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode()}),
+            json.dumps({"type": "input_audio_buffer.commit"}),
+        ],
+        last_event_type="conversation.item.input_audio_transcription.completed",
+    )
+    logging_obj: Final = Mock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+
+    await BaseLLMHTTPHandler().async_realtime(
+        model="stt-rt-v5",
+        websocket=client_ws,
+        logging_obj=logging_obj,
+        provider_config=_SonioxOverScriptedUpstream(),
+        headers={},
+        api_key="soniox-key",
+        query_params={"model": "stt-rt-v5"},
+    )
+
+    assert json.loads(upstream.sent[0])["enable_endpoint_detection"] is False
+    assert upstream.sent[1:] == [audio, '{"type":"finalize"}']
+    assert client_ws.sent_events()[-1]["transcript"] == "Hello"
 
 
 @pytest.mark.asyncio
