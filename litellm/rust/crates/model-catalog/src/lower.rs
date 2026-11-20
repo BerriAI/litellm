@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::num::NonZeroU64;
 
-use litellm_cost::money::UnitPrice;
+use litellm_cost::call::{InferenceGeo, Speed};
+use litellm_cost::money::{Multiplier, UnitPrice};
 use litellm_cost::price::{
     Adjustments, Band, BandEdge, Billing, CacheReadFallback, CacheReadMode, CacheTtl,
     GuardrailUnit, InputUnit, Meter, OffPeak, OffPeakRates, OutputUnit, Price, Prices, Residency,
@@ -280,9 +281,27 @@ impl From<&EntryWire> for Adjustments {
                 (Uplift::FedrampEndpoint, wire.fedramp_uplift),
             ]
             .into_iter()
-            .filter_map(|(uplift, factor)| Some((uplift, factor?))),
+            .filter_map(|(uplift, factor)| Some((uplift, factor?)))
+            .chain(provider_specific_uplifts(wire)),
         )
     }
+}
+
+/// The geo and `speed: fast` multipliers main reads out of `provider_specific_entry`, every numeric key but `fast`
+/// being a geo. A served `global` or `not_available` geo is never uplifted on main, so those keys are skipped
+fn provider_specific_uplifts(wire: &EntryWire) -> impl Iterator<Item = (Uplift, Multiplier)> + '_ {
+    wire.attributes
+        .provider_specific_entry
+        .iter()
+        .flatten()
+        .filter_map(|(key, factor)| {
+            let uplift = match key.as_str() {
+                "fast" => Uplift::Speed(Speed::Fast),
+                "global" | "not_available" => return None,
+                geo => Uplift::InferenceGeo(InferenceGeo::new(geo)),
+            };
+            Some((uplift, Multiplier::new(factor.as_f64()?)?))
+        })
 }
 
 impl TryFrom<EntryWire> for Model {
@@ -651,7 +670,6 @@ fn schedule(block: &OffPeakBlock, problems: &mut Vec<Error>) -> Option<Schedule>
 
 #[cfg(test)]
 mod tests {
-    use litellm_cost::money::Multiplier;
     use litellm_cost::price::{Channel, ServiceTier};
     use litellm_cost::schedule::{UtcWindow, Weekday};
     use rstest::rstest;
@@ -1222,6 +1240,31 @@ mod tests {
                 .map(Multiplier::get),
             Some(1.1)
         );
+    }
+
+    #[rstest]
+    #[case::us_geo("us", Uplift::InferenceGeo(InferenceGeo::new("us")), Some(1.1))]
+    #[case::geo_keys_fold_like_the_served_geo(
+        "EU",
+        Uplift::InferenceGeo(InferenceGeo::new("eu")),
+        Some(1.1)
+    )]
+    #[case::fast_is_speed_not_a_geo("fast", Uplift::Speed(Speed::Fast), Some(1.1))]
+    #[case::global_is_never_uplifted(
+        "global",
+        Uplift::InferenceGeo(InferenceGeo::new("global")),
+        None
+    )]
+    fn provider_specific_entry_lowers_geo_and_speed_uplifts(
+        #[case] key: &str,
+        #[case] uplift: Uplift,
+        #[case] expected: Option<f64>,
+    ) {
+        let adjustments = Adjustments::from(&wire(json!({
+            "provider_specific_entry": {key: 1.1, "bedrock_invocation_schema": "messages"}
+        })));
+
+        assert_eq!(adjustments.get(&uplift).map(Multiplier::get), expected);
     }
 
     #[rstest]
