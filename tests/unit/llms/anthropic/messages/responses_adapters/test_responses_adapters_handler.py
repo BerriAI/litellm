@@ -1128,6 +1128,23 @@ def test_container_answers_400_without_drop_params(container: str | dict[str, ob
     assert "no equivalent for container" in rejected.value.message
 
 
+@pytest.mark.parametrize("container", CONTAINERS)
+def test_additional_drop_params_leaves_out_a_listed_speed_and_container(
+    monkeypatch: pytest.MonkeyPatch, container: str | dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=MESSAGES,
+        speed="fast",
+        container=container,
+        extra_kwargs={**OPENAI_API, "additional_drop_params": ["speed", "container"]},
+    )
+
+    assert {"service_tier", "speed", "container"}.isdisjoint(responses_kwargs)
+
+
 WIRE_RESPONSE: Final = {
     "id": "resp_fields",
     "object": "response",
