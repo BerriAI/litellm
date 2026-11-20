@@ -356,11 +356,15 @@ _OPUS: Final = _ogg_page(0, b"OpusHead\x01\x01" + _OPUS_PRE_SKIP.to_bytes(2, "li
 )
 
 
-def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object]) -> int:
-    sse: Final = b'data: {"type":"speech.audio.delta","audio":"%s"}\n\ndata: {"type":"speech.audio.done","usage":%s}\n\n' % (
+def _speech_sse(audio: bytes) -> bytes:
+    return b'data: {"type":"speech.audio.delta","audio":"%s"}\n\ndata: {"type":"speech.audio.done","usage":%s}\n\n' % (
         base64.b64encode(audio),
         json.dumps({"input_tokens": 6, "output_tokens": _REPORTED_TOKENS, "total_tokens": 56}).encode(),
     )
+
+
+def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object]) -> int:
+    sse: Final = _speech_sse(audio)
     response: Final = OpenAIChatCompletion().audio_speech(
         model="gpt-4o-mini-tts",
         input="hello",
@@ -389,6 +393,13 @@ def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object]) -> in
         pytest.param(_PCM, {"response_format": "pcm"}, _BILLED_TOKENS, id="pcm"),
         pytest.param(_WAV, {"response_format": "wav"}, _BILLED_TOKENS, id="wav"),
         pytest.param(_OPUS, {"response_format": "opus"}, _BILLED_TOKENS, id="opus"),
+        pytest.param(
+            _OPUS[:-40] + b"OggS" + bytes(36),
+            {"response_format": "opus"},
+            _BILLED_TOKENS,
+            id="opus whose last packet holds the bytes that start a page",
+        ),
+        pytest.param(_PCM[:50352], {"response_format": "pcm", "speed": 4.0}, 83, id="rounds once after speed"),
         pytest.param(_MP3, {"response_format": "mp3"}, _BILLED_TOKENS - 1, id="mp3 drops the encoder delay"),
         pytest.param(_MP3, {}, _BILLED_TOKENS - 1, id="mp3 is the default format"),
         pytest.param(_PCM, {"response_format": "pcm", "speed": 2.0}, _BILLED_TOKENS * 2, id="sped up audio"),
@@ -414,3 +425,43 @@ def test_token_priced_speech_falls_back_to_the_reported_tokens_when_the_audio_le
     audio: bytes, response_format: str
 ):
     assert _billed_audio_tokens(audio, {"response_format": response_format}) == _REPORTED_TOKENS
+
+
+@pytest.mark.parametrize("speed", [0.1, 4.5, 0, -1, True, "2"])
+def test_token_priced_speech_falls_back_to_the_reported_tokens_for_a_speed_the_provider_does_not_accept(
+    speed: object,
+):
+    assert _billed_audio_tokens(_PCM, {"response_format": "pcm", "speed": speed}) == _REPORTED_TOKENS
+
+
+@pytest.mark.parametrize("speed", [0.25, 4.0])
+def test_token_priced_speech_scales_by_the_slowest_and_fastest_speed_the_provider_accepts(speed: float):
+    assert _billed_audio_tokens(_PCM, {"response_format": "pcm", "speed": speed}) == int(_BILLED_TOKENS * speed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [True, False])
+async def test_async_token_priced_speech_bills_the_length_of_the_audio_streamed_or_buffered(stream: bool):
+    response: Final = await OpenAIChatCompletion().async_audio_speech(
+        model="gpt-4o-mini-tts",
+        input="hello",
+        voice="alloy",
+        optional_params={"response_format": "wav"},
+        api_key="fake-key",
+        api_base=None,
+        organization=None,
+        project=None,
+        max_retries=0,
+        timeout=10.0,
+        logging_obj=Mock(),
+        client=AsyncOpenAI(
+            api_key="fake-key",
+            http_client=httpx.AsyncClient(transport=_sse_transport([], 4096, sse=_speech_sse(_WAV))),
+        ),
+        stream=stream,
+    )
+    audio: Final = b"".join([chunk async for chunk in await response.aiter_bytes()]) if stream else response.content
+
+    assert audio == _WAV
+    assert response.usage is not None
+    assert response.usage.completion_tokens == _BILLED_TOKENS

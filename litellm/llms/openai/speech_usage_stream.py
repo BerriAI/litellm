@@ -1,5 +1,7 @@
 import base64
+import re
 from collections.abc import AsyncIterator, Iterator, Mapping
+from fractions import Fraction
 from typing import Final
 
 import httpx
@@ -20,10 +22,13 @@ _AUDIO_MEDIA_TYPES: Final[Mapping[str, str]] = {
     "pcm": "audio/pcm",
 }
 _BILLED_TOKENS_PER_SECOND: Final = 20
+_MIN_SPEED: Final = 0.25
+_MAX_SPEED: Final = 4.0
 _PCM_BYTES_PER_SECOND: Final = 24000 * 2
 _WAV_HEADER_BYTES: Final = 44
 _HEAD_BYTES: Final = 64
-_OGG_MAX_PAGE_BYTES: Final = 27 + 255 + 255 * 255
+_OGG_PAGE_HEADER_BYTES: Final = 27
+_OGG_MAX_PAGE_BYTES: Final = _OGG_PAGE_HEADER_BYTES + 255 + 255 * 255
 _OPUS_GRANULES_PER_SECOND: Final = 48000
 _MP3_SAMPLES_PER_FRAME: Final = 576
 _MP3_ENCODER_DELAY_SAMPLES: Final = 1105
@@ -56,22 +61,22 @@ class _SpeechEvent(BaseModel):
     usage: _SpeechUsage | None = None
 
 
-def _pcm_tokens(total: int) -> int:
-    return total * _BILLED_TOKENS_PER_SECOND // _PCM_BYTES_PER_SECOND
+def _pcm_seconds(total: int) -> Fraction:
+    return Fraction(total, _PCM_BYTES_PER_SECOND)
 
 
-def _wav_tokens(head: bytes, total: int) -> int | None:
+def _wav_seconds(head: bytes, total: int) -> Fraction | None:
     byte_rate: Final = int.from_bytes(head[28:32], "little")
     if head[:4] != b"RIFF" or head[36:40] != b"data" or byte_rate == 0:
         return None
-    return (total - _WAV_HEADER_BYTES) * _BILLED_TOKENS_PER_SECOND // byte_rate
+    return Fraction(total - _WAV_HEADER_BYTES, byte_rate)
 
 
 def _is_mpeg2_layer3_frame(head: bytes) -> bool:
     return len(head) >= 4 and head[0] == 0xFF and head[1] & 0xFE == 0xF2
 
 
-def _mp3_tokens(head: bytes, total: int) -> int | None:
+def _mp3_seconds(head: bytes, total: int) -> Fraction | None:
     if not _is_mpeg2_layer3_frame(head):
         return None
     bitrate_index: Final = head[2] >> 4
@@ -82,18 +87,35 @@ def _mp3_tokens(head: bytes, total: int) -> int | None:
     frame_bytes, uneven = divmod(72000 * _MPEG2_LAYER3_KBPS[bitrate_index], sample_rate)
     if frame_bytes == 0 or uneven or total % frame_bytes:
         return None
-    samples: Final = total // frame_bytes * _MP3_SAMPLES_PER_FRAME - _MP3_ENCODER_DELAY_SAMPLES
-    return samples * _BILLED_TOKENS_PER_SECOND // sample_rate
+    return Fraction(total // frame_bytes * _MP3_SAMPLES_PER_FRAME - _MP3_ENCODER_DELAY_SAMPLES, sample_rate)
 
 
-def _opus_tokens(head: bytes, tail: bytes) -> int | None:
-    last_page: Final = tail.rfind(b"OggS")
-    if head[28:36] != b"OpusHead" or last_page < 0 or len(tail) < last_page + 14:
+def _is_last_ogg_page(tail: bytes, start: int) -> bool:
+    segments_at: Final = start + _OGG_PAGE_HEADER_BYTES
+    if len(tail) < segments_at or tail[start + 4] != 0:
+        return False
+    segments: Final = tail[start + 26]
+    return segments_at + segments + sum(tail[segments_at : segments_at + segments]) == len(tail)
+
+
+def _opus_seconds(head: bytes, tail: bytes) -> Fraction | None:
+    if head[28:36] != b"OpusHead":
+        return None
+    last_page: Final = next(
+        (found.start() for found in re.finditer(b"OggS", tail) if _is_last_ogg_page(tail, found.start())), None
+    )
+    if last_page is None:
         return None
     played: Final = int.from_bytes(tail[last_page + 6 : last_page + 14], "little") - int.from_bytes(
         head[38:40], "little"
     )
-    return played * _BILLED_TOKENS_PER_SECOND // _OPUS_GRANULES_PER_SECOND
+    return Fraction(played, _OPUS_GRANULES_PER_SECOND)
+
+
+def _accepted_speed(speed: object) -> Fraction | None:
+    if isinstance(speed, bool) or not isinstance(speed, (int, float)):
+        return None
+    return Fraction(speed) if _MIN_SPEED <= speed <= _MAX_SPEED else None
 
 
 class BilledAudioClock:
@@ -102,7 +124,7 @@ class BilledAudioClock:
 
     def __init__(self, response_format: object, speed: object = None) -> None:
         self._format: Final = str(response_format or "mp3")
-        self._speed: Final = speed if isinstance(speed, (int, float)) and speed > 0 else 1
+        self._speed: Final = Fraction(1) if speed is None else _accepted_speed(speed)
         self._head = b""
         self._tail = b""
         self._total = 0
@@ -113,22 +135,24 @@ class BilledAudioClock:
         self._tail = (self._tail + audio)[-_OGG_MAX_PAGE_BYTES:]
         self._total += len(audio)
 
-    def _at_normal_speed(self) -> int | None:
+    def _seconds(self) -> Fraction | None:
         match self._format:
             case "pcm":
-                return _pcm_tokens(self._total)
+                return _pcm_seconds(self._total)
             case "wav":
-                return _wav_tokens(self._head, self._total)
+                return _wav_seconds(self._head, self._total)
             case "mp3":
-                return _mp3_tokens(self._head, self._total)
+                return _mp3_seconds(self._head, self._total)
             case "opus":
-                return _opus_tokens(self._head, self._tail)
+                return _opus_seconds(self._head, self._tail)
             case _:
                 return None
 
     def tokens(self) -> int | None:
-        counted: Final = self._at_normal_speed()
-        return int(counted * self._speed) if counted is not None and counted >= 0 else None
+        seconds: Final = self._seconds()
+        if seconds is None or seconds < 0 or self._speed is None:
+            return None
+        return int(seconds * self._speed * _BILLED_TOKENS_PER_SECOND)
 
 
 def _parse_event(line: bytes) -> _SpeechEvent | None:
