@@ -7,6 +7,8 @@ import traceback
 import tracemalloc
 import uuid
 from collections import OrderedDict
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from enum import Enum
 from functools import reduce
@@ -20,16 +22,22 @@ import respx
 from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm import acompletion, aembedding, completion, embedding
+from litellm import CustomLLM, acompletion, aembedding, completion, embedding
 import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
-from litellm.caching.caching import Cache, CacheMode, response_cache_phase
+from litellm.caching.caching import Cache, CacheMode, enable_cache, response_cache_phase, update_cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
+from litellm.types.caching import (
+    DEFAULT_CACHING_SUPPORTED_CALL_TYPES,
+    EMBEDDING_CACHE_FORMAT_VERSION,
+    LiteLLMCacheType,
+    SemanticCacheScope,
+)
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
@@ -1770,3 +1778,203 @@ def test_cache_key_for_large_image_payloads_does_not_copy_the_whole_request() ->
     assert added_peak < payload_bytes / 4, (
         f"peak {added_peak / 2**20:.1f} MiB for a {payload_bytes / 2**20:.0f} MiB payload"
     )
+
+
+class _CountingEmbedder(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: int = 0
+
+    def _respond(self, model: str, input: list[str]) -> EmbeddingResponse:
+        self.calls += 1
+        return EmbeddingResponse(
+            model=model,
+            data=[
+                Embedding(embedding=[float(self.calls)], index=idx, object="embedding") for idx, _ in enumerate(input)
+            ],
+        )
+
+    def embedding(self, model: str, input: list[str], *args: object, **kwargs: object) -> EmbeddingResponse:
+        return self._respond(model, input)
+
+    async def aembedding(self, model: str, input: list[str], *args: object, **kwargs: object) -> EmbeddingResponse:
+        return self._respond(model, input)
+
+
+@pytest.fixture
+def counting_embedder(monkeypatch: pytest.MonkeyPatch) -> _CountingEmbedder:
+    embedder: Final = _CountingEmbedder()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "count-embed", "custom_handler": embedder}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "count-embed"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "count-embed"])
+    return embedder
+
+
+_EMBED_REQUEST: Final = MappingProxyType({"model": "count-embed/m", "input": ["alpha", "beta"]})
+_COMPLETION_REQUEST: Final = MappingProxyType(
+    {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "excluded call types"}]}
+)
+_EMBEDDING_CALL_TYPES: Final = ("embedding", "aembedding")
+_CALL_TYPE_EXCLUSION_CASES: Final = (
+    pytest.param({}, True, True, id="default"),
+    pytest.param({"excluded_call_types": []}, True, True, id="empty_exclusion"),
+    pytest.param({"excluded_call_types": list(_EMBEDDING_CALL_TYPES)}, False, True, id="embeddings_excluded"),
+    pytest.param({"excluded_call_types": ["completion", "acompletion"]}, True, False, id="completions_excluded"),
+    pytest.param(
+        {
+            "supported_call_types": [*_EMBEDDING_CALL_TYPES, "completion", "acompletion"],
+            "excluded_call_types": list(_EMBEDDING_CALL_TYPES),
+        },
+        False,
+        True,
+        id="custom_supported_list",
+    ),
+    pytest.param(
+        {"supported_call_types": None, "excluded_call_types": list(_EMBEDDING_CALL_TYPES)},
+        False,
+        False,
+        id="none_supported",
+    ),
+    pytest.param(
+        {"supported_call_types": [], "excluded_call_types": list(_EMBEDDING_CALL_TYPES)},
+        False,
+        False,
+        id="empty_supported",
+    ),
+)
+
+
+@asynccontextmanager
+async def _owned_cache_writes() -> AsyncIterator[Callable[[], Awaitable[None]]]:
+    before: Final = frozenset(_PENDING_CACHE_WRITES)
+
+    async def drain() -> None:
+        owned: Final = frozenset(_PENDING_CACHE_WRITES) - before
+        if not owned:
+            return
+        _, unfinished = await asyncio.wait(owned, timeout=CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS)
+        for task in unfinished:
+            task.cancel()
+        await asyncio.gather(*unfinished, return_exceptions=True)
+
+    try:
+        yield drain
+    finally:
+        await drain()
+
+
+def _completion_text(response: object) -> str:
+    assert isinstance(response, litellm.ModelResponse), response
+    choice: Final = response.choices[0]
+    assert isinstance(choice, litellm.Choices), choice
+    return str(choice.message.content)
+
+
+@pytest.mark.parametrize(("cache_kwargs", "embeddings_cached", "completions_cached"), _CALL_TYPE_EXCLUSION_CASES)
+def test_excluded_call_types_decide_sync_cache_reads_and_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    cache_kwargs: dict[str, object],
+    embeddings_cached: bool,
+    completions_cached: bool,
+) -> None:
+    backend: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, _backend=backend, **cache_kwargs))
+
+    embedding(**_EMBED_REQUEST)
+    embedding(**_EMBED_REQUEST)
+    embedding_entries: Final = len(backend.cache_dict)
+    completion(**_COMPLETION_REQUEST, mock_response="first")
+    second: Final = completion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == (1 if embeddings_cached else 2)
+    assert (embedding_entries > 0) is embeddings_cached
+    assert _completion_text(second) == ("first" if completions_cached else "second")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cache_kwargs", "embeddings_cached", "completions_cached"), _CALL_TYPE_EXCLUSION_CASES)
+async def test_excluded_call_types_decide_async_cache_reads_and_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    cache_kwargs: dict[str, object],
+    embeddings_cached: bool,
+    completions_cached: bool,
+) -> None:
+    backend: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, _backend=backend, **cache_kwargs))
+
+    async with _owned_cache_writes() as drain_owned_writes:
+        await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+        await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+        embedding_entries: Final = len(backend.cache_dict)
+        await acompletion(**_COMPLETION_REQUEST, mock_response="first")
+        await drain_owned_writes()
+        second: Final = await acompletion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == (1 if embeddings_cached else 2)
+    assert (embedding_entries > 0) is embeddings_cached
+    assert _completion_text(second) == ("first" if completions_cached else "second")
+
+
+@pytest.mark.asyncio
+async def test_excluded_call_types_bypass_embeddings_cached_before_the_exclusion(
+    monkeypatch: pytest.MonkeyPatch, counting_embedder: _CountingEmbedder
+) -> None:
+    backend: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, _backend=backend))
+
+    async with _owned_cache_writes() as drain_owned_writes:
+        await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+        primed: Final = dict(backend.cache_dict)
+        monkeypatch.setattr(
+            litellm,
+            "cache",
+            Cache(type=LiteLLMCacheType.LOCAL, _backend=backend, excluded_call_types=list(_EMBEDDING_CALL_TYPES)),
+        )
+        response: Final = await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+
+    assert len(primed) == len(_EMBED_REQUEST["input"])
+    assert counting_embedder.calls == 2
+    assert [item["embedding"] for item in response.data] == [[2.0], [2.0]]
+    assert backend.cache_dict == primed
+
+
+@pytest.mark.parametrize("configure_cache", [enable_cache, update_cache], ids=["enable_cache", "update_cache"])
+def test_cache_setup_helpers_pass_excluded_call_types_to_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    configure_cache: Callable[..., None],
+) -> None:
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "input_callback", list(litellm.input_callback))
+    monkeypatch.setattr(litellm, "success_callback", list(litellm.success_callback))
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm._async_success_callback))
+    backend: Final = InMemoryCache()
+
+    configure_cache(type=LiteLLMCacheType.LOCAL, excluded_call_types=list(_EMBEDDING_CALL_TYPES), _backend=backend)
+    embedding(**_EMBED_REQUEST)
+    embedding(**_EMBED_REQUEST)
+    embedding_entries: Final = len(backend.cache_dict)
+    completion(**_COMPLETION_REQUEST, mock_response="first")
+    second: Final = completion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == 2
+    assert embedding_entries == 0
+    assert _completion_text(second) == "first"
+
+
+def test_excluded_call_types_leave_the_callers_lists_and_later_defaults_intact() -> None:
+    supported: Final = [*_EMBEDDING_CALL_TYPES, "completion"]
+    excluded: Final = list(_EMBEDDING_CALL_TYPES)
+
+    Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported, excluded_call_types=excluded)
+    Cache(type=LiteLLMCacheType.LOCAL, excluded_call_types=excluded)
+
+    assert supported == ["embedding", "aembedding", "completion"]
+    assert excluded == ["embedding", "aembedding"]
+    assert Cache(type=LiteLLMCacheType.LOCAL).supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)

@@ -1144,13 +1144,13 @@ def _count_on_claude(
 @pytest.mark.parametrize(
     ("params", "preserve_instructions"),
     [
-        ({}, True),
-        ({"store": True}, True),
+        ({}, False),
+        ({"store": True}, False),
         ({"store": False}, False),
         ({"extra_body": {"store": False}}, False),
-        ({"store": False, "extra_body": {"store": True}}, True),
+        ({"store": False, "extra_body": {"store": True}}, False),
         ({"store": True, "extra_body": {"store": False}}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, False),
         ({"store": False, "truncation": "auto"}, True),
         ({"store": False, "previous_response_id": "resp_prior"}, True),
         ({"store": False, "conversation": "conv_prior"}, True),

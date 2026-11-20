@@ -1,5 +1,6 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from typing import (
     ClassVar,
     Final,
@@ -1940,6 +1941,13 @@ class RustProjectRepository:
     def find_with_budget(self, project_id: str) -> Future[str | None]: ...
 
 @final
+class RustSpendLogRepository:
+    def __new__(cls, database: NativeDatabase) -> RustSpendLogRepository: ...
+    def key_window_spend(self, api_key: str, since: datetime) -> Future[float]: ...
+    def team_window_spend(self, team_id: str, since: datetime) -> Future[float]: ...
+    def user_window_spend(self, user_id: str, since: datetime) -> Future[float]: ...
+
+@final
 class RustTagRepository:
     def __new__(cls, database: NativeDatabase) -> RustTagRepository: ...
     def names(self, limit: int) -> Future[list[str]]: ...
@@ -2016,6 +2024,7 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
+def messages_optional_params() -> list[str]: ...
 
 @final
 class NativeModelCapacityState:
@@ -2263,6 +2272,7 @@ __all__ = [
     "RustOrganizationRepository",
     "RustPlan",
     "RustProjectRepository",
+    "RustSpendLogRepository",
     "RustTagRepository",
     "RustTeamGrant",
     "RustTeamMembershipRepository",
@@ -2299,6 +2309,7 @@ __all__ = [
     "jwt_presents_claims",
     "jwt_unverified_claims",
     "messages",
+    "messages_optional_params",
     "native_redis_breaker_states",
     "ocr",
     "ocr_health_check_document",
@@ -2572,6 +2583,7 @@ class _FailedStep(_Step):
         "routing_plugins_left_nothing",
         "routing_plugins_need_async",
         "multiple_teams",
+        "multiple_model_groups",
         "reserved",
         "invalid_router_weights",
         "non_numeric_weight",

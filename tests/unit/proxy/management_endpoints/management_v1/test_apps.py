@@ -1,9 +1,9 @@
 import asyncio
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -11,6 +11,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1.apps import get_app_store, router
 from litellm.proxy.management_helpers.apps import AppStore
+from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope
 from tests.unit.proxy.management_helpers.test_apps import (
     AppDatabase,
     profile,
@@ -34,9 +35,144 @@ def client(
     return TestClient(app), store
 
 
+@pytest.mark.parametrize("invalid", ("missing", "private", "organization", "app_organization", "conflicting"))
+def test_app_presets_reject_unrelated_or_conflicting_assignments(invalid: str) -> None:
+    http, store = client()
+    assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    app: Final = http.post("/management/v1/apps", json={"resource_id": "chat"}).json()
+    scopes: Final = {
+        "organization": BudgetGroupScope.ORGANIZATION,
+        "app_organization": BudgetGroupScope.APP_ORGANIZATION,
+        "conflicting": BudgetGroupScope.APP,
+    }
+    group: Final = (
+        asyncio.run(profile(store, "Standard", 10, scopes[invalid]))
+        if invalid in scopes
+        else asyncio.run(store.customers.create_budget(Budget(max_budget=10), "admin"))
+        if invalid == "private"
+        else "missing"
+    )
+    body: Final = {"budget_id": group, **({"budget": {"max_budget": 5}} if invalid == "conflicting" else {})}
+    rejected: Final = http.patch(f"/management/v1/apps/{app['app_id']}", json=body)
+    assert rejected.status_code == 422, rejected.text
+    assert http.post("/management/v1/apps", json={"resource_id": "search", **body}).status_code == 422
+    assert http.get(f"/management/v1/apps/{app['app_id']}").json()["budget_id"] is None
+
+
+GRANT_ROUTES: Final = ("user", "team", "organization")
+
+
+async def grant_apps(database: AppDatabase, route: str, app_ids: tuple[str, ...]) -> None:
+    """Give user "admin" the apps through their own, their team's or their organization's object permission."""
+    await database.litellm_objectpermissiontable.create(
+        data={"object_permission_id": "grant", "apps": list(app_ids), "mcp_servers": ["unrelated"]}
+    )
+    await database.litellm_usertable.create(
+        data={
+            "user_id": "admin",
+            "teams": ["owners"] if route == "team" else [],
+            "object_permission_id": "grant" if route == "user" else None,
+        }
+    )
+    await database.litellm_teamtable.create(
+        data={"team_id": "owners", "object_permission_id": "grant" if route == "team" else None}
+    )
+    await database.litellm_organizationtable.create(
+        data={"organization_id": "division", "object_permission_id": "grant" if route == "organization" else None}
+    )
+    if route == "organization":
+        await database.litellm_organizationmembership.create(data={"organization_id": "division", "user_id": "admin"})
+
+
+def two_apps(role: LitellmUserRoles, route: str | None) -> tuple[TestClient, str, str]:
+    admin, store = client()
+    assert admin.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    chat: Final = admin.post("/management/v1/apps", json={"resource_id": "chat"}).json()["app_id"]
+    search: Final = admin.post("/management/v1/apps", json={"resource_id": "search"}).json()["app_id"]
+    if route is not None:
+        asyncio.run(grant_apps(cast(AppDatabase, store.db), route, (chat,)))  # cast-ok: the store wraps this fake
+    grantee: Final = FastAPI()
+    grantee.add_exception_handler(ManagementProblem, lambda request, error: problem_response(error.problem))
+    grantee.include_router(router)
+    grantee.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role, user_id="admin")
+    grantee.dependency_overrides[get_app_store] = lambda: store
+    return TestClient(grantee), chat, search
+
+
+@pytest.mark.parametrize("route", GRANT_ROUTES)
+def test_a_grantee_reads_only_the_apps_granted_to_them_their_team_or_their_organization(route: str) -> None:
+    http, chat, search = two_apps(LitellmUserRoles.INTERNAL_USER, route)
+    listed: Final = http.get("/management/v1/apps")
+    assert listed.status_code == 200, listed.text
+    assert [app["app_id"] for app in listed.json()] == [chat]
+    assert http.get(f"/management/v1/apps/{chat}").json()["app_id"] == chat
+    assert http.get(f"/management/v1/apps/{search}").status_code == 403
+    assert http.get(f"/management/v1/apps/{search}/customer_members/anyone").status_code == 403
+    assert http.get(f"/management/v1/apps/{search}/customer_organizations/anyone").status_code == 403
+    assert http.get("/management/v1/apps/definition").json()["resource_type"] == "team"
+
+
+@pytest.mark.parametrize("route", GRANT_ROUTES)
+def test_a_grantee_cannot_change_an_app_they_can_read(route: str) -> None:
+    http, chat, _ = two_apps(LitellmUserRoles.INTERNAL_USER, route)
+    assert http.patch(f"/management/v1/apps/{chat}", json={"budget": {"max_budget": 1}}).status_code == 403
+    assert http.post("/management/v1/apps", json={"resource_id": "chat"}).status_code == 403
+    assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 403
+    assert http.get("/management/v1/apps/resources", params={"resource_type": "team"}).status_code == 403
+    assert http.put(f"/management/v1/apps/{chat}/customer_members/anyone", json={}).status_code == 403
+    assert http.put(f"/management/v1/apps/{chat}/customer_organizations/anyone", json={}).status_code == 403
+
+
+def test_a_grantee_reads_only_customer_members_known_to_their_app() -> None:
+    admin, store = client()
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-a"}))
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-b"}))
+    asyncio.run(store.customers.members.create({"customer_member_id": "ours", "parent_org_id": "org-a"}))
+    asyncio.run(store.customers.members.create({"customer_member_id": "theirs", "parent_org_id": "org-b"}))
+    assert admin.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    chat: Final = admin.post("/management/v1/apps", json={"resource_id": "chat"}).json()["app_id"]
+    assert admin.put(f"/management/v1/apps/{chat}/customer_organizations/org-a", json={}).status_code == 200
+    asyncio.run(grant_apps(cast(AppDatabase, store.db), "user", (chat,)))  # cast-ok: the store wraps this fake
+    grantee: Final = FastAPI()
+    grantee.add_exception_handler(ManagementProblem, lambda request, error: problem_response(error.problem))
+    grantee.include_router(router)
+    grantee.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="admin"
+    )
+    grantee.dependency_overrides[get_app_store] = lambda: store
+    http: Final = TestClient(grantee)
+    members: Final = f"/management/v1/apps/{chat}/customer_members"
+    assert http.get(f"{members}/ours").json()["customer_member_id"] == "ours"
+    unrelated: Final = http.get(f"{members}/theirs")
+    unknown: Final = http.get(f"{members}/nobody")
+    assert (
+        (unrelated.status_code, unrelated.json())
+        == (unknown.status_code, unknown.json())
+        == (
+            404,
+            {"detail": "Customer member not found."},
+        )
+    )
+    assert admin.get(f"{members}/theirs").status_code == 200
+
+
+def test_a_user_without_a_grant_reads_no_apps() -> None:
+    http, chat, _ = two_apps(LitellmUserRoles.INTERNAL_USER, None)
+    assert http.get("/management/v1/apps").status_code == 403
+    assert http.get(f"/management/v1/apps/{chat}").status_code == 403
+
+
+def test_a_proxy_admin_reads_every_app_without_a_grant() -> None:
+    http, chat, search = two_apps(LitellmUserRoles.PROXY_ADMIN, None)
+    assert sorted(app["app_id"] for app in http.get("/management/v1/apps").json()) == sorted((chat, search))
+
+
 def test_choose_definition_discover_and_configure_existing_resource() -> None:
     http, store = client()
-    assert http.get("/management/v1/apps/definition").json() == {"resource_type": None, "auto_create_customers_without_app": True}
+    assert http.get("/management/v1/apps/definition").json() == {
+        "resource_type": None,
+        "auto_create_customers_without_app": True,
+    }
     assert http.get("/management/v1/apps/resources").json() == []
     preview: Final = http.get("/management/v1/apps/resources", params={"resource_type": "team"})
     assert preview.status_code == 200 and len(preview.json()) == 2
@@ -119,7 +255,6 @@ def test_virtual_key_discovery_never_returns_credentials_or_hashes() -> None:
     assert "token-a" not in response.text
 
 
-
 def test_list_and_get_apps_return_saved_budgets_and_period_usage() -> None:
     http, _ = client()
     assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
@@ -181,10 +316,17 @@ def test_customer_and_member_budget_endpoints_keep_apps_independent() -> None:
     assert override.json()["budget_source"] == "member_override"
     assert http.get(search_member).json() == override.json()
     assert http.get(chat_member).json() == inherited.json()
-    restored: Final = http.put(search_member, json={})
+    restored: Final = http.put(search_member, json={"budget_override": None})
     assert restored.status_code == 200
     assert restored.json()["effective_budget"] == Budget(max_budget=20, allowed_models=()).model_dump(mode="json")
     assert restored.json()["budget_source"] == "app_default"
+    permanent: Final = http.put(chat_member, json={"budget": {"max_budget": 7}})
+    assert permanent.status_code == 200, permanent.text
+    assert permanent.json()["budget"] == Budget(max_budget=7, allowed_models=()).model_dump(mode="json")
+    assert http.get(search_member).json()["budget"] is None
+    assert permanent.json()["budget_source"] == "member_budget"
+    rejected: Final = http.put(chat_org, json={"budget_id": "unknown", "budget": {"max_budget": 7}})
+    assert rejected.status_code == 422
     assert http.get(f"/management/v1/apps/{chat}/customer_members/missing").status_code == 404
 
 
@@ -209,3 +351,24 @@ def test_app_definition_uses_database_or_reports_unavailability(
         if available
         else {"detail": "Database unavailable."}
     )
+
+
+@pytest.mark.parametrize("path", ("/management/v1/apps", "/management/v1/apps/definition", "/management/v1/apps/a"))
+def test_unauthenticated_app_read_does_not_open_the_store(path: str) -> None:
+    opened: Final[list[str]] = []  # mutable-ok: records store opens across the request
+
+    def unauthenticated() -> UserAPIKeyAuth:
+        raise HTTPException(401, "Unauthorized.")
+
+    def opening_store() -> AppStore:
+        opened.append(path)
+        return AppStore(AppDatabase(), NOW)
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = unauthenticated
+    app.dependency_overrides[get_app_store] = opening_store
+
+    response: Final = TestClient(app).get(path)
+
+    assert (response.status_code, opened) == (401, []), response.text

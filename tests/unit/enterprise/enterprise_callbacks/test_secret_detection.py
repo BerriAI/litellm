@@ -12,6 +12,7 @@ Covers the three defects from the ticket:
 
 import cProfile
 import json
+import re
 import sys
 import tempfile
 import time
@@ -986,7 +987,10 @@ def _assignment_flood(n: int) -> str:
     return f"api_key: '{OPENAI_KEY}'\n" + "\n".join(f"password{i}=aB3dE6gH9jK2mN5p{i}" for i in range(n))
 
 
-def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
+_MEASUREMENTS: Final = 3
+
+
+def _profiled_calls(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
     previous_profiler: Final = sys.getprofile()
     profile: Final = cProfile.Profile()
     try:
@@ -994,6 +998,24 @@ def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> in
     finally:
         sys.setprofile(previous_profiler)
     return sum(entry.callcount for entry in profile.getstats())
+
+
+def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
+    """Fewest calls over repeated runs, which leaves out a one-off recompile of patterns evicted from the `re` cache."""
+    return min(_profiled_calls(guardrail, content) for _ in range(_MEASUREMENTS))
+
+
+def test_calls_to_redact_ignores_a_regex_cache_eviction() -> None:
+    guardrail: Final = _guardrail()
+    content: Final = _quote_run(1_000)
+    guardrail.redact_text(content)
+    warm: Final = _calls_to_redact(guardrail, content)
+
+    re.purge()
+
+    evicted: Final = _calls_to_redact(guardrail, content)
+
+    assert evicted <= 1.25 * warm, (warm, evicted)
 
 
 @pytest.mark.parametrize(

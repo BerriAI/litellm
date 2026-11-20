@@ -48,6 +48,8 @@ import litellm
 from litellm import Router
 from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.responses_adapters.transformation import LiteLLMAnthropicToResponsesAPIAdapter
 from litellm.llms.azure_ai.anthropic.count_tokens import handler as azure_ai_count_tokens_http
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -91,7 +93,7 @@ from litellm.proxy.proxy_server import (
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicMessagesRequest
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
@@ -3412,6 +3414,119 @@ def _shipped_kimi_k3_framing() -> int:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize(
+    "model", ["azure/responses/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol", "openai/gpt-6.2-sol"]
+)
+async def test_bridged_messages_local_count_ignores_leading_claude_code_billing_header(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, model: str
+) -> None:
+    router: Final = _single_deployment_router({"model": model}, {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    billing: Final = "x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; cch=781fd;"
+    system: Final = [{"type": "text", "text": "Be concise."}] if as_blocks else "Be concise."
+    with_billing: Final = (
+        [{"type": "text", "text": billing}, *system] if isinstance(system, list) else billing + "\n" + system
+    )
+    request: Final = TokenCountRequest(model="counted", messages=[{"role": "user", "content": "Hello"}], system=system)
+
+    baseline: Final = await count_request_tokens(request=request, messages_format="anthropic")
+    counted: Final = await count_request_tokens(
+        request=request.model_copy(update={"system": with_billing}), messages_format="anthropic"
+    )
+
+    assert counted.total_tokens == baseline.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chat_fallback", [False, True])
+@pytest.mark.parametrize("with_edits", [False, True])
+@pytest.mark.parametrize("as_blocks", [False, True])
+async def test_provider_count_removes_only_the_first_adjacent_billing_block(
+    monkeypatch: pytest.MonkeyPatch, chat_fallback: bool, with_edits: bool, as_blocks: bool
+) -> None:
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", chat_fallback)
+    router: Final = _single_deployment_router(
+        {"model": "openai/gpt-6.2-sol", "api_key": "test-key", "store": False}, {}
+    )
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    bodies: Final[list[dict[str, object]]] = []  # mutable-ok: records the HTTP peer's input
+
+    def peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 47}, request=request)
+
+    with patch.object(
+        openai_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        assert (
+            await _input_tokens(
+                router,
+                {
+                    "model": "counted",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "system": [
+                        {"type": "text", "text": billing_a},
+                        {"type": "text", "text": billing_b},
+                        {"type": "text", "text": "Be concise."},
+                    ]
+                    if as_blocks
+                    else billing_a + "\n" + billing_b + "\nBe concise.",
+                    **({"context_management": _CLEAR_TOOL_USES} if with_edits else {}),
+                },
+            )
+            == 47
+        )
+
+    assert bodies[0]["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": billing_b}, {"type": "input_text", "text": "Be concise."}]
+            if as_blocks
+            else [{"type": "input_text", "text": billing_b + "\nBe concise."}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]},
+    ]
+
+
+@pytest.mark.parametrize("as_blocks", [False, True])
+def test_generation_keeps_the_second_adjacent_billing_block(as_blocks: bool) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "openai/gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": [
+            {"type": "text", "text": billing_a},
+            {"type": "text", "text": billing_b},
+            {"type": "text", "text": "Be concise."},
+        ]
+        if as_blocks
+        else billing_a + "\n" + billing_b + "\nBe concise.",
+    }
+    chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+    responses: Final = LiteLLMAnthropicToResponsesAPIAdapter().translate_request(request)
+    assert chat["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": billing_b}, {"type": "text", "text": "Be concise."}]
+        if as_blocks
+        else billing_b + "\nBe concise.",
+    }
+    assert responses["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": billing_b}, {"type": "input_text", "text": "Be concise."}]
+        if as_blocks
+        else [{"type": "input_text", "text": billing_b + "\nBe concise."}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_framing_in_both_request_formats(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -4345,6 +4460,85 @@ class _MistralCountTokensPeer:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("prefix", ["ordinary", "single", "adjacent", "empty_first", "literal", "header_only", "style"])
+async def test_mistral_count_system_matches_the_generation_http_payload(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, prefix: str
+) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    before, after = {
+        "ordinary": (["answer=OK"], ["answer=OK"]),
+        "single": ([billing_a, "Be concise."], ["Be concise."]),
+        "adjacent": ([billing_a, billing_b, "answer=OK"], [billing_b, "answer=OK"]),
+        "empty_first": (["", billing_b, "Be concise."], ["", billing_b, "Be concise."]),
+        "literal": (
+            ["x-anthropic-billing-header: not metadata", "answer=OK"],
+            ["x-anthropic-billing-header: not metadata", "answer=OK"],
+        ),
+        "header_only": ([billing_a], []),
+        "style": ([billing_a, "style=concise"], ["style=concise"]),
+    }[prefix]
+    system: Final = [{"type": "text", "text": text} for text in before] if as_blocks else "\n".join(before)
+    expected: Final = ("" if as_blocks else "\n").join(after)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-agent",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-key"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        counted: Final = respx.post("https://api.mistral.ai/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 57})
+        )
+        generated: Final = respx.post("https://api.mistral.ai/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "mistral-large-4",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 57, "completion_tokens": 1, "total_tokens": 58},
+                },
+            )
+        )
+        assert (
+            await _input_tokens(
+                router, {"model": "mistral-agent", "messages": [{"role": "user", "content": "Hello"}], "system": system}
+            )
+            == 57
+        )
+        await litellm.anthropic.messages.acreate(
+            model="mistral/mistral-large-4",
+            api_key="test-key",
+            messages=[{"role": "user", "content": "Hello"}],
+            system=system,
+            max_tokens=32,
+        )
+    sent: Final = json.loads(generated.calls.last.request.content)
+    assert sent["messages"] == ([{"role": "system", "content": expected}] if expected else []) + [
+        {"role": "user", "content": "Hello"}
+    ]
+    count_body: Final = json.loads(counted.calls.last.request.content)
+    assert count_body == {
+        "model": "mistral-large-4",
+        "input": (
+            [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": expected}]}]
+            if expected
+            else []
+        )
+        + [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_messages_count_tokens_sends_mistral_the_messages_the_inference_polyfill_edits() -> None:
     router: Final = Router(
         model_list=[
@@ -4596,6 +4790,36 @@ class _BedrockCountTokensBody(BaseModel):
 def _bedrock_counted_request(request_body: bytes) -> str:
     invoke_model: Final = _BedrockCountTokensBody.model_validate_json(request_body).input.invoke_model
     return base64.b64decode(invoke_model.body).decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("provider", ["gemini", "bedrock"])
+async def test_nontranslating_provider_count_removes_only_the_first_billing_block(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, provider: str
+) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": [{"type": "text", "text": text} for text in (billing_a, billing_b, "Be concise.")]
+        if as_blocks
+        else billing_a + "\n" + billing_b + "\nBe concise.",
+    }
+    expected: Final = (
+        [{"text": text} for text in (billing_b, "Be concise.")]
+        if as_blocks
+        else [{"text": billing_b + "\nBe concise."}]
+    )
+    if provider == "bedrock":
+        response, sent = await _count_on_a_bridged_provider_count_api(body, monkeypatch)
+        assert response == {"input_tokens": 57, "litellm_count_source": "provider"}
+        assert json.loads(sent[0].content)["input"]["converse"]["system"] == expected
+        return
+    router: Final = Router(model_list=[_gemini_deployment("gemini-agent", {})])
+    response, sent_bodies = await _count_through_the_messages_endpoint(router, {**body, "model": "gemini-agent"})
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert json.loads(sent_bodies[0])["generateContentRequest"]["systemInstruction"] == {"parts": expected}
 
 
 async def _count_on_a_bridged_provider_count_api(

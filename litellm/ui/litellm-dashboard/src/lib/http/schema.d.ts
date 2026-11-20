@@ -9678,6 +9678,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/app_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get App Budget Groups
+         * @description List reusable overall app budget groups and their revision, independently of app × customer organization groups. Proxy admins only.
+         */
+        get: operations["get_app_budget_groups_management_v1_app_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure App Budget Groups
+         * @description Save the complete overall app budget group list with its expected_revision. default_budget_template must be null. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_app_budget_groups_management_v1_app_budget_groups_patch"];
+        trace?: never;
+    };
+    "/management/v1/app_customer_organization_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get App Customer Organization Budget Groups
+         * @description List reusable app × customer organization budget groups, independently of organization groups. Proxy admins only.
+         */
+        get: operations["get_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure App Customer Organization Budget Groups
+         * @description Save the complete app × customer organization budget group list with its expected_revision. default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_patch"];
+        trace?: never;
+    };
     "/management/v1/apps": {
         parameters: {
             query?: never;
@@ -9969,7 +10017,7 @@ export interface paths {
         put?: never;
         /**
          * Upsert Customer Member
-         * @description Create or update a customer member by customer_member_id within a customer org identified by customer_org_id or customer_org_alias. If both are supplied they must match. A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. Moving between customer orgs or selecting another customer org's customer team returns 409. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Proxy admins only.
+         * @description Create or update a customer member by customer_member_id within a customer org identified by customer_org_id or customer_org_alias. If both are supplied they must match. A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. Alias, budget_id, budget, budget_override and budget_override_expires_at follow the customer member models. Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. Moving between customer orgs or selecting another customer org's customer team returns 409. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Proxy admins only.
          */
         post: operations["upsert_customer_member_management_v1_customer_members_upsert_post"];
         delete?: never;
@@ -10025,7 +10073,7 @@ export interface paths {
         head?: never;
         /**
          * Configure Customer Organization Budget Groups
-         * @description Save the complete organization budget group list with its expected_revision. default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.
+         * @description Save the complete organization budget group list with its expected_revision. default_budget_template names the group assigned to new organizations that omit budget and budget_id, or null for no organization-level limit. Existing organizations are unchanged by default selection. Stale revisions or referenced deletions return 409. Proxy admins only.
          */
         patch: operations["configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch"];
         trace?: never;
@@ -10045,7 +10093,7 @@ export interface paths {
         put?: never;
         /**
          * Create Customer Organization
-         * @description Create a customer organization with resolved budgets. Proxy admins only.
+         * @description Create a customer organization with resolved budgets. Omit budget and budget_id to use the configured organization budget group default. Explicit null opts out of the default. Proxy admins only.
          */
         post: operations["create_customer_organization_management_v1_customer_organizations_post"];
         delete?: never;
@@ -28417,6 +28465,11 @@ export interface components {
             auto_create_customers?: boolean | null;
             budget?: components["schemas"]["Budget"] | null;
             /**
+             * Budget Id
+             * @description Linked overall-app budget group. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+            /**
              * Customer Margin
              * @description Fraction added to the cost of every request this app makes for a customer, e.g. 0.02 adds 2%. It replaces the gateway-wide customer surcharge for this app, so 0 turns the surcharge off for it. Null uses the gateway-wide customer surcharge.
              */
@@ -28451,6 +28504,12 @@ export interface components {
         AppMember: {
             /** App Id */
             app_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
             /** Budget Override Id */
             budget_override_id?: string | null;
             /** @default none */
@@ -28475,15 +28534,25 @@ export interface components {
          * AppMemberBudgetSource
          * @enum {string}
          */
-        AppMemberBudgetSource: "member_override" | "customer_default" | "app_default" | "none";
+        AppMemberBudgetSource: "member_budget" | "member_override" | "customer_default" | "app_default" | "none";
         /** AppMemberPut */
         AppMemberPut: {
+            /** @description Permanent budget for this app and customer member. Copies inherited policy on first edit. Explicit null fields clear limits. Null budget returns to inheritance. Independent of temporary increases. */
+            budget?: components["schemas"]["Budget"] | null;
             budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
         };
         /** AppOrganization */
         AppOrganization: {
             /** App Id */
             app_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
             /** Budget Override Id */
             budget_override_id?: string | null;
             /**
@@ -28509,7 +28578,12 @@ export interface components {
         };
         /** AppOrganizationPut */
         AppOrganizationPut: {
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
             customer_member_budget?: components["schemas"]["Budget"] | null;
             /** Tier Budget Id */
             tier_budget_id?: string | null;
@@ -28522,6 +28596,11 @@ export interface components {
              */
             auto_create_customers?: boolean | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked overall-app budget group. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
             /**
              * Customer Margin
              * @description Fraction added to the cost of every request this app makes for a customer, e.g. 0.02 adds 2%. It replaces the gateway-wide customer surcharge for this app, so 0 turns the surcharge off for it. Null uses the gateway-wide customer surcharge.
@@ -29576,6 +29655,11 @@ export interface components {
              * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
              */
             scan_raw_request?: boolean | null;
+            /**
+             * Scan Tool Descriptions As Text
+             * @description For text-only guardrails (panw_prisma_airs, presidio). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.
+             */
+            scan_tool_descriptions_as_text?: boolean | null;
             /**
              * Sensitive Data Route To Model
              * @description Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.
@@ -34065,6 +34149,7 @@ export interface components {
         CustomerMember: {
             /** Alias */
             alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -38071,6 +38156,8 @@ export interface components {
             agent_access_groups?: string[] | null;
             /** Agents */
             agents?: string[] | null;
+            /** Apps */
+            apps?: string[] | null;
             /** Blocked Tools */
             blocked_tools?: string[] | null;
             /** Mcp Access Groups */
@@ -38109,6 +38196,8 @@ export interface components {
              * @default []
              */
             agents: string[] | null;
+            /** Apps */
+            apps?: string[] | null;
             /**
              * Blocked Tools
              * @default []
@@ -38437,6 +38526,8 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Image Token Cost Batches */
             cache_read_input_image_token_cost_batches?: number | null;
+            /** Cache Read Input Image Token Cost Priority */
+            cache_read_input_image_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -38555,6 +38646,8 @@ export interface components {
             input_cost_per_image_token?: number | null;
             /** Input Cost Per Image Token Batches */
             input_cost_per_image_token_batches?: number | null;
+            /** Input Cost Per Image Token Priority */
+            input_cost_per_image_token_priority?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -40381,6 +40474,11 @@ export interface components {
              */
             scan_raw_request?: boolean | null;
             /**
+             * Scan Tool Descriptions As Text
+             * @description For text-only guardrails (panw_prisma_airs, presidio). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.
+             */
+            scan_tool_descriptions_as_text?: boolean | null;
+            /**
              * Send User Api Key Alias
              * @description Whether to send user_API_key_alias in headers
              * @default false
@@ -41468,6 +41566,8 @@ export interface components {
         MemberCreate: {
             /** Alias */
             alias?: string | null;
+            /** @description Permanent member-specific budget. When leaving a preset, copies its settings into a private budget and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. Independent of temporary budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -41490,6 +41590,8 @@ export interface components {
         MemberPatch: {
             /** Alias */
             alias?: string | null;
+            /** @description Permanent member-specific budget. When leaving a preset, copies its settings into a private budget and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. Independent of temporary budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -41505,6 +41607,8 @@ export interface components {
         MemberUpsert: {
             /** Alias */
             alias?: string | null;
+            /** @description Permanent member-specific budget. When leaving a preset, copies its settings into a private budget and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. Independent of temporary budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -41523,6 +41627,7 @@ export interface components {
         MemberUpsertResponse: {
             /** Alias */
             alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -55784,6 +55889,8 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Image Token Cost Batches */
             cache_read_input_image_token_cost_batches?: number | null;
+            /** Cache Read Input Image Token Cost Priority */
+            cache_read_input_image_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -55902,6 +56009,8 @@ export interface components {
             input_cost_per_image_token?: number | null;
             /** Input Cost Per Image Token Batches */
             input_cost_per_image_token_batches?: number | null;
+            /** Input Cost Per Image Token Priority */
+            input_cost_per_image_token_priority?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -70208,6 +70317,112 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_app_budget_groups_management_v1_app_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_app_budget_groups_management_v1_app_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
