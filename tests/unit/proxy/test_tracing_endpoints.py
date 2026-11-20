@@ -5,9 +5,10 @@ Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 import asyncio
 import gzip
 import json
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from itertools import chain
 from typing import Final, Literal, NamedTuple, TypedDict
 from unittest.mock import AsyncMock, MagicMock, call
 from urllib.parse import urlsplit
@@ -19,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import Response
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, Span
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
 
@@ -1069,6 +1071,11 @@ async def test_storage_rejects_remote_query_help_that_drifts_from_the_contract(d
 _LENS_URL: Final = "http://lens.test"
 
 
+def _spans(resources: Iterable[ResourceSpans]) -> tuple[Span, ...]:
+    scopes: Final = chain.from_iterable(resource.scope_spans for resource in resources)
+    return tuple(chain.from_iterable(scope.spans for scope in scopes))
+
+
 class _Upload(NamedTuple):
     path: str
     authorization: str
@@ -1128,13 +1135,7 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
         for path, auth, body in lens_uploads
         if path == "/internal/traces" and auth == "Bearer test-service-token-with-32-characters" and body
     )
-    spans: Final = tuple(
-        span
-        for trace in traces
-        for resource in trace.resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
-    )
+    spans: Final = _spans(chain.from_iterable(trace.resource_spans for trace in traces))
     assert tuple(span.name for span in spans) == ("chat gpt-4o-mini",)
     assert tuple(path for path, _, _ in lens_uploads if path.startswith("/operator")) == ()
     assert "operator-service" not in str(traces[0].resource_spans[0].resource)
@@ -1182,17 +1183,17 @@ async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call
         await asyncio.sleep(0.2)
 
     resources: Final = tuple(
-        resource
-        for path, _, body in lens_uploads
-        if path == "/internal/traces" and body
-        for resource in ExportTraceServiceRequest.FromString(body).resource_spans
+        chain.from_iterable(
+            ExportTraceServiceRequest.FromString(body).resource_spans
+            for path, _, body in lens_uploads
+            if path == "/internal/traces" and body
+        )
     )
-    spans: Final = {span.name: span for resource in resources for scope in resource.scope_spans for span in scope.spans}
+    spans: Final = {span.name: span for span in _spans(resources)}
     assert sorted(spans) == ["chat gpt-4o-mini", "execute_tool Bash"]
     assert {
         attribute.key: attribute.value.string_value
-        for resource in resources
-        for attribute in resource.resource.attributes
+        for attribute in chain.from_iterable(resource.resource.attributes for resource in resources)
         if attribute.key.startswith("lens.")
     } == {"lens.session.capture": "true", "lens.session.attribute": "gen_ai.conversation.id"}
     model_call: Final = {item.key: item.value.string_value for item in spans["chat gpt-4o-mini"].attributes}
