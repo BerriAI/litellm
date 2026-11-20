@@ -86,6 +86,8 @@ _RECURSIVE_REPR_PLACEHOLDERS: Final[Mapping[type, str]] = MappingProxyType(
 )
 _WALKED_TYPES: Final = frozenset(_RECURSIVE_REPR_PLACEHOLDERS)
 _NO_IDS: Final[frozenset[int]] = frozenset()
+_CONVERSATION_PARAMS: Final = frozenset({"messages", "input", "system"})
+_OPAQUE_CONVERSATION_FIELDS: Final = frozenset({"arguments", "input", "output", "schema", "input_schema", "parameters"})
 
 
 def _container_children(value: object) -> Iterable[object]:
@@ -112,27 +114,33 @@ def _ids_to_walk(value: object, path: frozenset[int], depth: int) -> frozenset[i
 
 
 def _repr_items_fragments(
-    items: Iterable[object], walk: frozenset[int], seen: frozenset[int], depth: int
+    items: Iterable[object], walk: frozenset[int], seen: frozenset[int], depth: int, order_objects: bool
 ) -> Iterator[str]:
     for index, item in enumerate(items):
         if index:
             yield ", "
-        yield from _repr_fragments(item, walk, seen, depth)
+        yield from _repr_fragments(item, walk, seen, depth, order_objects)
 
 
 def _repr_entries_fragments(
-    entries: Iterable[tuple[object, object]], walk: frozenset[int], seen: frozenset[int], depth: int
+    value: Mapping[object, object], walk: frozenset[int], seen: frozenset[int], depth: int, order_objects: bool
 ) -> Iterator[str]:
+    entries: Final[Iterable[tuple[object, object]]] = (
+        sorted(cast(Mapping[str, object], value).items())  # cast-ok: the guard requires exact string keys
+        if order_objects and all(type(key) is str for key in value)
+        else value.items()
+    )
     for index, (key, item) in enumerate(entries):
         if index:
             yield ", "
         yield repr(key)
         yield ": "
-        yield from _repr_fragments(item, walk, seen, depth)
+        yield from _repr_fragments(item, walk, seen, depth, order_objects and key not in _OPAQUE_CONVERSATION_FIELDS)
 
 
-def _repr_fragments(value: object, walk: frozenset[int], seen: frozenset[int], depth: int) -> Iterator[str]:
-    """Yields repr(value) in pieces, byte for byte, so cache keys stay stable without building one huge string"""
+def _repr_fragments(
+    value: object, walk: frozenset[int], seen: frozenset[int], depth: int, order_objects: bool
+) -> Iterator[str]:
     placeholder: Final = _RECURSIVE_REPR_PLACEHOLDERS.get(type(value))
     if placeholder is None:
         yield repr(value)
@@ -140,7 +148,7 @@ def _repr_fragments(value: object, walk: frozenset[int], seen: frozenset[int], d
     if id(value) in seen:
         yield placeholder
         return
-    if id(value) not in walk or depth >= _REPR_WALK_MAX_DEPTH:
+    if depth >= _REPR_WALK_MAX_DEPTH or (not order_objects and id(value) not in walk):
         yield repr(value)
         return
     inner_seen: Final = seen | frozenset((id(value),))
@@ -148,10 +156,11 @@ def _repr_fragments(value: object, walk: frozenset[int], seen: frozenset[int], d
         case dict():
             yield "{"
             yield from _repr_entries_fragments(
-                cast(dict[object, object], value).items(),  # cast-ok: an exact dict of unknown key/value types
+                cast(dict[object, object], value),  # cast-ok: an exact dict of unknown key/value types
                 walk,
                 inner_seen,
                 depth + 1,
+                order_objects,
             )
             yield "}"
         case list():
@@ -161,12 +170,13 @@ def _repr_fragments(value: object, walk: frozenset[int], seen: frozenset[int], d
                 walk,
                 inner_seen,
                 depth + 1,
+                order_objects,
             )
             yield "]"
         case tuple():
             items: Final = cast(tuple[object, ...], value)  # cast-ok: an exact tuple of unknown items
             yield "("
-            yield from _repr_items_fragments(items, walk, inner_seen, depth + 1)
+            yield from _repr_items_fragments(items, walk, inner_seen, depth + 1, order_objects)
             yield ",)" if len(items) == 1 else ")"
         case _:
             yield repr(value)
@@ -189,14 +199,16 @@ def _level_holds_large_str(level: tuple[object, ...], visited: frozenset[int], d
     return _level_holds_large_str(children, visited.union(fresh), depth + 1)
 
 
-def _format_fragments(value: object) -> Iterator[str]:
+def _format_fragments(value: object, *, order_objects: bool) -> Iterator[str]:
     if type(value) not in _WALKED_TYPES:
         yield f"{value}"
         return
-    if not _level_holds_large_str((value,), _NO_IDS, 0):
+    has_large_string: Final = _level_holds_large_str((value,), _NO_IDS, 0)
+    if not order_objects and not has_large_string:
         yield repr(value)
         return
-    yield from _repr_fragments(value, _ids_to_walk(value, _NO_IDS, 0), _NO_IDS, 0)
+    walk: Final = _ids_to_walk(value, _NO_IDS, 0) if has_large_string else _NO_IDS
+    yield from _repr_fragments(value, walk, _NO_IDS, 0, order_objects)
 
 
 def _hash_cache_key_fragments(fragments: Iterable[str]) -> str:
@@ -574,7 +586,7 @@ class Cache:
     def _keyed_param_values(self, kwargs: dict[str, object], is_semantic_cache: bool) -> Iterator[tuple[str, object]]:
         combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
-        for param in kwargs:
+        for param in kwargs if is_semantic_cache else sorted(kwargs):
             if param in scope_excluded_params:
                 continue
             if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
@@ -593,7 +605,9 @@ class Cache:
         is_semantic_cache: Final = self._is_semantic_cache()
         for param, param_value in self._keyed_param_values(kwargs, is_semantic_cache):
             yield f"{param}: "
-            yield from _format_fragments(param_value)
+            yield from _format_fragments(
+                param_value, order_objects=not is_semantic_cache and param in _CONVERSATION_PARAMS
+            )
         if is_semantic_cache:
             yield self._get_semantic_cache_tenant_scope(kwargs)
         yield _keyed_provider_params_in_extra_body(kwargs)
