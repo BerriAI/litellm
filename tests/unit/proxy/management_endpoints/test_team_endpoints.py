@@ -20270,3 +20270,25 @@ async def test_team_duration_edits_use_the_writers_current_schedule(
     persisted: Final = {**stored, **transaction.litellm_teamtable.update.call_args.kwargs["data"]}
     assert persisted["budget_duration"] == "45m"
     assert persisted["budget_reset_at"] == datetime.fromisoformat(expected)
+
+
+@pytest.mark.parametrize("request_type", [NewTeamRequest, UpdateTeamRequest])
+@pytest.mark.parametrize(
+    "windows",
+    [
+        [{"budget_duration": "1d", "max_budget": -1.0}],
+        [{"budget_duration": "5x", "max_budget": 1.0}],
+        [{"budget_duration": "1d", "max_budget": 1.0}, {"budget_duration": "1d", "max_budget": 2.0}],
+    ],
+    ids=["negative", "unsupported-duration", "duplicate-duration"],
+)
+def test_team_budget_windows_reject_invalid_windows(request_type, windows):
+    with pytest.raises(ValidationError):
+        request_type(team_id="team-1", budget_limits=windows)
+
+
+def test_stored_team_windows_load_without_request_validation():
+    team = LiteLLM_TeamTable(
+        team_id="team-1", budget_limits=[{"budget_duration": "1d", "max_budget": -1.0}, {"budget_duration": "1d", "max_budget": 2.0}]
+    )
+    assert [window.max_budget for window in team.budget_limits or ()] == [-1.0, 2.0]

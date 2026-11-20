@@ -142,10 +142,15 @@ def _customer_window_counter(
         limit.budget_duration, settings, now, previous_reset=configured_reset
     )
     reset_at: Final = configured_reset if configured_reset is not None and configured_reset > now else standard_reset
-    start: Final = calendar_budget_window_start(
-        limit.budget_duration,
-        reset_at.astimezone(standard_reset.tzinfo),
-        reset_time_of_day=settings.reset_time_of_day,
+    saved_start: Final = limit.window_start if isinstance(limit, BudgetLimit) and reset_at is configured_reset else None
+    start: Final = (
+        saved_start.replace(tzinfo=saved_start.tzinfo or timezone.utc)
+        if saved_start is not None
+        else calendar_budget_window_start(
+            limit.budget_duration,
+            reset_at.astimezone(standard_reset.tzinfo),
+            reset_time_of_day=settings.reset_time_of_day,
+        )
     ).astimezone(timezone.utc)
     return _BudgetCounter(
         counter_key=customer_window_counter(scope_key, entity_id, limit.budget_duration, start),

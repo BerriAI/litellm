@@ -213,7 +213,9 @@ async def new_budget(
         {
             "budget_limits": budget_limit_json(
                 initialize_budget_limits(
-                    budget_obj.budget_limits, get_budget_reset_settings(), datetime.now(timezone.utc)
+                    carry_budget_limit_resets(budget_obj.budget_limits, ()),
+                    get_budget_reset_settings(),
+                    datetime.now(timezone.utc),
                 )
             )
         }

@@ -468,3 +468,20 @@ async def test_admitted_windows_are_charged_during_policy_outage(
         scalar_queued: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
         for scope in scopes:
             assert scalar_queued[f"{scope.key}_list_transactions"] == {scope.entity_id: 0.75}
+
+
+def test_saved_window_start_names_the_counter_until_its_reset_passes():
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    created: Final = datetime(2026, 11, 13, 3, tzinfo=timezone.utc)
+    limit: Final = BudgetLimit(
+        budget_duration="2d", max_budget=10, reset_at=datetime(2026, 11, 15, 6, tzinfo=timezone.utc), window_start=created
+    )
+    (current,) = customer_window_counters("customer_org", "org", (limit,), now=created, reset_settings=settings)
+    assert current.window_start == created
+    assert parse_customer_window_counter(current.counter_key) == ("customer_org", "org", "2d", created)
+
+    after_reset: Final = datetime(2026, 11, 15, 7, tzinfo=timezone.utc)
+    unsaved: Final = limit.model_copy(update={"window_start": None})
+    assert customer_window_counters(
+        "customer_org", "org", (limit,), now=after_reset, reset_settings=settings
+    ) == customer_window_counters("customer_org", "org", (unsaved,), now=after_reset, reset_settings=settings)
