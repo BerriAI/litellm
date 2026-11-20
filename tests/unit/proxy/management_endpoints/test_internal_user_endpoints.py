@@ -2711,7 +2711,8 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
 async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_transaction(
     mocker: MockerFixture,
 ) -> None:
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, budget_windows_absent_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import budget_windows_absent_cache, budget_windows_absent_cache_key
     from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
     from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
 
@@ -2737,7 +2738,7 @@ async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_tra
         budget_windows_absent_cache_key(Litellm_EntityType.USER.value, user_id) for user_id in saved_users
     )
     for marker in markers:
-        cache.budget_windows_absent_cache.set_cache(key=marker, value=True)
+        budget_windows_absent_cache.set_cache(key=marker, value=True)
     mocker.patch(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
@@ -2763,7 +2764,7 @@ async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_tra
     )
     for write in window_writes:
         _assert_resent_windows_keep_their_resets(write["data"]["budget_limits"])
-    assert all(cache.budget_windows_absent_cache.get_cache(key=marker) is None for marker in markers)
+    assert all(budget_windows_absent_cache.get_cache(key=marker) is None for marker in markers)
     written_windows: Final = dict(
         chain.from_iterable(
             ((user_id, json.loads(write["data"]["budget_limits"])) for user_id in write["where"]["user_id"]["in"])

@@ -12,6 +12,7 @@ from litellm.proxy.management_endpoints.management_v1.customers import (
     require_customer_admin,
 )
 from litellm.proxy.management_helpers.app_access import ALL_APPS, AppAccess, granted_app_ids
+from litellm.proxy.management_helpers.app_models import app_resource_models
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.types.proxy.management_endpoints.apps import (
     App,
@@ -42,9 +43,9 @@ async def get_app_store() -> AsyncIterator[AppStore]:
     if prisma_client is None:
         raise HTTPException(503, "Database unavailable.")
     async with prisma_client.db.tx() as db:
-        store: Final = AppStore(db, cache=user_api_key_cache)
+        store: Final = AppStore(db, cache=user_api_key_cache, cache_reads=False)
         yield store
-    await store.invalidate_definition_cache()
+    await store.invalidate_cache()
 
 
 Store: TypeAlias = Annotated[AppStore, Depends(get_app_store)]
@@ -96,6 +97,16 @@ async def list_app_resources(
     resource_type: AppResourceType | None = None,
 ) -> tuple[AppResource, ...]:
     return await store.resources(offset, limit, resource_type)
+
+
+@router.get(
+    "/resources/{resource_type}/{resource_id}/models",
+    response_model=tuple[str, ...],
+    dependencies=ADMIN_ONLY,
+    description="List models accessible to an app's underlying team, project, or virtual key. Proxy admins only.",
+)
+async def list_app_resource_models(resource_type: AppResourceType, resource_id: str, store: Store) -> tuple[str, ...]:
+    return resolve(await app_resource_models(store, resource_type, resource_id))
 
 
 @router.post(

@@ -113,9 +113,9 @@ describe("CustomerHierarchySettings", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sets organization rate limits without requiring a dollar budget", async () => {
-    const unlimited = { ...organization, budget: null };
-    renderSettings({ kind: "organization", record: unlimited });
+  it.each(["organization", "team"] as const)("sets %s rate limits directly without a dollar budget", async (kind) => {
+    const record = { ...organization, customer_team_id: "team-1", parent_org_id: "org-1", budget: null };
+    renderSettings({ kind, record });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "60" } });
     expect(await saveChanges()).toMatchObject({
@@ -294,9 +294,10 @@ describe("CustomerHierarchySettings", () => {
       },
     };
     renderSettings({ kind: "member", record: custom });
-    expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(10);
-    expect(screen.getByRole("spinbutton", { name: "Yearly budget" })).toHaveValue(100);
-    fireEvent.change(screen.getByRole("spinbutton", { name: `${period} budget` }), {
+    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(10);
+    expect(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveValue(100);
+    const label = period === "Monthly" ? "Spend limit (USD)" : "Additional spend limit (USD)";
+    fireEvent.change(screen.getByRole("spinbutton", { name: label }), {
       target: { value: amount },
     });
     const body = await saveChanges();
@@ -315,13 +316,13 @@ describe("CustomerHierarchySettings", () => {
       { kind: "member", record: { ...member, budget_override: null, budget_override_expires_at: null } },
       member,
     );
-    expect(screen.queryByRole("spinbutton", { name: "Monthly budget" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Spend limit (USD)" })).not.toBeInTheDocument();
     await chooseSelectOption(
       user,
       screen.getByRole("combobox", { name: "Budget template" }),
       "Enter custom limits instead",
     );
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "75" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "75" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "60" } });
     expect(await saveChanges(user)).toEqual({
@@ -354,9 +355,9 @@ describe("CustomerHierarchySettings", () => {
     const custom = { ...member, budget_id: "owned", budget: { max_budget: 15, budget_duration: "1mo" } };
     const user = renderSettings({ kind: "member", record: custom });
     expect(screen.getByRole("combobox", { name: "Budget template" })).toHaveTextContent("Custom");
-    expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(15);
+    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(15);
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget template" }), /^Standard/);
-    expect(screen.queryByRole("spinbutton", { name: "Monthly budget" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Spend limit (USD)" })).not.toBeInTheDocument();
     expect(await saveChanges(user)).toEqual({ budget_id: "template-1" });
   });
 
@@ -369,8 +370,8 @@ describe("CustomerHierarchySettings", () => {
     };
     renderSettings({ kind: "member", record: legacy });
     expect(screen.getByRole("combobox", { name: "Budget template" })).toHaveTextContent("Custom");
-    expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(20);
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "50" } });
+    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(20);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "50" } });
     expect(await saveChanges()).toEqual({
       budget: {
         budget_limits: null,
