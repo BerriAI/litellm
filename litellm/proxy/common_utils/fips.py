@@ -7,7 +7,12 @@ from urllib.parse import urlsplit
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import exclude_rsa_key_exchange_and_chacha20
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
-from litellm.proxy.db.token_auth import AZURE_POSTGRESQL_AUTH_ENV_VAR, IAM_TOKEN_DB_AUTH_ENV_VAR
+from litellm.proxy.db.pgbouncer import database_url_is_pooled
+from litellm.proxy.db.token_auth import (
+    AZURE_POSTGRESQL_AUTH_ENV_VAR,
+    IAM_TOKEN_DB_AUTH_ENV_VAR,
+    token_auth_flag_enabled,
+)
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
@@ -115,10 +120,22 @@ def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
     return None
 
 
+def _token_login(environ: Mapping[str, str]) -> bool:
+    """Whether RDS IAM or Azure Entra token login is on, read the way the token refresh reads it."""
+    try:
+        return any(
+            token_auth_flag_enabled(environ.get(name), env_var=name)
+            for name in (IAM_TOKEN_DB_AUTH_ENV_VAR, AZURE_POSTGRESQL_AUTH_ENV_VAR)
+        )
+    except ValueError:
+        return False
+
+
 def database_password_login_warning(environ: Mapping[str, str]) -> str | None:
-    """A warning when DATABASE_URL logs in to Postgres with a password and neither RDS IAM nor Azure Entra token login
-    is on. None otherwise."""
-    if any(str_to_bool(environ.get(name)) for name in (IAM_TOKEN_DB_AUTH_ENV_VAR, AZURE_POSTGRESQL_AUTH_ENV_VAR)):
+    """A warning when DATABASE_URL logs in with a password: to Postgres when neither RDS IAM nor Azure Entra token
+    login is on, or to the in-container PgBouncer, which always takes a password. None otherwise."""
+    pooled: Final = database_url_is_pooled(environ)
+    if not pooled and _token_login(environ):
         return None
     try:
         password: Final = urlsplit(environ.get("DATABASE_URL", "")).password
@@ -126,6 +143,13 @@ def database_password_login_warning(environ: Mapping[str, str]) -> str | None:
         return None
     if not password:
         return None
+    if pooled:
+        return (
+            f"{_SETTING} is on but LITELLM_PGBOUNCER_ENABLED logs the workers in to the in-container PgBouncer with a "
+            "password, and that login (SCRAM) is computed outside the FIPS module. Turn LITELLM_PGBOUNCER_ENABLED off "
+            "and use client-certificate login: cert in pg_hba.conf, sslidentity and sslpassword in DATABASE_URL with "
+            "no password, and PGSSLCERT and PGSSLKEY set to the same certificate and key."
+        )
     return (
         f"{_SETTING} is on but DATABASE_URL logs in to Postgres with a password. The password login (SCRAM) is "
         "computed outside the FIPS module. Use client-certificate login instead: cert in pg_hba.conf, sslidentity "
