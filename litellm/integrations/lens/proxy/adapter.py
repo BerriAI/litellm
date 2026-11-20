@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
 from typing import Annotated, Final
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 import jwt
@@ -175,13 +175,22 @@ async def browser_session(request: Request) -> UserAPIKeyAuth | None:
     return auth if auth.user_id == user_id else None
 
 
+def sign_in_redirect(sign_in_url: str) -> RedirectResponse:
+    # The dashboard login page sends any browser holding an unexpired `token` cookie straight back
+    # here, so a session this route refused has to be dropped or the two pages redirect forever
+    response: Final = RedirectResponse(sign_in_url, status_code=303)
+    response.delete_cookie("token", path="/")
+    response.delete_cookie("token", path=urlsplit(sign_in_url).path.removesuffix("/login"))
+    return response
+
+
 def login_redirect(
     connection: Connection | None, lens_url: str, identity: Identity | None, sign_in_url: str, now: int
 ) -> Response:
     if connection is None or not lens_url:
         raise HTTPException(503, _LOGIN_UNAVAILABLE)
     if identity is None:
-        return RedirectResponse(sign_in_url, status_code=303)
+        return sign_in_redirect(sign_in_url)
     token: Final = connection.login_token(identity, now)
     if token is None:
         raise HTTPException(403, "Lens requires an authenticated user or key")
