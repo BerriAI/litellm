@@ -46879,8 +46879,24 @@
           "title": "RejectMCPServerRequest",
           "type": "object"
         },
-        "UpdateMCPServerRequest": {
+        "UpdateMCPServerWithProfilesRequest": {
           "properties": {
+            "additional_auth": {
+              "anyOf": [
+                {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Replaces the server's extra upstream auth profiles. A profile keeps its stored secrets when it omits them, and an empty list or null removes all of them. Omit the field to keep them.",
+              "title": "Additional Auth"
+            },
             "alias": {
               "anyOf": [
                 {
@@ -47335,7 +47351,7 @@
           "required": [
             "server_id"
           ],
-          "title": "UpdateMCPServerRequest",
+          "title": "UpdateMCPServerWithProfilesRequest",
           "type": "object"
         },
         "UpdateMCPToolsetRequest": {
@@ -47825,7 +47841,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UpdateMCPServerRequest"
+                  "$ref": "#/components/schemas/UpdateMCPServerWithProfilesRequest"
                 }
               }
             },

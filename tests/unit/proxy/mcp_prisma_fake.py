@@ -7,7 +7,7 @@ from types import TracebackType
 from typing import Final
 
 from prisma.errors import UniqueViolationError
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 
 class FakeRow(BaseModel, extra="allow", frozen=True):
@@ -40,11 +40,14 @@ _SERVER_DEFAULTS: Final[Mapping[str, object]] = {
             "subject_token_type",
             "token_exchange_profile",
             "alias",
+            "mcp_info",
         )
     ),
 }
 
 
+_CREATED_ROWS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_IDENTIFIER_WHERE: Final = TypeAdapter(tuple[dict[str, list[dict[str, dict[str, str] | str | None]]], ...])
 _JSON_COLUMNS: Final = ("credentials", "mcp_info", "static_headers", "env", "env_vars")
 
 
@@ -78,9 +81,29 @@ class _ProfileTable:
         wanted: Final = condition if isinstance(condition, Mapping) else {"in": [condition]}
         assert set(wanted) == {"in"}, f"inexact match requested: {where}"
         found: Final = [FakeRow(**_as_read(row)) for row in self._store.profiles if row[column] in wanted["in"]]
-        if column == "profile_id_normalized":
+        if column in self._store.held_lookup_columns:
             await self._store.wait_for_concurrent_lookups()
         return found
+
+    async def delete_many(self, where: Mapping[str, object]) -> int:
+        kept: Final = [row for row in self._store.profiles if row["server_id"] != where["server_id"]]
+        deleted: Final = len(self._store.profiles) - len(kept)
+        self._store.profiles[:] = kept
+        return deleted
+
+    async def create_many(self, data: Sequence[Mapping[str, object]]) -> int:
+        if self._store.vanishing_profile_conflicts:
+            self._store.vanishing_profile_conflicts -= 1
+            raise _violation("profile_id_normalized")
+        for created in data:
+            if any(
+                row["profile_id"] == created["profile_id"]
+                or row["profile_id_normalized"] == created["profile_id_normalized"]
+                for row in self._store.profiles
+            ):
+                raise _violation("profile_id_normalized")
+            self._store.profiles.append({"created_at": self._store.next_created_at(), **created})
+        return len(data)
 
     def _with_server(self, row: Mapping[str, object], include: Mapping[str, object] | None) -> FakeRow:
         if not (include or {}).get("server"):
@@ -97,18 +120,16 @@ class _ServerTable:
         return FakeRow(**_as_read(row))
 
     def _apply_nested(self, server_id: str, nested: Mapping[str, object]) -> None:
-        if "deleteMany" in nested:
-            self._store.profiles[:] = [p for p in self._store.profiles if p["server_id"] != server_id]
-        for created in nested.get("create", ()):
-            clash: Final = [
-                p
-                for p in self._store.profiles
-                if p["profile_id"] == created["profile_id"]
+        for created in _CREATED_ROWS.validate_python(nested.get("create", ())):
+            if any(
+                p["profile_id"] == created["profile_id"]
                 or p["profile_id_normalized"] == created["profile_id_normalized"]
-            ]
-            if clash:
+                for p in self._store.profiles
+            ):
                 raise _violation("profile_id_normalized")
-            self._store.profiles.append({**created, "server_id": server_id})
+            self._store.profiles.append(
+                {"created_at": self._store.next_created_at(), **created, "server_id": server_id}
+            )
 
     def _find(self, server_id: object) -> dict[str, object] | None:
         return next((row for row in self._store.servers if row["server_id"] == server_id), None)
@@ -130,13 +151,13 @@ class _ServerTable:
     async def update(
         self, data: Mapping[str, object], where: Mapping[str, object], include: Mapping[str, object] | None = None
     ) -> FakeRow | None:
+        assert "auth_profiles" not in data, (
+            "Prisma runs nested writes in the order sent, so profiles are replaced by ordered statements"
+        )
         row: Final = self._find(where["server_id"])
         if row is None:
             return None
-        row.update({k: v for k, v in data.items() if k != "auth_profiles"})
-        nested: Final = data.get("auth_profiles")
-        if isinstance(nested, Mapping):
-            self._apply_nested(str(row["server_id"]), nested)
+        row.update(data)
         return self._as_row(row)
 
     async def find_unique(
@@ -146,7 +167,20 @@ class _ServerTable:
         return None if row is None else self._as_row(row)
 
     async def find_first(self, where: Mapping[str, object] | None = None, **_: object) -> FakeRow | None:
-        return None
+        if not self._store.identifier_checks or where is None:
+            return None
+        name_match, _approval, *own_row_guards = _IDENTIFIER_WHERE.validate_python(where["AND"])
+        wanted: Final = str(name_match["OR"][0]["server_name"]["equals"]).lower()
+        excluded: Final = frozenset(guard["NOT"][0]["server_id"] for guard in own_row_guards)
+        return next(
+            (
+                self._as_row(row)
+                for row in self._store.servers
+                if row["server_id"] not in excluded
+                and wanted in {str(row.get("server_name") or "").lower(), str(row.get("alias") or "").lower()}
+            ),
+            None,
+        )
 
     async def find_many(
         self, where: Mapping[str, object] | None = None, include: Mapping[str, object] | None = None, **_: object
@@ -199,16 +233,27 @@ class FakeMcpPrisma:
         self.db = _Db(self)
         self.writer_db = self.db
         self._hold_until: int | None = None
+        self.held_lookup_columns: frozenset[str] = frozenset()
         self._arrived = 0
         self._release: asyncio.Event | None = None
         self._writes = 0
+        self._profile_creates = 0
+        self.identifier_checks = False
+        self.vanishing_profile_conflicts = 0
 
     def next_updated_at(self) -> datetime:
         self._writes += 1
         return datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=self._writes)
 
-    def hold_profile_lookups_until(self, concurrent_lookups: int) -> None:
+    def next_created_at(self) -> datetime:
+        self._profile_creates += 1
+        return datetime(2025, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=self._profile_creates)
+
+    def hold_profile_lookups_until(
+        self, concurrent_lookups: int, columns: frozenset[str] = frozenset({"profile_id_normalized"})
+    ) -> None:
         self._hold_until = concurrent_lookups
+        self.held_lookup_columns = columns
         self._release = asyncio.Event()
 
     async def wait_for_concurrent_lookups(self) -> None:

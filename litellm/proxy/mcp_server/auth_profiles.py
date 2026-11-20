@@ -1,5 +1,6 @@
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -203,16 +204,20 @@ def _credential_fields(profile: MCPAuthProfile) -> Mapping[str, str | None]:
     return {"authentication_token": profile.authentication_token}
 
 
-def _missing_credential(profile: MCPAuthProfile) -> str | None:
-    return next((field for field, value in _credential_fields(profile).items() if not value), None)
+def _missing_credential(profile: MCPAuthProfile, kept: AbstractSet[str]) -> str | None:
+    return next(
+        (field for field, value in _credential_fields(profile).items() if not value and field not in kept), None
+    )
 
 
-def profile_missing_credential(server: str, profiles: Sequence[MCPAuthProfile]) -> MalformedProfile | None:
+def profile_missing_credential(
+    server: str, profiles: Sequence[MCPAuthProfile], kept: Mapping[str, AbstractSet[str]] = MappingProxyType({})
+) -> MalformedProfile | None:
     return next(
         (
             MalformedProfile(server, position, f"profile '{profile.id}' needs {field}")
             for position, profile in enumerate(profiles)
-            if (field := _missing_credential(profile)) is not None
+            if (field := _missing_credential(profile, kept.get(profile.id, frozenset()))) is not None
         ),
         None,
     )

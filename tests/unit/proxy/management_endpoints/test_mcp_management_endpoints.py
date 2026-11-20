@@ -11995,6 +11995,19 @@ def test_a_profile_without_its_credential_is_refused_with_400_and_stores_nothing
     assert (profile_api.prisma.servers, profile_api.prisma.profiles) == ([], [])
 
 
+def test_a_put_adding_a_static_profile_without_a_token_is_refused_with_400(profile_api: _ProfileApi) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    admin.post("/v1/mcp/server", json=_server_body("tickets"))
+
+    response: Final = admin.put(
+        "/v1/mcp/server",
+        json={"server_id": "tickets", "additional_auth": [{"id": "tickets-bots", "auth_type": "bearer_token"}]},
+    )
+
+    assert response.status_code == 400, response.text
+    assert profile_api.prisma.profiles == []
+
+
 @pytest.mark.parametrize(
     "bad_profile",
     [
@@ -12023,7 +12036,7 @@ def test_a_profile_without_its_credential_is_refused_with_400_and_stores_nothing
         pytest.param({"id": "p1", "auth_type": "oauth2_token_exchange"}, id="token-exchange"),
     ],
 )
-@pytest.mark.parametrize("verb", ["post"])
+@pytest.mark.parametrize("verb", ["post", "put"])
 def test_a_profile_that_needs_a_person_or_has_a_bad_id_is_refused_with_400_before_any_write(
     profile_api: _ProfileApi, bad_profile: dict[str, object], verb: str
 ) -> None:

@@ -159,6 +159,9 @@ if TYPE_CHECKING:
         def litellm_invitationlink(self) -> TableActions[prisma_models.LiteLLM_InvitationLink]: ...
 
         @property
+        def litellm_mcpauthprofiletable(self) -> TableActions[prisma_models.LiteLLM_MCPAuthProfileTable]: ...
+
+        @property
         def litellm_mcpservertable(self) -> TableActions[prisma_models.LiteLLM_MCPServerTable]: ...
 
         @property

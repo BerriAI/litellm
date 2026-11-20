@@ -1671,6 +1671,15 @@ class NewMCPServerWithProfilesRequest(NewMCPServerRequest):  # frozen-ok: endpoi
     )
 
 
+class UpdateMCPServerWithProfilesRequest(UpdateMCPServerRequest):  # frozen-ok: endpoints stamp fields on it
+    additional_auth: Sequence[Mapping[str, object]] | None = Field(
+        default=None,
+        exclude=True,
+        description="Replaces the server's extra upstream auth profiles. A profile keeps its stored secrets when "
+        "it omits them, and an empty list or null removes all of them. Omit the field to keep them.",
+    )
+
+
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
     mcp_server_ids: list[str]
 
