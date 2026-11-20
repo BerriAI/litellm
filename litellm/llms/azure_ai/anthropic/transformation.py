@@ -7,7 +7,9 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig, admitted_extra_body
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -15,7 +17,7 @@ from litellm.types.router import GenericLiteLLMParams
 _PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
+def _promote_extra_body_to_optional_params(optional_params: dict, drop_params: object) -> AnthropicError | None:
     """Promote anthropic-native passthrough keys out of ``extra_body``.
 
     ``azure_ai`` is an OpenAI-compatible provider, so non-OpenAI kwargs like
@@ -28,12 +30,17 @@ def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
     """
     extra_body: Final = optional_params.get("extra_body")
     if not isinstance(extra_body, dict) or not extra_body:
-        return
+        return None
     admitted: Final = admitted_extra_body(
-        _PARAMS_ADAPTER.validate_python(extra_body), _PARAMS_ADAPTER.validate_python(optional_params)
+        _PARAMS_ADAPTER.validate_python(extra_body),
+        _PARAMS_ADAPTER.validate_python(optional_params),
+        drops_unsupported_params(drop_params),
     )
+    if isinstance(admitted, AnthropicError):
+        return admitted
     optional_params.update(admitted)
     optional_params.pop("extra_body", None)
+    return None
 
 
 class AzureAnthropicConfig(AnthropicConfig):
@@ -66,8 +73,6 @@ class AzureAnthropicConfig(AnthropicConfig):
         1. API key via 'api-key' header
         2. Azure AD token via 'Authorization: Bearer <token>' header
         """
-        _promote_extra_body_to_optional_params(optional_params)
-
         # Convert dict to GenericLiteLLMParams if needed
         if isinstance(litellm_params, dict):
             # Ensure api_key is included if provided
@@ -79,6 +84,10 @@ class AzureAnthropicConfig(AnthropicConfig):
             # Set api_key if provided and not already set
             if api_key and not litellm_params_obj.api_key:
                 litellm_params_obj.api_key = api_key
+
+        promotion_error: Final = _promote_extra_body_to_optional_params(optional_params, litellm_params_obj.drop_params)
+        if promotion_error is not None:
+            raise promotion_error
 
         # Use Azure authentication logic
         headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
@@ -126,7 +135,11 @@ class AzureAnthropicConfig(AnthropicConfig):
         Transform request using parent AnthropicConfig, then remove unsupported params.
         Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
         """
-        _promote_extra_body_to_optional_params(optional_params)
+        promotion_error: Final = _promote_extra_body_to_optional_params(
+            optional_params, _PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params")
+        )
+        if promotion_error is not None:
+            raise promotion_error
 
         data: Final = super().transform_request(
             model=model,

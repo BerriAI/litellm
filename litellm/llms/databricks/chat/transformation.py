@@ -284,6 +284,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         complete_url: Final = f"{url_base}/chat/completions"
         return complete_url
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body
+
     def get_supported_openai_params(self, model: str | None = None) -> list[str]:
         return [
             "stream",

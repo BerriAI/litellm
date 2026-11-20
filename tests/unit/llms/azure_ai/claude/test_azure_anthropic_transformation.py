@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -385,7 +387,7 @@ class TestAzureAnthropicConfig:
 
         assert result["output_config"] == {"effort": "high"}
 
-    def test_extra_body_promotion_never_replaces_the_model_conversation_or_tools(self) -> None:
+    def test_extra_body_promotion_drops_guarded_keys_under_drop_params(self) -> None:
         result = AzureAnthropicConfig().transform_request(
             model="claude-opus-4-6",
             messages=[{"role": "user", "content": "Hello"}],
@@ -401,7 +403,7 @@ class TestAzureAnthropicConfig:
                     "max_tokens": 4096,
                 },
             },
-            litellm_params={"api_key": "test-key"},
+            litellm_params={"api_key": "test-key", "drop_params": True},
             headers={"api-key": "test-key", "anthropic-version": "2023-06-01"},
         )
 
@@ -410,6 +412,25 @@ class TestAzureAnthropicConfig:
         assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
         assert {"system", "tools", "stream"}.isdisjoint(result)
         assert result["stop_sequences"] == ["5"]
+
+    def test_extra_body_promotion_answers_400_for_guarded_keys_without_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+
+        with pytest.raises(AnthropicError, match="extra_body can't set system, tools") as raised:
+            AzureAnthropicConfig().transform_request(
+                model="claude-opus-4-6",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={
+                    "max_tokens": 100,
+                    "extra_body": {"system": "unchecked", "tools": [{"name": "unchecked"}], "stop_sequences": ["5"]},
+                },
+                litellm_params={"api_key": "test-key"},
+                headers={"api-key": "test-key", "anthropic-version": "2023-06-01"},
+            )
+
+        assert raised.value.status_code == 400
 
     def test_legacy_thinking_upgrade_keeps_caller_effort_from_extra_body(self, local_model_cost_map):
         config = AzureAnthropicConfig()

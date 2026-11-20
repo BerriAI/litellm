@@ -2,7 +2,7 @@ import asyncio, base64, importlib
 import copy
 import json
 import uuid
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -2066,7 +2066,9 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     )
 
 
-def test_bedrock_invoke_claude_extra_body_never_replaces_the_model_conversation_or_tools() -> None:
+def _bedrock_invoke_claude_with_extra_body(
+    extra_body: Mapping[str, object], drop_params: bool
+) -> tuple[httpx.Request, ...]:
     captured_requests: Final[list[httpx.Request]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -2094,20 +2096,43 @@ def test_bedrock_invoke_claude_extra_body_never_replaces_the_model_conversation_
             aws_region_name="us-east-1",
             client=client,
             max_tokens=16,
-            extra_body={
-                "model": "claude-opus-5-5",
-                "messages": [{"role": "user", "content": "unchecked"}],
-                "system": "unchecked",
-                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
-                "stop_sequences": ["5"],
-                "max_tokens": 4096,
-            },
+            drop_params=drop_params,
+            extra_body=dict(extra_body),
         )
     finally:
         client.close()
+    return tuple(captured_requests)
 
-    request_body: Final = json.loads(captured_requests[0].content)
+
+_GUARDED_EXTRA_BODY: Final = MappingProxyType(
+    {
+        "model": "claude-opus-5-5",
+        "messages": [{"role": "user", "content": "unchecked"}],
+        "system": "unchecked",
+        "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+        "stop_sequences": ["5"],
+        "max_tokens": 4096,
+    }
+)
+
+
+def test_bedrock_invoke_claude_extra_body_drops_guarded_keys_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body(_GUARDED_EXTRA_BODY, drop_params=True)
+
+    request_body: Final = json.loads(requests[0].content)
     assert request_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
     assert {"model", "system", "tools"}.isdisjoint(request_body)
     assert request_body["stop_sequences"] == ["5"]
     assert request_body["max_tokens"] == 16
+
+
+def test_bedrock_invoke_claude_extra_body_answers_400_for_guarded_keys_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages, model, system, tools"):
+        _bedrock_invoke_claude_with_extra_body(_GUARDED_EXTRA_BODY, drop_params=False)
