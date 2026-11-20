@@ -158,12 +158,16 @@ fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
 }
 
 /// When the `PGSSLCERT` and `PGSSLKEY` files were last written and how long they are, or that they are missing, so a
-/// pool can tell when the client certificate it was built from changed.
+/// pool can tell when the client certificate it was built from changed. Without native-tls the options never hold the
+/// files' contents, since sqlx reads both on each connection, so there is nothing to follow.
 #[derive(PartialEq)]
 pub(crate) struct ClientFiles([Option<(std::time::SystemTime, u64)>; 2]);
 
 impl ClientFiles {
     pub(crate) fn now() -> Self {
+        if !cfg!(feature = "native-tls") {
+            return Self([None, None]);
+        }
         let stamp = |name: &str| {
             let metadata = std::fs::metadata(std::env::var_os(name)?).ok()?;
             Some((metadata.modified().ok()?, metadata.len()))
