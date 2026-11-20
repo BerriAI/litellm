@@ -69,6 +69,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
                 litellm_completion_request={"model": "test"},
                 request_input="hi",
                 responses_api_request={"previous_response_id": "123"},
+                previous_response_id="123",
                 litellm_trace_id="original-trace",
             )
 

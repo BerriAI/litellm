@@ -9,6 +9,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -43,6 +44,22 @@ def _with_the_tool_choice_sent(
     return {**responses_api_request, "tool_choice": None}
 
 
+async def _with_previous_turns(
+    previous_response_id: str,
+    litellm_completion_request: Mapping[str, object],
+    responses_api_request: ResponsesAPIOptionalRequestParams,
+    request_kwargs: Mapping[str, object],
+) -> Mapping[str, object]:
+    return _REQUEST_KWARGS_ADAPTER.validate_python(
+        await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id=previous_response_id,
+            litellm_completion_request=dict(litellm_completion_request),
+            instructions=responses_api_request.get("instructions"),
+            request_kwargs=request_kwargs,
+        )
+    )
+
+
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
@@ -64,7 +81,7 @@ class LiteLLMCompletionTransformationHandler:
         bridged_request: Final[ResponsesAPIOptionalRequestParams] = (
             {**responses_api_request, "tools": list(hoisted.tools)} if hoisted.hoisted else responses_api_request
         )
-        litellm_completion_request: Final[dict] = (
+        litellm_completion_request: Final = _REQUEST_KWARGS_ADAPTER.validate_python(
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
                 input=bridged_input,
@@ -78,18 +95,33 @@ class LiteLLMCompletionTransformationHandler:
         echoed_request: Final = _with_the_tool_choice_sent(
             bridged_request, custom_llm_provider, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
         )
+        previous_response_id: Final[str | None] = echoed_request.get("previous_response_id")
 
         if _is_async:
             return self.async_response_api_handler(
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
                 responses_api_request=echoed_request,
+                previous_response_id=previous_response_id,
                 **kwargs,
             )
 
+        completion_request: Final[Mapping[str, object]] = (
+            _REQUEST_KWARGS_ADAPTER.validate_python(
+                run_async_function(
+                    _with_previous_turns,
+                    previous_response_id,
+                    litellm_completion_request,
+                    echoed_request,
+                    _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                )
+            )
+            if previous_response_id
+            else litellm_completion_request
+        )
         completion_args: Final = {}
         completion_args.update(kwargs)
-        completion_args.update(litellm_completion_request)
+        completion_args.update(completion_request)
         completion_args["_skip_responses_api_bridge"] = True
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
@@ -123,20 +155,24 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_request: dict,
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
+        previous_response_id: str | None,
         **kwargs,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
-        previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")
-        if previous_response_id:
-            litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
-                previous_response_id=previous_response_id,
-                litellm_completion_request=litellm_completion_request,
-                instructions=responses_api_request.get("instructions"),
-                request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+        request_fields: Final = _REQUEST_KWARGS_ADAPTER.validate_python(litellm_completion_request)
+        completion_request: Final[Mapping[str, object]] = (
+            await _with_previous_turns(
+                previous_response_id,
+                request_fields,
+                responses_api_request,
+                _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
             )
+            if previous_response_id
+            else request_fields
+        )
 
         acompletion_args: Final = {}
         acompletion_args.update(kwargs)
-        acompletion_args.update(litellm_completion_request)
+        acompletion_args.update(completion_request)
         acompletion_args["_skip_responses_api_bridge"] = True
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(

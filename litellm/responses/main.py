@@ -390,13 +390,19 @@ async def aresponses_api_with_mcp(
             )
 
             if tool_results:
-                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(call_params)
+                chains_on_first_round: Final = not LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(
+                    call_params
+                ) and provider_stores_the_conversation(
+                    model,
+                    custom_llm_provider,
+                    {**_REQUEST_KWARGS.validate_python(kwargs), "previous_response_id": previous_response_id},
+                )
 
                 follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                     response=response,
                     tool_results=tool_results,
                     original_input=input,
-                    preserve_reasoning=persistence_disabled,
+                    preserve_reasoning=not chains_on_first_round,
                 )
 
                 # Prepare parameters for follow-up call (restores original stream setting)
@@ -415,7 +421,7 @@ async def aresponses_api_with_mcp(
                     follow_up_input=follow_up_input,
                     model=model,
                     all_tools=all_tools,
-                    response_id=previous_response_id if persistence_disabled else response.id,
+                    response_id=response.id if chains_on_first_round else previous_response_id,
                     **follow_up_call_params,
                 )
 
@@ -513,6 +519,7 @@ def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None)
 
 
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter(list[str])
+_REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
 
 
 def _explicitly_dropped_fields(kwargs: Mapping[str, object]) -> frozenset[str]:

@@ -40,6 +40,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.exceptions import BadRequestError
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
@@ -295,6 +296,24 @@ def _attribute_fields(value: object) -> dict[str, object]:
     if not hasattr(value, "__dict__"):
         return {}
     return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
+
+
+def _previous_response_not_found(previous_response_id: str, model: str, provider: str | None) -> BadRequestError:
+    message: Final = (
+        f"Previous response with id '{previous_response_id}' not found. LiteLLM rebuilds this model's conversation "
+        "from its spend logs, which needs a database and `store_prompts_in_spend_logs: true`."
+    )
+    return BadRequestError(
+        message=message,
+        model=model,
+        llm_provider=provider,
+        body={
+            "message": message,
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "previous_response_not_found",
+        },
+    )
 
 
 def _input_item_role(input_item: Mapping[str, object]) -> str:
@@ -1047,6 +1066,8 @@ class LiteLLMCompletionResponsesConfig:
         )
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
+        if previous_response_id and not stored_messages:
+            raise _previous_response_not_found(previous_response_id, model, provider)
         replayed_messages: Final = (
             LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
                 stored_messages, CompletionRoute.model_validate(litellm_completion_request)
@@ -1076,9 +1097,6 @@ class LiteLLMCompletionResponsesConfig:
             else _messages[:instructions_end]
         )
 
-        # If session messages are empty (e.g., no database in test environment),
-        # we still need to process the new input messages
-        # Store original _messages before combining for safety check
         original_new_messages: Final = _messages.copy() if _messages else []
 
         combined_messages = [*leading_system_messages, *session_messages, *_messages[instructions_end:]]
