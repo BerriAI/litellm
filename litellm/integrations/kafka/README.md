@@ -1,8 +1,9 @@
 # Kafka request logging
 
 Export LiteLLM's `StandardLoggingPayload` as UTF-8 JSON Kafka records. The same
-configuration works with Apache Kafka and managed Kafka services, including
-[Alibaba Cloud ApsaraMQ for Kafka](oss-tables.md).
+transport settings work with Apache Kafka and managed Kafka-compatible services.
+See the [managed services guide](managed-services.md) for Confluent Cloud,
+Amazon MSK, Azure Event Hubs, Aiven and Alibaba Cloud examples.
 
 ## Install and configure
 
@@ -49,9 +50,11 @@ litellm.callbacks = ["kafka"]
 For explicit SDK lifecycle management, construct
 `litellm.integrations.kafka.KafkaLogger`, put that instance in `litellm.callbacks`,
 and call `logger.close()` after draining your application's logging tasks.
-`await logger.flush_queue()` waits for delivery of records already handed to the
-producer, within `flush_timeout`. It does not drain callbacks still waiting in
-LiteLLM's logging worker.
+Async applications can use `await logger.aclose()` without occupying their
+default executor. `await logger.flush_queue()` drains already submitted Kafka
+preparation jobs and asks the producer to flush, sharing one `flush_timeout`
+budget. It does not drain callbacks still waiting in LiteLLM's logging worker.
+The SDK exit handler drains the existing logging worker before closing Kafka.
 
 Explicit configuration takes precedence over environment defaults. The supported
 defaults are `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPIC`, `KAFKA_SECURITY_PROTOCOL`,
@@ -76,9 +79,13 @@ when the first record is produced.
 | `linger_ms` | `20` | Producer batching delay in milliseconds |
 | `batch_size` | `65536` | Producer batch size in bytes |
 | `queue_max_messages` | `10000` | Maximum queued producer records per worker |
+| `callback_queue_max_messages` | `128` | Maximum waiting async preparation jobs, in addition to one active job |
+| `callback_timeout_ms` | `100` | Maximum wait for async preparation before other callbacks continue |
 | `queue_max_kbytes` | `65536` | Maximum queued producer value bytes in KiB per worker |
 | `message_max_bytes` | `1000000` | Client record size limit, align with broker and topic limits |
 | `request_timeout_ms` | `10000` | Broker acknowledgement timeout |
+| `retry_backoff_ms` | `100` | Initial native produce retry backoff |
+| `retry_backoff_max_ms` | `1000` | Maximum native produce retry backoff |
 | `delivery_timeout_ms` | `30000` | Total delivery deadline including retries and batching |
 | `enable_idempotence` | `true` | Broker deduplication of retries within a producer session |
 | `flush_timeout` | `5.0` | Maximum seconds for a flush or close |
@@ -87,25 +94,46 @@ TLS verifies both the certificate chain and broker hostname. SASL passwords are
 passed to the Kafka client and masked in configuration representations. The
 integration does not support Kerberos or OAuth token refresh.
 
-Each process lazily creates one reusable producer per logger and a daemon thread
-that handles delivery reports. The native Kafka client batches, compresses and
-retries asynchronously. Async callbacks move payload preparation and enqueueing
-to a thread. They do not wait for broker acknowledgements. Serialization,
-redaction and buffering still use CPU and memory, so benchmark representative
-payload sizes and concurrency before rollout. Queue limits apply per producer,
-so multiply them by the number of proxy workers. These limits supplement the
-existing LiteLLM logging worker limits.
+Each logger lazily creates a reusable producer and a daemon poll thread. Async
+preparation has its own bounded queue and daemon worker, separate from the
+application's default executor. A full preparation queue rejects the new event.
+If preparation exceeds `callback_timeout_ms`, other callbacks can continue.
+Queued work is cancelled when possible. Already running work may still finish,
+so a preparation timeout does not by itself mean a record was dropped.
+
+The native client batches, compresses and retries retriable transport/broker
+errors within `delivery_timeout_ms`. There is no application retry loop around
+`produce()` and no wait for broker acknowledgements in request callbacks. A full
+native queue drops the new event instead of blocking or retrying the enqueue.
+Authentication, authorization and other terminal failures are not retried by
+LiteLLM. Configure both delivery deadlines and backoff for your service's
+throttling behavior.
+
+Serialization, redaction and buffering still use CPU and memory, so benchmark
+representative payload sizes and concurrency. The preparation limit counts
+Python jobs, while `queue_max_kbytes` bounds serialized values in the native
+queue. Neither limit represents total process memory. Limits apply per logger
+and worker and supplement the existing LiteLLM logging worker limits.
 
 This exporter is best effort. A full queue, oversized record, expired delivery,
 invalid record or failed producer drops the event without changing the model
 response. Warnings contain fixed reason codes and cumulative drop counts, with
 rate limiting. Failures also use LiteLLM's callback failure metric when enabled.
 An explicit logger exposes `statistics.accepted`, `statistics.delivered` and
-`statistics.dropped`. Accepted means queued locally, delivered means acknowledged
-by the broker. Dropped includes pre-enqueue and delivery failures.
+`statistics.dropped`. Accepted means queued in the native producer, delivered
+means acknowledged by the broker, and dropped includes pre-enqueue and terminal
+delivery failures. `statistics.delivery_failed` counts that latter subset.
+`statistics.callback_timeouts` counts preparation deadlines, including work that
+may subsequently succeed. `statistics.unconfirmed` records messages still
+unacknowledged at the final shutdown flush, or outstanding messages when that
+flush fails. It is not proof that the broker never received those messages.
 
-Graceful proxy shutdown drains logging work, then closes Kafka producers within
-the remaining shutdown budget. Process crashes, forced termination or a broker
+Graceful proxy shutdown drains logging work and finishes the existing PostgreSQL
+writer cleanup before closing Kafka. Preparation drain and final producer flush
+share the remaining shutdown budget. Neither producer construction nor the
+application's default executor can hold up Kafka's asynchronous close. Native
+cleanup that outlives the deadline continues on its daemon thread. A timed-out
+close does not claim all messages were delivered. Process crashes, forced termination or a broker
 outage longer than the delivery deadline can lose records. Idempotence does not
 provide a durable outbox or end-to-end exactly-once delivery. Consumers should
 retain Kafka coordinates and deduplicate replayed records.

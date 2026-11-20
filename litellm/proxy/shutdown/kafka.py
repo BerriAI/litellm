@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import Final
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.integrations.kafka import KafkaLogger
 
 
@@ -15,4 +16,8 @@ async def close_kafka_loggers(timeout: float) -> None:
     loggers: Final = MappingProxyType(
         {id(callback): callback for callback in callbacks if isinstance(callback, KafkaLogger)}
     )
-    await asyncio.gather(*(asyncio.to_thread(logger.close, timeout) for logger in loggers.values()))
+    results: Final = await asyncio.gather(
+        *(logger.aclose(timeout) for logger in loggers.values()), return_exceptions=True
+    )
+    if any(isinstance(result, BaseException) for result in results):
+        verbose_proxy_logger.warning("Kafka logging cleanup failed; continuing proxy shutdown")

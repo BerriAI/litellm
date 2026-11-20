@@ -77,6 +77,8 @@ def producer_config(params: KafkaInitParams) -> Mapping[str, KafkaConfigValue]:
             "message.max.bytes": params.message_max_bytes,
             "delivery.timeout.ms": params.delivery_timeout_ms,
             "request.timeout.ms": params.request_timeout_ms,
+            "retry.backoff.ms": params.retry_backoff_ms,
+            "retry.backoff.max.ms": params.retry_backoff_max_ms,
             "enable.idempotence": params.enable_idempotence,
             "acks": "all",
             "log_level": 0,

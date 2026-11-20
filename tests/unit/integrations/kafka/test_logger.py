@@ -2,8 +2,9 @@ import asyncio
 import json
 import sys
 import threading
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Generator, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
@@ -49,10 +50,13 @@ class Rejected:
 
 
 class RecordingProducer:
-    def __init__(self, *, full: bool = False, rejected: bool = False, fail_flush: bool = False) -> None:
+    def __init__(
+        self, *, full: bool = False, rejected: bool = False, fail_flush: bool = False, pending_flush: bool = False
+    ) -> None:
         self.full: Final = full
         self.rejected: Final = rejected
         self.fail_flush: Final = fail_flush
+        self.pending_flush: Final = pending_flush
         self.messages: tuple[Message, ...] = ()
         self.waiting: tuple[Message, ...] = ()
         self.flush_timeouts: tuple[float, ...] = ()
@@ -76,6 +80,8 @@ class RecordingProducer:
         self.flush_timeouts = (*self.flush_timeouts, timeout)
         if self.fail_flush:
             raise RuntimeError("a client error containing credentials must not be logged")
+        if self.pending_flush:
+            return len(self.waiting)
         waiting: Final = self.waiting
         self.waiting = ()
         error: Final[DeliveryError | None] = Rejected() if self.rejected else None
@@ -100,7 +106,9 @@ def configured(
 ) -> Generator[tuple[KafkaLogger, RecordingFactory]]:
     factory: Final = RecordingFactory(producer)
     logger: Final = KafkaLogger(
-        KafkaInitParams.model_validate({"bootstrap_servers": "broker:9092", "topic": "events", **(settings or {})}),
+        KafkaInitParams.model_validate(
+            {"bootstrap_servers": "broker:9092", "topic": "events", "callback_timeout_ms": 5000, **(settings or {})}
+        ),
         producer_factory=factory,
         start_polling=False,
     )
@@ -397,3 +405,162 @@ def test_enabling_kafka_without_the_optional_client_explains_how_to_install_it(m
     monkeypatch.setitem(sys.modules, "confluent_kafka", None)
     with pytest.raises(ImportError, match=r"Install litellm\[kafka\]"):
         KafkaLogger(KafkaInitParams(bootstrap_servers="broker:9092", topic="events"))
+
+
+@asynccontextmanager
+async def saturated_default_executor() -> AsyncGenerator[None]:
+    loop: Final = asyncio.get_running_loop()
+    entered: Final = asyncio.Event()
+    release: Final = threading.Event()
+
+    def occupy() -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10), "executor test did not release its blocked dependency"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        loop.set_default_executor(executor)
+        occupied: Final = loop.run_in_executor(None, occupy)
+        await asyncio.wait_for(entered.wait(), 5)
+        try:
+            yield
+        finally:
+            release.set()
+            await occupied
+
+
+def test_async_logging_does_not_wait_for_the_applications_default_executor() -> None:
+    async def run() -> None:
+        producer: Final = RecordingProducer()
+        with configured(producer) as (logger, _):
+            async with saturated_default_executor():
+                await asyncio.wait_for(logger.async_log_success_event(event(), None, NOW, NOW), 5)
+                assert len(producer.messages) == 1
+
+    asyncio.run(run())
+
+
+def test_proxy_kafka_shutdown_does_not_wait_for_the_applications_default_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.shutdown.kafka import close_kafka_loggers
+
+    async def run() -> None:
+        producer: Final = RecordingProducer()
+        with configured(producer) as (logger, _):
+            logger.log_success_event(event(), None, NOW, NOW)
+            monkeypatch.setattr(litellm, "callbacks", [logger])
+            async with saturated_default_executor():
+                await asyncio.wait_for(close_kafka_loggers(0), 5)
+                assert logger.statistics.delivered == 1
+
+    asyncio.run(run())
+
+
+def test_shutdown_does_not_wait_for_or_publish_after_an_inflight_producer_constructor() -> None:
+    producer: Final = RecordingProducer()
+    entered: Final = threading.Event()
+    release: Final = threading.Event()
+    closed: Final = threading.Event()
+
+    def factory(configuration: Mapping[str, KafkaConfigValue]) -> RecordingProducer:
+        entered.set()
+        assert release.wait(10), "constructor test did not release its blocked dependency"
+        return producer
+
+    logger: Final = KafkaLogger(KafkaInitParams(bootstrap_servers="broker:9092", topic="events"), factory)
+
+    def close() -> None:
+        logger.close(0)
+        closed.set()
+
+    publisher: Final = threading.Thread(target=logger.log_success_event, args=(event(), None, NOW, NOW), daemon=True)
+    closer: Final = threading.Thread(target=close, daemon=True)
+    publisher.start()
+    try:
+        assert entered.wait(5)
+        closer.start()
+        assert closed.wait(5), "close waited on the blocked producer constructor"
+    finally:
+        release.set()
+        publisher.join(5)
+        closer.join(5)
+        logger.close(0)
+
+    assert producer.messages == ()
+    assert logger.statistics.accepted == 0
+    assert logger.statistics.dropped == 1
+
+
+def test_close_does_not_report_an_empty_queue_after_an_unconfirmed_flush() -> None:
+    producer: Final = RecordingProducer(pending_flush=True)
+    with configured(producer) as (logger, _):
+        logger.log_success_event(event(), None, NOW, NOW)
+        logger.close(0)
+
+        assert logger.sink.flush() == 1
+        assert logger.statistics.unconfirmed == 1
+        assert logger.statistics.delivered == 0
+        assert logger.statistics.dropped == 0
+
+
+def test_a_stalled_kafka_constructor_does_not_hold_the_next_accounting_callback() -> None:
+    producer: Final = RecordingProducer()
+    entered: Final = threading.Event()
+    release: Final = threading.Event()
+    accounted: Final = threading.Event()
+
+    def factory(configuration: Mapping[str, KafkaConfigValue]) -> RecordingProducer:
+        entered.set()
+        assert release.wait(10), "test did not release its blocked Kafka client"
+        return producer
+
+    logger: Final = KafkaLogger(
+        KafkaInitParams(bootstrap_servers="broker:9092", topic="events", callback_timeout_ms=1), factory
+    )
+    publisher: Final = threading.Thread(target=logger.log_success_event, args=(event(), None, NOW, NOW), daemon=True)
+
+    async def callback_chain() -> None:
+        await logger.async_log_success_event(event(), None, NOW, NOW)
+        accounted.set()
+
+    publisher.start()
+    try:
+        assert entered.wait(5)
+        asyncio.run(asyncio.wait_for(callback_chain(), 5))
+        assert accounted.is_set()
+        assert logger.statistics.callback_timeouts == 1
+        assert not release.is_set()
+    finally:
+        release.set()
+        publisher.join(5)
+        logger.close()
+
+
+def test_shutdown_accounts_for_a_produce_call_that_finishes_after_the_close_deadline() -> None:
+    entered: Final = threading.Event()
+    release: Final = threading.Event()
+
+    class GatedProducer(RecordingProducer):
+        def produce(self, topic: str, *, value: bytes, key: bytes | None, on_delivery: DeliveryCallback) -> None:
+            entered.set()
+            assert release.wait(5), "test did not release its blocked produce call"
+            super().produce(topic, value=value, key=key, on_delivery=on_delivery)
+
+    producer: Final = GatedProducer(pending_flush=True)
+    logger: Final = KafkaLogger(
+        KafkaInitParams(bootstrap_servers="broker:9092", topic="events"), RecordingFactory(producer)
+    )
+    publisher: Final = threading.Thread(target=logger.log_success_event, args=(event(), None, NOW, NOW), daemon=True)
+    publisher.start()
+    try:
+        assert entered.wait(5)
+        logger.close(0)
+    finally:
+        release.set()
+        publisher.join(5)
+        logger.close(0)
+
+    assert logger.statistics.accepted == 1
+    assert logger.statistics.delivered == 0
+    assert logger.statistics.unconfirmed == 1
+    assert logger.sink.flush() == 1

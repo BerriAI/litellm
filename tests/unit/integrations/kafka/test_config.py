@@ -79,12 +79,16 @@ def test_queue_limits_and_delivery_deadline_reach_the_client() -> None:
         queue_max_kbytes=1024,
         delivery_timeout_ms=4000,
         request_timeout_ms=1000,
+        retry_backoff_ms=200,
+        retry_backoff_max_ms=1500,
     )
     config: Final = producer_config(params)
 
     assert config["queue.buffering.max.messages"] == params.queue_max_messages
     assert config["queue.buffering.max.kbytes"] == params.queue_max_kbytes
     assert config["delivery.timeout.ms"] == params.delivery_timeout_ms
+    assert config["retry.backoff.ms"] == params.retry_backoff_ms
+    assert config["retry.backoff.max.ms"] == params.retry_backoff_max_ms
     assert config["acks"] == "all"
     assert config["enable.idempotence"] is params.enable_idempotence
 
@@ -97,10 +101,13 @@ def test_queue_limits_and_delivery_deadline_reach_the_client() -> None:
         {"bootstrap_servers": ""},
         {"queue_max_messages": 0},
         {"queue_max_kbytes": 0},
+        {"callback_queue_max_messages": 0},
+        {"callback_timeout_ms": 0},
         {"security_protocol": "SASL_SSL"},
         {"sasl_password": "unused-password"},
         {"ssl_certificate_location": "/certificates/client.pem"},
         {"delivery_timeout_ms": 100, "request_timeout_ms": 100},
+        {"retry_backoff_ms": 500, "retry_backoff_max_ms": 100},
         {"flush_timeout": float("inf")},
         {"unsupported_option": "unrecognized"},
     ),

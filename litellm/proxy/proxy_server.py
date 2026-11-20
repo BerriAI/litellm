@@ -1498,9 +1498,6 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         await _drain_audit_tasks_on_shutdown()
 
     await drain_post_call_redis_batches()
-    from litellm.proxy.shutdown.kafka import close_kafka_loggers
-
-    await close_kafka_loggers(GracefulShutdownManager.remaining(5.0))
     if litellm.cache is not None:
         await litellm.cache.disconnect()
 
@@ -1513,6 +1510,10 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     # interval of enterprise billing data is dropped on every restart
     if shutdown_billing_metrics_recorder is not None:
         shutdown_billing_metrics_recorder()
+
+    from litellm.proxy.shutdown.kafka import close_kafka_loggers
+
+    await close_kafka_loggers(GracefulShutdownManager.remaining(5.0))
 
     if "litellm.integrations.langfuse.langfuse_sdk" in sys.modules:
         try:

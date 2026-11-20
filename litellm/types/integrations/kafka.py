@@ -23,10 +23,14 @@ class KafkaInitParams(StandardCustomLoggerInitParams):
     linger_ms: int = Field(default=20, ge=0, le=900_000)
     batch_size: int = Field(default=65_536, gt=0)
     queue_max_messages: int = Field(default=10_000, gt=0)
+    callback_queue_max_messages: int = Field(default=128, gt=0)
+    callback_timeout_ms: int = Field(default=100, gt=0)
     queue_max_kbytes: int = Field(default=65_536, gt=0)
     message_max_bytes: int = Field(default=1_000_000, ge=1_000)
     delivery_timeout_ms: int = Field(default=30_000, gt=0)
     request_timeout_ms: int = Field(default=10_000, gt=0)
+    retry_backoff_ms: int = Field(default=100, ge=0)
+    retry_backoff_max_ms: int = Field(default=1_000, ge=0)
     enable_idempotence: bool = True
     flush_timeout: float = Field(default=5.0, gt=0)
 
@@ -42,4 +46,6 @@ class KafkaInitParams(StandardCustomLoggerInitParams):
             raise ValueError("Kafka client TLS requires both ssl_certificate_location and ssl_key_location")
         if self.delivery_timeout_ms < self.request_timeout_ms + self.linger_ms:
             raise ValueError("delivery_timeout_ms must cover request_timeout_ms plus linger_ms")
+        if self.retry_backoff_max_ms < self.retry_backoff_ms:
+            raise ValueError("retry_backoff_max_ms must cover retry_backoff_ms")
         return self
