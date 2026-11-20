@@ -267,6 +267,26 @@ async def test_shutdown_commits_spend_a_logging_task_queued_while_the_first_comm
     assert committed == ["failure row spend"]
 
 
+@pytest.mark.asyncio
+async def test_shutdown_commits_spend_an_agents_row_logs_while_waiting_rows_drain():
+    queued: Final[list[str]] = []
+    committed: Final[list[str]] = []
+
+    async def commit_spend() -> None:
+        committed.extend(queued)
+        queued.clear()
+
+    async def drain_deferred_rows(timeout: float) -> None:
+        await asyncio.sleep(0.01)
+        queued.append("agents turn spend")
+
+    await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(
+        flush_spend=commit_spend, drain_deferred_rows=drain_deferred_rows
+    )
+
+    assert committed == ["agents turn spend"]
+
+
 token = MASTER_KEY
 
 

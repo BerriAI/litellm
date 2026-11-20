@@ -1008,6 +1008,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_turn_billing import (
+    openai_agents_turn_biller,
+)
 from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
 )
@@ -1456,6 +1459,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     worker: LoggingWorker = GLOBAL_LOGGING_WORKER,
     clock: Callable[[], float] = time.monotonic,
     drain_tasks: Callable[[float], Awaitable[None]] = drain_logging_tasks,
+    drain_deferred_rows: Callable[[float], Awaitable[None]] = openai_agents_turn_biller.drain,
 ) -> None:
     await flush_spend()
     remaining: Final = GracefulShutdownManager.remaining(clock=clock)
@@ -1467,6 +1471,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     )
 
     async def drain_callbacks() -> None:
+        await drain_deferred_rows(callback_timeout)
         await drain_tasks(callback_timeout)
         await worker.flush()
 
