@@ -328,7 +328,17 @@ def test_global_drop_params_drops_unsupported_options(respx_mock: MockRouter, mo
         (
             "gnani/prisma-v2.5",
             {"keywords": ["Lincoln"], "languages": ["hi"]},
-            {"bias_list": b'["Lincoln"]', "language_code": b"hi-IN"},
+            {"bias_list": b'["Lincoln"]', "bias_score": b"1.0", "language_code": b"hi-IN"},
+        ),
+        (
+            "gnani/prisma-v2.5",
+            {"keywords": "नमस्ते", "bias_score": 0.0, "language": "hi"},
+            {"bias_list": '["नमस्ते"]'.encode(), "bias_score": b"0.0"},
+        ),
+        (
+            "gnani/prisma-v3.0",
+            {"keywords": ["Lincoln"], "bias_list": ["Gettysburg"]},
+            {"bias_list": b'["Gettysburg"]', "keyterms": None},
         ),
         ("gnani/prisma-v3.0", {"keywords": "Lincoln"}, {"keyterms": b'["Lincoln"]', "language_code": b"indic-auto"}),
         (
@@ -351,6 +361,48 @@ def test_openai_keywords_and_languages_reach_gnani_native_fields(
     sent: Final = _form(route.calls.last.request)
     assert {key: sent.get(key) for key in expected} == expected
     assert "keywords" not in sent and "languages" not in sent
+
+
+@pytest.mark.parametrize("keywords", [["HDFC Bank"], ["COVID-19"], "R2D2", ["Lincoln", ""], [7]])
+def test_prisma_v25_rejects_keywords_gnani_would_silently_ignore(keywords: object, respx_mock: MockRouter) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="single words"):
+        litellm.transcription(
+            model="gnani/prisma-v2.5", file=_AUDIO, api_key="test", api_base=_BASE, language="hi", keywords=keywords
+        )
+    assert not respx_mock.calls
+
+
+def test_drop_params_drops_keywords_prisma_v25_cannot_boost(respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(
+        model="gnani/prisma-v2.5",
+        file=_AUDIO,
+        api_key="test",
+        api_base=_BASE,
+        language="hi",
+        keywords=["HDFC Bank"],
+        drop_params=True,
+    )
+    assert _form(route.calls.last.request) == {
+        "language_code": b"hi-IN",
+        "model": b"prisma-v2.5",
+        "audio_file": _AUDIO[1],
+    }
+
+
+def test_extra_headers_reach_gnani_as_headers_without_replacing_the_key(respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(
+        model=_MODEL,
+        file=_AUDIO,
+        api_key="request-key",
+        api_base=_BASE,
+        extra_headers={"X-API-Request-ID": "trace-1", "X-API-Key-ID": "other-key"},
+    )
+    request: Final = route.calls.last.request
+    assert request.headers["X-API-Request-ID"] == "trace-1"
+    assert request.headers["X-API-Key-ID"] == "request-key"
+    assert "extra_headers" not in _form(request)
 
 
 def test_prisma_v25_rejects_more_than_one_openai_language(respx_mock: MockRouter) -> None:
