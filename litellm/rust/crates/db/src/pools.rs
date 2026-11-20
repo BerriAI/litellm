@@ -655,6 +655,7 @@ mod tests {
         };
 
         use litellm_secret_value::SecretValue;
+        use rstest::rstest;
 
         use super::super::Pools;
         use crate::{Endpoint, PoolLimits, SslMode};
@@ -760,6 +761,7 @@ mod tests {
             Ok((port, presented))
         }
 
+        #[rstest]
         #[tokio::test]
         async fn new_connections_present_the_client_files_as_they_are_now()
         -> Result<(), Box<dyn StdError>> {
