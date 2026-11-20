@@ -1,6 +1,6 @@
 import pytest
 
-from litellm.proxy.lens_agent_steps import AgentCall, ToolExchange, agent_call, agent_name, tool_exchanges
+from litellm.integrations.lens.lens_trace_adapter import AgentCall, ToolExchange, agent_call, agent_name, tool_exchanges
 
 _LS = ToolExchange(call_id="call-ls", name="Bash", arguments='{"command": "ls"}', result="a.txt")
 _PWD = ToolExchange(call_id="call-pwd", name="Bash", arguments='{"command": "pwd"}', result="/work")

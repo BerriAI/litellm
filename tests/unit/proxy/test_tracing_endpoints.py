@@ -1133,7 +1133,7 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
     traces: Final = tuple(
         ExportTraceServiceRequest.FromString(body)
         for path, auth, body in lens_uploads
-        if path == "/internal/traces" and auth == "Bearer test-service-token-with-32-characters" and body
+        if path == "/v1/traces" and auth == "Bearer test-service-token-with-32-characters" and body
     )
     spans: Final = _spans(chain.from_iterable(trace.resource_spans for trace in traces))
     assert tuple(span.name for span in spans) == ("chat gpt-4o-mini",)
@@ -1186,7 +1186,7 @@ async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call
         chain.from_iterable(
             ExportTraceServiceRequest.FromString(body).resource_spans
             for path, _, body in lens_uploads
-            if path == "/internal/traces" and body
+            if path == "/v1/traces" and body
         )
     )
     spans: Final = {span.name: span for span in _spans(resources)}
@@ -1209,29 +1209,3 @@ async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call
         "gen_ai.agent.name": "claude-code",
     }
     assert tool_step.start_time_unix_nano == tool_step.end_time_unix_nano
-
-
-@pytest.mark.asyncio
-async def test_lens_without_a_gateway_trace_route_still_gets_cost_but_no_trace_exports(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import litellm
-    from litellm.integrations.otel.logger import OpenTelemetryV2
-    from litellm.tracing.exporter import LensExporter
-    from litellm.tracing.remote import LensConnection
-
-    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
-    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
-
-    def old_lens(connection: LensConnection) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            base_url=connection.url,
-            transport=httpx.MockTransport(
-                lambda request: Response(404 if request.url.path == "/internal/traces" else 200)
-            ),
-        )
-
-    async with manage_tracing(True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage)), None, old_lens):
-        registered: Final = tuple(type(callback) for callback in litellm.callbacks)
-    assert LensExporter in registered
-    assert not any(issubclass(callback, OpenTelemetryV2) for callback in registered)

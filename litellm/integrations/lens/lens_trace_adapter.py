@@ -5,13 +5,31 @@ rebuilt from the tool result a model call carries in its prompt, paired by call 
 earlier reply made.
 """
 
+import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime
 from itertools import chain
 from typing import Final, TypeVar
 
+from opentelemetry.context import Context
+from opentelemetry.sdk.trace import Span as RecordingSpan
+from opentelemetry.sdk.trace import SpanProcessor
+from opentelemetry.trace import Span
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+from typing_extensions import override
+
+import litellm
+from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.metadata import LLMCallEvent
+from litellm.integrations.otel.model.utils import to_ns
+from litellm.tracing.remote import LensConnection
+from litellm.types.utils import CaptureMessageContent
 
 _KNOWN_AGENTS: Final[tuple[tuple[str, str], ...]] = (
     ("claude-cli", "claude-code"),
@@ -199,3 +217,112 @@ def agent_call(standard_logging_payload: object) -> AgentCall:
     if payload is None:
         return AgentCall()
     return AgentCall(agent=agent_name(payload.metadata.user_agent), tool_exchanges=tool_exchanges(payload.messages))
+
+
+_AGENT_NAME: Final = "gen_ai.agent.name"
+_SESSION_ATTRIBUTE: Final = "gen_ai.conversation.id"
+_TOOL_STEP_TRACER: Final = "litellm.lens.tool_steps"
+_CALLING_AGENT: Final[ContextVar[str | None]] = ContextVar("lens_calling_agent", default=None)
+LENS_TRACE_PATH: Final = "/v1/traces"
+
+
+LENS_TRACE_CALLBACK: Final = "lens"
+
+
+class _LensTraceConfig(OpenTelemetryV2Config):
+    """Built from its arguments alone, so the OTEL_* variables a gateway sets for its own tracing never reach Lens."""
+
+    @classmethod
+    @override
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (init_settings,)
+
+
+class _LensTraceLogger(OpenTelemetryV2):
+    """Model-call spans only, on a private provider, so a gateway's own OTel callbacks are left as they are."""
+
+    @override
+    def _init_otel_logger_on_litellm_proxy(self) -> None:
+        return None
+
+    @override
+    def _close_llm_call(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> Span | None:
+        call: Final = LLMCallEvent.from_dict(kwargs)
+        made_by: Final = agent_call(call.payload)
+        carrier: Final = self._open_llm_calls.get(call.call_id) if call.call_id else None
+        if made_by.agent and carrier is not None and carrier.span is not None:
+            carrier.span.set_attribute(_AGENT_NAME, made_by.agent)
+        token: Final = _CALLING_AGENT.set(made_by.agent)
+        try:
+            span: Final = super()._close_llm_call(kwargs, start_time, end_time)
+        finally:
+            _CALLING_AGENT.reset(token)
+        if span is not None and call.session_id:
+            self._emit_tool_steps(made_by, call.session_id, to_ns(start_time))
+        return span
+
+    def _emit_tool_steps(self, made_by: AgentCall, session_id: str, at_ns: int | None) -> None:
+        """One zero-length step per tool result, at the start of the model call whose prompt carries it."""
+        tracer: Final = self.tracer_provider.get_tracer(_TOOL_STEP_TRACER)
+        for exchange in made_by.tool_exchanges:
+            tracer.start_span(
+                f"execute_tool {exchange.name}",
+                start_time=at_ns,
+                attributes={
+                    "gen_ai.operation.name": "execute_tool",
+                    "gen_ai.tool.name": exchange.name,
+                    "gen_ai.tool.call.id": exchange.call_id,
+                    "gen_ai.tool.call.arguments": exchange.arguments,
+                    "gen_ai.tool.call.result": exchange.result,
+                    _SESSION_ATTRIBUTE: session_id,
+                    **({_AGENT_NAME: made_by.agent} if made_by.agent else {}),
+                },
+            ).end(end_time=at_ns)
+
+
+class _AgentNameProcessor(SpanProcessor):
+    """Names the calling agent on a model-call span that is only created when the call closes."""
+
+    @override
+    def on_start(self, span: RecordingSpan, parent_context: Context | None = None) -> None:
+        agent: Final = _CALLING_AGENT.get()
+        if agent:
+            span.set_attribute(_AGENT_NAME, agent)
+
+
+@asynccontextmanager
+async def export_traces(connection: LensConnection) -> AsyncGenerator[None, None]:
+    trace_logger: Final = _LensTraceLogger(
+        config=_LensTraceConfig(
+            exporters=[
+                ExporterSpec(
+                    kind="otlp_http",
+                    traces_endpoint=connection.endpoint(LENS_TRACE_PATH),
+                    headers=f"Authorization=Bearer {connection.token}",
+                    resource_attributes={"lens.session.capture": "true", "lens.session.attribute": _SESSION_ATTRIBUTE},
+                )
+            ],
+            capture_message_content=CaptureMessageContent.SPAN_ONLY,
+        ),
+        callback_name=LENS_TRACE_CALLBACK,
+    )
+    trace_logger.tracer_provider.add_span_processor(_AgentNameProcessor())
+    manager: Final = litellm.logging_callback_manager
+    manager.add_litellm_callback(trace_logger)
+    try:
+        yield None
+    finally:
+        manager.remove_callback_from_all_lists(trace_logger)
+        await asyncio.to_thread(trace_logger.tracer_provider.shutdown)

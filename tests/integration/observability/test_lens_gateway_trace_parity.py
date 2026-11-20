@@ -21,7 +21,7 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from pydantic import BaseModel, JsonValue
 
 _MODEL: Final = "claude-haiku-4-5"
-_TRACE_PATH: Final = "/internal/traces"
+_TRACE_PATH: Final = "/v1/traces"
 
 
 class _Span(BaseModel, frozen=True):
