@@ -5,13 +5,17 @@ import { useQuery } from "@tanstack/react-query";
 import { createSerializer, useQueryStates } from "nuqs";
 import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { cn } from "@/lib/cva.config";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { uiHref } from "@/utils/uiHref";
 import { isProxyAdminRole } from "@/utils/roles";
 import useAuthorized from "../../hooks/useAuthorized";
 import { customerAppParsers } from "../../customers/_components/CustomerHierarchyNavigation";
+import {
+  CustomerDetailHeader,
+  CustomerDetailLayout,
+  CustomerDetailNavigation,
+} from "../../customers/_components/CustomerDetailLayout";
 import { customerUsageDateParsers } from "../../customers/_components/customerUsageRange";
 import type { App } from "./appForms";
 
@@ -55,33 +59,31 @@ export default function AppDetailPage({
     return <p role="status">{t("apps.loading")}</p>;
   };
   return (
-    <main className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
-      <a className="text-sm text-muted-foreground hover:underline" href={uiHref("apps")}>
-        {t("apps.list.back")}
-      </a>
-      <h1 className="text-xl font-semibold">{app.data?.alias ?? params.app_id ?? t("apps.selectApp")}</h1>
+    <CustomerDetailLayout>
+      <CustomerDetailHeader
+        title={app.data?.alias ?? params.app_id ?? t("apps.selectApp")}
+        breadcrumbLabel={t("ui.breadcrumb.label")}
+        breadcrumbs={
+          <a className="hover:text-foreground" href={uiHref("apps")}>
+            {t("apps.list.back")}
+          </a>
+        }
+      />
       {params.app_id && (
         <>
-          <nav aria-label={t("apps.navigation")} className="flex flex-wrap gap-x-6 gap-y-3 border-b">
-            {pages
+          <CustomerDetailNavigation
+            label={t("apps.navigation")}
+            items={pages
               .filter(([page]) => page === "usage" || canEdit)
-              .map(([page, label]) => (
-                <a
-                  key={page}
-                  href={detailHref(uiHref(`apps/${page}`), params)}
-                  aria-current={active === page ? "page" : undefined}
-                  className={cn(
-                    "border-b-2 border-transparent pb-3 text-sm font-medium text-muted-foreground hover:text-foreground",
-                    active === page && "border-primary text-foreground",
-                  )}
-                >
-                  {t(label)}
-                </a>
-              ))}
-          </nav>
+              .map(([page, label]) => ({
+                href: detailHref(uiHref(`apps/${page}`), params),
+                label: t(label),
+                active: active === page,
+              }))}
+          />
           {content()}
         </>
       )}
-    </main>
+    </CustomerDetailLayout>
   );
 }

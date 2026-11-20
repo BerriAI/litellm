@@ -7,6 +7,7 @@ import { ErrorState } from "@/components/shared/ErrorState";
 import type { BudgetGroups } from "./customerBudgetGroupsPlan";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import AppBudgetDefaults from "../../apps/_components/AppBudgetDefaults";
+import type { App } from "../../apps/_components/appForms";
 import { invalidateAppBudgets } from "../../apps/_components/appApi";
 
 export const budgetGroupCatalogs = [
@@ -38,10 +39,10 @@ export const budgetGroupCatalogs = [
 
 export default function CustomerBudgetCatalog({
   catalog,
-  includeAppDefaults = true,
+  app,
 }: {
   catalog: (typeof budgetGroupCatalogs)[number];
-  includeAppDefaults?: boolean;
+  app?: App;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -57,8 +58,8 @@ export default function CustomerBudgetCatalog({
       {groups.data && <CustomerBudgetGroups global scope={scope} organization={groups.data} onSaved={saved} />}
       {groups.isError && <ErrorState onRetry={() => void groups.refetch()} />}
       {groups.isPending && <p>{t("customerPortal.common.loading")}</p>}
-      {includeAppDefaults && scope === "app" && <AppBudgetDefaults />}
-      {includeAppDefaults && scope === "app-member" && <AppBudgetDefaults scope="member" />}
+      {scope === "app" && <AppBudgetDefaults app={app} />}
+      {scope === "app-member" && <AppBudgetDefaults scope="member" app={app} />}
     </>
   );
 }

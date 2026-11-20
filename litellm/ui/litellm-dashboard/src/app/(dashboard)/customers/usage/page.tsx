@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import CustomerMemberSpend from "../_components/CustomerMemberSpend";
 import CustomerUsageHeader from "../_components/CustomerUsageHeader";
+import { CustomerDetailLayout } from "../_components/CustomerDetailLayout";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "../_components/CustomerHierarchyNavigation";
 import CustomerBudgetSummary from "../_components/CustomerBudgetSummary";
 import CustomerSurchargeBreakdown from "../_components/CustomerSurchargeBreakdown";
@@ -80,10 +81,7 @@ export default function CustomerHierarchyUsagePage() {
   };
 
   return (
-    <main
-      className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6"
-      aria-label={t("customerPortal.analytics.title")}
-    >
+    <CustomerDetailLayout label={t("customerPortal.analytics.title")}>
       <CustomerUsageHeader
         scope={scope}
         data={data}
@@ -181,6 +179,6 @@ export default function CustomerHierarchyUsagePage() {
           )}
         </>
       )}
-    </main>
+    </CustomerDetailLayout>
   );
 }

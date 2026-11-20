@@ -236,10 +236,7 @@ function AppBudgetDefaultRows({
     });
   };
   return (
-    <section
-      className={singleApp ? "space-y-4" : "mt-6 space-y-4 border-t pt-6"}
-      aria-labelledby={`app-${scope}-default-heading`}
-    >
+    <section className="mt-6 space-y-4 border-t pt-6" aria-labelledby={`app-${scope}-default-heading`}>
       <div className="space-y-1">
         <h3 id={`app-${scope}-default-heading`} className="font-semibold">
           {t(title)}
