@@ -230,7 +230,7 @@ async def test_other_stored_dicts_fail_loudly_since_they_never_run(entries: dict
 
 
 async def _pre_call(
-    data: dict[str, object], reject_unregistered: bool, skip_guardrails: bool = False
+    data: dict[str, object], reject_unregistered: object, skip_guardrails: bool = False
 ) -> dict[str, object] | None:
     from litellm.caching.caching import DualCache
     from litellm.proxy._types import CallTypes
@@ -271,6 +271,33 @@ async def test_pre_call_names_only_the_unregistered_guardrails(guardrail_loaded_
 
     assert exc.value.status_code == 400
     assert exc.value.detail["error"].startswith("Unknown guardrail(s): other-typo, typo.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entries",
+    ({"ghost": True}, ["ghost", 5], "ghost"),
+    ids=("toggle_map", "list_with_a_non_name_entry", "bare_string"),
+)
+async def test_pre_call_rejects_unregistered_names_in_any_shape_the_runtime_reads(entries: object) -> None:
+    with patch("litellm.callbacks", []), pytest.raises(HTTPException) as exc:
+        await _pre_call(_request({"guardrails": entries}), reject_unregistered=True)
+
+    assert exc.value.detail["error"].startswith("Unknown guardrail(s): ghost.")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_reads_a_string_true_setting_as_on() -> None:
+    with patch("litellm.callbacks", []), pytest.raises(HTTPException) as exc:
+        await _pre_call(_request({"guardrails": ["ghost"]}), reject_unregistered="true")
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_pre_call_treats_a_non_boolean_setting_as_off() -> None:
+    with patch("litellm.callbacks", []):
+        assert await _pre_call(_request({"guardrails": ["ghost"]}), reject_unregistered="sometimes") is not None
 
 
 @pytest.mark.asyncio

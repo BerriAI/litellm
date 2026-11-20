@@ -116,7 +116,10 @@ async def should_proceed_based_on_api_key(user_api_key_dict: UserAPIKeyAuth, gua
 
 _GUARDRAIL_ENTRIES: Final = TypeAdapter(list[str | dict[str, object]])
 _MODIFY_GUARDRAILS_PERMISSION: Final = TypeAdapter(dict[Literal["modify_guardrails"], StrictBool])
-_REQUEST_BUCKET: Final = TypeAdapter(Mapping[str, object])
+_STRING_KEYED: Final = TypeAdapter(Mapping[str, object])
+_GUARDRAIL_LIST: Final = TypeAdapter(list[object])
+_REJECT_UNREGISTERED_GUARDRAILS_SETTING: Final = "reject_unregistered_guardrails"
+_REJECT_UNREGISTERED_GUARDRAILS_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
 
 
 def _guardrail_entry_names(entries: object) -> frozenset[str] | None:
@@ -151,12 +154,38 @@ def loaded_guardrail_names() -> frozenset[str]:
     )
 
 
-def _listed_guardrail_names(bucket: object) -> frozenset[str]:
+def reject_unregistered_guardrails_enabled(general_settings: Mapping[str, object]) -> bool:
+    raw_value: Final = general_settings.get(_REJECT_UNREGISTERED_GUARDRAILS_SETTING)
     try:
-        fields: Final = _REQUEST_BUCKET.validate_python(bucket)
+        return _REJECT_UNREGISTERED_GUARDRAILS_FLAG.validate_python(raw_value) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            _REJECT_UNREGISTERED_GUARDRAILS_SETTING,
+            raw_value,
+        )
+        return False
+
+
+def _entry_guardrail_names(entry: object) -> frozenset[str]:
+    if isinstance(entry, str):
+        return frozenset((entry,))
+    try:
+        return frozenset(_STRING_KEYED.validate_python(entry))
     except ValidationError:
         return frozenset()
-    return _guardrail_entry_names(fields.get("guardrails")) or frozenset()
+
+
+def _listed_guardrail_names(bucket: object) -> frozenset[str]:
+    try:
+        entries: Final = _STRING_KEYED.validate_python(bucket).get("guardrails")
+    except ValidationError:
+        return frozenset()
+    try:
+        listed: Final = _GUARDRAIL_LIST.validate_python(entries, strict=True)
+    except ValidationError:
+        return _entry_guardrail_names(entries)
+    return frozenset(chain.from_iterable(_entry_guardrail_names(entry) for entry in listed))
 
 
 def reject_unregistered_request_guardrails(data: Mapping[str, object]) -> None:
