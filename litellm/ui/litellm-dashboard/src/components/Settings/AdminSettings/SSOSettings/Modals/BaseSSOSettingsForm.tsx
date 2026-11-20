@@ -31,6 +31,8 @@ export interface SSOSettingsFormValues {
   generic_token_endpoint?: string;
   generic_userinfo_endpoint?: string;
   generic_scope?: string;
+  cognito_domain?: string;
+  cognito_region?: string;
   saml_idp_metadata_url?: string;
   saml_idp_metadata_xml?: string;
   saml_sp_entity_id?: string;
@@ -121,6 +123,27 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
         placeholder: "openid email profile",
         required: false,
       },
+    ],
+  },
+  cognito: {
+    envVarMap: {
+      generic_client_id: "GENERIC_CLIENT_ID",
+      generic_client_secret: "GENERIC_CLIENT_SECRET",
+    },
+    fields: [
+      {
+        label: "adminPanel.ssoSettings.form.fields.cognitoDomain",
+        name: "cognito_domain",
+        placeholderKey: "adminPanel.ssoSettings.form.placeholders.cognitoDomain",
+      },
+      {
+        label: "adminPanel.ssoSettings.form.fields.cognitoRegion",
+        name: "cognito_region",
+        placeholder: "us-east-1",
+        required: false,
+      },
+      { label: "adminPanel.ssoSettings.form.fields.cognitoClientId", name: "generic_client_id" },
+      { label: "adminPanel.ssoSettings.form.fields.cognitoClientSecret", name: "generic_client_secret" },
     ],
   },
   generic: {
@@ -284,6 +307,19 @@ export const buildSSOSettingsSchema = (variant: SSOFormVariant) =>
         }),
       });
     });
+
+    if (
+      values.sso_provider === "cognito" &&
+      !isBlank(values.cognito_domain) &&
+      !values.cognito_domain?.includes(".") &&
+      isBlank(values.cognito_region)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["cognito_region"],
+        message: i18n.t("adminPanel.ssoSettings.form.errors.cognitoRegionRequired"),
+      });
+    }
 
     const proxyBaseUrl = values.proxy_base_url;
     if (isBlank(proxyBaseUrl)) {

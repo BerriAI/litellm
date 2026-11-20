@@ -4,6 +4,7 @@ import { renderWithProviders } from "../../../../../../tests/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BaseSSOSettingsForm, {
   buildSSOSettingsPatch,
+  buildSSOSettingsSchema,
   emptySSOSettingsFormValues,
   pickMountedSSOValues,
   renderProviderFields,
@@ -12,7 +13,7 @@ import BaseSSOSettingsForm, {
   useSSOSettingsForm,
 } from "./BaseSSOSettingsForm";
 import { expectControlBesideLabel } from "../../../../../../tests/fieldOrientation";
-import { processSSOSettingsPayload } from "../utils";
+import { parseCognitoDomain, processSSOSettingsPayload } from "../utils";
 
 const user = () => userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -527,5 +528,101 @@ describe("buildSSOSettingsPatch", () => {
     const result = patch({ ...seeded, sso_provider: "okta" });
     expect(result.sso_provider).toBe("okta");
     expect(Object.keys(result).filter((key) => key.startsWith("generic_"))).toEqual([]);
+  });
+});
+
+describe("AWS Cognito settings", () => {
+  const cognito = {
+    ...emptySSOSettingsFormValues,
+    sso_provider: "cognito",
+    cognito_domain: "my-pool",
+    cognito_region: "us-east-1",
+    generic_client_id: "app-client",
+    generic_client_secret: "app-secret",
+    user_email: "admin@example.com",
+    proxy_base_url: "https://gateway.example.com",
+  };
+  const issuePaths = (values: typeof cognito) => {
+    const result = buildSSOSettingsSchema("sso-settings").safeParse(values);
+    return result.success ? [] : result.error.issues.map((issue) => issue.path.join("."));
+  };
+
+  it("accepts a domain prefix with a region, and a full domain without one", () => {
+    expect(issuePaths(cognito)).toEqual([]);
+    expect(issuePaths({ ...cognito, cognito_domain: "auth.example.com", cognito_region: "" })).toEqual([]);
+  });
+
+  it("asks for the region when only a domain prefix is given", () => {
+    expect(issuePaths({ ...cognito, cognito_region: "" })).toEqual(["cognito_region"]);
+  });
+
+  it("requires the domain and app client credentials", () => {
+    expect(issuePaths({ ...cognito, cognito_domain: "", generic_client_id: "", generic_client_secret: "" })).toEqual([
+      "cognito_domain",
+      "generic_client_id",
+      "generic_client_secret",
+    ]);
+  });
+
+  it("sends the derived Cognito endpoints and claims when switching a generic provider to Cognito", () => {
+    const generic = {
+      ...cognito,
+      sso_provider: "generic",
+      cognito_domain: "",
+      cognito_region: "",
+      generic_authorization_endpoint: "https://idp.example.com/authorize",
+      generic_token_endpoint: "https://idp.example.com/token",
+      generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+    };
+    const result = buildSSOSettingsPatch(
+      generic,
+      pickMountedSSOValues(cognito, "sso-settings"),
+      "sso-settings",
+      processSSOSettingsPayload,
+    );
+    expect(result).toMatchObject({
+      sso_provider: "cognito",
+      generic_authorization_endpoint: "https://my-pool.auth.us-east-1.amazoncognito.com/oauth2/authorize",
+      generic_token_endpoint: "https://my-pool.auth.us-east-1.amazoncognito.com/oauth2/token",
+      generic_userinfo_endpoint: "https://my-pool.auth.us-east-1.amazoncognito.com/oauth2/userInfo",
+      generic_user_id_attribute: "sub",
+      generic_user_email_attribute: "email",
+    });
+    expect(result).not.toHaveProperty("cognito_domain");
+    expect(result).not.toHaveProperty("generic_client_id");
+  });
+
+  it("sends only the edited field for a saved Cognito config read back from its endpoints", () => {
+    const saved = processSSOSettingsPayload(cognito);
+    const seeded = {
+      ...emptySSOSettingsFormValues,
+      ...saved,
+      ...parseCognitoDomain(saved.generic_authorization_endpoint),
+      sso_provider: "cognito",
+    };
+    const result = buildSSOSettingsPatch(
+      seeded,
+      pickMountedSSOValues({ ...seeded, user_email: "new@example.com" }, "sso-settings"),
+      "sso-settings",
+      processSSOSettingsPayload,
+    );
+    expect(result).toEqual({ user_email: "new@example.com" });
+  });
+
+  it("clears the Cognito user id claim when switching back to a generic provider", () => {
+    const generic = {
+      ...cognito,
+      sso_provider: "generic",
+      generic_authorization_endpoint: "https://idp.example.com/authorize",
+      generic_token_endpoint: "https://idp.example.com/token",
+      generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+    };
+    const result = buildSSOSettingsPatch(
+      cognito,
+      pickMountedSSOValues(generic, "sso-settings"),
+      "sso-settings",
+      processSSOSettingsPayload,
+    );
+    expect(result).toMatchObject({ generic_user_id_attribute: null, generic_user_email_attribute: null });
   });
 });
