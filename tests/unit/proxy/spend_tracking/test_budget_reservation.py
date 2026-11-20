@@ -590,6 +590,42 @@ def test_annual_window_keeps_all_spend_from_its_reset_boundary(
         assert get_budget_window_start({"budget_duration": duration, "reset_at": reset_at}) == expected
 
 
+@pytest.mark.parametrize("today", ["2028-07-01", "2028-08-01", "2028-08-31", "2028-09-01"])
+@pytest.mark.parametrize(
+    ("duration", "reset_at", "expected"),
+    [
+        ("1mo", "2028-09-01T00:00:00Z", datetime(2028, 8, 1, tzinfo=timezone.utc)),
+        ("2mo", "2028-09-01T00:00:00Z", datetime(2028, 7, 1, tzinfo=timezone.utc)),
+        ("3mo", "2028-09-01T00:00:00Z", datetime(2028, 6, 1, tzinfo=timezone.utc)),
+        ("30d", "2028-09-01T00:00:00Z", datetime(2028, 8, 1, tzinfo=timezone.utc)),
+        ("monthly", "2028-09-01T00:00:00Z", datetime(2028, 8, 1, tzinfo=timezone.utc)),
+    ],
+)
+def test_month_window_start_is_the_same_boundary_whatever_day_it_is_read(
+    today: str, duration: str, reset_at: str, expected: datetime
+) -> None:
+    """A `Nmo` window opens on the calendar boundary of its reset, not `duration_in_seconds`
+    ago: measuring months from the day of the check opened a `2mo` window ending on
+    1 September on 2 July whenever it was read on 1 August."""
+    with patch("time.time", return_value=datetime.fromisoformat(today).replace(tzinfo=timezone.utc).timestamp()):
+        assert get_budget_window_start({"budget_duration": duration, "reset_at": reset_at}) == expected
+
+
+@pytest.mark.parametrize(
+    ("reset_at", "expected"),
+    [
+        ("2028-03-01T00:00:00Z", datetime(2028, 2, 1, tzinfo=timezone.utc)),
+        ("2028-11-01T00:00:00Z", datetime(2028, 10, 1, tzinfo=timezone.utc)),
+    ],
+)
+def test_thirty_days_opens_on_the_month_it_resets_on(reset_at: str, expected: datetime) -> None:
+    """`30d` resets on the 1st, so subtracting a fixed 30 days opened a window ending
+    1 March on 31 January: the 31st was counted by the window it had just left, and a
+    window ending 1 November opened on 2 October with the 1st left out."""
+    with patch("time.time", return_value=datetime(2028, 2, 15, tzinfo=timezone.utc).timestamp()):
+        assert get_budget_window_start({"budget_duration": "30d", "reset_at": reset_at}) == expected
+
+
 @pytest.mark.parametrize("duration", ("1h", "1mo", "12mo"))
 @pytest.mark.parametrize("reset_at", ("2026-11-15T05:48:02.123456Z", "2026-11-15T11:33:02.123456+05:45"))
 def test_legacy_window_start_uses_database_millisecond_precision(duration: str, reset_at: str) -> None:
@@ -622,6 +658,79 @@ class _AnnualWindowDatabase:
     async def group_by(self, **query: object) -> list[dict[str, object]]:
         self.scans += 1
         return [{"api_key": "calendar-key", "_sum": {"spend": 0.0}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "duration,zone,reset_at",
+    (
+        ("12mo", "UTC", "2029-01-01T00:00:00Z"),
+        ("12mo", "America/New_York", "2029-01-01T00:00:00-05:00"),
+        ("12mo", "Pacific/Apia", "2012-01-01T00:00:00+14:00"),
+    ),
+)
+async def test_cold_annual_counter_preserves_reset_writer_spend(
+    monkeypatch: pytest.MonkeyPatch, duration: str, zone: str, reset_at: str
+) -> None:
+    from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
+    from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+    from litellm.types.integrations.slack_alerting import Litellm_EntityType
+
+    database: Final = _AnnualWindowDatabase()
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    monkeypatch.setattr(litellm, "timezone", zone, raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
+    await ResetBudgetJob._roll_window_spend_row(
+        prisma_client=database,  # pyright: ignore[reportArgumentType]  # in-memory external database boundary
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="calendar-key",
+        budget_duration=duration,
+        next_reset_at=datetime.fromisoformat(reset_at.replace("Z", "+00:00")),
+        reset_settings=BudgetResetSettings(timezone=zone),
+    )
+    database.spend = 10.0
+    token: Final = UserAPIKeyAuth(
+        token="calendar-key",
+        budget_limits=[{"budget_duration": duration, "reset_at": reset_at, "max_budget": 10.0}],
+    )
+
+    with pytest.raises(litellm.BudgetExceededError) as failure:
+        await _virtual_key_multi_budget_check(token)
+    assert failure.value.current_cost == 10.0
+    assert store.get_local(f"spend:key:calendar-key:window:{duration}") == 10.0
+    assert database.scans == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("today", "duration", "zone", "next_reset_at", "expected"),
+    [
+        ("2028-08-01", "2mo", "UTC", "2028-09-01T00:00:00Z", datetime(2028, 7, 1)),
+        ("2028-09-01", "3mo", "America/New_York", "2028-09-01T00:00:00-04:00", datetime(2028, 6, 1, 4, 0)),
+    ],
+)
+async def test_multi_month_roll_opens_the_window_on_the_calendar_boundary(
+    monkeypatch: pytest.MonkeyPatch, today: str, duration: str, zone: str, next_reset_at: str, expected: datetime
+) -> None:
+    """The rolled row has to start where the read path starts the window, otherwise the two
+    disagree and the counter reseed drops the boundary day's spend."""
+    from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+    from litellm.types.integrations.slack_alerting import Litellm_EntityType
+
+    database: Final = _AnnualWindowDatabase()
+    monkeypatch.setattr(litellm, "timezone", zone, raising=False)
+    with patch("time.time", return_value=datetime.fromisoformat(today).replace(tzinfo=timezone.utc).timestamp()):
+        await ResetBudgetJob._roll_window_spend_row(
+            prisma_client=database,  # pyright: ignore[reportArgumentType]  # in-memory external database boundary
+            entity_type=Litellm_EntityType.KEY,
+            entity_id="calendar-key",
+            budget_duration=duration,
+            next_reset_at=datetime.fromisoformat(next_reset_at.replace("Z", "+00:00")),
+            reset_settings=BudgetResetSettings(timezone=zone),
+        )
+    assert database.start == expected
 
 
 @pytest.mark.asyncio
