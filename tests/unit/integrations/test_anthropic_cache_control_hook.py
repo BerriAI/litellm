@@ -7,11 +7,17 @@ import pathlib
 import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
+from httpx import Response
+from openai import OpenAI
 from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
@@ -22,6 +28,8 @@ from litellm.integrations.anthropic_cache_control_hook import (
     EXTERNAL_BREAKPOINTS_STAMP,
     AnthropicCacheControlHook,
     configured_injection_points,
+    developer_messages_for_a_prompt_caching_model,
+    request_keeps_developer_cache_control,
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -29,7 +37,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_tool_invoke,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_CODE_URL
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.github_copilot.authenticator import DEFAULT_GITHUB_DEVICE_CODE_URL
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders, Message
 from litellm.utils import ProviderConfigManager
@@ -1303,7 +1313,9 @@ def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_aft
         pytest.param("invoke/us.anthropic.claude-opus-5-5", "claude-opus-5-5", id="provider-left-out-of-the-params"),
         pytest.param("anthropic/my-claude-alias", "my-claude-alias", id="model-the-cost-map-does-not-know"),
         pytest.param(
-            "anthropic/my-unreadable-claude-alias", "my-unreadable-claude-alias", id="cost-map-entry-the-lookup-cannot-read"
+            "anthropic/my-unreadable-claude-alias",
+            "my-unreadable-claude-alias",
+            id="cost-map-entry-the-lookup-cannot-read",
         ),
     ],
 )
@@ -4930,6 +4942,827 @@ def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raisi
         {"type": "ephemeral"},
         {"type": "ephemeral"},
     ]
+
+
+_DEVELOPER_PREFIX: Final = (
+    "Policy handbook rule 8.3: record every backup decision in the tracker within 4 business days."
+)
+_CLAUDE_ON_CONVERSE: Final = "bedrock/converse/us.anthropic.claude-haiku-5-5"
+_OFFLINE_AWS_CREDENTIALS: Final[Mapping[str, str]] = {
+    "aws_access_key_id": "AKIADEVELOPERPREFIX",
+    "aws_secret_access_key": "developer-prefix-secret",
+    "aws_region_name": "us-east-1",
+}
+
+
+def _converse_client(sent_bodies: list[_ConverseBody]) -> HTTPHandler:
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(_ConverseBody.model_validate_json(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "Rule 8.3."}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 30, "outputTokens": 4, "totalTokens": 34},
+            },
+            request=request,
+        )
+
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+
+@pytest.mark.parametrize(
+    "developer_content",
+    [
+        pytest.param(_DEVELOPER_PREFIX, id="string_content"),
+        pytest.param([{"type": "text", "text": _DEVELOPER_PREFIX}], id="text_parts"),
+    ],
+)
+def test_system_injection_point_caches_a_developer_prompt_on_bedrock_converse(
+    developer_content: str | list[dict[str, str]],
+) -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "developer", "content": developer_content},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+    assert _count_converse_cache_points(sent_bodies[-1]) == 1
+
+
+def test_auto_prompt_caching_caches_a_developer_prompt_on_bedrock_converse(local_model_cost_map: None) -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        enable_prompt_caching=True,
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+
+
+@pytest.mark.parametrize(
+    "developer_content",
+    [
+        pytest.param(_DEVELOPER_PREFIX, id="string_content"),
+        pytest.param([{"type": "input_text", "text": _DEVELOPER_PREFIX}], id="input_text_parts"),
+    ],
+)
+def test_system_injection_point_caches_a_developer_input_item_on_the_responses_route(
+    developer_content: str | list[dict[str, str]],
+) -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.responses(
+        model=_CLAUDE_ON_CONVERSE,
+        input=[
+            {"role": "developer", "content": developer_content},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        store=False,
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+    assert _count_converse_cache_points(sent_bodies[-1]) == 1
+
+
+def test_system_injection_point_caches_both_a_system_and_a_developer_prompt() -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "system", "content": "You answer policy questions."},
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == (
+        {"text": "You answer policy questions."},
+        {"cachePoint": {"type": "default"}},
+        {"text": _DEVELOPER_PREFIX},
+        {"cachePoint": {"type": "default"}},
+    )
+
+
+def test_developer_prompts_only_take_the_breakpoints_configured_points_leave_over() -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "system", "content": "You answer policy questions."},
+            *({"role": "developer", "content": f"{_DEVELOPER_PREFIX} Note {note}."} for note in range(3)),
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ],
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].messages[-1].content[-1] == {"cachePoint": {"type": "default"}}
+    assert _count_converse_cache_points(sent_bodies[-1]) == 4
+
+
+_WEATHER_TOOL: Final = MappingProxyType(
+    {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+)
+_ONE_HOUR: Final = MappingProxyType({"type": "ephemeral", "ttl": "1h"})
+
+
+@pytest.mark.parametrize(
+    ("question_mark", "tool_mark", "other_points", "point_control", "caches_the_developer_prompt"),
+    [
+        pytest.param({"type": "ephemeral"}, None, (), None, True, id="same_ttl"),
+        pytest.param(dict(_ONE_HOUR), None, (), None, False, id="one_hour_question_after_the_prompt"),
+        pytest.param(
+            None,
+            {"type": "ephemeral", "ttl": "5m"},
+            (),
+            dict(_ONE_HOUR),
+            False,
+            id="one_hour_prompt_after_a_five_minute_tool",
+        ),
+        pytest.param(
+            None,
+            None,
+            ({"location": "tool_config"},),
+            dict(_ONE_HOUR),
+            False,
+            id="one_hour_prompt_after_the_tool_config_point",
+        ),
+    ],
+)
+def test_system_injection_point_leaves_a_developer_prompt_unmarked_when_its_mark_would_mix_ttls(
+    question_mark: dict[str, str] | None,
+    tool_mark: dict[str, str] | None,
+    other_points: tuple[dict[str, str], ...],
+    point_control: dict[str, str] | None,
+    caches_the_developer_prompt: bool,
+) -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+    question_part: Final = {"type": "text", "text": "Which rule covers backups?"}
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "developer", "content": [{"type": "text", "text": _DEVELOPER_PREFIX}]},
+            {
+                "role": "user",
+                "content": [
+                    question_part if question_mark is None else {**question_part, "cache_control": question_mark}
+                ],
+            },
+        ],
+        tools=[dict(_WEATHER_TOOL) if tool_mark is None else {**_WEATHER_TOOL, "cache_control": tool_mark}],
+        cache_control_injection_points=[
+            *other_points,
+            {"location": "message", "role": "system", "control": point_control},
+        ],
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == (
+        ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+        if caches_the_developer_prompt
+        else ({"text": _DEVELOPER_PREFIX},)
+    )
+
+
+
+def test_system_injection_point_stays_fast_when_a_one_hour_question_refuses_every_developer_mark() -> None:
+    developer_turns: Final = 3000
+    messages: Final[list[AllMessageValues]] = [
+        *({"role": "developer", "content": f"Rule {turn}."} for turn in range(developer_turns)),
+        {"role": "user", "content": [{"type": "text", "text": "Which rule?", "cache_control": dict(_ONE_HOUR)}]},
+    ]
+    started: Final = time.perf_counter()
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-haiku-5-5",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert time.perf_counter() - started < 3
+    assert _count_cache_control(processed) == 1
+    assert processed[-1]["content"][-1]["cache_control"] == dict(_ONE_HOUR)
+
+
+def test_system_injection_point_stays_fast_past_developer_messages_with_nothing_to_mark() -> None:
+    empty_developer_turns: Final = 3000
+    messages: Final[list[AllMessageValues]] = [
+        *({"role": "developer", "content": []} for _ in range(empty_developer_turns)),
+        {"role": "developer", "content": "Answer briefly."},
+        {"role": "user", "content": "Which rule?"},
+    ]
+    started: Final = time.perf_counter()
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-haiku-5-5",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert time.perf_counter() - started < 3
+    assert _count_cache_control(processed) == 1
+    assert processed[empty_developer_turns]["cache_control"] == {"type": "ephemeral"}
+
+_TOOL_WITH_A_CACHE_CONTROL_ARGUMENT: Final = MappingProxyType(
+    {
+        "type": "function",
+        "function": {
+            "name": "set_cache_policy",
+            "parameters": {"type": "object", "properties": {"cache_control": {"type": "string"}}},
+        },
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("developer_mark", "points"),
+    [
+        pytest.param(dict(_ONE_HOUR), None, id="client_mark"),
+        pytest.param(
+            None, [{"location": "message", "role": "system", "control": dict(_ONE_HOUR)}], id="injection_point"
+        ),
+    ],
+)
+def test_one_hour_developer_prompt_stays_cached_beside_a_tool_argument_named_cache_control(
+    developer_mark: dict[str, str] | None, points: list[dict[str, object]] | None
+) -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+    developer: Final = {"role": "developer", "content": _DEVELOPER_PREFIX}
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            developer if developer_mark is None else {**developer, "cache_control": developer_mark},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        tools=[dict(_TOOL_WITH_A_CACHE_CONTROL_ARGUMENT)],
+        cache_control_injection_points=points,
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == (
+        {"text": _DEVELOPER_PREFIX},
+        {"cachePoint": {"type": "default", "ttl": "1h"}},
+    )
+
+
+_FIVE_MINUTES: Final = MappingProxyType({"type": "ephemeral", "ttl": "5m"})
+_FIVE_MINUTE_TOOL: Final = MappingProxyType({**_WEATHER_TOOL, "cache_control": dict(_FIVE_MINUTES)})
+
+
+@pytest.mark.parametrize(
+    ("outside_fields", "keeps_the_mark"),
+    [
+        pytest.param(
+            {"tools": [dict(_TOOL_WITH_A_CACHE_CONTROL_ARGUMENT)]}, True, id="tool_argument_named_cache_control"
+        ),
+        pytest.param(
+            {
+                "tools": [
+                    {**_WEATHER_TOOL, "function": {**_WEATHER_TOOL["function"], "cache_control": dict(_FIVE_MINUTES)}}
+                ]
+            },
+            False,
+            id="mark_under_the_tool_function",
+        ),
+        pytest.param({"cache_control": dict(_FIVE_MINUTES)}, False, id="top_level_mark"),
+        pytest.param({"extra_body": {"cache_control": dict(_FIVE_MINUTES)}}, False, id="envelope_top_level_mark"),
+        pytest.param(
+            {"tools": [dict(_WEATHER_TOOL)], "extra_body": {"tools": [dict(_FIVE_MINUTE_TOOL)]}},
+            False,
+            id="envelope_tool_mark",
+        ),
+        pytest.param(
+            {"tools": [dict(_FIVE_MINUTE_TOOL)], "extra_body": {"tools": [dict(_WEATHER_TOOL)]}},
+            True,
+            id="tool_mark_the_envelope_replaces",
+        ),
+    ],
+)
+def test_one_hour_developer_mark_follows_the_ttls_of_the_marks_sent_outside_the_messages(
+    outside_fields: dict[str, object], keeps_the_mark: bool
+) -> None:
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {"role": "developer", "content": _DEVELOPER_PREFIX, "cache_control": dict(_ONE_HOUR)},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+    )
+
+    assert request_keeps_developer_cache_control(messages, MappingProxyType(outside_fields)) is keeps_the_mark
+
+
+def _server_search_replaying(results_field: str) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "srvtoolu_backup_rules",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "backup rules"}'},
+            }
+        ],
+        "provider_specific_fields": {
+            results_field: [
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_backup_rules",
+                    "content": [],
+                    "cache_control": dict(_ONE_HOUR),
+                }
+            ]
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("earlier_turns", "outside_fields"),
+    [
+        pytest.param([_server_search_replaying("web_search_results")], {}, id="replayed_web_search_result"),
+        pytest.param([_server_search_replaying("tool_results")], {}, id="replayed_server_tool_result"),
+        pytest.param(
+            [],
+            {
+                "extra_body": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Which rule covers backups?", "cache_control": dict(_ONE_HOUR)}
+                            ],
+                        }
+                    ]
+                }
+            },
+            id="envelope_messages",
+        ),
+    ],
+)
+def test_five_minute_developer_mark_is_dropped_before_a_one_hour_mark_the_provider_receives(
+    earlier_turns: list[dict[str, object]], outside_fields: dict[str, object]
+) -> None:
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {"role": "developer", "content": _DEVELOPER_PREFIX, "cache_control": dict(_FIVE_MINUTES)},
+            *earlier_turns,
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+    )
+
+    assert request_keeps_developer_cache_control(messages, MappingProxyType(outside_fields)) is False
+
+
+def test_system_injection_point_marks_a_developer_prompt_for_openai_prompt_cache_breakpoints() -> None:
+    sent_bodies: Final[list[Mapping[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-developer-prefix",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
+            },
+            request=request,
+        )
+
+    litellm.completion(
+        model="gpt-5.6",
+        messages=[
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        client=OpenAI(api_key="sk-offline", http_client=httpx.Client(transport=httpx.MockTransport(respond))),
+        api_key="sk-offline",
+    )
+
+    assert sent_bodies[-1]["messages"] == [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": _DEVELOPER_PREFIX, "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        },
+        {"role": "user", "content": "Which rule covers backups?"},
+    ]
+
+
+_GEMINI_HOST: Final = "generativelanguage.googleapis.com"
+_GEMINI_REPLY: Final = MappingProxyType(
+    {
+        "candidates": [
+            {"content": {"role": "model", "parts": [{"text": "Rule 8.3."}]}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 30, "candidatesTokenCount": 4, "totalTokenCount": 34},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("prompt_role", "opens_a_context_cache"),
+    [pytest.param("system", True, id="system_prompt"), pytest.param("developer", False, id="developer_prompt")],
+)
+def test_system_injection_point_leaves_a_gemini_developer_prompt_out_of_context_caching(
+    prompt_role: str, opens_a_context_cache: bool, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get(host=_GEMINI_HOST, path__regex=r"/cachedContents$").mock(
+        return_value=Response(200, json={"cachedContents": []})
+    )
+    create_cache: Final = respx_mock.post(host=_GEMINI_HOST, path__regex=r"/cachedContents$").mock(
+        return_value=Response(
+            200, json={"name": "cachedContents/developer-prefix", "usageMetadata": {"totalTokenCount": 9000}}
+        )
+    )
+    respx_mock.post(host=_GEMINI_HOST, path__regex=r":generateContent$").mock(
+        return_value=Response(200, json=dict(_GEMINI_REPLY))
+    )
+
+    litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[
+            {"role": prompt_role, "content": " ".join(itertools.repeat(_DEVELOPER_PREFIX, 600))},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        api_key="offline-gemini-key",
+    )
+
+    assert create_cache.called is opens_a_context_cache
+
+
+_LONG_DEVELOPER_PREFIX: Final = " ".join(itertools.repeat(_DEVELOPER_PREFIX, 600))
+_VERTEX_ENDPOINT_HOST: Final = "us-central1-aiplatform.googleapis.com"
+
+
+def test_system_injection_point_leaves_a_developer_prompt_on_a_gemini_tuned_vertex_endpoint_uncached(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from google.oauth2.credentials import Credentials
+
+    from litellm.main import vertex_chat_completion
+
+    monkeypatch.setitem(
+        vertex_chat_completion._credentials_project_mapping,
+        ("offline-vertex-credentials", "offline-project"),
+        (Credentials(token="offline-vertex-token"), "offline-project"),
+    )
+    respx_mock.get(host=_VERTEX_ENDPOINT_HOST, path__regex=r"/cachedContents$").mock(
+        return_value=Response(200, json={"cachedContents": []})
+    )
+    create_cache: Final = respx_mock.post(host=_VERTEX_ENDPOINT_HOST, path__regex=r"/cachedContents$").mock(
+        return_value=Response(
+            200, json={"name": "cachedContents/developer-prefix", "usageMetadata": {"totalTokenCount": 9000}}
+        )
+    )
+    respx_mock.post(host=_VERTEX_ENDPOINT_HOST, path__regex=r":generateContent$").mock(
+        return_value=Response(200, json=dict(_GEMINI_REPLY))
+    )
+
+    litellm.completion(
+        model="vertex_ai/4965075652664360960",
+        base_model="gemini-3.8-flash",
+        messages=[
+            {"role": "developer", "content": _LONG_DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        vertex_project="offline-project",
+        vertex_location="us-central1",
+        vertex_credentials="offline-vertex-credentials",
+        max_retries=0,
+    )
+
+    assert not create_cache.called
+
+
+def test_system_injection_point_caches_a_developer_prompt_on_vertex_claude(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from google.oauth2.credentials import Credentials
+
+    from litellm.main import vertex_partner_models_chat_completion
+
+    monkeypatch.setitem(
+        vertex_partner_models_chat_completion._credentials_project_mapping,
+        ("offline-vertex-credentials", "offline-project"),
+        (Credentials(token="offline-vertex-token"), "offline-project"),
+    )
+    route: Final = respx_mock.post(host="us-east5-aiplatform.googleapis.com", path__regex=r":rawPredict$").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "msg_developer_prefix",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "Rule 8.3."}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 30, "output_tokens": 4},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="vertex_ai/claude-haiku-5-5",
+        messages=[
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        vertex_project="offline-project",
+        vertex_location="us-east5",
+        vertex_credentials="offline-vertex-credentials",
+        max_retries=0,
+    )
+
+    assert json.loads(route.calls.last.request.content)["system"] == [
+        {"type": "text", "text": _DEVELOPER_PREFIX, "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+_GATEWAY_URL: Final = "https://gateway.invalid/chat/completions"
+
+
+@pytest.mark.parametrize(
+    ("model", "url", "deployment_fields"),
+    [
+        pytest.param(
+            "openrouter/google/gemini-3.8-flash",
+            "https://openrouter.ai/api/v1/chat/completions",
+            {},
+            id="openrouter",
+        ),
+        pytest.param("litellm_proxy/gemini-3.8-flash", _GATEWAY_URL, {}, id="litellm_proxy"),
+        pytest.param(
+            "litellm_proxy/team-assistant",
+            _GATEWAY_URL,
+            {"base_model": "gemini/gemini-3.8-flash"},
+            id="gateway_alias_base_model",
+        ),
+        pytest.param(
+            "litellm_proxy/team-assistant",
+            _GATEWAY_URL,
+            {"model_info": {"base_model": "gemini/gemini-3.8-flash"}},
+            id="gateway_alias_model_info_base_model",
+        ),
+    ],
+)
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_system_injection_point_leaves_a_developer_prompt_for_a_routed_gemini_model_unmarked(
+    model: str,
+    url: str,
+    deployment_fields: dict[str, object],
+    asynchronous: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(url).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-developer-prefix",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gemini-3.8-flash",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
+            },
+        )
+    )
+
+    request: Final = {
+        "model": model,
+        "messages": [
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        "api_key": "offline-key",
+        "api_base": url.removesuffix("/chat/completions"),
+        **deployment_fields,
+    }
+    if asynchronous:
+        await litellm.acompletion(**request)
+    else:
+        litellm.completion(**request)
+
+    assert "cache_control" not in route.calls.last.request.content.decode()
+
+
+@pytest.mark.parametrize(
+    "deployment_fields",
+    [
+        pytest.param({"base_model": "anthropic/claude-haiku-5-5"}, id="base_model"),
+        pytest.param({"model_info": {"base_model": "anthropic/claude-haiku-5-5"}}, id="model_info_base_model"),
+    ],
+)
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_system_injection_point_marks_a_developer_prompt_for_a_gateway_alias_with_a_claude_base_model(
+    deployment_fields: dict[str, object],
+    asynchronous: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(_GATEWAY_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-developer-prefix",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "claude-haiku-5-5",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
+            },
+        )
+    )
+
+    request: Final = {
+        "model": "litellm_proxy/team-assistant",
+        "messages": [
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        "api_key": "offline-key",
+        "api_base": _GATEWAY_URL.removesuffix("/chat/completions"),
+        **deployment_fields,
+    }
+    if asynchronous:
+        await litellm.acompletion(**request)
+    else:
+        litellm.completion(**request)
+
+    assert json.loads(route.calls.last.request.content)["messages"][0] == {
+        "role": "system",
+        "content": _DEVELOPER_PREFIX,
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_system_injection_point_filling_the_cap_without_a_developer_message_logs_no_limit_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(verbose_logger, "propagate", True)
+    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
+    messages: Final = [
+        {"role": "system", "content": "You are a weather assistant."},
+        {"role": "user", "content": "Weather in Paris?"},
+        {"role": "assistant", "content": "18C and sunny."},
+        {"role": "user", "content": "And tomorrow?"},
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-opus-5-5",
+        messages=cast(list[AllMessageValues], messages),
+        non_default_params={
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1},
+                {"location": "message", "index": -2},
+                {"location": "message", "index": -3},
+            ]
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _wire_cache_marks(processed) == 4
+    assert [record.getMessage() for record in caplog.records if "provider limit" in record.getMessage()] == []
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "device_code_url"),
+    [
+        pytest.param("github_copilot", DEFAULT_GITHUB_DEVICE_CODE_URL, id="github_copilot"),
+        pytest.param("chatgpt", CHATGPT_DEVICE_CODE_URL, id="chatgpt"),
+    ],
+)
+def test_system_injection_point_on_a_developer_prompt_starts_no_provider_sign_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, custom_llm_provider: str, device_code_url: str
+):
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.delenv("GITHUB_COPILOT_DEVICE_CODE_URL", raising=False)
+
+    def prompt_mark(role: str) -> object:
+        _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="gpt-6.1-sol",
+            messages=cast(
+                list[AllMessageValues],
+                [{"role": role, "content": "Answer in French."}, {"role": "user", "content": "Hi"}],
+            ),
+            non_default_params={
+                "custom_llm_provider": custom_llm_provider,
+                "cache_control_injection_points": [{"location": "message", "role": "system"}],
+            },
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return processed[0].get("cache_control")
+
+    with respx.mock(assert_all_called=False) as router:
+        device_code: Final = router.route(url=device_code_url).mock(return_value=Response(500))
+        marks: Final = (prompt_mark("system"), prompt_mark("developer"))
+
+    assert device_code.called is False
+    assert marks == ({"type": "ephemeral"}, {"type": "ephemeral"})
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        pytest.param("huggingface", "meta-llama/Llama-3.3-70B-Instruct", id="huggingface"),
+        pytest.param("lemonade", "Qwen3-8B-GGUF", id="lemonade"),
+    ],
+)
+def test_developer_prompt_caching_check_answers_without_a_model_lookup(custom_llm_provider: str, model: str):
+    developer: Final = {"role": "developer", "content": "Answer in French."}
+    question: Final = {"role": "user", "content": "Hi"}
+    params: Final[dict[str, object]] = {"cache_control_injection_points": [{"location": "message", "role": "system"}]}
+
+    with respx.mock(assert_all_called=False) as router:
+        lookups: Final = router.route().mock(return_value=Response(500))
+        checked: Final = developer_messages_for_a_prompt_caching_model(
+            cast(list[AllMessageValues], [{**developer, "cache_control": {"type": "ephemeral"}}, question]),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_info=None,
+            base_model=None,
+        )
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            params, cast(list[AllMessageValues], [dict(developer), dict(question)]), model, custom_llm_provider
+        )
+        _, injected, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=cast(list[AllMessageValues], [dict(developer), dict(question)]),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+
+    assert lookups.called is False
+    assert list(checked) == [developer, question]
+    assert injected == [developer, question]
 
 
 def test_cache_control_as_prompt_cache_breakpoints_leaves_unmarked_parts_with_non_string_keys_alone() -> None:

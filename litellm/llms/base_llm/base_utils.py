@@ -8,6 +8,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
@@ -15,7 +16,12 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionCachedContent,
+    ChatCompletionSystemMessage,
+    ChatCompletionToolCallChunk,
+)
 from litellm.types.utils import (
     CountContextManagement,
     Message,
@@ -443,19 +449,53 @@ def type_to_response_format_param(
     }
 
 
+_CACHE_CONTROL: Final = TypeAdapter(ChatCompletionCachedContent)
+
+
+def _valid_cache_control(value: object) -> ChatCompletionCachedContent | None:
+    try:
+        return _CACHE_CONTROL.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _request_keeps_developer_cache_control(
+    messages: Sequence[AllMessageValues], other_request_fields: Mapping[str, object] | None
+) -> bool:
+    from litellm.integrations.anthropic_cache_control_hook import request_keeps_developer_cache_control
+
+    if not any(message["role"] == "developer" and "cache_control" in message for message in messages):
+        return False
+    return request_keeps_developer_cache_control(messages, other_request_fields or MappingProxyType({}))
+
+
+def _developer_message_as_system_message(message: AllMessageValues, keep_cache_control: bool) -> AllMessageValues:
+    if message["role"] != "developer":
+        return message
+    verbose_logger.debug("Translating developer role to system role for non-OpenAI providers.")
+    cache_control: Final = (
+        _valid_cache_control(message["cache_control"]) if keep_cache_control and "cache_control" in message else None
+    )
+    if cache_control is None:
+        return ChatCompletionSystemMessage(role="system", content=message["content"])
+    return ChatCompletionSystemMessage(role="system", content=message["content"], cache_control=cache_control)
+
+
 def map_developer_role_to_system_role(
     messages: list[AllMessageValues],
+    other_request_fields: Mapping[str, object] | None = None,
 ) -> list[AllMessageValues]:
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    new_messages: Final[list[AllMessageValues]] = []
-    for m in messages:
-        if m["role"] == "developer":
-            verbose_logger.debug(
-                "Translating developer role to system role for non-OpenAI providers."
-            )  # ensure user knows what's happening with their input.
-            new_messages.append({"role": "system", "content": m["content"]})
-        else:
-            new_messages.append(m)
-    return new_messages
+    keep_cache_control: Final = _request_keeps_developer_cache_control(messages, other_request_fields)
+    return [_developer_message_as_system_message(message, keep_cache_control) for message in messages]
+
+
+def map_developer_role_to_system_role_for_batch(
+    messages: Sequence[AllMessageValues],
+) -> list[AllMessageValues]:
+    """
+    Translate `developer` role to `system` role in batch records, which drop a developer message's cache mark.
+    """
+    return [_developer_message_as_system_message(message, keep_cache_control=False) for message in messages]

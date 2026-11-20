@@ -565,8 +565,11 @@ async def acompletion(
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
     )
+    from litellm.litellm_core_utils.core_helpers import as_str_mapping
     from litellm.types.llms.openai import AllMessageValues
 
+    caller_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: acompletion takes untyped kwargs
+    caller_model_info: Final = as_str_mapping(caller_kwargs.get("model_info"))
     AnthropicCacheControlHook.maybe_seed_default_injection_points(
         non_default_params=kwargs,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
@@ -575,6 +578,8 @@ async def acompletion(
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=kwargs.get("api_base") or base_url,
+        model_info=caller_model_info,
+        base_model=caller_kwargs.get("base_model") or (caller_model_info or {}).get("base_model"),
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -5600,6 +5605,7 @@ def completion(
 
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
+        developer_messages_for_a_prompt_caching_model,
     )
     from litellm.types.llms.openai import AllMessageValues
 
@@ -5611,6 +5617,8 @@ def completion(
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=kwargs.get("api_base") or base_url,
+        model_info=cast(object, model_info),  # cast-ok: untyped kwargs
+        base_model=cast(object, base_model),  # cast-ok: untyped kwargs
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -5785,7 +5793,25 @@ def completion(
             )
 
         if provider_config is not None:
-            translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
+            translated_messages: Final = provider_config.translate_developer_role_to_system_role(
+                messages=list(
+                    developer_messages_for_a_prompt_caching_model(
+                        cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        model_info=model_info,
+                        base_model=base_model if isinstance(base_model, str) else None,
+                    )
+                ),
+                other_request_fields=MappingProxyType(
+                    {
+                        "tools": cast(list[object] | None, tools),  # cast-ok: completion types tools as a bare List
+                        "cache_control": non_default_params.get("cache_control"),
+                        "extra_body": non_default_params.get("extra_body"),
+                        "cache_control_injection_points": non_default_params.get("cache_control_injection_points"),
+                    }
+                ),
+            )
             history_for_route: Final = _history_without_unanswered_tool_search_calls(
                 translated_messages, custom_llm_provider, provider_config
             )
