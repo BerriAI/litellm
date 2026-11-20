@@ -150,21 +150,23 @@ async def test_blocked_history_tool_call_blocks_the_request(handler, request_bod
 
 
 @pytest.mark.asyncio
-async def test_masked_tool_call_scan_leaves_arguments_untouched():
-    bedrock: Final = _Bedrock(answer=MASK)
-    guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock)
-    result: Final = await guardrail.apply_guardrail(
-        inputs={
-            "texts": [],
-            "tool_calls": [
-                {"id": "call_1", "type": "function", "function": {"name": "send_payment", "arguments": ARGUMENTS}}
-            ],
-        },
-        request_data={},
-        input_type="request",
-    )
+@pytest.mark.parametrize("input_type", ["request", "response"])
+async def test_masked_tool_call_scan_blocks_instead_of_forwarding_the_arguments(input_type):
+    guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=_Bedrock(answer=MASK))
 
-    assert result["tool_calls"][0]["function"]["arguments"] == ARGUMENTS
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={
+                "texts": [],
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "send_payment", "arguments": ARGUMENTS}}
+                ],
+            },
+            request_data={},
+            input_type=input_type,
+        )
+
+    assert blocked.value.status_code == 400
 
 
 def _tool_call_only_response() -> ModelResponse:

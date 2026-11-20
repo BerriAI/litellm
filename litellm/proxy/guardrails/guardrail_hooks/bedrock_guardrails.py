@@ -3459,9 +3459,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         input_type: Literal["request", "response"],
     ) -> None:
-        """Scan tool-call names and arguments as text, raising when Bedrock blocks them.
+        """Scan tool-call names and arguments as text, raising when Bedrock blocks or masks them.
 
-        Masked output is discarded: rewriting arguments could leave them invalid JSON.
+        A mask also blocks: writing it into the arguments could leave them invalid JSON, and
+        forwarding the original arguments would let through what the policy masks.
         """
         if self.scan_tool_calls_as_text is not True or effective_scan_only_tool_results_for_guardrail(self):
             return
@@ -3478,7 +3479,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not tool_call_texts:
             return
         if input_type == "response":
-            await self.make_bedrock_api_request(
+            output_scan: Final = await self.make_bedrock_api_request(
                 source="OUTPUT",
                 response=ModelResponse(
                     choices=[
@@ -3490,13 +3491,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data,
                 logging_event_type=GuardrailEventHooks.post_call,
             )
+            self._raise_if_tool_call_scan_intervened(output_scan, request_data)
             return
-        await self.make_bedrock_api_request(
+        input_scan: Final = await self.make_bedrock_api_request(
             source="INPUT",
             messages=[ChatCompletionUserMessage(role="user", content=text) for text in tool_call_texts],
             request_data=request_data,
             logging_event_type=GuardrailEventHooks.pre_call,
         )
+        self._raise_if_tool_call_scan_intervened(input_scan, request_data)
+
+    def _raise_if_tool_call_scan_intervened(
+        self,
+        scan: BedrockGuardrailResponse,
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict
+    ) -> None:
+        if scan.get("action") == "GUARDRAIL_INTERVENED":
+            raise self._get_http_exception_for_blocked_guardrail(scan, request_data)
 
     async def apply_guardrail(
         self,
