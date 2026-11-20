@@ -2922,11 +2922,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         annotations: Final = chat_completion_message.get("annotations")
         provider_specific_fields: Final = chat_completion_message.get("provider_specific_fields")
-        finish_fields: Final = _candidate_finish_fields(candidate) if _names_its_finish(candidate) else None
-        native_finish_reason: Final = candidate.get("finishReason")
+        names_its_finish: Final = _names_its_finish(candidate)
+        finish_fields: Final = _candidate_finish_fields(candidate) if names_its_finish else None
         choice: Final = StreamingChoices(
-            finish_reason=VertexGeminiConfig._check_finish_reason(chat_completion_message, native_finish_reason)
-            if native_finish_reason
+            finish_reason=VertexGeminiConfig._check_finish_reason(
+                chat_completion_message, candidate.get("finishReason")
+            )
+            if names_its_finish
             else None,
             index=candidate.get("index", idx),
             delta=Delta(
@@ -4246,8 +4248,7 @@ def _transform_long_decode_hops(
 def _provider_finish_reasons(
     candidates: Sequence[Candidates], choices: Sequence["StreamingChoices"], blocked_indices: frozenset[int]
 ) -> tuple[tuple[int, str], ...]:
-    """A streamed choice also carries "stop" for Google's FINISH_REASON_UNSPECIFIED, so only a candidate that named how
-    it ended, or a blocked prompt, is evidence of it."""
+    """Only a candidate that named how it ended, or a blocked prompt, is evidence of a finish."""
     finished: Final = frozenset(
         candidate.get("index", position)
         for position, candidate in enumerate(candidates)

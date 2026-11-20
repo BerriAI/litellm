@@ -2717,6 +2717,17 @@ def test_gemini_stream_cut_before_any_finish_reason_raises(
 
 @pytest.mark.usefixtures("_gemini_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
+def test_gemini_stream_whose_only_finish_reason_is_unspecified_raises(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(
+        litellm.exceptions.MidStreamFallbackError, match="Stream ended before a finish_reason was received"
+    ):
+        _gemini_stream_finish_reasons(
+            respx_mock, _gemini_stream_chunk({"text": "One, two,"}, finish_reason="FINISH_REASON_UNSPECIFIED")
+        )
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
     ("first_part", "expected"),
     [(_GEMINI_CUT_STREAM_PARTS["text"], "stop"), (_GEMINI_CUT_STREAM_PARTS["tool_call"], "tool_calls")],
