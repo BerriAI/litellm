@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -38,7 +39,7 @@ from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var, mcp
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
 from litellm.types.mcp import MCPAuth, MCPTransport
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPServer
 from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 CatalogKind = Literal["tools", "prompts", "resources", "templates"]
@@ -1071,3 +1072,29 @@ async def test_the_challenge_names_the_url_the_client_addressed(request_path: st
     assert dict(start["headers"])[b"www-authenticate"].decode() == (
         f'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/{resource}"'
     )
+
+
+def _plain_server(**overrides: object) -> MCPServer:
+    return MCPServer(
+        server_id="docs", name="docs", transport=MCPTransport.http, url="https://docs.example/mcp", **overrides
+    )
+
+
+@pytest.mark.parametrize("without_profiles", [None, ()], ids=["null", "empty"])
+def test_catalog_identity_of_a_server_without_profiles_has_no_profile_key(without_profiles: tuple[()] | None) -> None:
+    identity: Final = json.loads(catalog._configuration_identity(_plain_server(additional_auth=without_profiles)))
+
+    assert "additional_auth" not in identity
+
+
+def test_catalog_identity_changes_when_a_profile_is_added_or_edited() -> None:
+    bots: Final = MCPAuthProfile(id="bots", auth_type="bearer_token", authentication_token="first")
+    rotated: Final = bots.model_copy(update={"authentication_token": "second"})
+
+    identities: Final = {
+        catalog._configuration_identity(_plain_server()),
+        catalog._configuration_identity(_plain_server(additional_auth=(bots,))),
+        catalog._configuration_identity(_plain_server(additional_auth=(rotated,))),
+    }
+
+    assert len(identities) == 3

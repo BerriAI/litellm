@@ -198,6 +198,30 @@ async def test_search_tool_litellm_params_are_moved_to_the_new_key():
 
 
 @pytest.mark.asyncio
+async def test_mcp_auth_profile_credentials_are_moved_to_the_new_key():
+    tables: Tables = {
+        "LiteLLM_MCPAuthProfileTable": [
+            {
+                "profile_id": "ana-bots",
+                "credentials": {
+                    "client_id": _encrypted("bot-app"),
+                    "client_secret": _encrypted("bot-secret"),
+                    "token_endpoint_auth_method": "client_secret_basic",
+                },
+            }
+        ]
+    }
+
+    migrated = await reencrypt_stored_values(_FakeDatabase(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY)
+
+    assert migrated == 2
+    credentials = tables["LiteLLM_MCPAuthProfileTable"][0]["credentials"]
+    assert decrypt_if_encrypted_with(credentials["client_id"], NEW_KEY) == "bot-app"
+    assert decrypt_if_encrypted_with(credentials["client_secret"], NEW_KEY) == "bot-secret"
+    assert credentials["token_endpoint_auth_method"] == "client_secret_basic"
+
+
+@pytest.mark.asyncio
 async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
     database = _FakeDatabase(_seeded_tables())
 
