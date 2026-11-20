@@ -115,6 +115,66 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_prefix", "sent_instructions"), [("Stable prefix", None), ("Older prefix", "Stable prefix")]
+)
+async def test_messages_follow_up_sends_the_system_prompt_only_when_the_stored_chain_lacks_it(
+    stored_prefix: str, sent_instructions: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    stored_chain: Final = {
+        "object": "list",
+        "data": [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": stored_prefix}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first"}]},
+        ],
+        "first_id": "msg_1",
+        "last_id": "msg_2",
+        "has_more": False,
+    }
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=stored_chain)
+        )
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        response: Final = await litellm.anthropic.messages.acreate(
+            model="openai/responses/gpt-6.2-sol",
+            max_tokens=16,
+            system="Stable prefix",
+            messages=[{"role": "user", "content": "again"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            previous_response_id="resp_prior",
+        )
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body.get("instructions") == sent_instructions
+    assert request_body["previous_response_id"] == "resp_prior"
+    assert request_body["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "again"}]}
+    ]
+    assert response["content"] == [{"type": "text", "text": "ok"}]
+
+
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
     responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
@@ -1654,18 +1714,20 @@ async def test_openai_turn_is_not_sent_again_for_other_rejections(
 @pytest.mark.parametrize(
     ("store_params", "system_in_input"),
     [
-        ({}, False),
-        ({"store": True}, False),
-        ({"store": "false"}, False),
+        ({}, True),
+        ({"store": True}, True),
+        ({"store": "false"}, True),
         ({"store": False}, True),
         ({"store": True, "extra_body": {"store": False}}, True),
-        ({"store": False, "extra_body": {"store": True}}, False),
-        ({"store": False, "extra_body": {"store": None}}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, False),
-        ({"store": False, "additional_drop_params": ["temperature"]}, True),
+        ({"store": False, "extra_body": {"store": True}}, True),
+        ({"store": False, "extra_body": {"store": None}}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, True),
+        ({"store": True, "previous_response_id": "resp_prior"}, False),
+        ({"conversation": "conv_prior"}, False),
+        ({"extra_body": {"truncation": "auto"}}, False),
     ],
 )
-def test_messages_system_prompt_moves_to_input_only_when_the_sent_store_is_false(
+def test_messages_system_prompt_goes_in_input_unless_the_request_continues_a_chain(
     store_params: dict[str, object], system_in_input: bool
 ) -> None:
     kwargs: Final = _build_responses_kwargs(
