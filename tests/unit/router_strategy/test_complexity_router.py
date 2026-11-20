@@ -18229,8 +18229,9 @@ def test_classifier_output_cap_rejects_nonpositive_values(cap: int) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("configured_cap", [64, None, "omitted"])
+@pytest.mark.parametrize("deployment_cap", [None, 8192])
 async def test_encrypted_classifier_sends_its_own_output_cap(
-    configured_cap: int | None | Literal["omitted"], native_classifier_http: MagicMock
+    configured_cap: int | None | Literal["omitted"], deployment_cap: int | None, native_classifier_http: MagicMock
 ) -> None:
     native: Final = Router(
         model_list=[
@@ -18240,6 +18241,7 @@ async def test_encrypted_classifier_sends_its_own_output_cap(
                     "model": "openai/gpt-6-astra",
                     "api_key": "test-key",
                     "api_base": "https://classifier.test/v1",
+                    **({"max_output_tokens": deployment_cap} if deployment_cap is not None else {}),
                 },
             }
         ],
@@ -18273,6 +18275,74 @@ async def test_encrypted_classifier_sends_its_own_output_cap(
     body: Final = json.loads(request.content)
     if isinstance(configured_cap, int):
         assert body["max_output_tokens"] == configured_cap
+    elif deployment_cap is not None:
+        assert body["max_output_tokens"] == deployment_cap
     else:
         assert "max_output_tokens" not in body
     assert "max_tokens" not in body
+    assert "max_completion_tokens" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_cap", [None, 64])
+@pytest.mark.parametrize("deployment_key", [None, "max_tokens", "max_completion_tokens"])
+async def test_classifier_cap_overrides_openai_deployment_token_limits(
+    configured_cap: int | None, deployment_key: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "classifier",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_key": "test-key",
+                    "api_base": "https://classifier.test/v1",
+                    **({deployment_key: 8192} if deployment_key is not None else {}),
+                },
+            },
+        ],
+        num_retries=0,
+    )
+    classifier: Final = ComplexityRouter(
+        model_name="auto",
+        ctx=RoutingContext(router),
+        complexity_router_config={
+            "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
+            "default_model": "capable",
+            "classifier_type": "llm",
+            "classifier_llm_config": {
+                "model": "classifier",
+                "timeout_ms": 5000,
+                "max_output_tokens": configured_cap,
+            },
+        },
+    )
+    with respx.mock(assert_all_mocked=True) as upstream:
+        endpoint: Final = upstream.post("https://classifier.test/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-classifier",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-6-astra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"tier":"SIMPLE"}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+        result: Final = await classifier.async_pre_routing_hook(
+            model="auto", request_kwargs={}, messages=[{"role": "user", "content": "rename this variable"}]
+        )
+
+    assert result.model == "cheap"
+    assert result.routing_decision["cause"] == "llm_classifier"
+    sent: Final = json.loads(endpoint.calls.last.request.content)
+    expected_cap: Final = configured_cap if configured_cap is not None else 8192 if deployment_key is not None else None
+    assert {key: sent[key] for key in OUTPUT_TOKEN_CEILING_PARAMS if key in sent} == (
+        {"max_completion_tokens": expected_cap} if expected_cap is not None else {}
+    )

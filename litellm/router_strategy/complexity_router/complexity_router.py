@@ -2985,7 +2985,10 @@ class ComplexityRouter(CustomLogger):
                 **classifier_payload,
                 **(
                     MappingProxyType(
-                        {"max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens}
+                        {
+                            **dict.fromkeys(OUTPUT_TOKEN_CEILING_PARAMS),
+                            "max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens,
+                        }
                     )
                     if max_output_tokens is not None
                     else EMPTY_MAPPING
