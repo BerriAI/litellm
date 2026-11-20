@@ -2063,6 +2063,169 @@ async def test_observed_tools_listing_retries_only_the_rate_limited_page(
 
 
 @pytest.mark.asyncio
+async def test_observed_tools_listing_retries_rate_limited_initialize_without_replaying_pages(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    initialize_ids: Final[list[object]] = []
+    initialized_notifications: Final[list[object]] = []
+    listing_cursors: Final[list[str | None]] = []
+    listing_sessions: Final[list[str | None]] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(200)
+        payload: Final = TypeAdapter(dict[str, object]).validate_json(request.content)
+        method: Final = payload.get("method")
+        request_id: Final = payload.get("id")
+        if method == "initialize":
+            initialize_ids.append(request_id)
+            if len(initialize_ids) == 1:
+                return httpx2.Response(429, headers={"Retry-After": "0"})
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "pagination", "version": "1"},
+                    },
+                },
+                headers={"mcp-session-id": "observed-session"},
+            )
+        if method == "notifications/initialized":
+            initialized_notifications.append(request_id)
+            return httpx2.Response(202)
+        if method != "tools/list":
+            return httpx2.Response(405)
+
+        params_value: Final = payload.get("params")
+        params: Final = params_value if isinstance(params_value, dict) else {}
+        cursor_value: Final = params.get("cursor")
+        cursor: Final = cursor_value if isinstance(cursor_value, str) else None
+        listing_cursors.append(cursor)
+        listing_sessions.append(request.headers.get("mcp-session-id"))
+        tool_name: Final = "first-tool" if cursor is None else "second-tool"
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "tools": [{"name": tool_name, "inputSchema": {"type": "object"}}],
+                    "nextCursor": "upstream-page-2" if cursor is None else None,
+                },
+            },
+        )
+
+    client: Final = _MockTransportClient(
+        respond,
+        server_url=(
+            "https://retry-user:retry-password@example.com/mcp/path-secret"
+            "?token=query-secret#fragment-secret"
+        ),
+        protocol_version=LATEST_HANDSHAKE_VERSION,
+    )
+    observed: Final[list[tuple[tuple[str, ...], str | None]]] = []
+
+    async def observe(page: ListToolsResult) -> None:
+        observed.append((tuple(tool.name for tool in page.tools), page.next_cursor))
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    result: Final = await client.list_tools_result(raise_on_error=True, on_page=observe)
+
+    assert len(initialize_ids) == 2
+    assert initialize_ids[0] == initialize_ids[1]
+    assert len(initialized_notifications) == 1
+    assert tuple(tool.name for tool in result.tools) == ("first-tool", "second-tool")
+    assert tuple(observed) == ((("first-tool",), "upstream-page-2"), (("second-tool",), None))
+    assert tuple(listing_cursors) == (None, "upstream-page-2")
+    assert tuple(listing_sessions) == ("observed-session", "observed-session")
+    assert "https://example.com" in caplog.text
+    assert "retry-user" not in caplog.text
+    assert "retry-password" not in caplog.text
+    assert "path-secret" not in caplog.text
+    assert "query-secret" not in caplog.text
+    assert "fragment-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_observed_tools_listing_walk_retry_redacts_server_url(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from mcp.types import PaginatedRequestParams, Tool
+
+    server_url: Final = (
+        "https://retry-user:retry-password@example.com/mcp/path-secret?token=query-secret#fragment-secret"
+    )
+    rate_limited_request: Final = httpx2.Request("POST", server_url)
+    rate_limited_response: Final = httpx2.Response(
+        429, headers={"Retry-After": "0"}, request=rate_limited_request
+    )
+    cursors: Final[list[str | None]] = []
+
+    async def list_tools(
+        session: object, *, params: PaginatedRequestParams | None = None
+    ) -> ListToolsResult:
+        cursor: Final = params.cursor if params is not None else None
+        cursors.append(cursor)
+        if cursors.count(cursor) == 1:
+            raise httpx2.HTTPStatusError(
+                "rate limited", request=rate_limited_request, response=rate_limited_response
+            )
+        return ListToolsResult(
+            tools=[Tool(name="first-tool" if cursor is None else "second-tool", inputSchema={"type": "object"})],
+            next_cursor="upstream-page-2" if cursor is None else None,
+        )
+
+    monkeypatch.setattr(mcp_client_module.ClientSession, "list_tools", list_tools)
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(200)
+        payload: Final = TypeAdapter(dict[str, object]).validate_json(request.content)
+        if payload.get("method") == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.get("id"),
+                    "result": {
+                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "pagination", "version": "1"},
+                    },
+                },
+                headers={"mcp-session-id": "observed-session"},
+            )
+        return httpx2.Response(202)
+
+    client: Final = _MockTransportClient(
+        respond,
+        server_url=server_url,
+        protocol_version=LATEST_HANDSHAKE_VERSION,
+    )
+    observed: Final[list[tuple[tuple[str, ...], str | None]]] = []
+
+    async def observe(page: ListToolsResult) -> None:
+        observed.append((tuple(tool.name for tool in page.tools), page.next_cursor))
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    result: Final = await client.list_tools_result(raise_on_error=True, on_page=observe)
+
+    assert tuple(tool.name for tool in result.tools) == ("first-tool", "second-tool")
+    assert tuple(observed) == ((("first-tool",), "upstream-page-2"), (("second-tool",), None))
+    assert tuple(cursors) == (None, None, "upstream-page-2", "upstream-page-2")
+    assert caplog.text.count("https://example.com") == 2
+    assert "retry-user" not in caplog.text
+    assert "retry-password" not in caplog.text
+    assert "path-secret" not in caplog.text
+    assert "query-secret" not in caplog.text
+    assert "fragment-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("paginated", (False, True))
 async def test_sse_catalog_limit_reports_the_failure_and_allows_smaller_pages(paginated: bool) -> None:
     from mcp.types import Tool

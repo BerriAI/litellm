@@ -328,16 +328,16 @@ class _MCPHTTPClient(httpx2.AsyncClient):
 
         deadline_at: Final = _MCP_OBSERVED_TOOLS_LIST_DEADLINE.get()
 
-        def is_observed_tools_list() -> bool:
+        def is_observed_discovery_post() -> bool:
             if deadline_at is None or request.method != "POST":
                 return False
             try:
                 payload: Final = TypeAdapter(dict[str, object]).validate_json(request.content)
             except (TypeError, ValueError, RuntimeError):
                 return False
-            return payload.get("method") == "tools/list"
+            return payload.get("method") in {"initialize", "tools/list"}
 
-        retry_tools_list: Final = is_observed_tools_list()
+        retry_observed_discovery: Final = is_observed_discovery_post()
 
         async def send_once() -> httpx2.Response:
             response: Final = await super(_MCPHTTPClient, self).send(
@@ -353,12 +353,13 @@ class _MCPHTTPClient(httpx2.AsyncClient):
             return response
 
         try:
-            if retry_tools_list:
+            if retry_observed_discovery:
                 from litellm.proxy.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+                from litellm.proxy.mcp_server.oauth_utils import redact_mcp_resource_url
 
                 return await retry_upstream_rate_limit(
                     send_once,
-                    str(request.url),
+                    redact_mcp_resource_url(str(request.url)) or "MCP server",
                     deadline_seconds=max(0.0, deadline_at - time.monotonic()) if deadline_at is not None else 0.0,
                 )
             return await send_once()
@@ -1127,6 +1128,11 @@ class MCPClient:
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
         try:
+            from litellm.proxy.mcp_server.oauth_utils import redact_mcp_resource_url
+
+            server_name: Final = redact_mcp_resource_url(self.server_url) or (
+                "MCP server" if self.server_url else "stdio"
+            )
             # A per-server timeout above the global default extends the whole-walk deadline
             listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
             token: Final = _MCP_OBSERVED_TOOLS_LIST_DEADLINE.set(
@@ -1139,7 +1145,7 @@ class MCPClient:
                         listing_deadline=listing_deadline,
                         require_complete=raise_on_error,
                         on_page=on_page,
-                        server_name=self.server_url or "stdio",
+                        server_name=server_name,
                     ),
                     quiet_on_error=raise_on_error,
                 )
