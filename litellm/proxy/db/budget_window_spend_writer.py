@@ -18,9 +18,11 @@ from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import chain, groupby
+from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -116,6 +118,11 @@ _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL: Final = (
     "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
+_SEED_FROM_SPEND_LOGS_USER_SQL: Final = _SEED_FROM_SPEND_LOGS_TEAM_SQL.replace("team_id =", '"user" =')
+_SEED_FROM_SPEND_LOGS_USER_UNBOUNDED_SQL: Final = _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL.replace(
+    "team_id =", '"user" ='
+)
+
 _UPSERT_TRANSACTION_TIMEOUT: Final = timedelta(seconds=60)
 
 
@@ -134,6 +141,33 @@ _SEED_TOTALS_ROWS: Final = TypeAdapter(tuple[_SeedTotalsRow, ...])
 _EXISTING_KEY_ROWS: Final = TypeAdapter(tuple[_ExistingKeyRow, ...])
 
 
+class CommittedWindowSpend(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    entity_type: str
+    entity_id: str
+    window_duration: str
+    window_start: datetime
+    spend: float
+    reset_at: datetime | None = None
+
+
+_COMMITTED_WINDOWS: Final = TypeAdapter(tuple[CommittedWindowSpend, ...])
+
+
+def _with_charged_reset(
+    rows: Sequence[CommittedWindowSpend], transaction: WindowSpendTransaction
+) -> tuple[CommittedWindowSpend, ...]:
+    reset: Final = transaction.get("reset_at")
+    start: Final = to_naive_utc(datetime.fromisoformat(transaction["window_start"]))
+    return tuple(
+        row.model_copy(update={"reset_at": datetime.fromisoformat(reset.replace("Z", "+00:00"))})
+        if reset and to_naive_utc(row.window_start) == start
+        else row
+        for row in rows
+    )
+
+
 class _SeedTotalsQuery(Protocol):
     async def __call__(self, query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]: ...
 
@@ -149,7 +183,13 @@ class _UpsertBatch(Protocol):
 class _UpsertBatchManager(Protocol):
     async def __aenter__(self) -> _UpsertBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 class _UpsertTransaction(Protocol):
@@ -161,7 +201,13 @@ class _UpsertTransaction(Protocol):
 class _UpsertTransactionManager(Protocol):
     async def __aenter__(self) -> _UpsertTransaction: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 def _seed_totals_query(prisma_client: "PrismaClient") -> _SeedTotalsQuery:
@@ -228,19 +274,24 @@ async def spend_logs_seed_totals(
     counts everything: that can only over-count once, which enforcement
     tolerates, whereas under-counting is a budget bypass.
     """
-    if entity_type == Litellm_EntityType.KEY.value:
-        bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_KEY_SQL, _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL
-    elif entity_type == Litellm_EntityType.TEAM.value:
-        bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_TEAM_SQL, _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL
-    else:
+    queries: Final = (
+        (_SEED_FROM_SPEND_LOGS_KEY_SQL, _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL)
+        if entity_type == Litellm_EntityType.KEY.value
+        else (_SEED_FROM_SPEND_LOGS_TEAM_SQL, _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL)
+        if entity_type == Litellm_EntityType.TEAM.value
+        else (_SEED_FROM_SPEND_LOGS_USER_SQL, _SEED_FROM_SPEND_LOGS_USER_UNBOUNDED_SQL)
+        if entity_type == Litellm_EntityType.USER.value
+        else None
+    )
+    if queries is None:
         return None
     read: Final = query or _seed_totals_query(prisma_client)
     async with db_span("seed_window_spend", "LiteLLM_SpendLogs"):
         rows: Final = (
-            await read(unbounded_sql, entity_id, window_start)
+            await read(queries[1], entity_id, window_start)
             if batch_started_at is None
             else await read(
-                bounded_sql,
+                queries[0],
                 entity_id,
                 window_start,
                 _exclusion_upper_bound(batch_started_at),
@@ -387,7 +438,9 @@ async def commit_window_spend_updates(
     transactions: Sequence[WindowSpendTransaction],
     spend_logs_aggregate: WindowSpendLogsAggregate = spend_logs_seed_totals,
     outer_transaction: _UpsertTransaction | None = None,
-) -> None:
+    *,
+    capture_spend: bool = False,
+) -> tuple[CommittedWindowSpend, ...]:
     """Apply aggregated window increments to LiteLLM_BudgetWindowSpend.
 
     An increment at or behind the row's window_start adds into the row (this is
@@ -399,7 +452,7 @@ async def commit_window_spend_updates(
     applied before the roll that supersedes it.
     """
     if not transactions:
-        return
+        return ()
 
     ordered: Final = tuple(sorted(transactions, key=window_spend_group_key))
     reads: Final = _transaction_reads(outer_transaction) if outer_transaction is not None else (None, None)
@@ -432,13 +485,53 @@ async def commit_window_spend_updates(
         (
             nullcontext(outer_transaction) if outer_transaction is not None else _upsert_transaction(prisma_client)
         ) as db_transaction,
-        db_transaction.batch_() as batcher,
     ):
-        for transaction, seed_base in zip(ordered, seed_bases):
-            batcher.execute_raw(
-                _UPSERT_WINDOW_SPEND_SQL,
-                *_upsert_params(transaction=transaction, seed_base=seed_base, now=now),
+        groups: Final = tuple(
+            (capture, tuple(items))
+            for capture, items in groupby(
+                zip(ordered, seed_bases),
+                key=lambda item: (
+                    capture_spend
+                    and item[0]["entity_type"] in ("app", "app_customer_org", "app_customer_member")
+                    and item[0]["spend"] > 0
+                ),
             )
+        )
+        return tuple(
+            chain.from_iterable(
+                [await _write_windows(db_transaction, items, now, capture) for capture, items in groups]
+            )
+        )
+
+
+async def _write_windows(
+    database: _UpsertTransaction,
+    items: tuple[tuple[WindowSpendTransaction, float], ...],
+    now: datetime,
+    capture: bool,
+) -> tuple[CommittedWindowSpend, ...]:
+    if capture:
+        return tuple(
+            chain.from_iterable(
+                [
+                    _with_charged_reset(
+                        _COMMITTED_WINDOWS.validate_python(
+                            await database.query_raw(
+                                _UPSERT_WINDOW_SPEND_SQL
+                                + " RETURNING entity_type, entity_id, window_duration, window_start, spend",
+                                *_upsert_params(transaction, seed_base, now),
+                            )
+                        ),
+                        transaction,
+                    )
+                    for transaction, seed_base in items
+                ]
+            )
+        )
+    async with database.batch_() as batcher:
+        for transaction, seed_base in items:
+            batcher.execute_raw(_UPSERT_WINDOW_SPEND_SQL, *_upsert_params(transaction, seed_base, now))
+    return ()
 
 
 async def roll_window_spend_row(

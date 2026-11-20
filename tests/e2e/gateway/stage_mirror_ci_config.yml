@@ -55,15 +55,15 @@ model_list:
     litellm_params:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: gemini-2.5-flash-vertex
+  - model_name: gemini-3.8-flash-vertex
     litellm_params:
-      model: vertex_ai/gemini-2.5-flash
+      model: vertex_ai/gemini-3.8-flash
       vertex_project: os.environ/VERTEXAI_PROJECT
-      vertex_location: us-central1
+      vertex_location: global
       vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
-  - model_name: gemini-2.5-flash
+  - model_name: gemini-3.8-flash
     litellm_params:
-      model: gemini/gemini-2.5-flash
+      model: gemini/gemini-3.8-flash
       api_key: os.environ/GEMINI_API_KEY
   - model_name: e2e-alias-rl-target
     litellm_params:

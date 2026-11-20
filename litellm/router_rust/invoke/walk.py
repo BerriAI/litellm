@@ -14,6 +14,7 @@ reads a failed request's walk off it), so a fresh call's root writes reach that 
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from litellm.exceptions import logged_class_name
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 if TYPE_CHECKING:
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 
     from litellm.router_api import RoutingContext
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+    from litellm.rust_bridge._native import AttemptShape
 
 # `RETRY_BREADCRUMB_LIMIT`: how many failures `previous_models` keeps.
 RETRY_BREADCRUMB_LIMIT: Final = 4
@@ -39,6 +41,18 @@ _WALK_KEYS: Final = (
 _SERVED_KEYS: Final = ("model_info", "deployment")
 # The walk state `run_async_fallback` hands every hop as kwargs.
 _HOP_KWARGS: Final = ("fallback_depth", "max_fallbacks", "attempted_targets", "include_fallback_errors")
+_RETRY_RECORD_KEYS: Final = ("previous_models", "request_retry_count")
+
+
+def _reentrant_hop_stamps(request: Mapping[str, object], field: str) -> Mapping[str, object]:
+    """A hop ``run_async_fallback`` re-entered with its own ``attempted_targets`` keeps the fallback
+    stamps it carries in place of the root level's (``async_function_with_fallbacks`` skips them)."""
+    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+
+    if not isinstance(request.get("attempted_targets"), AttemptedFallbackTargets):
+        return {}
+    bucket: Final = as_str_mapping(request.get(field)) or {}
+    return {key: bucket[key] for key in ("attempted_fallbacks", "original_model_group") if key in bucket}
 
 
 class _Scope:
@@ -72,7 +86,7 @@ def _breadcrumb(
         "deployment_id": known_id,
         "model": deployment if isinstance(deployment, str) else None,
         "base_model": base_model,
-        "exception_type": type(error).__name__,
+        "exception_type": logged_class_name(error),
         "exception_string": str(error),
         "attempted_retries": attempted if type(attempted) is int else None,
     }
@@ -119,7 +133,7 @@ def log_retry_into(
             {
                 "litellm.routing.router_model_name": router_name,
                 "litellm.retry.count": request_retry_count,
-                "error.type": type(error).__name__,
+                "error.type": logged_class_name(error),
                 **({"litellm.deployment.model_group": model_group} if isinstance(model_group, str) else {}),
                 **({"litellm.deployment.id": deployment_id} if isinstance(deployment_id, str) else {}),
             },
@@ -146,6 +160,7 @@ class WalkMetadata:
         root: Final[dict[str, object]] = {"attempted_fallbacks": 0}  # mutable-ok: the root level's metadata
         if model is not None:
             root["original_model_group"] = model
+        root.update(_reentrant_hop_stamps(request, field))
         self._request: Final = request
         self._field: Final = field
         self._params_base_model: Final = params_base_model
@@ -167,11 +182,13 @@ class WalkMetadata:
             return
         sibling: Final = request.get("metadata" if self._field == "litellm_metadata" else "litellm_metadata")
         if isinstance(sibling, dict):
-            sibling.pop("attempted_fallbacks", None)  # pyright: ignore[reportUnknownMemberType]  # the caller's metadata dict
-            sibling.pop("original_model_group", None)  # pyright: ignore[reportUnknownMemberType]  # see above
+            for key in ("attempted_fallbacks", "original_model_group", *_RETRY_RECORD_KEYS):
+                sibling.pop(key, None)  # pyright: ignore[reportUnknownMemberType]  # the caller's metadata dict
         bucket: Final = request.get(self._field)
         if not isinstance(bucket, dict):
             return
+        for key in _RETRY_RECORD_KEYS:
+            bucket.pop(key, None)  # pyright: ignore[reportUnknownMemberType]  # see above
         bucket["attempted_fallbacks"] = 0
         model: Final = request.get("model")
         if model is not None:
@@ -252,10 +269,18 @@ class WalkMetadata:
 
     def hop_kwargs(self, event: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: a fresh dict for the loggers
         """The kwargs the level held after a hop (``kwargs["model"] = target``), as the
-        fallback loggers see them."""
+        fallback loggers see them: the request's own metadata (the proxy's ``user_api_key_*``
+        labels) with the level's walk stamps laid over it, as ``run_async_fallback``'s
+        ``_hop_metadata`` copies it."""
         scope: Final = self._scope(event.get("scope"))
         model: Final = scope.metadata.get("model_group", event.get("to"))
-        return {**self._request, **scope.kwargs, "model": model, self._field: dict(scope.metadata)}
+        request_bucket: Final = as_str_mapping(self._request.get(self._field)) or {}
+        return {
+            **self._request,
+            **scope.kwargs,
+            "model": model,
+            self._field: {**request_bucket, **scope.metadata},
+        }
 
     def log_retry(self, event: Mapping[str, object], error: BaseException | None) -> None:
         """A ``retry_logged`` event: the failure joins the scope's ``previous_models``."""
@@ -289,7 +314,9 @@ class WalkMetadata:
         """The level's ``request_retry_count``, as the retry loop has counted it so far."""
         return self._scope(step.get("scope")).metadata.get("request_retry_count")
 
-    def stamp(self, step: Mapping[str, object], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    def stamp(
+        self, step: Mapping[str, object], kwargs: Mapping[str, object], shape: "AttemptShape"
+    ) -> Mapping[str, object]:
         """The attempt's kwargs with its level's walk metadata and hop kwargs laid over them."""
         scope: Final = self._scope(step.get("scope"))
         metadata: Final = scope.metadata
@@ -299,10 +326,27 @@ class WalkMetadata:
         self._write_through(
             scope, {"attempted_retries": metadata["attempted_retries"], "max_retries": metadata["max_retries"]}
         )
-        served: Final = dict(as_str_mapping(kwargs.get(self._field)) or {})
+        # `include_fallback_errors` is the walk's own flag: the fallback loggers see it, the provider never does.
+        hop: Final = {
+            key: scope.kwargs[key] for key in _HOP_KWARGS if key in scope.kwargs and key != "include_fallback_errors"
+        }
+        given: Final = kwargs.get(self._field)
+        # The requested group's attempts stamp the caller's own dict in place, as
+        # `_update_kwargs_with_deployment` stamps it: the proxy's post-call write-backs land in the dict
+        # its spend row reads. A fallback hop stamps its own copy (`run_async_fallback`'s kwargs).
+        served: Final = (
+            given  # pyright: ignore[reportUnknownVariableType]  # the caller's metadata dict
+            if isinstance(given, dict) and not shape.is_fallback
+            else dict(as_str_mapping(given) or {})
+        )
         served.update({key: metadata[key] for key in _WALK_KEYS if key in metadata})
         metadata.update({key: served.get(key) for key in _SERVED_KEYS})
-        return {**kwargs, **{key: scope.kwargs[key] for key in _HOP_KWARGS if key in scope.kwargs}, self._field: served}
+        sent: Final = (
+            {key: value for key, value in kwargs.items() if key != "mock_timeout"}
+            if shape.drops_mock_timeout
+            else kwargs
+        )
+        return {**sent, **hop, self._field: served}
 
 
 async def _log_failed_fallbacks(ctx: "RoutingContext", detail: str, parent_otel_span: "Span | None") -> None:

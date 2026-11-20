@@ -149,6 +149,11 @@ def request_messages(request: Request) -> tuple[Event, ...]:
     return tuple(JSON_OBJECT.validate_python(message) for message in messages)
 
 
+def request_tool_names(request: Request) -> list[JsonValue]:
+    tools: Final = JSON_LIST.validate_python(JSON_OBJECT.validate_json(request.body).get("tools") or [])
+    return [JSON_OBJECT.validate_python(tool).get("name") for tool in tools]
+
+
 def answer_reply(request: Request) -> Reply:
     marker: Final = marker_of(request)
     return turn_reply(request, f"msg_{marker}_answer", ({"type": "text", "text": answer(marker)},), "end_turn")
@@ -314,6 +319,11 @@ def provider_fields(assistant: Event) -> Event:
 
 def tool_call_ids(assistant: Event) -> list[JsonValue]:
     calls: Final = JSON_LIST.validate_python(assistant.get("tool_calls") or [])
+    return [JSON_OBJECT.validate_python(call)["id"] for call in calls]
+
+
+def server_tool_call_ids(assistant: Event) -> list[JsonValue]:
+    calls: Final = JSON_LIST.validate_python(provider_fields(assistant).get("server_tool_calls") or [])
     return [JSON_OBJECT.validate_python(call)["id"] for call in calls]
 
 

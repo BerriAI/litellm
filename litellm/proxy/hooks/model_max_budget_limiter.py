@@ -27,6 +27,8 @@ from litellm.litellm_core_utils.batch_utils import (
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_budget_shared_windows import (
@@ -187,17 +189,17 @@ def routed_models_of(router: "Router", team_id: str | None = None) -> RoutedMode
         router.settings().default_deployment is not None
         or router.settings().router_general_settings.pass_through_all_models
     )
-    served_names: Final = frozenset(router.registry().names(kind="group_set")) | (
+    model_groups: Final = frozenset(router.registry().names(kind="group_set")) | (
         frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset()
     )
     team_members: Final = _team_public_names_by_group(router=router, team_id=team_id)
     return RoutedModels(
-        served_names=served_names,
+        served_names=model_groups | frozenset(router.registry().aliases()),
         group_members=MappingProxyType(
             {
                 group: frozenset(members) | team_members.get(group, frozenset())
                 for group, members in router.registry().access_groups().items()
-                if group not in served_names
+                if group not in model_groups
             }
         ),
     )
@@ -524,6 +526,25 @@ def _usable_entry(entry: str, raw_budget_config: object) -> ResolvedModelBudget 
 def team_model_budget_entries(
     model: str, team_model_max_budget: Mapping[str, object], key_model_max_budget: Mapping[str, object] | None
 ) -> Mapping[str, object]:
+    models: Final = expand_model_latest_alias(model)
+    if len(models) == 1:
+        return _single_team_model_budget_entries(model, team_model_max_budget, key_model_max_budget)
+    entries: Final = tuple(
+        _single_team_model_budget_entries(candidate, team_model_max_budget, key_model_max_budget)
+        for candidate in models
+    )
+    return MappingProxyType(
+        {
+            entry: config
+            for entry, config in team_model_max_budget.items()
+            if all(entry in mapping for mapping in entries)
+        }
+    )
+
+
+def _single_team_model_budget_entries(
+    model: str, team_model_max_budget: Mapping[str, object], key_model_max_budget: Mapping[str, object] | None
+) -> Mapping[str, object]:
     """The team entries that budget `model` for this key.
 
     A key entry named after `model` that spend-gates it replaces the team entry named after it, so that model is
@@ -575,8 +596,23 @@ def _budget_model_candidates(model: str) -> tuple[str, ...]:
     the Bedrock base model (``anthropic.claude-opus-4-8`` governs the
     cross-region ``us.anthropic.claude-opus-4-8``), or on the bare family name
     that Bedrock id shares with its direct-provider twin (``claude-opus-4-8``).
+    A ``router_settings.model_group_alias`` name is also governed by every name
+    that budgets the model group it routes to, after the names of its own.
     """
-    return tuple(dict.fromkeys((model, model.split("/")[-1], *_bedrock_candidates(model))))
+    names: Final = (model, *_aliased_model_group(model))
+    return tuple(dict.fromkeys(itertools.chain.from_iterable(_own_name_candidates(name) for name in names)))
+
+
+def _own_name_candidates(model: str) -> tuple[str, ...]:
+    return (model, model.split("/")[-1], *_bedrock_candidates(model))
+
+
+def _aliased_model_group(model: str) -> tuple[str, ...]:
+    router: Final = _proxy_router()
+    if router is None:
+        return ()
+    target: Final = resolve_model_group_alias(router.registry().aliases(), model)
+    return () if target is None else (target,)
 
 
 def _bedrock_candidates(model: str) -> tuple[str, ...]:
@@ -780,6 +816,31 @@ def _as_float(value: object) -> float | None:
         return None
 
 
+def _entity_model_budget_entries(
+    model: str,
+    entity_budget: tuple[Litellm_EntityType, str | None, object],
+    model_access_groups: ModelAccessGroups,
+    team_id: str | None,
+) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:
+    entity_type, entity_id, model_max_budget = entity_budget
+    if entity_id is None or not isinstance(model_max_budget, Mapping) or not model_max_budget:
+        return ()
+    return tuple(
+        (entity_type, entity_id, resolved)
+        for candidate in expand_model_latest_alias(model)
+        if (
+            resolved := resolve_model_budget(
+                model=candidate,
+                model_max_budget=model_max_budget,
+                model_access_groups=model_access_groups,
+                team_id=team_id,
+            )
+        )
+        is not None
+        and resolved.budget_config.budget_duration is not None
+    )
+
+
 def _resolve_entity_model_budgets(
     model: str,
     entity_budgets: Iterable[tuple[Litellm_EntityType, str | None, object]],
@@ -787,19 +848,15 @@ def _resolve_entity_model_budgets(
     team_id: str | None,
 ) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:
     """Drop the scopes that do not budget `model`, keeping only what can be incremented."""
+    entries: Final = itertools.chain.from_iterable(
+        _entity_model_budget_entries(model, entity_budget, model_access_groups, team_id)
+        for entity_budget in entity_budgets
+    )
     return tuple(
-        (entity_type, entity_id, resolved)
-        for entity_type, entity_id, model_max_budget in entity_budgets
-        if entity_id is not None and isinstance(model_max_budget, Mapping) and model_max_budget
-        for resolved in (
-            resolve_model_budget(
-                model=model,
-                model_max_budget=model_max_budget,
-                model_access_groups=model_access_groups,
-                team_id=team_id,
-            ),
-        )
-        if resolved is not None and resolved.budget_config.budget_duration is not None
+        {
+            (entity_type, entity_id, resolved.budget_model): (entity_type, entity_id, resolved)
+            for entity_type, entity_id, resolved in entries
+        }.values()
     )
 
 
@@ -989,6 +1046,26 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
 
     async def _is_entity_within_model_budget(
+        self,
+        entity_type: Litellm_EntityType,
+        entity_id: str | None,
+        team_id: str | None,
+        model_max_budget: Mapping[str, object] | None,
+        model: str,
+        exceeded_message: str,
+    ) -> bool:
+        for candidate in expand_model_latest_alias(model):
+            await self._is_single_entity_within_model_budget(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                team_id=team_id,
+                model_max_budget=model_max_budget,
+                model=candidate,
+                exceeded_message=exceeded_message,
+            )
+        return True
+
+    async def _is_single_entity_within_model_budget(
         self,
         entity_type: Litellm_EntityType,
         entity_id: str | None,

@@ -134,6 +134,8 @@ async def test_approval_commits_version_archive_history_and_review(pending_updat
     assert current is not None
     published_manifest: Final = {
         **case.proposal.manifest,
+        "_litellm_review": {"approved_by": "integration-reviewer", "security_scan_passed": False},
+        "_litellm_published_by": "integration-reviewer",
         "source": {
             **TypeAdapter(dict[str, str]).validate_python(case.submission.proposal.manifest["source"]),
             "url": f"https://skills.example.test/claude-code/plugins/{case.original.name}/archive/"
@@ -148,17 +150,22 @@ async def test_approval_commits_version_archive_history_and_review(pending_updat
     )
     metadata: Final = await case.publications.get_metadata(case.original.name)
     assert metadata is not None
+    assert metadata.created_by == before.created_by == case.original.created_by
+    assert metadata.created_at == before.created_at
+    assert metadata.updated_at is not None and before.updated_at is not None
+    assert metadata.updated_at > before.updated_at
     assert await case.publications.get_content(metadata) == case.proposal.content
     history: Final = await case.publications.versions(metadata, 10, 0)
     assert tuple((version.version, version.description, version.archive_available) for version in history) == (
         ("1.0.1", case.proposal.description, True),
         ("1.0.0", case.original.description, True),
     )
+    assert history[0].published_by == "integration-reviewer"
+    assert history[1].published_by == case.original.created_by
     for version, publication, manifest in zip(
-        history, (case.proposal, case.original), (published_manifest, case.original.manifest), strict=True
+        history, (case.proposal, case.original), (published_manifest, {**case.original.manifest, "_litellm_published_by": case.original.created_by}), strict=True
     ):
         assert version.manifest == {**manifest, "version": version.version}
-        assert version.published_by == publication.created_by
         assert await case.publications.version_content(metadata, version.id) == publication.content
 
 
@@ -452,3 +459,60 @@ async def test_metadata_scan_requires_the_matching_managed_archive(
     else:
         assert isinstance(result, SubmissionConflict)
         assert await case.submissions.get_scan(submission.id) is None
+
+
+async def test_owner_edits_preserve_base_and_require_review_of_new_revision(pending_update: PendingUpdate) -> None:
+    case: Final = pending_update
+    before: Final = _published_rows(case.original.name)
+    replacement: Final = _publication(case.original.name, "Edited proposal instructions")
+    edited: Final = await case.submissions.edit(case.submission.id, case.submission.submitted_by, 0, replacement)
+    assert isinstance(edited, SkillSubmission)
+    assert (edited.revision, edited.submitted_by, edited.created_at, edited.base_updated_at) == (
+        1, case.submission.submitted_by, case.submission.created_at, case.submission.base_updated_at,
+    )
+    assert await case.submissions.get_archive(edited.id, edited.submitted_by) == replacement.content
+    assert _published_rows(case.original.name) == before
+    for revision in (None, 0):
+        stale: Final = await case.submissions.review(edited.id, "reviewer", True, None,
+            publication_base_url="https://skills.example.test", expected_revision=revision)
+        assert isinstance(stale, SubmissionConflict)
+    reviewed: Final = await case.submissions.review(edited.id, "reviewer", True, None,
+        publication_base_url="https://skills.example.test", expected_revision=edited.revision)
+    assert isinstance(reviewed, SubmissionReviewed)
+    current: Final = await case.publications.get_metadata(case.original.name)
+    assert current is not None
+    assert current.description == replacement.description
+    assert await case.publications.get_content(current) == replacement.content
+
+
+@pytest.mark.parametrize("action", ["edit", "withdraw"])
+async def test_owner_mutation_racing_approval_has_one_winner(pending_update: PendingUpdate, action: str) -> None:
+    case: Final = pending_update
+    before: Final = _published_rows(case.original.name)
+    with psycopg.connect(os.environ["DATABASE_URL"]) as blocker:
+        blocker.execute('SELECT id FROM "LiteLLM_SkillSubmission" WHERE id=%s FOR UPDATE', (case.submission.id,))
+        blocker_pid: Final = str(blocker.info.backend_pid)
+        requests: Final = (
+            asyncio.create_task(case.submissions.edit(case.submission.id, case.submission.submitted_by, 0,
+                _publication(case.original.name, "Concurrent owner edit"))) if action == "edit" else
+            asyncio.create_task(case.submissions.withdraw(case.submission.id, case.submission.submitted_by, 0)),
+            asyncio.create_task(case.submissions.review(case.submission.id, "reviewer", True, None,
+                publication_base_url="https://skills.example.test", expected_revision=0)),
+        )
+        try:
+            await asyncio.to_thread(eventually, lambda: read_rows(
+                """WITH RECURSIVE blocked AS (
+                       SELECT %s::integer AS pid UNION SELECT a.pid FROM pg_stat_activity a
+                       JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))
+                   ) SELECT pid FROM blocked WHERE pid<>%s::integer""", (blocker_pid, blocker_pid)),
+                lambda rows: len(rows) == 2, seconds=3)
+        finally:
+            blocker.rollback()
+            results: Final = await asyncio.gather(*requests)
+    assert sum(isinstance(result, SubmissionConflict) for result in results) == 1
+    if isinstance(results[0], SkillSubmission):
+        assert results[0].status == ("pending_review" if action == "edit" else "withdrawn")
+        assert _published_rows(case.original.name) == before
+    else:
+        assert isinstance(results[1], SubmissionReviewed)
+        assert (await case.submissions.get(case.submission.id, None)).status == "approved"
