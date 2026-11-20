@@ -1081,6 +1081,28 @@ def test_configured_caps_never_shrink_an_uncapped_hold(route: str, config_source
     assert configured == pytest.approx(uncapped)
 
 
+@pytest.mark.parametrize("config_source", ["deployment", "router_default"])
+@pytest.mark.parametrize("field", ["n", "best_of"])
+def test_a_configured_n_holds_like_a_requested_n_unless_the_request_sets_its_own(config_source: str, field: str) -> None:
+    body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1000}
+    plain: Final = _router_with_configured_caps(config_source, {})
+    configured: Final = _router_with_configured_caps(config_source, {field: 4})
+    single, requested, configured_hold, request_override = (
+        estimate_request_max_cost(request_body=request_body, route="/v1/chat/completions", llm_router=llm_router)
+        for request_body, llm_router in (
+            (body, plain),
+            ({**body, field: 4}, plain),
+            (body, configured),
+            ({**body, field: 1}, configured),
+        )
+    )
+
+    assert single is not None and requested is not None
+    assert requested > single
+    assert configured_hold == pytest.approx(requested)
+    assert request_override == pytest.approx(single)
+
+
 def _priced_router(
     backend_models: tuple[str, ...],
     additional_drop_params: list[str] | None = None,

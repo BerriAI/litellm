@@ -1312,13 +1312,15 @@ def _estimate_request_max_cost_for_model(
     body: Final = _WINDOW_OBJECT.validate_python(request_body)
     caps: Final = _valid_output_token_caps(body)
     surface: Final = _output_cap_surface(route, body)
+    serving: Final = pricing.deployments or tuple(_ServingDeployment(model_info=info) for info in pricing.cost_infos)
     honored_fields: Final = _honored_output_token_fields(
         caps,
         surface=surface,
-        serving=pricing.deployments or tuple(_ServingDeployment(model_info=info) for info in pricing.cost_infos),
+        serving=serving,
         caller_dropped=_caller_dropped_fields(body, llm_router),
     )
     requested_output_tokens: Final = _requested_output_tokens(caps, honored_fields=honored_fields, surface=surface)
+    output_multiplier: Final = _output_multiplier(body, serving=serving, llm_router=llm_router)
     estimates: Final = [
         _max_cost_for_cost_info(
             request_body=request_body,
@@ -1326,6 +1328,7 @@ def _estimate_request_max_cost_for_model(
             model=model,
             model_info=model_info,
             requested_output_tokens=requested_output_tokens,
+            output_multiplier=output_multiplier,
             input_tokens=input_tokens,
         )
         for model_info in pricing.cost_infos
@@ -1340,6 +1343,7 @@ def _max_cost_for_cost_info(
     model: str,
     model_info: Mapping[str, object],
     requested_output_tokens: int,
+    output_multiplier: int,
     input_tokens: int | None = None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
@@ -1364,7 +1368,6 @@ def _max_cost_for_cost_info(
     if estimated_input_tokens is None or output_tokens is None:
         return None
 
-    output_multiplier: Final = _get_output_multiplier(request_body=request_body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
@@ -1850,8 +1853,34 @@ def _forwarded_output_tokens(field: str, tokens: int, surface: _OutputCapSurface
     return tokens
 
 
-def _get_output_multiplier(request_body: Mapping[str, object]) -> int:
-    return max((1, *(value for key in ("n", "best_of") if (value := _to_int(request_body.get(key))) is not None)))
+def _output_multiplier(
+    request_body: Mapping[str, object], serving: Sequence[_ServingDeployment], llm_router: Router | None
+) -> int:
+    router_defaults: Final[Mapping[str, object]] = (
+        RoutingContext(llm_router).default_litellm_params() if llm_router is not None else {}
+    )
+    return max((1, *(_output_count(key, request_body, router_defaults, serving) for key in ("n", "best_of"))))
+
+
+def _output_count(
+    key: str,
+    request_body: Mapping[str, object],
+    router_defaults: Mapping[str, object],
+    serving: Sequence[_ServingDeployment],
+) -> int:
+    requested: Final = _to_int(request_body.get(key))
+    if requested is not None:
+        return requested
+    router_default: Final = _to_int(router_defaults.get(key))
+    if router_default is not None:
+        return router_default
+    return max((1, *(count for deployment in serving if (count := _deployment_output_count(key, deployment)))))
+
+
+def _deployment_output_count(key: str, deployment: _ServingDeployment) -> int | None:
+    if deployment.deployment is None:
+        return None
+    return _to_int(_get_value(deployment.deployment["litellm_params"], key))
 
 
 def _is_input_only_route(route: str) -> bool:
