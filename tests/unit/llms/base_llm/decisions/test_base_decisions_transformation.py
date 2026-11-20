@@ -7,6 +7,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.decisions.call import _provider_ir_request, _ResolvedSupport
 from litellm.llms.azure_ai.decisions.transformation import AzureAIDecisionsConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
@@ -108,6 +109,29 @@ def test_azure_decision_deployments_use_catalog_limits_without_typesafe_modes(
     )
 
     assert limits == DecisionsInputLimits(max_request_tokens=catalog_limit)
+
+
+def test_azure_decisions_keep_image_assets() -> None:
+    """Microsoft-Decision-1.1 takes images through the `assets` field, see #53058."""
+    raw: Final = {
+        **_SYSTEMONE_REQUEST,
+        "state": "Attached picture: image:pic.jpg",
+        "assets": {
+            "pic.jpg": {"type": "image", "format": "jpg", "data_base64": "aGVsbG8gd29ybGQ="},
+        },
+    }
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(raw))
+    kept: Final = _provider_ir_request(
+        ir,
+        provider_config=AzureAIDecisionsConfig(),
+        headers={},
+        support=_ResolvedSupport(box_questions=True, audio=False, videos=False),
+        kwargs={"drop_params": True},
+    )
+
+    assert isinstance(kept, DecisionsIRRequest)
+    assert dict(kept.assets) == dict(ir.assets)
+    assert ir_to_systemone_request("my-decision-deployment", kept)["assets"] == raw["assets"]
 
 
 def _openai_ir(raw: Mapping[str, object]) -> DecisionsIRRequest:
