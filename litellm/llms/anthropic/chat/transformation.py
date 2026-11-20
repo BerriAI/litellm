@@ -2696,8 +2696,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 message=f"{e}\nReceived Messages={request_messages}",
             )  # don't use verbose_logger.exception, if exception is raised
 
+        request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
+            dict[str, object], optional_params
+        )
+        extra_body: Final = _request_extra_body(request_params.pop("extra_body", None))
+        if isinstance(extra_body, AnthropicError):
+            raise extra_body
         self.update_headers_with_optional_anthropic_beta(
-            headers=headers, optional_params=optional_params, messages=anthropic_messages
+            headers=headers,
+            optional_params={
+                **request_params,
+                **{key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS},
+            },
+            messages=anthropic_messages,
         )
 
         ## Auto-strip advisor blocks from history if advisor tool is absent.
@@ -2769,12 +2780,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
         optional_params.pop("client_metadata", None)
-        request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
-            dict[str, object], optional_params
-        )
-        extra_body: Final = _request_extra_body(request_params.pop("extra_body", None))
-        if isinstance(extra_body, AnthropicError):
-            raise extra_body
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
