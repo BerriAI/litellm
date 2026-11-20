@@ -2,20 +2,12 @@
 //! `litellm/llms/bedrock/common_utils.py` reads them. Catalog lookups and the Bedrock routes share these
 
 use litellm_auth_aws::is_bedrock_region;
+use litellm_cost::candidates::bedrock::CROSS_REGION_INFERENCE_PREFIXES;
+pub use litellm_cost::candidates::bedrock::{
+    is_bedrock_cross_region_profile_of, strip_bedrock_routing_prefix,
+};
 
 const ROUTE_PREFIXES: [&str; 3] = ["bedrock/converse/", "bedrock/", "converse/"];
-const ROUTING_PREFIXES: [&str; 8] = [
-    "bedrock/",
-    "chat_completions/",
-    "converse/",
-    "invoke/",
-    "openai/",
-    "mantle/",
-    "nova-2/",
-    "nova/",
-];
-const CROSS_REGION_INFERENCE_PREFIXES: [&str; 8] =
-    ["global", "us", "eu", "apac", "jp", "au", "ca", "us-gov"];
 
 /// Port of Python's `get_bedrock_base_model`
 pub fn bedrock_base_model(model: &str) -> &str {
@@ -43,29 +35,12 @@ pub fn bedrock_base_model(model: &str) -> &str {
     }
 }
 
-/// Port of Python's `strip_bedrock_routing_prefix`.
-pub fn strip_bedrock_routing_prefix(model: &str) -> &str {
-    ROUTING_PREFIXES.into_iter().fold(model, |model, prefix| {
-        model.strip_prefix(prefix).unwrap_or(model)
-    })
-}
-
 pub fn split_bedrock_region_path(model: &str) -> (Option<&str>, &str) {
     let stripped = strip_bedrock_routing_prefix(model);
     match stripped.split_once('/') {
         Some((region, model_id)) if is_bedrock_region(region) => (Some(region), model_id),
         _ => (None, stripped),
     }
-}
-
-/// Port of Python's `_is_bedrock_cross_region_profile_of`: `profile` is a cross-region profile such as
-/// `us.anthropic.claude-x` of `served_model`
-pub fn is_bedrock_cross_region_profile_of(profile: &str, served_model: &str) -> bool {
-    let (region, profiled_model) = strip_bedrock_routing_prefix(profile)
-        .split_once('.')
-        .unwrap_or((strip_bedrock_routing_prefix(profile), ""));
-    CROSS_REGION_INFERENCE_PREFIXES.contains(&region)
-        && strip_bedrock_routing_prefix(served_model) == profiled_model
 }
 
 /// Port of Python's `extract_model_name_from_bedrock_arn`
@@ -137,22 +112,5 @@ mod tests {
     #[case::nova_custom("bedrock/nova/arn:aws:x", "amazon.nova-custom")]
     fn base_model_matches_the_python_resolution(#[case] model: &str, #[case] expected: &str) {
         assert_eq!(bedrock_base_model(model), expected);
-    }
-
-    #[rstest]
-    #[case::us_profile("us.anthropic.claude-x", "anthropic.claude-x", true)]
-    #[case::routed_profile("invoke/global.anthropic.claude-x", "anthropic.claude-x", true)]
-    #[case::other_model("us.anthropic.claude-x", "anthropic.claude-y", false)]
-    #[case::not_a_geo("anthropic.claude-x", "claude-x", false)]
-    #[case::no_dot("claude-x", "claude-x", false)]
-    fn a_cross_region_profile_names_its_served_model(
-        #[case] profile: &str,
-        #[case] served: &str,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(
-            is_bedrock_cross_region_profile_of(profile, served),
-            expected
-        );
     }
 }
