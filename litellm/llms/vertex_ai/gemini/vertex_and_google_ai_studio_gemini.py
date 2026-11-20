@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.tool_fields import (
     declared_function_name,
@@ -836,6 +837,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     """
 
     _route: ClassVar[str] = "vertex_ai"
+    _removes_undeclared_thinking_levels: ClassVar[bool] = False
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -1293,6 +1295,37 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
+
+_GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS: Final = frozenset({
+    "uniqueItems",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minProperties",
+    "maxProperties",
+    "patternProperties",
+    "unevaluatedProperties",
+    "propertyNames",
+    "$schema",
+})
+
+
+def _remove_unsupported_gemini_schema_keywords(schema: object) -> object:
+    """Recursively remove JSON Schema keywords unsupported by Gemini function declarations.
+
+    Keywords such as uniqueItems, exclusiveMinimum, etc. are valid JSON Schema but
+    rejected by Gemini function declarations with a 400 Bad Request.
+    """
+    if isinstance(schema, dict):
+        for keyword in _GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS:
+            schema.pop(keyword, None)
+        for value in schema.values():
+            _remove_unsupported_gemini_schema_keywords(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            _remove_unsupported_gemini_schema_keywords(item)
+    return schema
+
     def _map_function(
         self,
         value: list[dict],
@@ -1338,6 +1371,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
+        _remove_unsupported_gemini_schema_keywords(schema_value)
 
         inlined_tools: Final = _with_namespace_members_inlined(schema_value, outside_declarations)
         for index, parameters_json_schema in enumerate(parameters_json_schemas):
@@ -1648,10 +1682,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _supports_minimal_thinking_level(model: str) -> bool:
-        lowered: Final = model.lower()
-        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in lowered
-        return is_gemini3_or_newer_flash and not is_explicitly_disabled_factory(
-            model=model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
+        providers: Final = ("gemini", "vertex_ai")
+        key: Final = "supports_minimal_reasoning_effort"
+        declared_by_model_map: Final = any(
+            supports_factory(model=model, custom_llm_provider=provider, key=key) for provider in providers
+        )
+        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in model.lower()
+        return (declared_by_model_map or is_gemini3_or_newer_flash) and not any(
+            is_explicitly_disabled_factory(model=model, custom_llm_provider=provider, key=key) for provider in providers
         )
 
     @staticmethod
@@ -1926,6 +1964,37 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["include_server_side_tool_invocations"] = True
                 return
 
+    def _drops_logprobs(self, model: str, drop_params: bool, allowed_openai_params: Sequence[str]) -> bool:
+        if not drops_unsupported_params(drop_params) or {"logprobs", "top_logprobs"} & set(allowed_openai_params):
+            return False
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
+        return rows.get(f"{self._route}/{model.split('/')[-1]}", {}).get("supports_logprobs") is False
+
+    def _without_undeclared_thinking_level(
+        self,
+        thinking_config: GeminiThinkingConfig,
+        *,
+        model: str,
+        drop_params: bool,
+        allowed_openai_params: Sequence[str],
+    ) -> GeminiThinkingConfig:
+        level: Final = thinking_config.get("thinkingLevel")
+        if not self._removes_undeclared_thinking_levels or level is None:
+            return thinking_config
+        if not drops_unsupported_params(drop_params) or "reasoning_effort" in allowed_openai_params:
+            return thinking_config
+        declared: Final = declared_reasoning_efforts_for_model(model.split("/")[-1], self._route)
+        if declared is None or level in declared:
+            return thinking_config
+        warn_dropped_reasoning(
+            "reasoning_effort",
+            level,
+            model,
+            "Google AI Studio does not accept this thinking level for it, so Google's default applies.",
+            drop_params_gated=True,
+        )
+        return {"includeThoughts": VertexGeminiConfig._include_thoughts(thinking_config.get("includeThoughts"))}
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -1934,14 +2003,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         drop_params: bool,
         allow_integer_enums: bool = True,
         allow_parameters_json_schema: bool = True,
+        *,
+        allowed_openai_params: Sequence[str] = (),
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
             non_default_params, model=model, route=self._route, drop_params=drop_params
         )
         self._apply_include_server_side_tool_invocations(request_params, optional_params)
         supports_sampling_params: Final = self.supports_sampling_params(model)
+        drops_logprobs: Final = self._drops_logprobs(model, drop_params, allowed_openai_params)
         for param, value in request_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
+                continue
+            if param in ("logprobs", "top_logprobs") and drops_logprobs:
                 continue
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -2038,8 +2112,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_name="reasoning_effort",
                         param_description="thinking_budget",
                     )
-                    optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort(
-                        effort=effort_value, model=model, reasoning_effort=value
+                    optional_params["thinkingConfig"] = self._without_undeclared_thinking_level(
+                        VertexGeminiConfig._map_reasoning_effort(
+                            effort=effort_value, model=model, reasoning_effort=value
+                        ),
+                        model=model,
+                        drop_params=drop_params,
+                        allowed_openai_params=allowed_openai_params,
                     )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
@@ -2498,11 +2577,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         model_response.choices = [choice]
 
-        usage: Final = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
-            completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
-        )
+        usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
 
         setattr(model_response, "usage", usage)
 
