@@ -177,7 +177,7 @@ export default function TopAgents({
   totalTokens: number;
   onOpenAgent?: (agent: AgentRow) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [metric, setMetric] = useState<UsageMetric>("tokens");
   const allAgents = useMemo(() => topAgents(rows ?? []), [rows]);
   const agents = useMemo(
@@ -190,8 +190,8 @@ export default function TopAgents({
   );
   const otherLabel = t("usage.overview.otherSeries");
   const series = useMemo(
-    () => seriesBy(agentDailyData(daily), "models", metric, { top: CHART_SERIES, otherLabel }),
-    [daily, metric, otherLabel],
+    () => seriesBy(agentDailyData(daily), "models", metric, { top: CHART_SERIES, otherLabel, language: i18n.language }),
+    [daily, metric, otherLabel, i18n.language],
   );
   const totalsByDay = useMemo(() => bucketTotals(series), [series]);
   const colorOf = (label: string) => {

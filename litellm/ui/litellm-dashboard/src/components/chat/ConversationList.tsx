@@ -78,7 +78,7 @@ interface ConversationRowProps {
 }
 
 const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSelect, onDelete, onRename }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const title = displayConversationTitle(conv, t);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(title);
@@ -152,7 +152,8 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
             <span className="min-w-0 flex-1 text-left">
               <span className="block truncate">{title}</span>
               <span className="moyai-chat-conversation-meta block truncate text-xs font-normal text-muted-foreground">
-                {conv.model} · {dayjs(conv.updatedAt).format("MMM D")}
+                {conv.model} ·{" "}
+                {new Date(conv.updatedAt).toLocaleDateString(i18n.language, { month: "short", day: "numeric" })}
               </span>
             </span>
           </Button>

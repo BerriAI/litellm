@@ -22,15 +22,15 @@ const AutoRotationView: React.FC<AutoRotationViewProps> = ({
   variant = "card",
   className = "",
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const formatTimestamp = (timestamp: string | Date) => {
     const date = new Date(timestamp);
-    const dateStr = date.toLocaleDateString("en-US", {
+    const dateStr = date.toLocaleDateString(i18n.language, {
       year: "numeric",
       month: "short",
       day: "numeric",
     });
-    const timeStr = date.toLocaleTimeString("en-US", {
+    const timeStr = date.toLocaleTimeString(i18n.language, {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,

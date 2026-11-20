@@ -45,7 +45,7 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
 const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { dateValue, onDateChange, results, loading } = activity;
 
   const startTime = dateValue.from ?? null;
@@ -76,15 +76,15 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
-  const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results), [results]);
+  const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results, i18n.language), [results, i18n.language]);
 
   // Cumulative anchors on a synthetic $0 point at the range start so a short
   // range (down to a single day) rises from zero instead of floating as one dot.
   const overTime = useMemo(() => {
     if (accumulation !== "cumulative") return perInterval;
-    const startLabel = startTime ? shortDate(localIsoDay(startTime)) : "";
+    const startLabel = startTime ? shortDate(localIsoDay(startTime), i18n.language) : "";
     return withStartAnchor(toCumulative(perInterval), startLabel);
-  }, [accumulation, perInterval, startTime]);
+  }, [accumulation, perInterval, startTime, i18n.language]);
 
   const intervalLabel = t("costOptimization.usage.perDay");
   const savingsLabels = {
@@ -92,7 +92,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
     "Prompt caching": t("costOptimization.usage.savings.drivers.promptCaching"),
     "Auto-router": t("costOptimization.usage.savings.drivers.autoRouter"),
   };
-  const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
+  const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined, i18n.language);
   const savingsSubtitle = [
     accumulation === "cumulative"
       ? t("costOptimization.usage.savings.runningTotal")
@@ -126,9 +126,9 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
     () =>
       buildDailyToolSeries(toolSpend?.daily ?? [], topToolNames).map((point) => ({
         ...point,
-        date: shortDate(String(point.date)),
+        date: shortDate(String(point.date), i18n.language),
       })),
-    [toolSpend, topToolNames],
+    [toolSpend, topToolNames, i18n.language],
   );
   const toolColors = useMemo(() => SEQUENTIAL_COLOR_RAMP.slice(0, Math.max(topToolNames.length, 1)), [topToolNames]);
 

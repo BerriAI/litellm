@@ -9,6 +9,7 @@ import { useResizeObserver } from "usehooks-ts";
 import { DotFieldCanvas, DotFieldRoot } from "@/components/shared/dotField/DotField";
 import type { DotBand, DotColumn } from "@/components/shared/dotField/dots";
 import { cn } from "@/lib/cva.config";
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
 
 import type { TimeWindow } from "../timeRange/timeRange";
 
@@ -18,6 +19,18 @@ const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const EDGE_FORMAT = "MMM DD, HH:mm";
+
+const formatTimelineDate = (time: number, format: string, language: string): string => {
+  const date = moment(time);
+  if (format !== EDGE_FORMAT) return date.format(format);
+  return formatDateWithEnglishPattern(date.toDate(), language, date.format(format), {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+};
 
 export interface TimeBucket extends DotColumn {
   startMs: number;
@@ -86,7 +99,7 @@ function BucketTooltip({
   bucketCount: number;
   noun: ItemNoun;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   return (
     <div
       className="pointer-events-none absolute top-full z-floating mt-1 rounded-md border border-border bg-popover px-2.5 py-1.5 font-mono text-xs text-popover-foreground shadow-md"
@@ -95,7 +108,7 @@ function BucketTooltip({
     >
       <div>
         {t("shared.timeline.tooltip.range", {
-          start: moment(bucket.startMs).format(EDGE_FORMAT),
+          start: formatTimelineDate(bucket.startMs, EDGE_FORMAT, i18n.language),
           end: moment(bucket.endMs).format("HH:mm"),
         })}
       </div>
@@ -158,6 +171,7 @@ function SelectionBracket({
   bucketCount: number;
   onHandleDown: (mode: DragMode) => (e: React.PointerEvent) => void;
 }) {
+  const { i18n } = useTranslation();
   const leftFrac = band.lo / bucketCount;
   const rightFrac = (band.hi + 1) / bucketCount;
   const widthPx = (rightFrac - leftFrac) * stripWidth;
@@ -190,10 +204,10 @@ function SelectionBracket({
         )}
       </div>
       <span className={cn(edgeLabel, leftFrac < 0.12 ? "" : "-translate-x-full pr-1")} style={{ left: pct(leftFrac) }}>
-        {moment(window.startMs).format(format)}
+        {formatTimelineDate(window.startMs, format, i18n.language)}
       </span>
       <span className={cn(edgeLabel, rightFrac > 0.88 ? "-translate-x-full" : "pl-1")} style={{ left: pct(rightFrac) }}>
-        {moment(window.endMs).format(format)}
+        {formatTimelineDate(window.endMs, format, i18n.language)}
       </span>
     </>
   );
@@ -206,6 +220,7 @@ export function timelineTicks(range: TimeWindow, width: number): number[] {
 }
 
 function TickAxis({ range, width }: { range: TimeWindow; width: number }) {
+  const { i18n } = useTranslation();
   const format = tickFormat(range);
   const ticks = timelineTicks(range, width);
   return (
@@ -223,7 +238,7 @@ function TickAxis({ range, width }: { range: TimeWindow; width: number }) {
         >
           <span className="h-1 w-px bg-border" />
           <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-            {moment(range.startMs + (range.endMs - range.startMs) * t).format(format)}
+            {formatTimelineDate(range.startMs + (range.endMs - range.startMs) * t, format, i18n.language)}
           </span>
         </div>
       ))}

@@ -45,11 +45,11 @@ export const useBreakdown = (
   top = 6,
   colorByKey?: ReadonlyMap<string, string>,
 ) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const otherLabel = t("usage.overview.otherSeries");
   const series = useMemo(
-    () => seriesBy(results, dimension, metric, { top, colorByKey, otherLabel }),
-    [results, dimension, metric, top, colorByKey, otherLabel],
+    () => seriesBy(results, dimension, metric, { top, colorByKey, otherLabel, language: i18n.language }),
+    [results, dimension, metric, top, colorByKey, otherLabel, i18n.language],
   );
   const ranking = useMemo(() => leaderboard(results, dimension, metric), [results, dimension, metric]);
   return { series, ranking };

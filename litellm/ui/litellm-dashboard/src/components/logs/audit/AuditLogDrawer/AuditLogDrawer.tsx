@@ -2,6 +2,7 @@ import { copyToClipboard } from "@/utils/dataUtils";
 import { Check, Copy } from "lucide-react";
 import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
 import moment from "moment";
 import { AuditLogEntry, AUDIT_TABLE_NAME_DISPLAY } from "../AuditLogsTableColumns";
 import DefaultProxyAdminTag from "../../../common_components/DefaultProxyAdminTag";
@@ -170,8 +171,9 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
 }
 
 export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   if (!log) return null;
+  const updated = moment.utc(log.updated_at).local();
 
   const tableDisplay = Object.hasOwn(AUDIT_TABLE_NAME_DISPLAY, log.table_name)
     ? t(AUDIT_TABLE_NAME_DISPLAY[log.table_name])
@@ -185,7 +187,15 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
         <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-6 py-4">
           <StatusBadge tone={ACTION_TONE[log.action] ?? "neutral"} label={log.action} />
           <span className="text-sm text-muted-foreground">
-            {moment.utc(log.updated_at).local().format("MMM D, YYYY HH:mm:ss")}
+            {formatDateWithEnglishPattern(updated.toDate(), i18n.language, updated.format("MMM D, YYYY HH:mm:ss"), {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+              hourCycle: "h23",
+            })}
           </span>
         </div>
 

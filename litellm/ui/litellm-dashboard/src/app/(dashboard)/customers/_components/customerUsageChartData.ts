@@ -28,14 +28,18 @@ const UNCLASSIFIED_TOKEN_SERIES = {
   color: "#64748b",
 } as const;
 
-export const customerTokenBreakdownSeries = (days: readonly DailyData[], t: TFunction = i18n.t): Series => {
+export const customerTokenBreakdownSeries = (
+  days: readonly DailyData[],
+  t: TFunction = i18n.t,
+  language = i18n.language,
+): Series => {
   const data = days.map(({ date, metrics }) => {
     const cacheRead = metrics.cache_read_input_tokens ?? 0;
     const cacheWrite = metrics.cache_creation_input_tokens ?? 0;
     const output = metrics.completion_tokens;
     const uncachedInput = metrics.prompt_tokens - cacheRead - cacheWrite;
     const total = metrics.total_tokens;
-    const point = { date, label: formatDayLabel(date) };
+    const point = { date, label: formatDayLabel(date, language) };
     if (Math.min(cacheRead, cacheWrite, output, uncachedInput) < 0 || metrics.prompt_tokens + output !== total) {
       return { ...point, cacheRead: 0, cacheWrite: 0, uncachedInput: 0, output: 0, unclassified: total };
     }
@@ -70,7 +74,7 @@ const entityDays = (
 };
 
 export const customerUsageSeriesWith =
-  (t: TFunction) =>
+  (t: TFunction, language = i18n.language) =>
   (
     data: CustomerHierarchyUsage,
     dimension: CustomerUsageDimension,
@@ -86,7 +90,12 @@ export const customerUsageSeriesWith =
           model_groups: customerModelBreakdown(day),
         },
       }));
-      return seriesBy(days, "model_groups", metric, { top: TOP_SERIES, colorByKey: colorByModel, otherLabel });
+      return seriesBy(days, "model_groups", metric, {
+        top: TOP_SERIES,
+        colorByKey: colorByModel,
+        otherLabel,
+        language,
+      });
     }
 
     const unnamedKey = t("customerPortal.analytics.unnamedKey");
@@ -103,7 +112,7 @@ export const customerUsageSeriesWith =
     const breakdown = dimension === "api_keys" ? "api_keys" : "model_groups";
     const ranking = rollUpBreakdown(days, breakdown).sort((a, b) => b.spend - a.spend || a.key.localeCompare(b.key));
     const colors = new Map(ranking.map((row, index) => [row.key, stackedUsageColor(index)]));
-    const series = seriesBy(days, breakdown, metric, { top: TOP_SERIES, colorByKey: colors, otherLabel });
+    const series = seriesBy(days, breakdown, metric, { top: TOP_SERIES, colorByKey: colors, otherLabel, language });
     const namedCount = Math.min(TOP_SERIES, ranking.filter((row) => rankValue(row, metric) > 0).length);
     return {
       ...series,

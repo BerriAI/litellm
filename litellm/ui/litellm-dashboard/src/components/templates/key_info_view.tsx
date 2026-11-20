@@ -116,7 +116,7 @@ export default function KeyInfoView({
   backButtonText = i18n.t("keyDetail.keyInfoView.backToKeys"),
   tabParam = "detail_tab",
 }: KeyInfoViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const accessGroupNames = useModelAccessGroupNames();
   const activityDateRange = useActivityDateRange();
@@ -504,12 +504,12 @@ export default function KeyInfoView({
   // Update the formatTimestamp function to use the desired date format
   const formatTimestamp = (timestamp: string | Date) => {
     const date = new Date(timestamp);
-    const dateStr = date.toLocaleDateString("en-US", {
+    const dateStr = date.toLocaleDateString(locale.language, {
       year: "numeric",
       month: "short",
       day: "numeric",
     });
-    const timeStr = date.toLocaleTimeString("en-US", {
+    const timeStr = date.toLocaleTimeString(locale.language, {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
@@ -598,7 +598,7 @@ export default function KeyInfoView({
     return t("keyDetail.keyInfoView.budget.unlimited");
   })();
   const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate);
-  const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at);
+  const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at, t, locale.language);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">

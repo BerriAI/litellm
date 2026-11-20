@@ -44,14 +44,14 @@ interface LogsTimeRangePickerProps {
 }
 
 export function LogsTimeRangePicker({ value, onValueChange }: LogsTimeRangePickerProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
 
   const selectedOption = QUICK_SELECT_OPTIONS.find(
     (option) => option.value === value.interval.value && option.unit === value.interval.unit,
   );
   const displayLabel = value.isCustomDate
-    ? getTimeRangeDisplay(true, value.startTime, value.endTime, t)
+    ? getTimeRangeDisplay(true, value.startTime, value.endTime, { t, language: i18n.language })
     : selectedOption && t(selectedOption.labelKey);
 
   return (

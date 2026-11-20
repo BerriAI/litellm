@@ -19,7 +19,8 @@ export interface BudgetPeriodTooltipProps {
 
 dayjs.extend(utc);
 
-const formatPeriodDate = (iso: string): string => dayjs.utc(iso).format("MMM D, YYYY HH:mm");
+const formatPeriodDate = (iso: string): string =>
+  dayjs.utc(iso).locale(i18n.language.toLowerCase()).format("MMM D, YYYY HH:mm");
 
 const describePeriod = (budgetDuration: string, budgetResetAt: string | null | undefined): string | null => {
   const period = budgetPeriodRange(budgetDuration, budgetResetAt);

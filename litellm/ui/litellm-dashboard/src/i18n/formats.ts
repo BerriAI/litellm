@@ -41,6 +41,15 @@ const COMPACT = { notation: "compact", maximumFractionDigits: 1 } as const;
 const MONTH_DAY = { month: "short", day: "numeric" } as const;
 const DATE = { ...MONTH_DAY, year: "numeric" } as const;
 const CLOCK = { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" } as const;
+export const formatDateWithEnglishPattern = (
+  date: Date,
+  language: string,
+  english: string,
+  options: Intl.DateTimeFormatOptions,
+): string =>
+  !language || language.startsWith("en") || Number.isNaN(date.getTime())
+    ? english
+    : new Intl.DateTimeFormat(language, options).format(date);
 const NUMERIC_DATE_TIME = {
   year: "numeric",
   month: "numeric",

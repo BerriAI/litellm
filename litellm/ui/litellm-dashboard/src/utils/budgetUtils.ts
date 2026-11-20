@@ -1,4 +1,5 @@
 import dayjs, { Dayjs } from "dayjs";
+import "dayjs/locale/zh-cn";
 import utc from "dayjs/plugin/utc";
 import type { TFunction } from "i18next";
 
@@ -6,9 +7,15 @@ import i18n from "@/i18n/i18n";
 
 dayjs.extend(utc);
 
-export function formatBudgetResetTime(iso: string | null | undefined, t: TFunction = i18n.t.bind(i18n)): string | null {
+const budgetDateLocale = (language = i18n.language) => language.toLowerCase();
+
+export function formatBudgetResetTime(
+  iso: string | null | undefined,
+  t: TFunction = i18n.t.bind(i18n),
+  language = i18n.language,
+): string | null {
   if (!iso) return null;
-  const resetDate = dayjs.utc(iso);
+  const resetDate = dayjs.utc(iso).locale(budgetDateLocale(language));
   if (!resetDate.isValid()) return null;
   const timestamp = t("keyDetail.keyInfoView.timestamp", {
     date: resetDate.format("MMM D, YYYY"),
@@ -19,9 +26,9 @@ export function formatBudgetResetTime(iso: string | null | undefined, t: TFuncti
 
 const isMidnight = (instant: Dayjs): boolean => instant.isSame(instant.startOf("day"));
 
-export function formatBudgetResetUtc(iso: string | null | undefined): string | null {
+export function formatBudgetResetUtc(iso: string | null | undefined, language = i18n.language): string | null {
   if (!iso) return null;
-  const resetDate = dayjs.utc(iso);
+  const resetDate = dayjs.utc(iso).locale(budgetDateLocale(language));
   if (!resetDate.isValid()) return null;
   return resetDate.format(isMidnight(resetDate) ? "MMM D, YYYY" : "MMM D, YYYY HH:mm");
 }
@@ -81,8 +88,9 @@ export function describeBudgetResetSchedule(
   budgetDuration: string | null | undefined,
   budgetResetAt: string | null | undefined,
   t: TFunction = i18n.t.bind(i18n),
+  language = i18n.language,
 ): BudgetResetSchedule {
-  const resetDate = budgetResetAt ? dayjs.utc(budgetResetAt) : null;
+  const resetDate = budgetResetAt ? dayjs.utc(budgetResetAt).locale(budgetDateLocale(language)) : null;
   if (resetDate?.isValid()) {
     const label = resetDate.format("MMM D, YYYY HH:mm [UTC]");
     const period = budgetDuration

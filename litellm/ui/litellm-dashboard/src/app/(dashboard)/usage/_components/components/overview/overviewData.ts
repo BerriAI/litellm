@@ -1,4 +1,4 @@
-import type { ParseKeys } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import i18n from "@/i18n/i18n";
 import { stackedUsageColor } from "@/components/shared/charts";
@@ -91,10 +91,10 @@ export interface Series {
 
 const seriesKey = (index: number) => `s${index}`;
 
-export const formatDayLabel = (date: string): string => {
+export const formatDayLabel = (date: string, language = i18n.language): string => {
   const parsed = new Date(`${date}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return date;
-  return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return parsed.toLocaleDateString(language, { month: "short", day: "numeric" });
 };
 
 const sortByDate = (results: readonly DailyData[]) =>
@@ -122,9 +122,11 @@ export const seriesBy = (
   results: readonly DailyData[],
   dimension: BreakdownDimension | "api_keys",
   metric: UsageMetric,
-  options: number | { top?: number; colorByKey?: ReadonlyMap<string, string>; otherLabel?: string } = 6,
+  options:
+    | number
+    | { top?: number; colorByKey?: ReadonlyMap<string, string>; otherLabel?: string; language?: string } = 6,
 ): Series => {
-  const { top = 6, colorByKey, otherLabel } = typeof options === "number" ? { top: options } : options;
+  const { top = 6, colorByKey, otherLabel, language } = typeof options === "number" ? { top: options } : options;
   const leaders = rollUpBreakdown(results, dimension)
     .filter((row) => rankValue(row, metric) > 0)
     .sort((a, b) => rankValue(b, metric) - rankValue(a, metric))
@@ -145,7 +147,7 @@ export const seriesBy = (
   const keys = labels.map((_, index) => seriesKey(index));
   const data = days.map(({ day, values, other }) => ({
     date: day.date,
-    label: formatDayLabel(day.date),
+    label: formatDayLabel(day.date, language),
     ...Object.fromEntries((hasOther ? [...values, other] : values).map((value, index) => [keys[index], value])),
   }));
   const colors = labels.map((label, index) => {
@@ -160,7 +162,12 @@ export type Granularity = "day" | "week";
 const DAY_MS = 86_400_000;
 
 /** Sums a daily series into 7-day buckets anchored on the first day, keeping one point per bucket. */
-export const bucketSeries = (series: Series, granularity: Granularity): Series => {
+export const bucketSeries = (
+  series: Series,
+  granularity: Granularity,
+  language = i18n.language,
+  t: TFunction = i18n.t,
+): Series => {
   if (granularity === "day" || series.data.length === 0) return series;
   const origin = Date.parse(`${series.data[0].date}T00:00:00Z`);
   const bucketStart = (date: string) => {
@@ -172,7 +179,7 @@ export const bucketSeries = (series: Series, granularity: Granularity): Series =
     const members = series.data.filter((day) => bucketStart(day.date) === start);
     return {
       date: start,
-      label: i18n.t("usage.overview.weekOf", { date: formatDayLabel(start) }),
+      label: t("usage.overview.weekOf", { date: formatDayLabel(start, language) }),
       ...Object.fromEntries(
         series.keys.map((key) => [key, members.reduce((sum, day) => sum + Number(day[key] ?? 0), 0)]),
       ),
@@ -227,10 +234,10 @@ export const formatMetricValue = (value: number, metric: UsageMetric): string =>
   metric === "spend" ? formatCompactUsd(value) : formatCompact(value);
 
 /** One point per day with the headline totals, for sparklines. */
-export const dailyTotals = (results: readonly DailyData[]): SeriesDay[] =>
+export const dailyTotals = (results: readonly DailyData[], language = i18n.language): SeriesDay[] =>
   sortByDate(results).map((day) => ({
     date: day.date,
-    label: formatDayLabel(day.date),
+    label: formatDayLabel(day.date, language),
     spend: day.metrics.spend,
     requests: day.metrics.api_requests,
     tokens: day.metrics.total_tokens,

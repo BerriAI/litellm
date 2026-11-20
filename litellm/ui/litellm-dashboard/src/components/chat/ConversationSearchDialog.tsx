@@ -2,7 +2,6 @@
 
 import React, { useState } from "react";
 import { MessageSquare, Search } from "lucide-react";
-import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -24,7 +23,7 @@ const ConversationSearchDialog: React.FC<ConversationSearchDialogProps> = ({
   onSelect,
   onClose,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [query, setQuery] = useState("");
   const [wasOpen, setWasOpen] = useState(open);
 
@@ -74,7 +73,7 @@ const ConversationSearchDialog: React.FC<ConversationSearchDialogProps> = ({
                   <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
                   <span className="text-left text-[13px] flex-1 truncate">{title}</span>
                   <span className="text-[11px] text-muted-foreground shrink-0 ml-auto">
-                    {dayjs(conv.updatedAt).format("MMM D")}
+                    {new Date(conv.updatedAt).toLocaleDateString(i18n.language, { month: "short", day: "numeric" })}
                   </span>
                 </Button>
               );
