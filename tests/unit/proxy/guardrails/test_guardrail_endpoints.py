@@ -4663,7 +4663,11 @@ async def _apply_policy(mocker: MockerFixture, policy_name: str, premium: bool) 
     guardrails: Final = {name: _TaggingGuardrail(name) for name in ("alpha", "zeta", "beta-db", "omega-db")}
     _patch_apply_guardrail_env(mocker, {})
     registry: Final = mocker.Mock()
-    registry.get_initialized_guardrail_callback.side_effect = lambda guardrail_name: guardrails.get(guardrail_name)
+
+    def initialized(guardrail_name: str) -> CustomGuardrail | None:
+        return guardrails.get(guardrail_name)
+
+    registry.get_initialized_guardrail_callback.side_effect = initialized
     mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", registry)
     mocker.patch.object(litellm, "callbacks", [guardrails["zeta"], guardrails["alpha"]])
     mocker.patch("litellm.proxy.proxy_server.premium_user", premium)
@@ -4709,3 +4713,35 @@ async def test_apply_guardrail_rejects_requests_without_exactly_one_supported_ta
 
     assert response.status_code == 422
     assert reason in response.text
+
+
+@pytest.fixture
+def bedrock_policy() -> Iterator[str]:
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    name: Final = "bedrock-policy"
+    registry: Final = get_policy_registry()
+    registry.add_policy(name, Policy(guardrails=PolicyGuardrails(add=["bedrock-guard"])), source="config")
+    yield name
+    registry.remove_policy(name)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_policy_names_the_guardrail_that_refuses_message_text(
+    mocker: MockerFixture, bedrock_policy: str
+) -> None:
+    mocker.patch("litellm.proxy.proxy_server.premium_user", True)
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker,
+        (),
+        {
+            "guardrail_name": None,
+            "policy_name": bedrock_policy,
+            "images": [_PNG],
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert call.response.status_code == 422
+    assert "Guardrail 'bedrock-guard' scans 'text' and ignores 'messages'" in call.response.text

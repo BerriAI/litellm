@@ -2578,19 +2578,21 @@ async def _run_guardrail(
 
 
 async def _run_guardrail_chain(
-    guardrails: tuple[tuple[str, CustomGuardrail], ...],
+    guardrails: tuple[CustomGuardrail, ...],
     request: ApplyGuardrailRequest,
     request_data: dict[str, object],  # mutable-ok: every guardrail records its verdict on the shared request dict
     response_handler: StandardGuardrailResponseHandler,
 ) -> GenericGuardrailAPIInputs:
     if not guardrails:
         return {"texts": [request.text]}
-    name, active = guardrails[0]
-    step: Final = request.model_copy(update={"guardrail_name": name})
-    outputs: Final = await _run_guardrail(active, step, request_data, response_handler.resolve_input_type(step, active))
-    texts: Final = outputs.get("texts", [])
-    next_step: Final = step.model_copy(update={"text": texts[0]}) if texts else step
-    return await _run_guardrail_chain(guardrails[1:], next_step, request_data, response_handler)
+    active: Final = guardrails[0]
+    step: Final[ApplyGuardrailRequest] = (
+        request if request.policy_name is None else request.model_copy(update={"guardrail_name": active.guardrail_name})
+    )
+    input_type: Final = response_handler.resolve_input_type(step, active)
+    texts: Final = (await _run_guardrail(active, step, request_data, input_type)).get("texts", [])
+    next_request: Final = request.model_copy(update={"text": texts[0]}) if texts else request
+    return await _run_guardrail_chain(guardrails[1:], next_request, request_data, response_handler)
 
 
 def _in_registration_order(names: Iterable[str]) -> tuple[str, ...]:
@@ -2637,13 +2639,13 @@ async def _require_guardrail(guardrail_name: str) -> CustomGuardrail:
     return active_guardrail
 
 
-async def _requested_guardrails(request: ApplyGuardrailRequest) -> tuple[tuple[str, CustomGuardrail], ...]:
+async def _requested_guardrails(request: ApplyGuardrailRequest) -> tuple[CustomGuardrail, ...]:
     names: Final = (
         _policy_guardrail_names(request.policy_name)
         if request.policy_name is not None
         else tuple(name for name in (request.guardrail_name,) if name is not None)
     )
-    return tuple([(name, await _require_guardrail(name)) for name in names])
+    return tuple([await _require_guardrail(name) for name in names])
 
 
 def _record_verdict_for_logging(
