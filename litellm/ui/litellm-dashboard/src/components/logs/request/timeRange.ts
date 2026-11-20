@@ -14,12 +14,13 @@ export const getTimeRangeDisplay = (
   if (isCustomDate) {
     const format = (value: string) => {
       const date = moment(value);
-      return formatDateWithEnglishPattern(date.toDate(), language, date.format("MMM D, h:mm A"), {
+      const rangeDateOptions: Intl.DateTimeFormatOptions = {
         month: "short",
         day: "numeric",
         hour: "numeric",
         minute: "2-digit",
-      });
+      };
+      return formatDateWithEnglishPattern(date.toDate(), language, date.format("MMM D, h:mm A"), rangeDateOptions);
     };
     return `${format(startTime)} - ${format(endTime)}`;
   }

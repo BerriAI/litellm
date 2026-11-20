@@ -149,6 +149,15 @@ function LogsError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+const logTimestampOptions: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+};
+
 function LogsTable({ rows, onRowClick }: { rows: LogRow[]; onRowClick: (row: LogRow) => void }) {
   const { t, i18n } = useTranslation();
   return (
@@ -184,14 +193,7 @@ function LogsTable({ rows, onRowClick }: { rows: LogRow[]; onRowClick: (row: Log
                   moment(row.startTime).toDate(),
                   i18n.language,
                   moment(row.startTime).format("MMM D, HH:mm:ss"),
-                  {
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                    hourCycle: "h23",
-                  },
+                  logTimestampOptions,
                 )}
               </TableCell>
               <TableCell className="text-sm">{row.model || "-"}</TableCell>

@@ -90,12 +90,13 @@ export const customerUsageSeriesWith =
           model_groups: customerModelBreakdown(day),
         },
       }));
-      return seriesBy(days, "model_groups", metric, {
+      const seriesOptions = {
         top: TOP_SERIES,
         colorByKey: colorByModel,
         otherLabel,
         language,
-      });
+      };
+      return seriesBy(days, "model_groups", metric, seriesOptions);
     }
 
     const unnamedKey = t("customerPortal.analytics.unnamedKey");
@@ -112,7 +113,8 @@ export const customerUsageSeriesWith =
     const breakdown = dimension === "api_keys" ? "api_keys" : "model_groups";
     const ranking = rollUpBreakdown(days, breakdown).sort((a, b) => b.spend - a.spend || a.key.localeCompare(b.key));
     const colors = new Map(ranking.map((row, index) => [row.key, stackedUsageColor(index)]));
-    const series = seriesBy(days, breakdown, metric, { top: TOP_SERIES, colorByKey: colors, otherLabel, language });
+    const seriesOptions = { top: TOP_SERIES, colorByKey: colors, otherLabel, language };
+    const series = seriesBy(days, breakdown, metric, seriesOptions);
     const namedCount = Math.min(TOP_SERIES, ranking.filter((row) => rankValue(row, metric) > 0).length);
     return {
       ...series,

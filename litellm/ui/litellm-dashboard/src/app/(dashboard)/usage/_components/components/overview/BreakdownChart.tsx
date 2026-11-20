@@ -47,10 +47,10 @@ export const useBreakdown = (
 ) => {
   const { t, i18n } = useTranslation();
   const otherLabel = t("usage.overview.otherSeries");
-  const series = useMemo(
-    () => seriesBy(results, dimension, metric, { top, colorByKey, otherLabel, language: i18n.language }),
-    [results, dimension, metric, top, colorByKey, otherLabel, i18n.language],
-  );
+  const series = useMemo(() => {
+    const seriesOptions = { top, colorByKey, otherLabel, language: i18n.language };
+    return seriesBy(results, dimension, metric, seriesOptions);
+  }, [results, dimension, metric, top, colorByKey, otherLabel, i18n.language]);
   const ranking = useMemo(() => leaderboard(results, dimension, metric), [results, dimension, metric]);
   return { series, ranking };
 };

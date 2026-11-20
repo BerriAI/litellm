@@ -23,13 +23,14 @@ const EDGE_FORMAT = "MMM DD, HH:mm";
 const formatTimelineDate = (time: number, format: string, language: string): string => {
   const date = moment(time);
   if (format !== EDGE_FORMAT) return date.format(format);
-  return formatDateWithEnglishPattern(date.toDate(), language, date.format(format), {
+  const edgeDateOptions: Intl.DateTimeFormatOptions = {
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
-  });
+  };
+  return formatDateWithEnglishPattern(date.toDate(), language, date.format(format), edgeDateOptions);
 };
 
 export interface TimeBucket extends DotColumn {

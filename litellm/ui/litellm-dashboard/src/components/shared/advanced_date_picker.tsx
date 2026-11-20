@@ -153,12 +153,13 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const formatSelectionDate = (date: Date) => {
     if (language.startsWith("en"))
       return moment(date).format(showTimeRange ? "MMM D, YYYY [at] HH:mm:ss" : "MMM D, YYYY");
-    return new Intl.DateTimeFormat(language, {
+    const selectionDateOptions: Intl.DateTimeFormatOptions = {
       year: "numeric",
       month: "short",
       day: "numeric",
       ...(showTimeRange && { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }),
-    }).format(date);
+    };
+    return new Intl.DateTimeFormat(language, selectionDateOptions).format(date);
   };
 
   // CRITICAL: Apply the same date adjustment logic as the original component

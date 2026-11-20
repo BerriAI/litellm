@@ -170,6 +170,16 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
   );
 }
 
+const auditTimestampOptions: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+};
+
 export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
   const { t, i18n } = useTranslation();
   if (!log) return null;
@@ -187,15 +197,12 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
         <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-6 py-4">
           <StatusBadge tone={ACTION_TONE[log.action] ?? "neutral"} label={log.action} />
           <span className="text-sm text-muted-foreground">
-            {formatDateWithEnglishPattern(updated.toDate(), i18n.language, updated.format("MMM D, YYYY HH:mm:ss"), {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-              hourCycle: "h23",
-            })}
+            {formatDateWithEnglishPattern(
+              updated.toDate(),
+              i18n.language,
+              updated.format("MMM D, YYYY HH:mm:ss"),
+              auditTimestampOptions,
+            )}
           </span>
         </div>
 
