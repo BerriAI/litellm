@@ -6672,71 +6672,60 @@ async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrot
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "body, route_type, metadata, expected",
+    ("body", "route_type", "expected"),
     [
-        ({}, "acompletion", {}, "team-model"),
-        ({"model": "body-model"}, "acompletion", {}, "body-model"),
-        ({"model": None}, "acompletion", {}, "gpt-4o-2024-08-06"),
-        ({"model": ""}, "acompletion", {}, "gpt-4o-2024-08-06"),
-        ({}, "acompletion", {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}, "gpt-4o-2024-08-06"),
-        ({}, "atext_completion", {}, "gpt-4o-2024-08-06"),
+        ({"messages": [{"role": "user", "content": "hi"}]}, "acompletion", "team-model"),
+        ({"model": "other-model", "messages": [{"role": "user", "content": "hi"}]}, "acompletion", "other-model"),
+        ({"model": None, "messages": [{"role": "user", "content": "hi"}]}, "acompletion", "upstream-model"),
+        ({"model": "", "messages": [{"role": "user", "content": "hi"}]}, "acompletion", "upstream-model"),
+        (
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True},
+            },
+            "acompletion",
+            "upstream-model",
+        ),
+        ({"prompt": "hi"}, "atext_completion", "upstream-model"),
     ],
+    ids=("path-only", "body-model-wins", "null-body-model", "empty-body-model", "raw-model-name", "text-completion"),
 )
 async def test_nonstreaming_response_model_echoes_the_path_model_when_the_body_has_none(
-    monkeypatch: pytest.MonkeyPatch,
     body: dict[str, object],
     route_type: Literal["acompletion", "atext_completion"],
-    metadata: dict[str, object],
     expected: str,
 ) -> None:
-    import litellm.proxy.common_request_processing as cpr
+    from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
 
-    async def llm() -> litellm.ModelResponse:
-        return litellm.ModelResponse(
-            model="gpt-4o-2024-08-06", choices=[{"message": {"role": "assistant", "content": "pong"}}]
-        )
-
-    async def fake_route_request(**_kwargs: object) -> Coroutine[object, object, litellm.ModelResponse]:
-        return llm()
-
-    logging_obj = MagicMock(litellm_call_id="call-id", defer_async_logging=False)
-    proxy_logging = MagicMock(spec=ProxyLogging)
-    proxy_logging.during_call_hook = AsyncMock(return_value=None)
-    proxy_logging.post_call_success_hook = AsyncMock(side_effect=lambda data, user_api_key_dict, response: response)
-    proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
-    proxy_logging._callback_capabilities_cache = {}
-    monkeypatch.setattr(cpr, "route_request", fake_route_request)
-
-    processor = ProxyBaseLLMRequestProcessing(data={**body, "messages": []})
-    monkeypatch.setattr(
-        processor,
-        "common_processing_pre_call_logic",
-        AsyncMock(return_value=({"model": "team-model", "metadata": metadata}, logging_obj)),
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "team-model",
+                "litellm_params": {"model": "openai/upstream-model", "api_key": "sk-test", "mock_response": "pong"},
+            }
+        ]
     )
-    monkeypatch.setattr(processor, "_has_post_call_guardrails", MagicMock(return_value=False))
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/openai/deployments/team-model/chat/completions",
-            "headers": [],
-            "query_string": b"",
-        }
-    )
-
-    response = await processor.base_process_llm_request(
-        request=request,
+    response: Final = await ProxyBaseLLMRequestProcessing(data=dict(body)).base_process_llm_request(
+        request=Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/openai/deployments/team-model/chat/completions",
+                "query_string": b"",
+                "headers": [(b"content-type", b"application/json")],
+            }
+        ),
         fastapi_response=Response(),
-        user_api_key_dict=ProxyUserAPIKeyAuth(),
-        proxy_logging_obj=proxy_logging,
-        general_settings={},
-        proxy_config=MagicMock(spec=ProxyConfig),
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
         route_type=route_type,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        general_settings={},
+        proxy_config=RealProxyConfig(),
+        llm_router=router,
         model="team-model",
-        version=None,
     )
 
-    assert response.model == expected
+    assert getattr(response, "model", None) == expected
 
 
 class TestStreamingClientDisconnectLogging:
