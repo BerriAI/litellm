@@ -1,9 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { createParser, createSerializer, parseAsString, useQueryStates, type inferParserType } from "nuqs";
-import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
 import type { CustomerUsageScope } from "./customerUsageApi";
 import { customerUsageDateParsers } from "./customerUsageRange";
+import { CustomerDetailNavigation } from "./CustomerDetailLayout";
 
 type CustomerHierarchyView = "usage" | "teams" | "members" | "budget_groups" | "settings";
 const LABELS = {
@@ -59,32 +59,17 @@ export default function CustomerHierarchyNavigation({
   let pages: readonly CustomerHierarchyView[] = ["usage", "teams", "members", "budget_groups", "settings"];
   if (scope.team) pages = ["usage", "members", "settings"];
   if (scope.member) pages = ["usage", "settings"];
-  return (
-    <nav
-      aria-label={t("customerPortal.hierarchy.customerNavigation")}
-      className="flex flex-wrap gap-x-6 gap-y-3 border-b"
-    >
-      {pages.map((page) => {
-        const organizationMembers = page === "members" && !scope.team;
-        const explicitTab = page === "settings" || page === "budget_groups" || organizationMembers;
-        return (
-          <a
-            key={page}
-            href={
-              page === "usage"
-                ? customerHierarchyHref("usage", scope)
-                : `${customerHierarchyHref("manage", scope)}${explicitTab ? `&tab=${page}` : ""}`
-            }
-            aria-current={active === page ? "page" : undefined}
-            className={cn(
-              "shrink-0 whitespace-nowrap border-b-2 border-transparent px-0.5 pb-3 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
-              active === page && "border-primary text-foreground",
-            )}
-          >
-            {t(LABELS[page])}
-          </a>
-        );
-      })}
-    </nav>
-  );
+  const items = pages.map((page) => {
+    const organizationMembers = page === "members" && !scope.team;
+    const explicitTab = page === "settings" || page === "budget_groups" || organizationMembers;
+    return {
+      href:
+        page === "usage"
+          ? customerHierarchyHref("usage", scope)
+          : `${customerHierarchyHref("manage", scope)}${explicitTab ? `&tab=${page}` : ""}`,
+      label: t(LABELS[page]),
+      active: active === page,
+    };
+  });
+  return <CustomerDetailNavigation label={t("customerPortal.hierarchy.customerNavigation")} items={items} />;
 }

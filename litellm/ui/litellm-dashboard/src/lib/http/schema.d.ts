@@ -9806,6 +9806,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/apps/resources/{resource_type}/{resource_id}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List App Resource Models
+         * @description List models accessible to an app's underlying team, project, or virtual key. Proxy admins only.
+         */
+        get: operations["list_app_resource_models_management_v1_apps_resources__resource_type___resource_id__models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/apps/{app_id}": {
         parameters: {
             query?: never;
@@ -70680,6 +70700,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AppResource"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_resource_models_management_v1_apps_resources__resource_type___resource_id__models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resource_type: components["schemas"]["AppResourceType"];
+                resource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
             /** @description Validation Error */
