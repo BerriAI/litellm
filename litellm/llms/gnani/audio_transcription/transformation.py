@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -31,6 +31,8 @@ _NOT_FORWARDED: Final = frozenset(
     (
         *OPENAI_TRANSCRIPTION_PARAMS,
         *GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS,
+        "keywords",
+        "languages",
         "prompt",
         "stream",
         "temperature",
@@ -38,6 +40,7 @@ _NOT_FORWARDED: Final = frozenset(
     )
 )
 _REGION_CODE: Final = re.compile(r"([A-Za-z]{2})-([A-Za-z]{2})")
+_LANGUAGE_LIST: Final = TypeAdapter(list[str])
 
 
 class _PrismaTranscript(BaseModel):
@@ -78,10 +81,28 @@ def _language_code(model: str, language: object) -> str:
     return ",".join(_normalized_hint(hint) for hint in hints)
 
 
+def _is_blank(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _joined_languages(languages: object) -> object:
+    try:
+        return ",".join(_LANGUAGE_LIST.validate_python(languages))
+    except ValidationError:
+        return languages
+
+
 def _language_hint(fields: Mapping[str, object]) -> object:
-    native: Final = fields.get("language_code")
-    native_unset: Final = native is None or (isinstance(native, str) and not native.strip())
-    return fields.get("language") if native_unset else native
+    hints: Final = (fields.get("language_code"), _joined_languages(fields.get("languages")), fields.get("language"))
+    return next((hint for hint in hints if not _is_blank(hint)), None)
+
+
+def _with_keywords_as_terms(fields: Mapping[str, object], model: str) -> Mapping[str, object]:
+    keywords: Final = fields.get("keywords")
+    terms_field: Final = "bias_list" if _is_v25(model) else "keyterms"
+    if keywords is None or fields.get(terms_field) is not None:
+        return fields
+    return {**fields, terms_field: [keywords] if isinstance(keywords, str) else keywords}
 
 
 def _form_value(value: object) -> str:
@@ -129,7 +150,7 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             raise UnsupportedParamsError(
                 message="Gnani transcription supports response_format=json", model=model, llm_provider="gnani"
             )
-        mapped: Final = {key: non_default_params.get(key) for key in ("language", "prompt")}
+        mapped: Final = {key: non_default_params.get(key) for key in ("language", "languages", "keywords", "prompt")}
         return {**optional_params, **{key: value for key, value in mapped.items() if value is not None}}
 
     def validate_environment(
@@ -175,8 +196,11 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             raise BadRequestError(
                 message="Gnani transcription requires a non-empty audio file", model=model, llm_provider="gnani"
             )
-        fields: Final = _with_prompt_as_previous_text(
-            {**(as_str_mapping(optional_params.get("extra_body")) or {}), **optional_params}
+        fields: Final = _with_keywords_as_terms(
+            _with_prompt_as_previous_text(
+                {**(as_str_mapping(optional_params.get("extra_body")) or {}), **optional_params}
+            ),
+            model,
         )
         supported: Final = _V25_FIELDS if _is_v25(model) else _V3_FIELDS
         incompatible: Final = (_V25_FIELDS | _V3_FIELDS) - supported

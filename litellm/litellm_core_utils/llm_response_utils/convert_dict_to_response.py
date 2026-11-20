@@ -939,7 +939,7 @@ def convert_to_model_response_object(
             if "text" in response_object:
                 model_response_object.text = response_object["text"]
 
-            optional_keys: Final = ["language", "task", "duration", "words", "segments"]
+            optional_keys: Final = ["language", "task", "duration", "words", "segments", "request_id", "truncated"]
             for key in optional_keys:  # not guaranteed to be in response
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
