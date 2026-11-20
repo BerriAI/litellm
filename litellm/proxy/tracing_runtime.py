@@ -8,6 +8,8 @@ from typing import Final
 
 import httpx
 from fastapi import HTTPException, Request
+from opentelemetry import baggage
+from opentelemetry import context as otel_context
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import Span as RecordingSpan
 from opentelemetry.sdk.trace import SpanProcessor
@@ -145,13 +147,15 @@ class _LensTraceLogger(OpenTelemetryV2):
         if made_by.agent and carrier is not None and carrier.span is not None:
             carrier.span.set_attribute(_AGENT_NAME, made_by.agent)
         token: Final = _CALLING_AGENT.set(made_by.agent)
+        without_inherited_baggage: Final = otel_context.attach(baggage.clear())
         try:
             span: Final = super()._close_llm_call(kwargs, start_time, end_time)
+            if span is not None and call.session_id:
+                self._emit_tool_steps(made_by, call.session_id, to_ns(start_time))
+            return span
         finally:
+            otel_context.detach(without_inherited_baggage)
             _CALLING_AGENT.reset(token)
-        if span is not None and call.session_id:
-            self._emit_tool_steps(made_by, call.session_id, to_ns(start_time))
-        return span
 
     def _emit_tool_steps(self, made_by: AgentCall, session_id: str, at_ns: int | None) -> None:
         """One zero-length step per tool result, at the start of the model call whose prompt carries it."""
