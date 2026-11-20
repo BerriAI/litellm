@@ -218,6 +218,20 @@ def test_boot_load_falls_back_to_the_bundled_document(reply: _Reply, fallback_re
     assert source["fallback_reason"] is not None and source["fallback_reason"].startswith(fallback_reason)
 
 
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_refused_document_is_reported_without_the_credentials_its_url_carries():
+    with _serving(_Reply(body=b"[1, 2]")) as server:
+        presigned: Final = f"{server.url}?X-Amz-Signature=lit-secret-signature"
+        _boot_load(presigned, max_attempts=1)
+        booted: Final = get_model_cost_map_source_info()["fallback_reason"]
+        reloaded: Final = asyncio.run(refetch_model_cost_map(url=presigned, max_attempts=1))
+
+    assert isinstance(reloaded, ModelCostMapReloadUnavailable)
+    assert booted is not None and booted.startswith(f"Remote fetch failed: invalid JSON from {server.url}: ")
+    assert reloaded.reason.startswith(f"invalid JSON from {server.url}: ")
+    assert "lit-secret-signature" not in booted + reloaded.reason
+
+
 _MOVED: Final = _Reply(status=302, body=b"", headers={"Location": "/moved.json"})
 _REDIRECTED_DOCUMENT: Final = _document_with(**{"lit-redirected-model": {"litellm_provider": "openai", "mode": "chat"}})
 

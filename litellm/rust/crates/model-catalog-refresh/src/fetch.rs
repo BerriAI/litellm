@@ -145,7 +145,7 @@ fn reason(url: &str, cause: &Cause) -> String {
 }
 
 /// Drops userinfo, query and fragment, where presigned URLs and tokens carry credentials
-fn redacted(url: &str) -> Cow<'_, str> {
+pub(crate) fn redacted(url: &str) -> Cow<'_, str> {
     let Ok(mut parsed) = Url::parse(url) else {
         return Cow::Borrowed(url);
     };
