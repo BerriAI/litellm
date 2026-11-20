@@ -11,6 +11,7 @@ from __future__ import annotations
 import hmac
 import inspect
 import json
+import logging
 import os
 import posixpath
 import re
@@ -1758,7 +1759,11 @@ async def _bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error("BedrockError in handle_bedrock_count_tokens: %s", e)
+        verbose_proxy_logger.log(
+            logging.WARNING if e.status_code < 500 else logging.ERROR,
+            "BedrockError in handle_bedrock_count_tokens: %s",
+            e,
+        )
         from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
 
         provider_headers: Final = e.response.headers

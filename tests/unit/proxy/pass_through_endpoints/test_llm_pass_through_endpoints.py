@@ -8608,6 +8608,31 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
 
 
 @pytest.mark.parametrize(
+    ("aws_status", "log_level"),
+    [(400, logging.WARNING), (429, logging.WARNING), (500, logging.ERROR)],
+)
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_a_provider_4xx_as_a_warning_and_a_5xx_as_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    aws_status: int,
+    log_level: int,
+) -> None:
+    aws_reply: Final = httpx.Response(aws_status, json={"message": "The count failed."})
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
+        await _bedrock_native_count(monkeypatch, respx_mock, aws_reply, Response())
+
+    assert exc_info.value.status_code == aws_status
+    assert [
+        record.levelno
+        for record in caplog.records
+        if record.name == "LiteLLM Proxy" and record.levelno >= logging.WARNING
+    ] == [log_level]
+
+
+@pytest.mark.parametrize(
     ("request_body", "problem"),
     [
         ({"model": _BEDROCK_COUNT_ALIAS}, "Request must contain content to count tokens"),
