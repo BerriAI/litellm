@@ -1286,6 +1286,19 @@ def test_custom_handler_deployment_trusts_only_the_chat_cap_it_receives(monkeypa
     assert max_output_capped == pytest.approx(uncapped)
 
 
+@pytest.mark.parametrize("cap", [{"max_output_tokens": 1}, {"maxTokens": 1}, {"inferenceConfig": {"maxTokens": 1}}])
+def test_a_provider_that_rejects_the_cap_probe_keeps_the_uncapped_hold(cap: dict[str, object]) -> None:
+    router: Final = _priced_router(("scaledown/extract",))
+    body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}]}
+    uncapped: Final = estimate_request_max_cost(request_body=body, route="/v1/chat/completions", llm_router=router)
+    capped: Final = estimate_request_max_cost(
+        request_body={**body, **cap}, route="/v1/chat/completions", llm_router=router
+    )
+
+    assert uncapped is not None
+    assert capped == pytest.approx(uncapped)
+
+
 @pytest.mark.parametrize("ceiling", [0, -1])
 def test_non_positive_model_ceiling_reserves_the_default_output_cap(ceiling: int) -> None:
     body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}]}

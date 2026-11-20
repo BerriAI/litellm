@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.duration_parser import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.litellm_core_utils.tool_fields import drop_policy
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import (
@@ -1815,7 +1816,7 @@ def _provider_output_cap_fields(model: str, provider: str) -> frozenset[str]:
         mapped: Final = _MAPPED_PARAMS.validate_python(
             config.map_openai_params({"max_tokens": _CAP_PROBE}, {}, model, False) if config is not None else {}
         )
-    except (BadRequestError, ValueError, TypeError, KeyError):
+    except (BadRequestError, BaseLLMException, ValueError, TypeError, KeyError):
         return frozenset()
     return frozenset(field for field, value in mapped.items() if value == _CAP_PROBE)
 
