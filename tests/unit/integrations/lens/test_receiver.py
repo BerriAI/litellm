@@ -4,11 +4,11 @@ from typing import Final, cast
 import pytest
 
 from litellm.constants import AGENT_TRACING_AGENT_LIST_LIMIT
-from litellm.tracing.generated.models import TraceAgentRow, TraceAgentsParams
-from litellm.tracing.generated.types import TraceScope
-from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing import TraceReceiver
-from litellm.tracing.types import TraceAgent
+from litellm.integrations.lens.generated.models import TraceAgentRow, TraceAgentsParams
+from litellm.integrations.lens.generated.types import TraceScope
+from litellm.integrations.lens.storage import LensTraceStorage
+from litellm.integrations.lens import TraceReceiver
+from litellm.integrations.lens.types import TraceAgent
 
 
 class AgentRowsStorage:

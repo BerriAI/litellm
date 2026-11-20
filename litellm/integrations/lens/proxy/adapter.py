@@ -12,11 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import JSONResponse
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
-from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.lens.buffering import (
+from litellm.integrations.lens.proxy.buffering import (
     FORWARD_BUFFER_BUDGET,
     AdmittedBody,
     BodyReservation,
@@ -25,7 +21,11 @@ from litellm.proxy.lens.buffering import (
     LensRoute,
     request_body,
 )
-from litellm.tracing.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
+from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
+from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
 PUBLIC_CONTRACT: Final = 1

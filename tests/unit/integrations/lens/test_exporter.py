@@ -8,7 +8,13 @@ import httpx
 import pytest
 from prometheus_client import REGISTRY
 
-from litellm.tracing.exporter import MAX_BUFFER_EVENTS, MAX_EVENT_BYTES, ExportFailure, LensExporter, encode_record
+from litellm.integrations.lens.exporter import (
+    MAX_BUFFER_EVENTS,
+    MAX_EVENT_BYTES,
+    ExportFailure,
+    LensExporter,
+    encode_record,
+)
 
 
 @pytest.mark.asyncio
@@ -237,7 +243,7 @@ async def test_cancelled_inflight_export_drops_the_batch_and_pending_records() -
 
 @pytest.mark.asyncio
 async def test_byte_budget_rejects_large_queue_and_shutdown_without_start_discards_it() -> None:
-    from litellm.tracing.exporter import MAX_BUFFER_BYTES
+    from litellm.integrations.lens.exporter import MAX_BUFFER_BYTES
 
     async with httpx.AsyncClient(base_url="http://lens") as client:
         exporter: Final = LensExporter(client)
@@ -253,7 +259,7 @@ async def test_byte_budget_rejects_large_queue_and_shutdown_without_start_discar
 
 @pytest.mark.asyncio
 async def test_batches_stay_bounded_without_losing_or_reordering_records() -> None:
-    from litellm.tracing.exporter import MAX_BATCH_BYTES
+    from litellm.integrations.lens.exporter import MAX_BATCH_BYTES
 
     bodies: Final = asyncio.Queue[bytes]()
 

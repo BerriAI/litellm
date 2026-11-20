@@ -9,11 +9,11 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Response
 from starlette.requests import ClientDisconnect, Request
 from starlette.types import Message
 
+from litellm.integrations.lens.proxy.adapter import Connection, Identity, forward, router
+from litellm.integrations.lens.proxy.buffering import FORWARD_BUFFER_BUDGET, BodyReservation, BufferBudget, LensRoute
+from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.http_parsing_utils import read_request_body
-from litellm.proxy.lens.adapter import Connection, Identity, forward, router
-from litellm.proxy.lens.buffering import FORWARD_BUFFER_BUDGET, BodyReservation, BufferBudget, LensRoute
-from litellm.tracing.remote import MAX_RESPONSE_BYTES, LensConnection
 
 IDENTITY: Final = Identity(
     user_role=LitellmUserRoles.PROXY_ADMIN,

@@ -389,6 +389,8 @@ from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+from litellm.integrations.lens.proxy.adapter import router as lens_router
+from litellm.integrations.lens.proxy.internal import LensInternalMiddleware
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -765,8 +767,6 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF10
     run_spend_event,
 )
 from litellm.proxy.image_endpoints.endpoints import router as image_router
-from litellm.proxy.lens.adapter import router as lens_router
-from litellm.proxy.lens.internal import LensInternalMiddleware
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,
@@ -977,8 +977,10 @@ from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
+from litellm.integrations.lens.config import is_lens_tracing_enabled
+from litellm.integrations.lens.proxy import tracing_endpoints
+from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream
-from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -1066,7 +1068,6 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.tracing_runtime import manage_tracing
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     router as latest_release_endpoints_router,
@@ -1141,7 +1142,6 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
-from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
