@@ -281,6 +281,8 @@ def test_fields_litellm_does_not_know_reach_gnani(model: str, language: str | No
         ("gnani/prisma-v3.0", {"language_code": "hi-in"}, b"hi-IN"),
         ("gnani/prisma-v3.0", {"language": "en", "language_code": "hi-IN"}, b"hi-IN"),
         ("gnani/prisma-v3.0", {"language": "en", "language_code": ""}, b"en-IN"),
+        ("gnani/prisma-v3.0", {"language": "en", "language_code": "  "}, b"en-IN"),
+        ("gnani/prisma-v2.5", {"language": "hi", "language_code": " "}, b"hi-IN"),
     ],
 )
 def test_gnani_language_code_is_normalized_and_wins_over_language(
