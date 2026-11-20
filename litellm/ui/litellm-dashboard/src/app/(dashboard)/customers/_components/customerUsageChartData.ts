@@ -1,4 +1,5 @@
 import {
+  formatDayLabel,
   rankValue,
   rollUpBreakdown,
   seriesBy,
@@ -10,8 +11,45 @@ import type { DailyData } from "@/components/UsagePage/types";
 import i18n from "@/i18n/i18n";
 import type { CustomerHierarchyUsage } from "./customerUsageApi";
 import type { CustomerUsageDimension } from "./CustomerUsageRankings";
+import { customerModelBreakdown } from "./customerUsageTotals";
 
 const TOP_SERIES = 8;
+
+const TOKEN_BREAKDOWN_SERIES = [
+  { key: "uncachedInput", label: "customerPortal.tokenUsage.uncachedInputTokens", color: "#10b981" },
+  { key: "cacheRead", label: "customerPortal.tokenUsage.cacheReadTokens", color: "#3b82f6" },
+  { key: "cacheWrite", label: "customerPortal.tokenUsage.cacheWriteTokens", color: "#a855f7" },
+  { key: "output", label: "usage.statStrip.tokenPopover.outputTokens", color: "#f59e0b" },
+] as const;
+const UNCLASSIFIED_TOKEN_SERIES = {
+  key: "unclassified",
+  label: "customerPortal.tokenUsage.unclassifiedTokens",
+  color: "#64748b",
+} as const;
+
+export const customerTokenBreakdownSeries = (days: readonly DailyData[]): Series => {
+  const data = days.map(({ date, metrics }) => {
+    const cacheRead = metrics.cache_read_input_tokens ?? 0;
+    const cacheWrite = metrics.cache_creation_input_tokens ?? 0;
+    const output = metrics.completion_tokens;
+    const uncachedInput = metrics.prompt_tokens - cacheRead - cacheWrite;
+    const total = metrics.total_tokens;
+    const point = { date, label: formatDayLabel(date) };
+    if (Math.min(cacheRead, cacheWrite, output, uncachedInput) < 0 || metrics.prompt_tokens + output !== total) {
+      return { ...point, cacheRead: 0, cacheWrite: 0, uncachedInput: 0, output: 0, unclassified: total };
+    }
+    return { ...point, cacheRead, cacheWrite, uncachedInput, output, unclassified: 0 };
+  });
+  const segments = data.some(({ unclassified }) => unclassified > 0)
+    ? [...TOKEN_BREAKDOWN_SERIES, UNCLASSIFIED_TOKEN_SERIES]
+    : TOKEN_BREAKDOWN_SERIES;
+  return {
+    data,
+    keys: segments.map(({ key }) => key),
+    labels: segments.map(({ label }) => i18n.t(label)),
+    colors: segments.map(({ color }) => color),
+  };
+};
 
 const entityDays = (
   primary: readonly DailyData[],
@@ -41,8 +79,7 @@ export const customerUsageSeries = (
       ...day,
       breakdown: {
         ...day.breakdown,
-        model_groups:
-          Object.keys(day.breakdown.model_groups).length > 0 ? day.breakdown.model_groups : day.breakdown.models,
+        model_groups: customerModelBreakdown(day),
       },
     }));
     return seriesBy(days, "model_groups", metric, { top: TOP_SERIES, colorByKey: colorByModel });

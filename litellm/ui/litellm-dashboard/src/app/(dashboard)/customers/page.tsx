@@ -24,6 +24,7 @@ import {
   sortCustomerOrganizations,
 } from "./_components/customerOrganizations";
 import { mergeCustomerActivityPages } from "./_components/customerUsageData";
+import { customerUsageTotals } from "./_components/customerUsageTotals";
 import {
   calendarDate,
   CUSTOMER_USAGE_MAX_RANGE_DAYS,
@@ -81,9 +82,10 @@ function CustomerOrganizations() {
   const lastPage = Math.max(0, Math.ceil(sorted.length / pagination.pageSize) - 1);
   const page = Math.min(pagination.pageIndex, lastPage);
   const start = page * pagination.pageSize;
-  const loading = organizations.isPending || monthlyUsage.isPending;
+  const loading = organizations.isPending || monthlyUsage.isPending || usage.isPending;
   const activity = usage.data ?? EMPTY_USAGE;
   const totals = useMemo(() => overviewTotals(activity.metadata, null), [activity]);
+  const usageTotals = useMemo(() => (usage.data ? customerUsageTotals(usage.data.results) : null), [usage.data]);
 
   const onCreated = () => {
     setSearch("");
@@ -92,22 +94,10 @@ function CustomerOrganizations() {
   };
 
   return (
-    <div className="w-full space-y-5 px-6 py-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h1 className="text-lg font-semibold tracking-tight">{t("customerPortal.list.title")}</h1>
-          <p className="text-sm text-muted-foreground">{t("customerPortal.list.subtitle")}</p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" /> {t("customerPortal.list.create")}
-        </Button>
-      </div>
+    <div className="mx-auto w-full max-w-[1920px] space-y-6 px-4 py-6 sm:px-6">
       <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
-            <p className="mt-1 text-xs text-muted-foreground">{t("customerPortal.list.overallUsageHelp")}</p>
-          </div>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 className="pb-2.5 text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
           <AdvancedDatePicker
             value={dateValue}
             onValueChange={onDateChange}
@@ -145,13 +135,8 @@ function CustomerOrganizations() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-pressed={sorting[0]?.id === "created_at" && sorting[0].desc}
-            onClick={() => onSortingChange([CUSTOMER_ORGANIZATION_TABLE.defaultSort])}
-          >
-            {t("customerPortal.list.newestFirst")}
+          <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" /> {t("customerPortal.list.create")}
           </Button>
         </div>
         {organizations.isError || monthlyUsage.isError ? (
@@ -168,6 +153,7 @@ function CustomerOrganizations() {
             searching={Boolean(search)}
             startDate={startDate}
             endDate={endDate}
+            usageTotals={usageTotals}
           />
         )}
         <DataTablePagination
@@ -179,8 +165,6 @@ function CustomerOrganizations() {
           isLoading={organizations.isFetching || monthlyUsage.isFetching}
         />
       </div>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.list.budgetAndShareHelp")}</p>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.list.attribution")}</p>
       <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} />
     </div>
   );

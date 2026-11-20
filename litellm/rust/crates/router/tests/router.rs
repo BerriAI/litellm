@@ -18,13 +18,12 @@ fn catalog() -> Catalog {
 #[case::configured(
     "api_key: test-key\n      api_base: https://provider.example/v1\n      custom_llm_provider: test-provider"
 )]
-#[case::secret_reference("api_key: os.environ/ROUTER_TEST_API_KEY")]
 fn configuration_preserves_deployment_parameters(catalog: Catalog, #[case] parameters: &str) {
     let config = Config::from_yaml(&format!(
         "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model\n      {parameters}"
     ))
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None, &catalog);
+    let router = Router::from_config(&config, &catalog);
     let deployment = router.get(&config.model_list[0].model_name).unwrap();
     let params = &config.model_list[0].litellm_params;
 
@@ -52,7 +51,7 @@ fn configuration_types_the_provider_params_of_a_deployment(catalog: Catalog) {
       azure_ad_token: ignored-by-every-group",
     )
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None, &catalog);
+    let router = Router::from_config(&config, &catalog);
     let params = &router.get("public-model").unwrap().litellm_params;
 
     assert_eq!(
@@ -82,7 +81,7 @@ fn lookup_uses_public_names(catalog: Catalog, #[case] name: &str, #[case] expect
       model: provider/b",
     )
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None, &catalog);
+    let router = Router::from_config(&config, &catalog);
 
     assert_eq!(router.get(name).map(|entry| entry.model.as_str()), expected);
 }
@@ -91,11 +90,7 @@ fn lookup_uses_public_names(catalog: Catalog, #[case] name: &str, #[case] expect
 fn empty_configuration_has_no_deployment(catalog: Catalog) {
     let config = Config::from_yaml("model_list: []").unwrap();
 
-    assert!(
-        Router::from_config(&config, &|_: &str| None, &catalog)
-            .get("")
-            .is_none()
-    );
+    assert!(Router::from_config(&config, &catalog).get("").is_none());
     assert!(Router::default().get("unknown").is_none());
 }
 
@@ -107,6 +102,7 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
         api_base: Some("https://provider.example/v1".into()),
         custom_llm_provider: Some("test-provider".into()),
         litellm_params: Default::default(),
+        configurable_clientside_auth_params: Box::default(),
         timeout: Some(Duration::from_secs(7)),
         shaping: MessagesShaping {
             settings: MessagesSettings {

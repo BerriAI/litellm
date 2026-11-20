@@ -5612,6 +5612,29 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         )
         self.assertEqual(litellm_spans[0].status.status_code, StatusCode.ERROR)
 
+    def test_handle_failure_emits_each_attempt_with_its_destination(self) -> None:
+        from opentelemetry.trace import StatusCode
+
+        from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME
+
+        exporter: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        otel: Final = OpenTelemetry(tracer_provider=provider)
+        kwargs: Final = self._build_kwargs(exception=True)
+        start: Final = datetime(2026, 1, 1)
+        for index in range(3):
+            marker: Final = start + timedelta(seconds=index)
+            kwargs["current_attempt_api_call_start_time"] = marker
+            kwargs["standard_logging_object"]["api_base"] = f"https://region-{index}.example:{8443 + index}/v1"
+            otel._handle_failure(kwargs, None, marker, marker + timedelta(milliseconds=500))
+            otel._handle_failure(kwargs, None, marker, marker + timedelta(milliseconds=500))
+        spans: Final = tuple(s for s in exporter.get_finished_spans() if s.name == LITELLM_REQUEST_SPAN_NAME)
+        assert len(spans) == 3
+        assert [s.attributes["server.address"] for s in spans] == [f"region-{i}.example" for i in range(3)]
+        assert [s.attributes["server.port"] for s in spans] == [8443, 8444, 8445]
+        assert all(s.status.status_code is StatusCode.ERROR for s in spans)
+
     def test_create_guardrail_span_dedupes_across_lifecycle_entrypoints(self):
         """``_create_guardrail_span`` is called from post-call-success hook,
         ``_handle_success``, and ``_handle_failure``. A single guardrail
@@ -8364,6 +8387,41 @@ async def test_failed_non_chat_span_gets_no_failure_usage_flags(
     attributes: Final = dict(span.attributes or {})
     assert USAGE_PROVIDER_STATUS_ATTRIBUTE not in attributes
     assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
+
+
+@pytest.mark.parametrize(
+    ("api_base", "hostname", "port"),
+    [
+        ("http://127.0.0.1:abc/v1", "127.0.0.1", None),
+        ("http://127.0.0.1:99999/v1", "127.0.0.1", None),
+        ("http://[::1/v1", None, None),
+        ("http://[not-ipv6]/v1", None, None),
+        ("http://127.0.0.1:8080/v1", "127.0.0.1", 8080),
+        ("", None, None),
+    ],
+)
+def test_malformed_destination_preserves_other_span_attributes(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
+    api_base: str,
+    hostname: str | None,
+    port: int | None,
+) -> None:
+    otel, exporter = in_memory_otel
+    data_dir: Final = Path(__file__).parent / "open_telemetry" / "data"
+    captured: Final = json.loads((data_dir / "captured_kwargs.json").read_text())
+    kwargs: Final = {
+        **captured,
+        "standard_logging_object": {**captured["standard_logging_object"], "api_base": api_base},
+    }
+    response: Final = json.loads((data_dir / "captured_response.json").read_text())
+
+    otel.log_success_event(kwargs, response, _FIXED_START, _FIXED_START + timedelta(seconds=1))
+
+    span: Final = next(span for span in exporter.get_finished_spans() if span.name == LITELLM_REQUEST_SPAN_NAME)
+    attributes: Final = dict(span.attributes or {})
+    assert attributes["gen_ai.request.model"] == captured["model"]
+    assert attributes.get("server.address") == hostname
+    assert attributes.get("server.port") == port
 
 
 def test_successful_span_reports_provider_usage_without_failure_usage_flags(

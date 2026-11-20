@@ -11,9 +11,10 @@ interface Props {
   id: string;
   value: readonly string[];
   onChange: (value: string[]) => void;
+  disabled?: boolean;
 }
 
-export default function CustomerAllowedModelsSelect({ id, value, onChange }: Props) {
+export default function CustomerAllowedModelsSelect({ id, value, onChange, disabled }: Props) {
   const { t } = useTranslation();
   const models = useAllProxyModels();
   const configured = new Map((models.data?.data ?? []).map((model) => [model.id, model]));
@@ -41,6 +42,7 @@ export default function CustomerAllowedModelsSelect({ id, value, onChange }: Pro
         onValueChange={onChange}
         placeholder={t("customerPortal.hierarchy.searchModels")}
         loading={models.isLoading}
+        disabled={disabled}
       />
       {models.isError && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status">

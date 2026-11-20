@@ -4056,10 +4056,10 @@ def test_a_dispatched_failure_lifts_the_fields_the_spend_log_needs():
 async def test_a_dispatched_failure_is_counted_off_the_event_loop():
     from unittest.mock import AsyncMock, patch
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -4070,7 +4070,7 @@ async def test_a_dispatched_failure_is_counted_off_the_event_loop():
                 "first_api_call_start_time": 1700000000.0,
                 "call_type": "acompletion",
                 "model": "claude-fable-5",
-                "messages": [{"role": "user", "content": text * 100}],
+                "messages": [{"role": "user", "content": uncounted_text()}],
             }
         ),
         "metadata": {},
@@ -4516,3 +4516,65 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
     assert _is_client_error_exception(ProxyException(message="x", type="x", param=None, code="429")) is True
     assert _is_client_error_exception(ValueError("x")) is False
+
+
+class _NativeHookMCPGuardrail(_RecordingMCPGuardrail):
+    use_native_lifecycle_hooks = True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringPostMCPCall(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return [GuardrailEventHooks.post_call, GuardrailEventHooks.post_mcp_call]
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringOtherHooks(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return [GuardrailEventHooks.post_call]
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringNoHooks(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return None
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("guardrail_class", "expected_calls", "expected_text"),
+    [
+        (_NativeHookDeclaringPostMCPCall, 1, "<MASKED>"),
+        (_NativeHookDeclaringOtherHooks, 0, "jane@example.com"),
+        (_NativeHookDeclaringNoHooks, 0, "jane@example.com"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_a_native_hook_guardrail_only_when_it_supports_post_mcp_call(
+    restore_callbacks, guardrail_class, expected_calls, expected_text
+):
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = guardrail_class(event_hook=GuardrailEventHooks.post_mcp_call)
+    litellm.callbacks = [guardrail]  # test-quality-ok: post_mcp_call_hook reads litellm.callbacks, restore_callbacks undoes it
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"mcp_tool_name": "echo"},
+        user_api_key_dict=None,
+    )
+
+    assert (guardrail.call_count, [item.text for item in returned.content]) == (expected_calls, [expected_text])

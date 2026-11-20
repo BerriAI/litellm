@@ -14,6 +14,7 @@ from fastapi import HTTPException, status
 from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import ROUTE_CALL_TYPE_METADATA_KEY
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.fallback_utils import without_global_fallbacks_around
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -23,7 +24,6 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     carries_explicit_credentials,
-    get_team_provider_deployment,
     team_deployment_the_caller_may_use,
 )
 from litellm.router import router_arguments
@@ -228,6 +228,19 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "aretrieve_batch": "/batches",
 }
 
+GENERATE_CONTENT_SPEND_ENDPOINTS: Final = MappingProxyType(
+    {
+        "agenerate_content": "/models/{model}:generateContent",
+        "agenerate_content_stream": "/models/{model}:streamGenerateContent",
+    }
+)
+_SPEND_ENDPOINT_BY_CALL_TYPE: Final = MappingProxyType({**ROUTE_ENDPOINT_MAPPING, **GENERATE_CONTENT_SPEND_ENDPOINTS})
+
+
+def spend_endpoint(call_type: str, metadata: Mapping[str, object]) -> str | None:
+    route_call_type: Final = metadata.get(ROUTE_CALL_TYPE_METADATA_KEY)
+    return _SPEND_ENDPOINT_BY_CALL_TYPE.get(route_call_type if isinstance(route_call_type, str) else call_type)
+
 
 _AVAILABLE_MODELS_HINT: Final = "Call `/v1/models` to view available models for your key."
 
@@ -314,6 +327,21 @@ class ProxyMissingRequiredParamError(ProxyException):
 
 class ProxyMissingParamWithoutLoadedModelError(ProxyMissingRequiredParamError):
     pass
+
+
+class ProxyCommaSeparatedModelsStreamError(ProxyException):
+    def __init__(self) -> None:
+        super().__init__(
+            message=(
+                "Comma-separated models send the request to every listed model and cannot stream. "
+                "To stream, send one model name. To spread traffic or fail over across models, put them behind "
+                "one model group or fallbacks (https://docs.litellm.ai/docs/proxy/reliability). "
+                "To race the listed models and stream the first answer, set fastest_response=true."
+            ),
+            type="invalid_request_error",
+            param="stream",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -765,9 +793,7 @@ def _model_less_team_vector_store_file_call(
 async def _authorized_team_file_deployment(
     llm_router: LitellmRouter | None, call: _ModelLessTeamFileCall
 ) -> TeamProviderDeployment | None:
-    return await team_deployment_the_caller_may_use(
-        get_team_provider_deployment(llm_router, call.caller, call.custom_llm_provider), llm_router, call.caller
-    )
+    return await team_deployment_the_caller_may_use(llm_router, call.caller, call.custom_llm_provider)
 
 
 def _with_team_deployment_attribution(
@@ -793,17 +819,14 @@ def _with_team_deployment_attribution(
     }
 
 
-def _merge_router_settings_override(
-    data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
-) -> frozenset[str]:
-    data.pop("enable_tag_filtering", None)
+def router_settings_override_updates(data: Mapping[str, object]) -> Mapping[str, object]:
     drop_params: Final = litellm.drop_params is True or normalize_drop_params(data.get("drop_params")) is True
     router_settings_override_adapter: Final = (
         _JSON_OBJECT_OR_DROPPED_ADAPTER if drop_params else _OPTIONAL_JSON_OBJECT_ADAPTER
     )
     try:
         router_settings_override: Final = router_settings_override_adapter.validate_python(
-            data.pop("router_settings_override", None)
+            data.get("router_settings_override")
         )
     except ValidationError:
         raise ProxyException(
@@ -812,8 +835,6 @@ def _merge_router_settings_override(
             param="router_settings_override",
             code=status.HTTP_400_BAD_REQUEST,
         ) from None
-    if "user_config" in data and data["user_config"] is None:
-        data.pop("user_config")
     user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))
     router_settings_from_override: Final = MappingProxyType(
         {
@@ -826,8 +847,19 @@ def _merge_router_settings_override(
         if router_settings_override is not None
         else {}
     )
-    data.update(router_settings_from_override)
-    return _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)
+    return router_settings_from_override
+
+
+def _merge_router_settings_override(
+    data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
+) -> frozenset[str]:
+    data.pop("enable_tag_filtering", None)
+    updates: Final = router_settings_override_updates(data)
+    data.pop("router_settings_override", None)
+    if "user_config" in data and data["user_config"] is None:
+        data.pop("user_config")
+    data.update(updates)
+    return _ROUTER_ONLY_SETTINGS.intersection(updates)
 
 
 async def route_request(
@@ -919,17 +951,19 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     elif (
         route_type == "acompletion"
-        and data.get("model", "") is not None
-        and "," in data.get("model", "")
+        and isinstance(comma_separated_models := data.get("model"), str)
+        and "," in comma_separated_models
         and llm_router is not None
     ):
         # Handle batch completions with comma-separated models BEFORE user_config check
         # This ensures batch completion logic is applied even when user_config is set
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
-        else:
-            models: Final = [model.strip() for model in data.pop("model").split(",")]
-            return llm_router.abatch_completion(models=models, **data)
+        if data.get("stream") is True:
+            raise ProxyCommaSeparatedModelsStreamError()
+        data.pop("model")
+        models: Final = [model.strip() for model in comma_separated_models.split(",")]
+        return llm_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:
         return _route_user_config_request(data, route_type)
