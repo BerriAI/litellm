@@ -21062,7 +21062,7 @@
     "budgetGroups": {
       "organizationDefault": "Use organization default",
       "organizationDefaultHelp": "Apply the configured default when this organization is created.",
-      "settingsHint": "Manage separate presets for overall app limits, organization-wide limits, and each customer's or member's usage within an app.",
+      "settingsHint": "Manage separate presets for overall app limits, organization-wide limits, and each customer's usage within an app.",
       "overallAppTab": "Overall App Budget Groups",
       "overallTab": "Overall Organization Budget Groups",
       "appTab": "Per-App Organization Budget Groups",

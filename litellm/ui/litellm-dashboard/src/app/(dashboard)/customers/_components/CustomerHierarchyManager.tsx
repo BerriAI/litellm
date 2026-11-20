@@ -421,6 +421,7 @@ export default function CustomerHierarchyManager() {
     );
 
   const entity = selected.entity;
+  const showOrganizationApps = entity.kind === "organization" && (tab === "teams" || tab === "members");
   const currentScope = {
     org: scope.org,
     team: selected.team?.customer_team_id ?? null,
@@ -437,7 +438,7 @@ export default function CustomerHierarchyManager() {
     <CustomerDetailLayout label={t("customerPortal.hierarchy.title")}>
       <HierarchyHeader hierarchy={hierarchy} selected={selected} />
       <CustomerHierarchyNavigation scope={currentScope} active={tab} />
-      {entity.kind === "organization" && tab !== "budget_groups" && (
+      {showOrganizationApps && (
         <CustomerOrganizationApps
           key={scope.org}
           organizationId={scope.org}

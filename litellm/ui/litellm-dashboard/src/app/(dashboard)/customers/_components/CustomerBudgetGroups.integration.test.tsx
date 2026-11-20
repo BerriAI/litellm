@@ -121,6 +121,7 @@ describe("CustomerBudgetGroups", () => {
   );
   it.each(catalogCases)("saves $title, model-only=$modelOnly", async (entry) => {
     const { title, tabTitle, endpoint, scope, modelOnly } = entry;
+    const directEditor = modelOnly || scope === "app-member";
     const user = userEvent.setup();
     const { period, duration } = {
       "overall-app": { period: "No reset", duration: null },
@@ -143,14 +144,14 @@ describe("CustomerBudgetGroups", () => {
       return json(request.method === "PATCH" ? saved : emptyOrganization);
     });
     const view = renderWithProviders(
-      modelOnly ? (
+      directEditor ? (
         <CustomerBudgetGroups organization={emptyOrganization} onSaved={onSaved} global scope={scope} />
       ) : (
         <CustomerSettings />
       ),
       { searchParams: `?tab=${scope}` },
     );
-    if (!modelOnly) expect(screen.getByRole("tab", { name: tabTitle })).toHaveAttribute("aria-selected", "true");
+    if (!directEditor) expect(screen.getByRole("tab", { name: tabTitle })).toHaveAttribute("aria-selected", "true");
     const editor = within(await screen.findByRole("form", { name: "Budget groups" }));
     await user.click(await editor.findByRole("button", { name: "Add budget group" }));
     fireEvent.change(editor.getByLabelText("Group name 1"), { target: { value: name } });
@@ -180,7 +181,7 @@ describe("CustomerBudgetGroups", () => {
       default_budget_template: null,
       default_budgets: [{ name, ...budget }],
     });
-    if (modelOnly) {
+    if (directEditor) {
       expect(onSaved).toHaveBeenCalledOnce();
       view.rerender(<CustomerBudgetGroups organization={saved} onSaved={onSaved} global scope={scope} />);
       expect(screen.getByLabelText("model-a")).toBeInTheDocument();
