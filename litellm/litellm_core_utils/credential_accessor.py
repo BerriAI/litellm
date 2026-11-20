@@ -7,7 +7,6 @@ from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import holds_api_key_secret_reference, holds_secret_pointer
 from litellm.types.utils import (
     API_KEY_SECRET_REFERENCE_REJECTION,
@@ -44,6 +43,8 @@ def _resolved_credential_value(credential_name: str, key: str, value: object) ->
     reference: Final = _env_ref(value, key)
     if reference is None:
         return value
+    from litellm.secret_managers.main import get_secret_str  # noqa: PLC0415  # import cycle via litellm.caching
+
     resolved: Final = get_secret_str(reference)
     if resolved:
         return resolved
