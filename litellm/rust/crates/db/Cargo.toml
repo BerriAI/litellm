@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 include = ["Cargo.toml", "src/**"]
 
+[features]
+native-tls = ["sqlx/tls-native-tls"]
+
 [dependencies]
 futures-util.workspace = true
 litellm-circuit-breaker.workspace = true

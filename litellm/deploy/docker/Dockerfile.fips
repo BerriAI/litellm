@@ -60,6 +60,7 @@ RUN --mount=type=secret,id=cgr-token \
     openssl \
     libssl3 \
     openssl-dev \
+    pkgconf \
     nodejs \
     npm \
     libsndfile
@@ -97,7 +98,7 @@ COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 
 RUN sed -i 's/\r$//' litellm/deploy/docker/build_admin_ui.sh && chmod +x litellm/deploy/docker/build_admin_ui.sh && ./litellm/deploy/docker/build_admin_ui.sh
 
-ARG MATURIN_PEP517_ARGS=""
+ARG MATURIN_PEP517_ARGS="--features fips"
 RUN uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no-editable \
     --no-install-package cryptography --no-install-package grpcio --no-install-package psycopg-binary \
     --extra proxy \
@@ -194,6 +195,8 @@ RUN for lib in "$(python -c 'import grpc._cython.cygrpc as m; print(m.__file__)'
       readelf -d "$lib" | grep -q 'NEEDED.*\[libssl\.so\.4\]' && ! nm -D --defined-only "$lib" | grep -qE ' (SSL|EVP|BIO)_' \
         || { echo "$lib does not use the image's FIPS OpenSSL"; exit 1; }; \
     done
+RUN objdump -p /app/.venv/lib/python3.13/site-packages/litellm/rust_bridge/_native.abi3.so | grep -Eq 'NEEDED +libssl\.so' || \
+    { echo "litellm/rust_bridge/_native.abi3.so does not link the system OpenSSL; build it with --features fips"; exit 1; }
 COPY litellm/deploy/docker/scan_bundled_crypto.sh litellm/deploy/docker/fips_elf_inventory.txt /fips-scan/
 RUN chmod +x /fips-scan/scan_bundled_crypto.sh && \
     /fips-scan/scan_bundled_crypto.sh /app/.venv /opt/prisma /usr/local/bin
