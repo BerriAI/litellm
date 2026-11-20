@@ -3343,3 +3343,156 @@ def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseab
     assert body["error"]["code"] == -32000
     assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
     assert body["error"]["data"]["code"] == "403"
+
+
+def test_message_send_params_rejects_inline_http_push_url():
+    """Regression (#49622): message/send's inline pushNotificationConfig must clear the same SSRF guard as tasks/pushNotificationConfig/set."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    params = {
+        "message": {
+            "messageId": "msg-1",
+            "role": "ROLE_USER",
+            "parts": [{"text": "hello"}],
+        },
+        "configuration": {
+            "pushNotificationConfig": {
+                "url": "http://webhook.example.com/hook",
+                "token": "tok",
+            }
+        },
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        _build_message_send_params(params)
+
+    assert exc_info.value.status_code == 400
+    assert "HTTPS" in exc_info.value.detail
+
+
+def test_message_send_params_rejects_inline_private_address_push_url():
+    """Regression (#49622): a link-local inline push URL is refused before anything reaches the agent."""
+    import socket as socket_module
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    params = {
+        "message": {
+            "messageId": "msg-1",
+            "role": "ROLE_USER",
+            "parts": [{"text": "hello"}],
+        },
+        "configuration": {
+            "pushNotificationConfig": {
+                "url": "https://169.254.169.254/latest/meta-data/",
+            }
+        },
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        _build_message_send_params(params)
+
+    assert exc_info.value.status_code == 400
+
+
+def test_message_send_params_accepts_https_public_push_url():
+    """A compliant inline push config passes through unchanged."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    params = {
+        "message": {
+            "messageId": "msg-1",
+            "role": "user",
+            "parts": [{"text": "hello"}],
+        },
+        "configuration": {
+            "pushNotificationConfig": {
+                "url": "https://webhook.example.com/hook",
+                "token": "tok",
+            }
+        },
+    }
+
+    # The public-address SSRF check itself is covered by the dedicated
+    # _validate_push_notification_url tests; keep this test offline by
+    # letting the (already scheme-validated) https URL through.
+    with patch("litellm.proxy.agent_endpoints.a2a_endpoints.validate_url", return_value=None):
+        result = _build_message_send_params(params)
+    assert result.message.role.value == "user"
+    assert result.configuration is not None
+    assert result.configuration.push_notification_config is not None
+    assert result.configuration.push_notification_config.url == "https://webhook.example.com/hook"
+
+
+def test_message_send_params_without_push_config_is_untouched():
+    """No inline push config: nothing extra is validated, plain sends behave as before."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    result = _build_message_send_params(
+        {
+            "message": {
+                "messageId": "msg-1",
+                "role": "ROLE_USER",
+                "parts": [{"text": "hello"}],
+            },
+            "configuration": {"blocking": True},
+        }
+    )
+    assert result.message.role.value == "user"
+
+
+def test_message_send_params_rejects_a2a_10_task_push_url_loopback():
+    """Regression (#49637 review): A2A 1.0 taskPushNotificationConfig survives the
+    1.0->0.3 conversion into built.configuration.push_notification_config, so the
+    built-object check must run on the fallback path too — a loopback webhook on
+    message/send is refused before reaching the agent."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    params = {
+        "message": {
+            "messageId": "msg-1",
+            "role": "ROLE_USER",
+            "parts": [{"text": "hello"}],
+        },
+        "configuration": {
+            "taskPushNotificationConfig": {
+                "url": "http://127.0.0.1:8080/hook",
+            }
+        },
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        _build_message_send_params(params)
+
+    assert exc_info.value.status_code == 400
+
+
+def test_message_send_params_rejects_snake_case_task_push_url():
+    """The snake_case task_push_notification_config wire spelling is covered too."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    params = {
+        "message": {
+            "messageId": "msg-1",
+            "role": "ROLE_USER",
+            "parts": [{"text": "hello"}],
+        },
+        "configuration": {
+            "task_push_notification_config": {
+                "url": "http://10.0.0.9/hook",
+            }
+        },
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        _build_message_send_params(params)
+
+    assert exc_info.value.status_code == 400
