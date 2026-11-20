@@ -3900,7 +3900,6 @@ async def customer_accounting_counters(
     from litellm.proxy.auth.customer_hierarchy_auth import (
         get_customer_scopes_for_accounting,
     )
-    from litellm.proxy.management_helpers.customer_hierarchy import utc_datetime
 
     try:
         scopes: Final = (
@@ -3917,7 +3916,7 @@ async def customer_accounting_counters(
             "Unable to load customer budget windows for spend accounting"
         )
         return ()
-    now: Final = utc_datetime(started_at) if started_at is not None else datetime.now(timezone.utc)
+    now: Final = started_at.astimezone(timezone.utc) if started_at is not None else datetime.now(timezone.utc)
     return tuple(
         chain.from_iterable(
             customer_window_counters(scope.key, scope.entity_id, scope.accounting_limits(), now=now) for scope in scopes

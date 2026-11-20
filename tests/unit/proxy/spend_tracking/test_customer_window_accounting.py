@@ -122,9 +122,10 @@ def test_custom_windows_keep_their_reset_anchor_across_days_and_dst(
 
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("duration", ("daily", "weekly", "1w", "01h", "1mo", "12mo", "2d"))
-def test_accounting_snapshot_keeps_the_admitted_window_key(duration: str) -> None:
-    now: Final = datetime(2026, 11, 2, 13, 30, tzinfo=timezone.utc)
+async def test_accounting_snapshot_keeps_the_admitted_window_key(duration: str) -> None:
+    now: Final = datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc)
     scope: Final = CustomerScopeAuth(key="app", entity_id="app", budget_limits=(
         AppDurationLimit(budget_duration=duration, max_budget=10),
         BudgetLimit(budget_duration="15m", max_budget=1, reset_at=now),
@@ -134,6 +135,9 @@ def test_accounting_snapshot_keeps_the_admitted_window_key(duration: str) -> Non
     assert customer_window_counters("app", "app", restored.budget_limits, now=now) == customer_window_counters(
         "app", "app", scope.budget_limits, now=now
     )
+    assert await ps.customer_accounting_counters(
+        CustomerHierarchyIds(app_id="app"), (restored,), started_at=datetime.fromtimestamp(now.timestamp())
+    ) == customer_window_counters("app", "app", scope.budget_limits, now=now)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ("customer_org", "customer_team", "customer_member"))
