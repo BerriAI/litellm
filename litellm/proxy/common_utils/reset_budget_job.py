@@ -1911,12 +1911,14 @@ class ResetBudgetJob:
         return True
 
     @staticmethod
-    def _next_window_reset(window: dict, now: datetime, reset_settings: BudgetResetSettings) -> datetime | None:
+    def _next_window_reset(
+        window: Mapping[str, object], now: datetime, reset_settings: BudgetResetSettings
+    ) -> datetime | None:
         reset_at_str: Final = window.get("reset_at")
-        if not reset_at_str:
+        budget_duration: Final = window.get("budget_duration")
+        if not isinstance(reset_at_str, str) or not reset_at_str or not isinstance(budget_duration, str):
             return None
-        budget_duration: Final = window["budget_duration"]
-        annual: Final = isinstance(budget_duration, str) and is_annual_budget_duration(budget_duration)
+        annual: Final = is_annual_budget_duration(budget_duration)
         saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
         if _as_utc(saved_reset_at) > _as_utc(now):
             return None
