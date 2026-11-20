@@ -1,6 +1,6 @@
 from html import escape
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -17,9 +17,8 @@ def mount_scalar_reference(app: FastAPI, docs_url: str | None) -> None:
 
     app.mount(SCALAR_ASSET_PATH, StaticFiles(directory=_ASSET_DIR), name="scalar")
 
-    @app.get(docs_url, include_in_schema=False)
     async def scalar_reference(request: Request) -> HTMLResponse:
-        root_path: Final = request.scope.get("root_path", "").rstrip("/")
+        root_path: Final = cast(str, request.scope.get("root_path", "")).rstrip("/")
         assets: Final = escape(f"{root_path}{SCALAR_ASSET_PATH}")
         schema: Final = escape(f"{root_path}{openapi_url}")
         title: Final = escape(app.title)
@@ -40,3 +39,5 @@ def mount_scalar_reference(app: FastAPI, docs_url: str | None) -> None:
 </body>
 </html>"""
         )
+
+    app.add_api_route(docs_url, scalar_reference, methods=["GET"], include_in_schema=False)
