@@ -133,6 +133,16 @@ export function LogDetailsDrawer({
   const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("duration");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
+  const sidebarMode = isSessionMode ? "session" : "trace";
+  const sidebarResetKey = open ? sidebarMode : null;
+  const [previousSidebarResetKey, setPreviousSidebarResetKey] = useState<typeof sidebarResetKey>(null);
+
+  if (sidebarResetKey !== previousSidebarResetKey) {
+    setPreviousSidebarResetKey(sidebarResetKey);
+    if (sidebarResetKey !== null) {
+      setIsSidebarCollapsed(typeof window !== "undefined" && window.innerWidth < 768);
+    }
+  }
 
   const { data: sessionData } = useQuery({
     queryKey: ["sessionLogs", sessionId],
@@ -224,15 +234,11 @@ export function LogDetailsDrawer({
     }
   }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
-  // Reset transient UI state when the drawer opens or closes.
   useEffect(() => {
-    if (open) {
-      setIsSidebarCollapsed(window.innerWidth < 768);
-    } else {
-      if (isSessionMode) setSelectedSessionRequestId(null);
-      setSessionSortMode("duration");
-      setCopiedLeftPanelId(false);
-    }
+    if (open) return;
+    if (isSessionMode) setSelectedSessionRequestId(null);
+    setSessionSortMode("duration");
+    setCopiedLeftPanelId(false);
   }, [open, isSessionMode]);
 
   // Keyboard navigation
