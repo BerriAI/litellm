@@ -27,10 +27,11 @@ class _GradiumSpeechRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     text: str
+    output_format: str
 
 
 class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
-    TTS_ENDPOINT_PATH = "/api/post/speech/tts"
+    TTS_ENDPOINT_PATH = "/api/speech/tts"
     DEFAULT_OUTPUT_FORMAT = "wav"
 
     VOICE_MAPPINGS: ClassVar[Mapping[str, str]] = {
@@ -40,12 +41,39 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         "onyx": "QkmUhBH4hIV2_BkY",
         "nova": "w9V1722uEmTkWqnR",
         "shimmer": "BbLb4TxdlrldgpHI",
+        "ash": "_6Aslh2DxfmnRLmP",
+        "ballad": "yk2FCQroF3f6O5Zg",
+        "coral": "vjFyp2BcCyTlUmYb",
+        "sage": "7Qu2QSs0IjinH2yU",
+        "verse": "dME3IWyZBvmh1n1q",
+        "marin": "NbpkqMVS3CJeq2j8",
+        "cedar": "POBHtemksfWQbng0",
     }
 
     FORMAT_MAPPINGS: ClassVar[Mapping[str, str]] = {
         "wav": "wav",
         "pcm": "pcm_24000",
         "opus": "opus",
+        **{
+            native: native
+            for native in (
+                "ulaw_8000",
+                "mulaw_8000",
+                "alaw_8000",
+                "pcm_8000",
+                "pcm_16000",
+                "pcm_22050",
+                "pcm_24000",
+                "pcm_44100",
+                "pcm_48000",
+            )
+        },
+    }
+
+    RAW_AUDIO_MEDIA_TYPES: ClassVar[Mapping[str, str]] = {
+        "ulaw_8000": "audio/basic",
+        "mulaw_8000": "audio/basic",
+        "alaw_8000": "audio/x-alaw-basic",
     }
 
     UNSUPPORTED_OPENAI_PARAMS: ClassVar[frozenset[str]] = frozenset({"speed", "instructions"})
@@ -55,6 +83,7 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _resolve_voice_id(
         self,
+        model: str,
         voice: str | dict[str, object] | None,  # mutable-ok: mirrors the dict|str the base class passes through
         params: Mapping[str, object],
     ) -> str:
@@ -69,7 +98,11 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         if candidate is None:
-            raise ValueError("Gradium voice_id is required. Pass `voice` when calling `litellm.speech()`.")
+            raise litellm.BadRequestError(
+                message="Gradium voice_id is required. Pass `voice` when calling `litellm.speech()`.",
+                model=model,
+                llm_provider="gradium",
+            )
 
         return self.VOICE_MAPPINGS.get(candidate.lower(), candidate)
 
@@ -81,7 +114,7 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         drop_params: bool = False,
         kwargs: dict[str, object] | None = None,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: callers mutate the returned params downstream
-        mapped_voice: Final = self._resolve_voice_id(voice, optional_params)
+        mapped_voice: Final = self._resolve_voice_id(model, voice, optional_params)
         response_format: Final = optional_params.get("response_format")
         output_format: Final = self.FORMAT_MAPPINGS.get(response_format) if isinstance(response_format, str) else None
         unsupported: Final = tuple(
@@ -183,7 +216,11 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
                 headers=raw_response.headers,
             )
 
+        sent: Final = _GradiumSpeechRequest.model_validate_json(raw_response.request.content)
+        if not any(value.startswith("audio/") for value in raw_response.headers.get_list("content-type")):
+            media_type: Final = self.RAW_AUDIO_MEDIA_TYPES.get(sent.output_format, "audio/pcm")
+            raw_response.headers["content-type"] = media_type  # rebind-ok: httpx exposes headers only as mutable
+
         speech: Final = HttpxBinaryResponseContent(raw_response)
-        billed_text: Final = _GradiumSpeechRequest.model_validate_json(raw_response.request.content).text
-        speech.hidden_params = {**speech.hidden_params, "billed_characters": len(billed_text)}
+        speech.hidden_params = {**speech.hidden_params, "billed_characters": len(sent.text)}
         return speech
