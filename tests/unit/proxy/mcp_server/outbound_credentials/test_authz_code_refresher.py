@@ -59,7 +59,6 @@ def _recording_persist(sink):
         expires_in: int | None,
         scopes: tuple[str, ...] | None,
         cimd_client_id: str | None = None,
-        refreshed_from: str | None = None,
     ) -> None:
         sink.append(
             (user_id, server_id, access_token, refresh_token, expires_in, scopes)
@@ -334,7 +333,6 @@ async def test_verified_refresh_preserves_binding_proof_in_storage():
     assert token.refresh_token == "rotated"
     assert token.identity_binding_proof == "verified-binding"
     assert persist.await_args.kwargs["identity_binding_proof"] == "verified-binding"
-    assert persist.await_args.kwargs["refreshed_from"] == "old-rt"
 
 
 @pytest.mark.asyncio

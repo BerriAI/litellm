@@ -61,7 +61,7 @@ async def _read_credential(user_id: str, server_id: str) -> Mapping[str, object]
 
     if prisma_client is None:
         raise TokenStoreUnavailable("Database not connected")
-    return await get_user_oauth_credential(prisma_client, user_id, server_id, use_writer=True)
+    return await get_user_oauth_credential(prisma_client, user_id, server_id)
 
 
 async def _persist_credential(
@@ -73,8 +73,7 @@ async def _persist_credential(
     scopes: tuple[str, ...] | None,
     identity_binding_proof: str | None = None,
     cimd_client_id: str | None = None,
-    refreshed_from: str | None = None,
-) -> bool | None:
+) -> None:
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415
         store_user_oauth_credential,
     )
@@ -82,7 +81,7 @@ async def _persist_credential(
 
     if prisma_client is None:
         return
-    return await store_user_oauth_credential(
+    await store_user_oauth_credential(
         prisma_client=prisma_client,
         user_id=user_id,
         server_id=server_id,
@@ -92,7 +91,6 @@ async def _persist_credential(
         scopes=list(scopes) if scopes is not None else None,
         skip_byok_guard=True,
         identity_binding_proof=identity_binding_proof,
-        refreshed_from=refreshed_from,
         **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
     )
 

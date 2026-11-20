@@ -169,17 +169,6 @@ class _UserCredentialsTable:
         self.rows = {**self.rows, (pair["user_id"], pair["server_id"]): row}
         return row
 
-    async def create(self, data: Mapping[str, str]) -> SimpleNamespace:
-        from prisma.errors import UniqueViolationError
-
-        key: Final = (data["user_id"], data["server_id"])
-        if key in self.rows:
-            raise UniqueViolationError({}, message="Unique constraint failed on the fields: (`user_id`,`server_id`)")
-        self.writes += 1
-        row: Final = SimpleNamespace(**data, updated_at=self.writes)
-        self.rows = {**self.rows, key: row}
-        return row
-
     async def update_many(self, data: Mapping[str, object], where: Mapping[str, str]) -> int:
         key: Final = (where["user_id"], where["server_id"])
         existing: Final = self.rows.get(key)

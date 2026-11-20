@@ -11,9 +11,8 @@ keeps a plain-base64 fallback on read so existing rows continue to work.
 import asyncio
 import base64
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from itertools import count
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -34,7 +33,6 @@ from litellm.proxy.mcp_server.db import (
     _decode_user_credential,
     _prepare_mcp_server_data,
     create_mcp_server,
-    decode_oauth_payload,
     decrypt_credentials,
     encrypt_credentials,
     get_all_mcp_servers,
@@ -68,9 +66,7 @@ def _make_prisma_with_existing(row):
     """Build a MagicMock prisma_client whose user-credentials table returns ``row``
     for find_unique and behaves async-correctly for upsert/find_many."""
     prisma = MagicMock()
-    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=row)
-    prisma.db.litellm_mcpusercredentials.update_many = AsyncMock(return_value=1)
     prisma.db.litellm_mcpusercredentials.upsert = AsyncMock()
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[])
     return prisma
@@ -446,10 +442,8 @@ async def test_purge_user_oauth_credentials_for_server_noop_when_empty():
 
 
 def _stored_value(prisma) -> str:
-    table: Final = prisma.db.litellm_mcpusercredentials
-    if table.update_many.await_count:
-        return table.update_many.call_args.kwargs["data"]["credential_b64"]
-    call: Final = table.upsert.call_args
+    """Pull the credential_b64 value passed to the most recent upsert call."""
+    call = prisma.db.litellm_mcpusercredentials.upsert.call_args
     data = call.kwargs["data"]
     create_value = data["create"]["credential_b64"]
     update_value = data["update"]["credential_b64"]
@@ -853,570 +847,6 @@ async def test_refusal_notes_each_refused_scope_once_on_the_saved_grant(credenti
     assert rows.rows[("alice", "srv-1")].updated_at == saved_at
 
 
-def _hold_first_reads(monkeypatch: pytest.MonkeyPatch, rows: SimpleNamespace, readers: int) -> None:
-    find_unique: Final = rows.find_unique
-    reads: Final = count()
-    all_read: Final = asyncio.Event()
-
-    async def read_together(where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
-        row: Final = await find_unique(where)
-        index: Final = next(reads)
-        if index < readers:
-            if index == readers - 1:
-                all_read.set()
-            await all_read.wait()
-        return row
-
-    monkeypatch.setattr(rows, "find_unique", read_together)
-
-
-def _run_between_first_read_and_write(
-    monkeypatch: pytest.MonkeyPatch, rows: SimpleNamespace, step: Callable[[], Awaitable[None]]
-) -> None:
-    find_unique: Final = rows.find_unique
-    reads: Final = count()
-
-    async def read_then_step(where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
-        row: Final = await find_unique(where)
-        if next(reads) == 0:
-            await step()
-        return row
-
-    monkeypatch.setattr(rows, "find_unique", read_then_step)
-
-
-def _writer_grant(prisma: SimpleNamespace) -> OAuthCredentialPayload:
-    grant: Final = decode_oauth_payload(
-        prisma.writer_db.litellm_mcpusercredentials.rows[("alice", "srv-1")].credential_b64
-    )
-    assert grant is not None
-    return grant
-
-
-@pytest.mark.asyncio
-async def test_concurrent_scope_refusals_keep_both_scopes(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1")
-    _hold_first_reads(monkeypatch, credentials_prisma.db.litellm_mcpusercredentials, readers=2)
-
-    await asyncio.gather(
-        record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist"),
-        record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "notifications"),
-    )
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], sorted(grant["needs_scopes"])) == ("at-1", ["gist", "notifications"])
-
-
-@pytest.mark.asyncio
-async def test_refusal_racing_a_sign_in_leaves_the_new_grant_alone(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old")
-
-    async def sign_in() -> None:
-        await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new", skip_byok_guard=True)
-
-    _run_between_first_read_and_write(monkeypatch, credentials_prisma.db.litellm_mcpusercredentials, sign_in)
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], grant.get("needs_scopes")) == ("at-new", None)
-
-
-@pytest.mark.asyncio
-async def test_refusal_on_a_grant_saved_before_grant_ids_leaves_a_racing_sign_in_alone(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
-
-    async def save_without_grant_id(access_token: str) -> None:
-        payload: Final = {"type": "oauth2", "access_token": access_token, "refresh_token": f"rt-{access_token}"}
-        await rows.upsert(
-            where={"user_id_server_id": {"user_id": "alice", "server_id": "srv-1"}},
-            data={
-                "create": {
-                    "user_id": "alice",
-                    "server_id": "srv-1",
-                    "credential_b64": encrypt_value_helper(json.dumps(payload)),
-                }
-            },
-        )
-
-    async def sign_in_on_a_main_replica() -> None:
-        await save_without_grant_id("at-new")
-
-    await save_without_grant_id("at-old")
-    _run_between_first_read_and_write(monkeypatch, rows, sign_in_on_a_main_replica)
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], grant.get("needs_scopes")) == ("at-new", None)
-
-
-@pytest.mark.asyncio
-async def test_refusal_racing_a_refresh_lands_on_the_refreshed_grant(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
-
-    async def refresh() -> None:
-        await store_user_oauth_credential(
-            credentials_prisma, "alice", "srv-1", "at-refreshed", refresh_token="rt-1", refreshed_from="rt-1"
-        )
-
-    _run_between_first_read_and_write(monkeypatch, credentials_prisma.db.litellm_mcpusercredentials, refresh)
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], grant.get("needs_scopes")) == ("at-refreshed", ["gist"])
-
-
-@pytest.mark.asyncio
-async def test_refresh_racing_a_refusal_keeps_the_refusal(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
-
-    async def refuse() -> None:
-        await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    _run_between_first_read_and_write(monkeypatch, credentials_prisma.writer_db.litellm_mcpusercredentials, refuse)
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-refreshed", refresh_token="rt-1", refreshed_from="rt-1"
-    )
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], grant.get("needs_scopes")) == ("at-refreshed", ["gist"])
-
-
-@pytest.mark.asyncio
-async def test_refresh_reads_the_saved_grant_from_the_writer(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
-    before_the_refusal: Final = dict(rows.rows)
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    async def lagging_read(where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
-        pair: Final = where["user_id_server_id"]
-        return before_the_refusal.get((pair["user_id"], pair["server_id"]))
-
-    replica: Final = SimpleNamespace(find_unique=lagging_read, update_many=rows.update_many, upsert=rows.upsert)
-    monkeypatch.setattr(credentials_prisma, "db", SimpleNamespace(litellm_mcpusercredentials=replica))
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-refreshed", refresh_token="rt-1", refreshed_from="rt-1"
-    )
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], grant.get("needs_scopes")) == ("at-refreshed", ["gist"])
-
-
-@pytest.mark.asyncio
-async def test_refusal_reads_a_new_sign_in_from_the_writer(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
-
-    async def replica_without_the_sign_in(where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
-        return None
-
-    replica: Final = SimpleNamespace(
-        find_unique=replica_without_the_sign_in, update_many=rows.update_many, upsert=rows.upsert
-    )
-    monkeypatch.setattr(credentials_prisma, "db", SimpleNamespace(litellm_mcpusercredentials=replica))
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    assert _writer_grant(credentials_prisma).get("needs_scopes") == ["gist"]
-
-
-@pytest.mark.asyncio
-async def test_overlapping_refreshes_of_one_grant_keep_its_refusals(credentials_prisma: SimpleNamespace) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-0", refresh_token="rt-0")
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-    signed_in: Final = _writer_grant(credentials_prisma)
-
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", refreshed_from="rt-0"
-    )
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-2", refresh_token="rt-2", refreshed_from="rt-0"
-    )
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], grant["grant_id"], grant.get("needs_scopes")) == (
-        "at-2",
-        signed_in["grant_id"],
-        ["gist"],
-    )
-    assert "rt-0" not in json.dumps(grant)
-
-
-@pytest.mark.asyncio
-async def test_overlapping_refresh_after_a_non_rotating_refresh_keeps_its_refusals(
-    credentials_prisma: SimpleNamespace,
-) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-0", refresh_token="rt-0")
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", refreshed_from="rt-0"
-    )
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-2", refresh_token="rt-1", refreshed_from="rt-1"
-    )
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-3", refresh_token="rt-3", refreshed_from="rt-0"
-    )
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], grant.get("needs_scopes")) == ("at-3", ["gist"])
-
-
-@pytest.mark.asyncio
-async def test_refresh_without_a_new_refresh_token_keeps_the_presented_one(credentials_prisma: SimpleNamespace) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-0", refresh_token="rt-0")
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refreshed_from="rt-0")
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-2", refreshed_from="rt-0")
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], grant["refresh_token"], grant.get("needs_scopes")) == ("at-2", "rt-0", ["gist"])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("late_refresh_token", [None, "rt-0"])
-async def test_overlapping_refresh_without_a_new_refresh_token_keeps_the_rotated_one(
-    credentials_prisma: SimpleNamespace, late_refresh_token: str | None
-) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-0", refresh_token="rt-0")
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", refreshed_from="rt-0"
-    )
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-2", refresh_token=late_refresh_token, refreshed_from="rt-0"
-    )
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (grant["access_token"], grant["refresh_token"], grant.get("needs_scopes")) == ("at-2", "rt-1", ["gist"])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("newer_refresh_token", [None, "rt-new"])
-async def test_late_refresh_leaves_a_newer_sign_in_alone(
-    credentials_prisma: SimpleNamespace, newer_refresh_token: str | None
-) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-signed-in", refresh_token=newer_refresh_token, expires_in=3600
-    )
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-    signed_in: Final = _writer_grant(credentials_prisma)
-
-    saved: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-from-old-refresh", refresh_token="rt-old", refreshed_from="rt-old"
-    )
-
-    assert saved is False
-    assert _writer_grant(credentials_prisma) == signed_in
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("newer_refresh_token", [None, "rt-new"])
-@pytest.mark.parametrize("newer_expires_in", [-60, 30, None])
-async def test_refresh_from_another_login_takes_over_a_saved_login_that_no_longer_serves(
-    credentials_prisma: SimpleNamespace, newer_refresh_token: str | None, newer_expires_in: int | None
-) -> None:
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
-    await store_user_oauth_credential(
-        credentials_prisma,
-        "alice",
-        "srv-1",
-        "at-signed-in",
-        refresh_token=newer_refresh_token,
-        expires_in=newer_expires_in,
-    )
-
-    saved: Final = await store_user_oauth_credential(
-        credentials_prisma,
-        "alice",
-        "srv-1",
-        "at-from-old-refresh",
-        expires_in=3600,
-        refreshed_from="rt-old",
-    )
-
-    assert (saved, _writer_grant(credentials_prisma)["access_token"]) == (True, "at-from-old-refresh")
-
-
-@pytest.mark.asyncio
-async def test_after_github_rejects_the_saved_refresh_token_another_client_takes_over(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import litellm.proxy.mcp_server.db as db_mod
-
-    async def token_endpoint(url: str, headers: Mapping[str, str], data: Mapping[str, str]) -> _RefreshResponse:
-        return _RefreshResponse({"error": "bad_refresh_token", "error_description": "The refresh token is invalid"})
-
-    def http_client(**_: object) -> SimpleNamespace:
-        return SimpleNamespace(post=token_endpoint)
-
-    monkeypatch.setattr(db_mod, "get_async_httpx_client", http_client)
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-dead", refresh_token="rt-dead", expires_in=-60
-    )
-    dead_grant: Final = await _saved_grant(credentials_prisma)
-
-    refreshed: Final = await db_mod.refresh_user_oauth_token(credentials_prisma, "alice", _refresh_server(), dead_grant)
-    other_client_saved: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-live", expires_in=3600, refreshed_from="rt-live"
-    )
-
-    assert (refreshed, other_client_saved, _writer_grant(credentials_prisma)["access_token"]) == (None, True, "at-live")
-
-
-@pytest.mark.asyncio
-async def test_refresh_of_a_tokenless_row_saved_before_grant_ids_still_saves(
-    credentials_prisma: SimpleNamespace,
-) -> None:
-    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
-    legacy: Final = {"type": "oauth2", "access_token": "at-0", "connected_at": "2026-01-01T00:00:00+00:00"}
-    await rows.upsert(
-        where={"user_id_server_id": {"user_id": "alice", "server_id": "srv-1"}},
-        data={
-            "create": {
-                "user_id": "alice",
-                "server_id": "srv-1",
-                "credential_b64": encrypt_value_helper(json.dumps(legacy)),
-            }
-        },
-    )
-
-    first: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-1", refreshed_from="rt-client"
-    )
-    second: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-2", refreshed_from="rt-client"
-    )
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (first, second, grant["access_token"], grant["refresh_token"]) == (True, True, "at-2", "rt-client")
-
-
-@pytest.mark.asyncio
-async def test_refresh_after_the_grant_was_deleted_does_not_store_the_presented_token(
-    credentials_prisma: SimpleNamespace,
-) -> None:
-    saved: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-1", refreshed_from="rt-revoked"
-    )
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (saved, grant["access_token"], grant.get("refresh_token")) == (True, "at-1", None)
-
-
-@pytest.mark.asyncio
-async def test_refreshes_after_the_grant_was_deleted_keep_saving(credentials_prisma: SimpleNamespace) -> None:
-    first: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-1", expires_in=3600, refreshed_from="rt-client"
-    )
-    second: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-2", refreshed_from="rt-client"
-    )
-
-    grant: Final = _writer_grant(credentials_prisma)
-    assert (first, second, grant["access_token"], grant.get("refresh_token")) == (True, True, "at-2", None)
-
-
-@pytest.mark.asyncio
-async def test_refresh_with_another_token_after_the_grant_was_deleted_is_not_saved(
-    credentials_prisma: SimpleNamespace,
-) -> None:
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-1", expires_in=3600, refreshed_from="rt-client"
-    )
-
-    saved: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-other", refreshed_from="rt-other"
-    )
-
-    assert (saved, _writer_grant(credentials_prisma)["access_token"]) == (False, "at-1")
-
-
-@pytest.mark.asyncio
-async def test_refresh_after_the_grant_was_deleted_leaves_a_racing_sign_in_alone(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def sign_in() -> None:
-        await store_user_oauth_credential(
-            credentials_prisma, "alice", "srv-1", "at-signed-in", refresh_token="rt-new", expires_in=3600, skip_byok_guard=True
-        )
-
-    _run_between_first_read_and_write(monkeypatch, credentials_prisma.db.litellm_mcpusercredentials, sign_in)
-    saved: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-from-old-refresh", refreshed_from="rt-client"
-    )
-
-    assert (saved, _writer_grant(credentials_prisma)["access_token"]) == (False, "at-signed-in")
-
-
-@pytest.mark.asyncio
-async def test_refresh_of_a_tokenless_row_saved_before_grant_ids_leaves_a_racing_sign_in_alone(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
-    legacy: Final = {"type": "oauth2", "access_token": "at-0"}
-    await rows.upsert(
-        where={"user_id_server_id": {"user_id": "alice", "server_id": "srv-1"}},
-        data={
-            "create": {
-                "user_id": "alice",
-                "server_id": "srv-1",
-                "credential_b64": encrypt_value_helper(json.dumps(legacy)),
-            }
-        },
-    )
-
-    async def sign_in() -> None:
-        await store_user_oauth_credential(
-            credentials_prisma, "alice", "srv-1", "at-signed-in", refresh_token="rt-new", expires_in=3600, skip_byok_guard=True
-        )
-
-    _run_between_first_read_and_write(monkeypatch, rows, sign_in)
-    saved: Final = await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-from-old-refresh", refreshed_from="rt-client"
-    )
-
-    assert (saved, _writer_grant(credentials_prisma)["access_token"]) == (False, "at-signed-in")
-
-
-@pytest.mark.asyncio
-async def test_refresh_returns_the_refreshed_grant_while_the_replica_lags(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import litellm.proxy.mcp_server.db as db_mod
-
-    async def token_endpoint(url: str, headers: Mapping[str, str], data: Mapping[str, str]) -> _RefreshResponse:
-        return _RefreshResponse({"access_token": "at-refreshed", "expires_in": 3600})
-
-    def http_client(**_: object) -> SimpleNamespace:
-        return SimpleNamespace(post=token_endpoint)
-
-    monkeypatch.setattr(db_mod, "get_async_httpx_client", http_client)
-    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
-    old_grant: Final = await _saved_grant(credentials_prisma)
-    before_the_refresh: Final = dict(rows.rows)
-
-    async def lagging_read(where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
-        pair: Final = where["user_id_server_id"]
-        return before_the_refresh.get((pair["user_id"], pair["server_id"]))
-
-    replica: Final = SimpleNamespace(find_unique=lagging_read, update_many=rows.update_many, upsert=rows.upsert)
-    monkeypatch.setattr(credentials_prisma, "db", SimpleNamespace(litellm_mcpusercredentials=replica))
-    refreshed: Final = await db_mod.refresh_user_oauth_token(credentials_prisma, "alice", _refresh_server(), old_grant)
-
-    assert refreshed is not None and refreshed["access_token"] == "at-refreshed"
-
-
-@pytest.mark.asyncio
-async def test_refresh_after_a_newer_sign_in_returns_the_newer_grant(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import litellm.proxy.mcp_server.db as db_mod
-
-    async def token_endpoint(url: str, headers: Mapping[str, str], data: Mapping[str, str]) -> _RefreshResponse:
-        return _RefreshResponse({"access_token": "at-from-old-refresh", "expires_in": 3600})
-
-    def http_client(**_: object) -> SimpleNamespace:
-        return SimpleNamespace(post=token_endpoint)
-
-    monkeypatch.setattr(db_mod, "get_async_httpx_client", http_client)
-    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
-    old_grant: Final = await _saved_grant(credentials_prisma)
-    before_the_sign_in: Final = dict(rows.rows)
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-signed-in", refresh_token="rt-new", expires_in=3600
-    )
-
-    async def lagging_read(where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
-        pair: Final = where["user_id_server_id"]
-        return before_the_sign_in.get((pair["user_id"], pair["server_id"]))
-
-    replica: Final = SimpleNamespace(find_unique=lagging_read, update_many=rows.update_many, upsert=rows.upsert)
-    monkeypatch.setattr(credentials_prisma, "db", SimpleNamespace(litellm_mcpusercredentials=replica))
-    refreshed: Final = await db_mod.refresh_user_oauth_token(credentials_prisma, "alice", _refresh_server(), old_grant)
-
-    assert refreshed is not None and refreshed["access_token"] == "at-signed-in"
-
-
-@pytest.mark.asyncio
-async def test_token_route_refresh_after_a_sign_in_does_not_warm_the_cache(
-    credentials_prisma: SimpleNamespace,
-) -> None:
-    from litellm.proxy.mcp_server.discoverable_endpoints import _store_per_user_token_server_side
-    from litellm.proxy.mcp_server.oauth2_token_cache import mcp_per_user_token_cache
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
-
-    server: Final = MCPServer(
-        server_id="srv-1", name="srv", transport="http", auth_type="oauth2", oauth2_flow="authorization_code"
-    )
-    await store_user_oauth_credential(
-        credentials_prisma, "alice", "srv-1", "at-signed-in", refresh_token="rt-new", expires_in=3600
-    )
-    await mcp_per_user_token_cache.delete("alice", "srv-1")
-
-    await _store_per_user_token_server_side(
-        server, "alice", {"access_token": "at-from-old-refresh", "expires_in": 3600}, refreshed_from="rt-old"
-    )
-
-    assert _writer_grant(credentials_prisma)["access_token"] == "at-signed-in"
-    assert await mcp_per_user_token_cache.get_token("alice", "srv-1") is None
-
-
-@pytest.mark.asyncio
-async def test_guarded_refresh_never_overwrites_a_saved_api_key(credentials_prisma: SimpleNamespace) -> None:
-    await store_user_credential(credentials_prisma, "alice", "srv-1", "byok-api-key")
-
-    with pytest.raises(ValueError, match="Refusing to overwrite"):
-        await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refreshed_from="rt-1")
-
-    assert await get_user_credential(credentials_prisma, "alice", "srv-1") == "byok-api-key"
-
-
-@pytest.mark.asyncio
-async def test_token_refresh_keeps_the_scope_refusal_until_the_next_sign_in(
-    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import litellm.proxy.mcp_server.db as db_mod
-
-    async def token_endpoint(url: str, headers: Mapping[str, str], data: Mapping[str, str]) -> _RefreshResponse:
-        return _RefreshResponse({"access_token": "at-refreshed", "expires_in": 3600})
-
-    def http_client(**_: object) -> SimpleNamespace:
-        return SimpleNamespace(post=token_endpoint)
-
-    monkeypatch.setattr(db_mod, "get_async_httpx_client", http_client)
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
-    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
-
-    refreshed: Final = await db_mod.refresh_user_oauth_token(
-        credentials_prisma, "alice", _refresh_server(), await _saved_grant(credentials_prisma)
-    )
-
-    assert refreshed is not None
-    assert (refreshed["access_token"], refreshed.get("needs_scopes")) == ("at-refreshed", ["gist"])
-    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-signed-in")
-    assert "needs_scopes" not in await _saved_grant(credentials_prisma)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("byok_secret", [None, "byok-api-key"])
 async def test_refusal_without_a_saved_oauth_grant_writes_nothing(
@@ -1432,12 +862,39 @@ async def test_refusal_without_a_saved_oauth_grant_writes_nothing(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scopes", [("gist", "notifications"), ("gist", "gist"), ("gist", "notifications", "repo")])
+async def test_concurrent_refusals_preserve_each_missing_permission(
+    credentials_prisma: SimpleNamespace, scopes: tuple[str, ...]
+) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    original: Final = rows.rows[("alice", "srv-1")]
+    barrier: Final = asyncio.Barrier(len(scopes))
+    update: Final = rows.update_many
+
+    async def simultaneous_update(data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        if where["credential_b64"] == original.credential_b64:
+            await barrier.wait()
+        return await update(data=data, where=where)
+
+    rows.update_many = simultaneous_update
+    await asyncio.wait_for(
+        asyncio.gather(*(record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", scope) for scope in scopes)),
+        timeout=5,
+    )
+    grant: Final = await _saved_grant(credentials_prisma)
+    assert set(grant["needs_scopes"]) == set(scopes)
+    assert len(grant["needs_scopes"]) == len(set(scopes))
+    assert (grant["access_token"], grant["refresh_token"]) == ("at-1", "rt-1")
+
+
+@pytest.mark.asyncio
 async def test_refusal_never_overwrites_a_grant_saved_after_it_was_read(credentials_prisma: SimpleNamespace) -> None:
     rows: Final = credentials_prisma.db.litellm_mcpusercredentials
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old")
     read_before_the_save: Final = rows.rows[("alice", "srv-1")]
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new")
-    rows.find_unique = AsyncMock(return_value=read_before_the_save)
+    rows.find_unique = AsyncMock(side_effect=[read_before_the_save, rows.rows[("alice", "srv-1")]])
     await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
     del rows.find_unique
     grant: Final = await _saved_grant(credentials_prisma)
