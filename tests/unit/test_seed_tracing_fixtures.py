@@ -13,8 +13,8 @@ import pytest
 from prisma import Json, Prisma
 from pydantic import InstanceOf, TypeAdapter
 
+from litellm.integrations.clickhouse.spend_log_types import SpendLogRecord
 from litellm.integrations.lens.generated.responses import TraceSQLResponse
-from litellm.integrations.lens.types import SpendLogRecord
 from litellm.scripts.seed_tracing_fixtures import (
     JSON,
     TRACE_FIXTURES,

@@ -25,7 +25,7 @@ from litellm.integrations.clickhouse.clickhouse_spend_logger import (
     strip_cache_hit_suffix,
 )
 from litellm.integrations.clickhouse.context import lens_analysis
-from litellm.integrations.lens.types import SpendLogRecord
+from litellm.integrations.clickhouse.spend_log_types import SpendLogRecord
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.internal_call_metadata import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
 from litellm.litellm_core_utils.secret_redaction import REDACTED

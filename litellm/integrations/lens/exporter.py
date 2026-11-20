@@ -15,8 +15,8 @@ from typing_extensions import TypeIs
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
+from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.lens.types import SpendLogPayload
 
 if TYPE_CHECKING:
     from prometheus_client import Counter as PrometheusCounter
