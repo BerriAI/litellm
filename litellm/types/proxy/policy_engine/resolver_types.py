@@ -156,7 +156,7 @@ class PolicyCreateRequest(LiteLLMBaseModel):
         default=None,
         description="Condition for when this policy applies.",
     )
-    pipeline: dict[str, Any] | None = Field(
+    pipeline: dict[str, object] | None = Field(
         default=None,
         description="Optional guardrail pipeline for ordered execution. Contains 'mode' and 'steps'.",
     )
@@ -189,7 +189,7 @@ class PolicyUpdateRequest(LiteLLMBaseModel):
         default=None,
         description="Condition for when this policy applies.",
     )
-    pipeline: dict[str, Any] | None = Field(
+    pipeline: dict[str, object] | None = Field(
         default=None,
         description="Optional guardrail pipeline for ordered execution. Contains 'mode' and 'steps'.",
     )
@@ -216,8 +216,8 @@ class PolicyDBResponse(LiteLLMBaseModel):
     description: str | None = Field(default=None, description="Policy description.")
     guardrails_add: list[str] = Field(default_factory=list, description="Guardrails to add.")
     guardrails_remove: list[str] = Field(default_factory=list, description="Guardrails to remove.")
-    condition: dict[str, Any] | None = Field(default=None, description="Policy condition.")
-    pipeline: dict[str, Any] | None = Field(default=None, description="Optional guardrail pipeline.")
+    condition: dict[str, object] | None = Field(default=None, description="Policy condition.")
+    pipeline: dict[str, object] | None = Field(default=None, description="Optional guardrail pipeline.")
     created_at: datetime | None = Field(default=None, description="When the policy was created.")
     updated_at: datetime | None = Field(default=None, description="When the policy was last updated.")
     created_by: str | None = Field(default=None, description="Who created the policy.")
@@ -272,7 +272,7 @@ class PolicyVersionCompareResponse(LiteLLMBaseModel):
 
     version_a: PolicyDBResponse = Field(description="First version.")
     version_b: PolicyDBResponse = Field(description="Second version.")
-    field_diffs: dict[str, dict[str, Any]] = Field(
+    field_diffs: dict[str, dict[str, object]] = Field(
         default_factory=dict,
         description="Field name -> {version_a: val, version_b: val} for differing fields.",
     )

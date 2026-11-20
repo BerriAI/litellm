@@ -89,6 +89,15 @@ class Database:
             (key >> 32, key & 0xFFFFFFFF),
         )
 
+    @step("List the database sessions holding an advisory lock")
+    def holders(self, key: int = GATE_KEY) -> tuple[tuple[Scalar, ...], ...]:
+        return self.query(
+            "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted "
+            "AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) "
+            "AND classid = %s AND objid = %s ORDER BY pid",
+            (key >> 32, key & 0xFFFFFFFF),
+        )
+
     @step("List replica identities waiting on any of the advisory locks")
     def waiting_identities(self, keys: tuple[int, ...]) -> frozenset[str]:
         if not keys:

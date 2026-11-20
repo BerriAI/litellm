@@ -16,6 +16,7 @@ from litellm.llms.perplexity.embedding.transformation import (
     PerplexityEmbeddingConfig,
     PerplexityEmbeddingError,
 )
+from litellm import completion_cost
 from litellm.types.utils import EmbeddingResponse
 
 
@@ -182,9 +183,7 @@ class TestPerplexityEmbeddingConfig:
     def test_transform_embedding_response_base64_int8(self):
         """Test decoding base64_int8 embeddings to float arrays (Perplexity default)."""
         int8_values = [127, -128, 0, 64, -64]
-        b64_encoded = base64.b64encode(
-            struct.pack(f"{len(int8_values)}b", *int8_values)
-        ).decode()
+        b64_encoded = base64.b64encode(struct.pack(f"{len(int8_values)}b", *int8_values)).decode()
 
         mock_response_data = {
             "object": "list",
@@ -397,3 +396,44 @@ def test_perplexity_embedding_usage_that_is_not_an_object_is_rejected(usage):
 def test_perplexity_embedding_token_count_that_is_not_an_integer_is_rejected(usage):
     with pytest.raises(ValidationError):
         _transform({"data": [FLOAT_ROW], "usage": usage})
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/perplexity",
+        "https://gateway.example.com/perplexity/",
+        "https://gateway.example.com/perplexity/v1/embeddings/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        PerplexityEmbeddingConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="pplx-embed-v1-0.6b", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/perplexity/v1/embeddings"
+    )
+
+
+def test_perplexity_embedding_bills_the_cost_perplexity_reports_over_the_text_token_rate():
+    reported_cost = 0.5
+    response = _transform(
+        {
+            "data": [FLOAT_ROW],
+            "model": "pplx-embed-v1-0.6b",
+            "usage": {
+                "prompt_tokens": 67,
+                "total_tokens": 67,
+                "cost": {"currency": "USD", "input_cost": reported_cost, "total_cost": reported_cost},
+            },
+        }
+    )
+
+    billed = completion_cost(
+        completion_response=response,
+        model="perplexity/pplx-embed-v1-0.6b",
+        custom_llm_provider="perplexity",
+        call_type="embedding",
+    )
+
+    assert billed == pytest.approx(reported_cost)

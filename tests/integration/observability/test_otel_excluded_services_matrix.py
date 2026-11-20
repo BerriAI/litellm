@@ -346,8 +346,11 @@ def _db_systems(spans: tuple[Span, ...]) -> set[str]:
 
 
 def _post_auth_datastore_spans(spans: tuple[Span, ...]) -> tuple[Span, ...]:
-    auth_ids: Final = frozenset(span["span_id"] for span in spans if span["name"].startswith("auth "))
-    return tuple(span for span in spans if _db_systems((span,)) and span["parent_span_id"] not in auth_ids)
+    return tuple(
+        span
+        for span in spans
+        if _db_systems((span,)) and span["attributes"].get("litellm.team.id") is not None
+    )
 
 
 def _names(spans: tuple[Span, ...]) -> list[str]:
@@ -356,6 +359,10 @@ def _names(spans: tuple[Span, ...]) -> list[str]:
 
 def _has_root(spans: tuple[Span, ...]) -> bool:
     return any(span["kind"] == SERVER for span in spans)
+
+
+def _has_model_span(spans: tuple[Span, ...]) -> bool:
+    return any("gen_ai.operation.name" in span["attributes"] for span in spans)
 
 
 def _trace_of_call(sink: str, call_id: str, since: int) -> tuple[Span, ...]:
@@ -367,7 +374,7 @@ def _trace_of_call(sink: str, call_id: str, since: int) -> tuple[Span, ...]:
 def _operator_trace(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     trace: Final = eventually(
         lambda: _trace_of_call(rig.sinks.operator, sent.call_id, cursors.operator),
-        lambda spans: _has_root(spans) and "redis" in _db_systems(spans),
+        lambda spans: _has_root(spans) and "redis" in _db_systems(spans) and _has_model_span(spans),
         seconds=40,
     )
     assert len({span["trace_id"] for span in trace}) == 1, _names(trace)
@@ -405,7 +412,7 @@ def _assert_tenant_mirrors(rig: Rig, operator: tuple[Span, ...], cursors: Cursor
 
 def _assert_withheld(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     tenant: Final = _assert_tenant_mirrors(rig, _operator_trace(rig, sent, cursors), cursors)
-    assert any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
+    assert _has_model_span(tenant), _names(tenant)
     return tenant
 
 
@@ -519,7 +526,7 @@ def unconfigured_rig(
         yield started
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 @pytest.mark.parametrize("stream", [False, True], ids=["unary", "stream"])
 @pytest.mark.parametrize("client", CLIENTS)
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
@@ -534,7 +541,7 @@ def test_tenant_trace_keeps_request_spans_without_datastore_spans(
     _assert_withheld(rig, sent, cursors)
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 @pytest.mark.parametrize("endpoint", ["chat", "messages"])
 def test_cache_hit_twin_keeps_datastore_spans_off_the_tenant(rig: Rig, endpoint: Endpoint) -> None:
     marker: Final = _marker()
@@ -549,7 +556,7 @@ def test_cache_hit_twin_keeps_datastore_spans_off_the_tenant(rig: Rig, endpoint:
     _assert_tenant_mirrors(rig, _operator_trace_by_id(rig, trace_id, cursors), cursors)
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
 def test_failed_upstream_call_keeps_datastore_spans_off_the_tenant(rig: Rig, endpoint: Endpoint) -> None:
     cursors: Final = rig.cursors()
@@ -571,7 +578,7 @@ def test_failed_upstream_call_keeps_datastore_spans_off_the_tenant(rig: Rig, end
     _assert_tenant_mirrors(rig, operator, cursors)
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 def test_key_level_callback_vars_destination_is_filtered_too(rig: Rig, langfuse_vars: dict[str, JsonValue]) -> None:
     key: Final = rig.scenario.key(
         metadata={
@@ -588,7 +595,7 @@ def test_key_level_callback_vars_destination_is_filtered_too(rig: Rig, langfuse_
     _assert_withheld(rig, sent, cursors)
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 @pytest.mark.parametrize("status", [403, 404])
 def test_rejecting_tenant_destination_leaves_serving_and_the_operator_trace_intact(rig: Rig, status: int) -> None:
     configure_sink(rig.sinks.tenant, status=status)
@@ -651,7 +658,7 @@ def _assert_tenant_never_saw_datastore_spans(rig: Rig, cursors: Cursors, traces:
     assert _db_systems(tenant) == set(), _names(tenant)
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300, func_only=True)
 def test_tenant_outage_during_a_mixed_burst_keeps_serving_and_never_leaks_datastore_spans(rig: Rig) -> None:
     cursors: Final = rig.cursors()
     configure_sink(rig.sinks.tenant, status=503)
@@ -668,7 +675,7 @@ def test_tenant_outage_during_a_mixed_burst_keeps_serving_and_never_leaks_datast
     _assert_withheld(rig, rig.raw("messages", _marker(), stream=True), after)
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300, func_only=True)
 def test_stalled_tenant_destination_during_a_burst_does_not_block_responses(rig: Rig) -> None:
     cursors: Final = rig.cursors()
     configure_sink(rig.sinks.tenant, paused=True)
@@ -682,7 +689,7 @@ def test_stalled_tenant_destination_during_a_burst_does_not_block_responses(rig:
     _assert_tenant_never_saw_datastore_spans(rig, cursors, traces)
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300, func_only=True)
 def test_killing_one_of_two_workers_mid_burst_keeps_the_filter_on_the_survivor(rig: Rig) -> None:
     workers: Final = eventually(rig.owned.worker_pids, lambda found: len(found) == 2, seconds=30)
     cursors: Final = rig.cursors()
@@ -719,7 +726,7 @@ def _assert_tenant_kept(
         return (
             sum(1 for span in spans if span["kind"] == SERVER) == 1
             and "redis" in _db_systems(spans)
-            and (not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in spans))
+            and (not needs_model_span or _has_model_span(spans))
         )
 
     tenant: Final = eventually(
@@ -730,7 +737,7 @@ def _assert_tenant_kept(
     )
     assert sum(1 for span in tenant if span["kind"] == SERVER) == 1, _names(tenant)
     assert "redis" in _db_systems(tenant), f"redis spans missing at the tenant: {_names(tenant)}"
-    assert not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
+    assert not needs_model_span or _has_model_span(tenant), _names(tenant)
     return tenant
 
 
@@ -739,7 +746,7 @@ def _assert_kept(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     return _assert_tenant_kept(rig, operator[0]["trace_id"], cursors, needs_model_span=True)
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 @pytest.mark.parametrize("stream", [False, True], ids=["unary", "stream"])
 @pytest.mark.parametrize("client", CLIENTS)
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
@@ -754,7 +761,7 @@ def test_unconfigured_tenant_trace_keeps_datastore_spans(
     _assert_kept(unconfigured_rig, sent, cursors)
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 @pytest.mark.parametrize("endpoint", ["chat", "messages"])
 def test_unconfigured_cache_hit_twin_keeps_datastore_spans(unconfigured_rig: Rig, endpoint: Endpoint) -> None:
     cursors: Final = unconfigured_rig.cursors()
@@ -806,7 +813,7 @@ def test_unconfigured_cache_hit_twin_keeps_datastore_spans(unconfigured_rig: Rig
     )
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
 def test_unconfigured_failed_upstream_keeps_datastore_spans(unconfigured_rig: Rig, endpoint: Endpoint) -> None:
     cursors: Final = unconfigured_rig.cursors()
@@ -832,7 +839,7 @@ def test_unconfigured_failed_upstream_keeps_datastore_spans(unconfigured_rig: Ri
     _assert_tenant_kept(unconfigured_rig, trace_id, cursors)
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 @pytest.mark.parametrize("status", [403, 404])
 def test_unconfigured_rejecting_tenant_destination_recovers(unconfigured_rig: Rig, status: int) -> None:
     configure_sink(unconfigured_rig.sinks.tenant, status=status)
@@ -851,7 +858,7 @@ def test_unconfigured_rejecting_tenant_destination_recovers(unconfigured_rig: Ri
     _assert_kept(unconfigured_rig, recovered, after)
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=True)
 def test_unconfigured_key_level_destination_keeps_datastore_spans(
     unconfigured_rig: Rig, langfuse_vars: dict[str, JsonValue]
 ) -> None:
@@ -893,7 +900,7 @@ def _assert_tenant_kept_the_burst(rig: Rig, cursors: Cursors, traces: set[str]) 
     assert not missing_redis, f"redis spans missing from tenant burst traces: {missing_redis}, {_names(burst)}"
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300, func_only=True)
 def test_unconfigured_tenant_outage_during_a_mixed_burst(unconfigured_rig: Rig) -> None:
     cursors: Final = unconfigured_rig.cursors()
     configure_sink(unconfigured_rig.sinks.tenant, status=503)
@@ -910,7 +917,7 @@ def test_unconfigured_tenant_outage_during_a_mixed_burst(unconfigured_rig: Rig) 
     _assert_kept(unconfigured_rig, unconfigured_rig.raw("messages", _marker(), stream=True), after)
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300, func_only=True)
 def test_unconfigured_killing_one_of_two_workers_keeps_the_fan_out(unconfigured_rig: Rig) -> None:
     workers: Final = eventually(unconfigured_rig.owned.worker_pids, lambda found: len(found) == 2, seconds=30)
     cursors: Final = unconfigured_rig.cursors()

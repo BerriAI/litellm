@@ -70,7 +70,7 @@ class AWSKeyManagementService_V2:
             is_litellm_license_in_env = True
         if is_litellm_license_in_env is False:
             raise ValueError(
-                "AWSKeyManagementService V2 is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your envionment."
+                "AWSKeyManagementService V2 is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your environment."
             )
 
     def load_aws_kms(self, use_aws_kms: bool | None):
@@ -88,7 +88,7 @@ class AWSKeyManagementService_V2:
         except Exception as e:
             raise e
 
-    def decrypt_value(self, secret_name: str) -> Any:
+    def decrypt_value(self, secret_name: str) -> str | bool:
         if self.kms_client is None:
             raise ValueError("kms_client is None")
         encrypted_value = os.getenv(secret_name, None)

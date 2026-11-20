@@ -5,6 +5,7 @@ import httpx
 from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -38,6 +39,11 @@ class _RAGFlowCreateResponse(TypedDict):
 
 class _RAGFlowCreateResponseRoot(RootModel[_RAGFlowCreateResponse]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+class _RAGFlowStatus(TypedDict):
+    code: ReadOnly[NotRequired[int]]
+    message: ReadOnly[NotRequired[str]]
 
 
 _RAGFLOW_EMPTY_DATA: Final[_RAGFlowDataset] = {}
@@ -95,15 +101,16 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         - api_base in litellm_params
         - Default: http://localhost:9380
         """
-        api_base = (
-            api_base or litellm_params.get("api_base") or get_secret_str("RAGFLOW_API_BASE") or "http://localhost:9380"
+        params_api_base: Final = litellm_params.get("api_base")
+        resolved_api_base: Final = (
+            api_base
+            or (f"{params_api_base}" if params_api_base else None)
+            or get_secret_str("RAGFLOW_API_BASE")
+            or "http://localhost:9380"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
         # RAGFlow datasets API endpoint
-        return f"{api_base}/api/v1/datasets"
+        return join_api_base(resolved_api_base, "api/v1/datasets")
 
     def transform_search_vector_store_request(
         self,
@@ -195,7 +202,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json: Final[_RAGFlowStatus] = response.json()
 
             # Check for RAGFlow error response
             if response_json.get("code") != 0:

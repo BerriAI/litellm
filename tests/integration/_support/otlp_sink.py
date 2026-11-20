@@ -13,7 +13,6 @@ import datetime
 import json
 import os
 import signal
-import socket
 import ssl
 import subprocess
 import sys
@@ -32,8 +31,9 @@ from urllib.parse import urlparse
 import httpx
 import psutil
 import yaml
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 INTERNAL_MARKERS: Final = ("gen_ai.operation.name", "mcp.method.name", "litellm.guardrail_name")
 
@@ -46,6 +46,8 @@ class Span(TypedDict):
     name: ReadOnly[str]
     attributes: ReadOnly[Mapping[str, JsonValue]]
     resource: ReadOnly[Mapping[str, JsonValue]]
+    status_code: ReadOnly[NotRequired[int]]
+    start_time_unix_nano: ReadOnly[NotRequired[int]]
 
 
 class _SpanListing(TypedDict):
@@ -87,6 +89,8 @@ def _proto_spans(body: bytes) -> list[Span]:
             span_id=span.span_id.hex(),
             parent_span_id=span.parent_span_id.hex(),
             kind=span.kind,
+            status_code=span.status.code,
+            start_time_unix_nano=span.start_time_unix_nano,
             name=span.name,
             attributes={attribute.key: scalar(attribute.value) for attribute in span.attributes},
             resource={attribute.key: scalar(attribute.value) for attribute in resource.resource.attributes},
@@ -118,6 +122,8 @@ def _json_spans(body: bytes) -> list[Span]:
             span_id=str(span.get("spanId", "")),
             parent_span_id=str(span.get("parentSpanId", "")),
             kind=int(span.get("kind", 0)),
+            status_code=int(span.get("status", {}).get("code", 0)),
+            start_time_unix_nano=int(span.get("startTimeUnixNano", 0)),
             name=str(span.get("name", "")),
             attributes={attribute["key"]: scalar(attribute.get("value")) for attribute in span.get("attributes", [])},
             resource={
@@ -421,12 +427,6 @@ class ConnectSink:
     ca_pem: str
 
 
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return int(reserve.getsockname()[1])
-
-
 def _pid_reachable(url: str) -> bool:
     try:
         return httpx.get(f"{url}/__pid", trust_env=False, timeout=2).status_code == 200
@@ -439,7 +439,7 @@ def owned_sinks(directory: Path) -> Iterator[SpanSinks]:
     from integration._support.process import group_members, signal_group, stop_root_process
 
     directory.mkdir(parents=True, exist_ok=True)
-    ports: Final = tuple(_free_port() for _ in range(3))
+    ports: Final = tuple(allocate_port() for _ in range(3))
     root: Final = Path(__file__).resolve().parents[3]
     with ExitStack() as stack:
         processes: Final = tuple(
@@ -509,8 +509,8 @@ def _await_sink(url: str) -> None:
 
 @contextmanager
 def owned_grpc_sink(directory: Path) -> Iterator[GrpcSink]:
-    http_port: Final = _free_port()
-    grpc_port: Final = _free_port()
+    http_port: Final = allocate_port()
+    grpc_port: Final = allocate_port()
     with _spawn_sink(directory, "otlp-grpc-sink.log", ["--port", str(http_port), "--grpc-port", str(grpc_port)]):
         control_url: Final = f"http://127.0.0.1:{http_port}"
         _await_sink(control_url)
@@ -519,8 +519,8 @@ def owned_grpc_sink(directory: Path) -> Iterator[GrpcSink]:
 
 @contextmanager
 def owned_connect_sink(directory: Path) -> Iterator[ConnectSink]:
-    http_port: Final = _free_port()
-    tunnel_port: Final = _free_port()
+    http_port: Final = allocate_port()
+    tunnel_port: Final = allocate_port()
     ca_dir: Final = directory / "mitm"
     with _spawn_sink(
         directory,

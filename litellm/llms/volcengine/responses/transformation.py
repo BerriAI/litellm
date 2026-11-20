@@ -3,6 +3,7 @@ from types import UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from pydantic import fields as pyd_fields
 
 import litellm
@@ -11,8 +12,8 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, list_input_items_query_params
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -37,12 +38,19 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_RESPONSE_BODY: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+
 
 class _EventModelClass(Protocol):
     @property
     def model_fields(self) -> Mapping[str, pyd_fields.FieldInfo]: ...
 
     def model_validate(self, obj: Mapping[str, object]) -> ResponsesAPIStreamingResponse: ...
+
+
+class _FieldDefaultCarrier(Protocol):
+    @property
+    def default(self) -> object: ...
 
 
 class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -137,8 +145,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if base_url.endswith("/responses"):
             return base_url
         if base_url.endswith("/api/v3"):
-            return f"{base_url}/responses"
-        return f"{base_url}/api/v3/responses"
+            return join_api_base(base_url, "responses")
+        return join_api_base(base_url, "api/v3/responses")
 
     def map_openai_params(
         self,
@@ -305,10 +313,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}"
-        data: Final[dict] = {}
+        data: Final[dict[str, str]] = {}
         return url, data
 
     def transform_get_response_api_response(
@@ -345,19 +353,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         order: Literal["asc", "desc"] = "desc",
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/input_items"
-        params: Final[dict[str, str | int]] = {}
-        if after is not None:
-            params["after"] = after
-        if before is not None:
-            params["before"] = before
-        if include:
-            params["include"] = ",".join(include)
-        if limit is not None:
-            params["limit"] = limit
-        if order is not None:
-            params["order"] = order
-        return url, params
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
+        return url, list_input_items_query_params(after=after, before=before, include=include, limit=limit, order=order)
 
     def transform_list_input_items_response(
         self,
@@ -380,7 +377,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/cancel"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/cancel")
         data: Final[dict] = {}
         return url, data
 
@@ -415,7 +412,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     @staticmethod
     def _parsed_response_body(raw_response: httpx.Response) -> dict[str, object]:
-        return raw_response.json()
+        return _RESPONSE_BODY.validate_python(raw_response.json())
 
     @staticmethod
     def _annotation_origin(annotation: object) -> object:
@@ -429,6 +426,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _field_annotation(field: pyd_fields.FieldInfo) -> object:
         annotation: Final[object] = field.annotation
         return annotation
+
+    @staticmethod
+    def _field_default(field: _FieldDefaultCarrier) -> object:
+        return field.default
 
     @staticmethod
     def _fill_missing_fields(chunk: Mapping[str, object], event_model: object | None) -> Mapping[str, object]:
@@ -451,7 +452,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 continue
 
             # Explicit default or factory
-            field_default: object = field.default
+            field_default: object = VolcEngineResponsesAPIConfig._field_default(field)
             if field_default is not pyd_fields.PydanticUndefined and field_default is not None:
                 patched[name] = field_default
                 continue

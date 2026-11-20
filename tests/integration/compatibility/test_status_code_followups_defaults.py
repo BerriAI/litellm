@@ -28,7 +28,6 @@ from integration.compatibility._status_code_audit import (
     USER_MESSAGES,
     assembled_text,
     assert_no_provider_call,
-    drain_rig_upstream,
     deployment,
     error_body,
     invalid_request,
@@ -45,11 +44,6 @@ from pydantic import JsonValue
 from tests.integration.cost_calculation.cost_tracking_case import BinaryResponse, StoredResponse
 
 pytestmark: Final = pytest.mark.timeout(180)
-
-
-@pytest.fixture(autouse=True)
-def _drained_upstream() -> None:
-    drain_rig_upstream()
 
 
 @dataclass(frozen=True, slots=True)

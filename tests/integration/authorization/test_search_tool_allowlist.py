@@ -92,7 +92,10 @@ def test_search_tool_allowlist_refuses_other_tools_before_any_upstream_call(
             assert (refused.status_code, refused.json()) == (403, refusal), refused.text
         assert wire.drain() == ()
         served: Final = gateway.request("POST", f"/v1/search/{allowed}", _SEARCH_BODY, key=key)
-        assert (served.status_code, served.json()) == (200, {"object": "search", "results": []}), served.text
+        assert (served.status_code, served.json()) == (
+            200,
+            {"object": "search", "results": [], "provider_metadata": {}},
+        ), served.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/allowed/search")]
 
 
@@ -106,7 +109,6 @@ _SCOPES: Final = (
 def test_search_tool_allowlist_refuses_the_model_spelling_before_any_upstream_call(
     gateway: Gateway, scope: str, make_key: Callable[[Scenario, str], str]
 ) -> None:
-    pytest.skip("BUG: POST /v1/search with model=<tool> bypasses the key and team search_tools allowlist")
     with wire_server(_exa_peer) as wire, gateway.scenario() as scenario:
         allowed, denied = _two_tools(gateway, scenario, wire)
         key: Final = make_key(scenario, allowed)

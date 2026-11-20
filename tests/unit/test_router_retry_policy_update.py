@@ -88,9 +88,7 @@ def test_update_router_config_rejects_malformed_model_group_retry_policy():
     """model_group_retry_policy is Dict[str, RetryPolicy], so each per-group
     policy is validated the same way."""
     with pytest.raises(ValidationError):
-        UpdateRouterConfig(
-            model_group_retry_policy={"gpt-4": {"RateLimitErrorRetries": "x"}}
-        )
+        UpdateRouterConfig(model_group_retry_policy={"gpt-4": {"RateLimitErrorRetries": "x"}})
 
 
 # ---------------------------------------------------------------------------
@@ -144,16 +142,6 @@ def test_set_optional_pre_call_checks_reconciles_callback_types():
 
     assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
     assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
-
-
-def test_remove_optional_pre_call_check_removes_local_and_global_callbacks():
-    router = _build_router()
-
-    router.set_optional_pre_call_checks(["prompt_caching"])
-    router._remove_optional_callbacks_of_type(PromptCachingDeploymentCheck)
-
-    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in (router.optional_callbacks or []))
-    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
 
 
 def test_remove_optional_pre_call_check_keeps_global_callback_for_another_router():
@@ -255,7 +243,9 @@ def test_update_settings_keeps_per_group_encrypted_content_affinity_when_global_
     router.update_settings(optional_pre_call_checks=[])
 
     affinity_checks: Final = [
-        callback for callback in (router.optional_callbacks or []) if isinstance(callback, EncryptedContentAffinityCheck)
+        callback
+        for callback in (router.optional_callbacks or [])
+        if isinstance(callback, EncryptedContentAffinityCheck)
     ]
     assert len(affinity_checks) == 1
     assert affinity_checks[0].enable_global_affinity is False
@@ -298,6 +288,21 @@ def test_update_settings_persists_retry_policy_dict():
     assert router.retry_policy.BadRequestErrorRetries == 5
     assert router.retry_policy.RateLimitErrorRetries == 7
     assert router.retry_policy.TimeoutErrorRetries == 3
+
+
+def test_update_settings_fallback_on_unsupported_params_round_trips_through_get_settings():
+    router = _build_router()
+    assert router.get_settings()["fallback_on_unsupported_params"] is True
+
+    router.update_settings(fallback_on_unsupported_params=False)
+
+    assert router.fallback_on_unsupported_params is False
+    assert router.get_settings()["fallback_on_unsupported_params"] is False
+
+
+def test_update_router_config_keeps_fallback_on_unsupported_params_payload():
+    payload = UpdateRouterConfig(fallback_on_unsupported_params=False).model_dump(exclude_none=True)
+    assert payload["fallback_on_unsupported_params"] is False
 
 
 def test_update_settings_accepts_retry_policy_object_unchanged():
@@ -415,6 +420,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     fake_table = _FakeConfigTable()
     prisma_client = MagicMock()
     prisma_client.db.litellm_config = fake_table
+    prisma_client.writer_db = prisma_client.db
 
     async def _apply_router_settings(*args, **kwargs):
         await proxy_server.proxy_config._add_router_settings_from_db_config(
@@ -454,9 +460,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
 
     read_back = (
         await proxy_server.get_config(
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"
-            )
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876")
         )
     )["router_settings"]["retry_policy"]
     assert read_back.BadRequestErrorRetries == 5

@@ -4,14 +4,22 @@ from typing import Dict, Optional
 
 import pytest
 
+from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
 from litellm.proxy._types import UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.resolvers.exceptions import (
+    KeyNotFoundError,
     NoDatabaseConnectionError,
     PrincipalMissingSourceKeyError,
 )
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.resolvers.models import Principal, PrincipalType
 from litellm.proxy.auth.resolvers.store import IdentityStore
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 class _FakeCache:
@@ -27,6 +35,7 @@ class _FakeCache:
 
     async def async_set_cache(self, *args, **kwargs):
         return None
+
 
 
 async def test_resolve_returns_a_principal_projected_from_the_looked_up_key():
@@ -68,3 +77,20 @@ async def test_resolve_raises_without_a_db_connection():
     store = IdentityStore(None, _FakeCache())
     with pytest.raises(NoDatabaseConnectionError):
         await store.resolve(hashed_token="missing")
+
+
+async def test_resolve_raises_a_generic_key_not_found_carrying_the_hash_when_no_key_row_exists(
+    rust_auth_stores: RustAuthStores,
+):
+    """The 401 message stays generic for the caller, while the hash rides on the
+    exception so the auth failure log line can still name it for the operator."""
+    missing = hash_token("sk-live-not-a-key")
+    store = IdentityStore(object(), _FakeCache())
+
+    with pytest.raises(KeyNotFoundError) as exc_info:
+        await store.resolve(hashed_token=missing)
+
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    assert missing not in str(exc_info.value)
+    assert exc_info.value.hashed_token == missing
+    assert rust_auth_stores.key.lookups == [(missing, False)]

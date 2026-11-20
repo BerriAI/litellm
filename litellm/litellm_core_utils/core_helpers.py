@@ -2,22 +2,31 @@
 ## Helper utilities
 import copy
 import logging
+import math
 import re
-from collections.abc import Collection, Iterable, Mapping
+import sys
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from http import HTTPStatus
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
+from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.types.utils import ModelResponseStream
+    from litellm.types.utils import ClaudeSubscriptionUsage, ModelResponseStream, StandardLoggingKubernetesPodRouting
 
     Span = _Span | Any
 else:
@@ -29,6 +38,49 @@ _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
+
+
+def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
+    """Put the provider prefix back on a provider-stripped model."""
+    if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    if _already_routes_to(model, custom_llm_provider):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
+def _already_routes_to(model: str, custom_llm_provider: str) -> bool:
+    from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+
+    return _leads_with_provider(model) and inferred_provider(model) == custom_llm_provider
+
+
+def _leads_with_provider(model: str) -> bool:
+    leading_segment, separator, _ = model.partition("/")
+    return bool(separator) and names_a_provider(leading_segment)
+
+
+def names_a_provider(candidate: str) -> bool:
+    """Whether a model name's leading segment is a provider rather than part of the model."""
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    provider_names: Final = {getattr(provider, "value", provider) for provider in litellm.provider_list}
+    return (
+        candidate in provider_names
+        or JSONProviderRegistry.exists(candidate)
+        or is_registered_custom_provider(candidate)
+    )
+
+
+def qualify_agentic_followup_model(patch_model: str | None, model: str, custom_llm_provider: str) -> str:
+    """Resolve the model an agentic follow-up re-dispatches, keeping a hook's own provider."""
+    if not patch_model or patch_model == model:
+        return qualify_provider_stripped_model(model, custom_llm_provider)
+    if _leads_with_provider(patch_model):
+        return patch_model
+    return qualify_provider_stripped_model(patch_model, custom_llm_provider)
 
 
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
@@ -49,20 +101,224 @@ def safe_divide_seconds(seconds: float, denominator: float, default: float | Non
     return float(seconds / denominator)
 
 
-_DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
+_LAX_BOOL: Final = TypeAdapter(bool)
 
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
-    return value if isinstance(value, Mapping) else None
+    return value if isinstance(value, (dict, Mapping)) else None
 
 
-def normalize_drop_params(value: object) -> bool | None:
+def as_object_list(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
+
+
+_OBJECT_ENTRIES: Final = TypeAdapter(list[object])
+_OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
+_PARAM_NAME: Final = re.compile(r"\w+")
+
+
+def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(_PARAM_NAME.findall(value))
+    if isinstance(value, Mapping):
+        return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
+    try:
+        entries: Final = _OBJECT_ENTRIES.validate_python(value)
+    except ValidationError:
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
+
+
+_Key = TypeVar("_Key")  # rebind-ok: a TypeVar cannot be Final
+_Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
+
+
+INCLUDE_COST_IN_STREAMING_USAGE_HEADER: Final = "x-litellm-include-cost-in-streaming-usage"
+
+
+def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    proxy_server_request: Final = as_str_mapping(container.get("proxy_server_request")) if container else None
+    return as_str_mapping(proxy_server_request.get("headers")) if proxy_server_request else None
+
+
+def stream_cost_injection_requested(request_headers: Mapping[str, object] | None) -> bool:
+    """The global include_cost_in_streaming_usage flag or the per-request header asks for usage.cost on streams."""
+    if litellm.include_cost_in_streaming_usage:
+        return True
+    if not request_headers:
+        return False
+    header_value: Final = next(
+        (value for name, value in request_headers.items() if name.lower() == INCLUDE_COST_IN_STREAMING_USAGE_HEADER),
+        None,
+    )
+    return isinstance(header_value, str) and header_value.strip().lower() == "true"
+
+
+def without(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` without ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key not in keys}
+
+
+def only(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` with only ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key in keys}
+
+
+def decoded_json_object(value: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(value)
+    if mapping is not None:
+        return mapping
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
+
+
+@runtime_checkable
+class _SupportsIter(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, key: str | int, /) -> object: ...
+
+
+def attribute_or_none(source: object, name: str) -> object:
+    return getattr(source, name, None)
+
+
+_HTTP_ERROR_STATUSES: Final = range(HTTPStatus.BAD_REQUEST, 600)
+
+
+def error_status_code(exc: object, default: int) -> int:
+    """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
+    the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
+    carried: Final = _http_error_status(attribute_or_none(exc, "status_code"))
+    if carried is not None:
+        return carried
+    stringified: Final = attribute_or_none(exc, "code")
+    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
+    return default if from_code is None else from_code
+
+
+def _http_error_status(value: object) -> int | None:
+    match value:
+        case bool():
+            return None
+        case int() if value in _HTTP_ERROR_STATUSES:
+            return value
+        case str() if len(value) == 3 and value.isascii() and value.isdigit() and int(value) in _HTTP_ERROR_STATUSES:
+            return int(value)
+        case _:
+            return None
+
+
+_Shape: Final = TypeVar("_Shape")
+
+
+@dataclass(frozen=True, slots=True)
+class FinishEvidence:
+    """Finish reasons a stream received from the provider. ``unindexed`` is a received reason whose
+    choice the stream could not tell, so it is only evidence for a single-choice response."""
+
+    by_choice: Mapping[int, str]
+    unindexed: str | None
+
+
+NO_FINISH_EVIDENCE: Final = FinishEvidence(by_choice=MappingProxyType({}), unindexed=None)
+
+
+def finish_evidence_of(stream: object) -> FinishEvidence:
+    evidence: Final[object] = getattr(stream, "finish_evidence", None)
+    return evidence if isinstance(evidence, FinishEvidence) else NO_FINISH_EVIDENCE
+
+
+def has_attributes(
+    value: object,
+    shape: type[_Shape],
+    *names: str,
+) -> TypeIs[_Shape]:  # guard-ok: hasattr sees what __getattr__ serves, which Protocol isinstance skips on 3.12+
+    return all(hasattr(value, name) for name in names)
+
+
+def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shape:
+    if has_attributes(value, shape, *names):
+        return value
+    missing: Final = next(name for name in names if not hasattr(value, name))
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
+
+
+class KeywordArguments(Protocol):
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def keyword_arguments(value: object, target: type[object]) -> KeywordArguments:
+    if has_attributes(value, KeywordArguments, "keys"):
+        return value
+    raise TypeError(
+        f"{target.__module__}.{target.__qualname__}() argument after ** must be a mapping, not {type(value).__name__}"
+    )
+
+
+def iter_items(value: object) -> Iterable[object]:
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        return listed
+    if isinstance(value, _SupportsIter):
+        return value
+    if isinstance(value, _SupportsGetItem):
+        return iter(value)
+    raise TypeError(f"'{type(value).__name__}' object is not iterable")
+
+
+@runtime_checkable
+class _SupportsContains(Protocol):
+    def __contains__(self, key: object, /) -> bool: ...
+
+
+_NOT_A_CONTAINER: Final = "is not a container or iterable" if sys.version_info >= (3, 14) else "is not iterable"
+
+
+def json_contains(value: object, key: object) -> bool:
+    if isinstance(value, _SupportsContains):
+        return key in value
+    if isinstance(value, (_SupportsIter, _SupportsGetItem)):
+        return key in tuple(iter_items(value))
+    raise TypeError(f"argument of type '{type(value).__name__}' {_NOT_A_CONTAINER}")
+
+
+def subscript(value: object, key: str | int) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+
+
+def attribute_items(source: object, name: str) -> Iterable[object]:
+    value: Final = attribute_or_none(source, name)
+    return iter_items(value) if value else ()
+
+
+def lax_bool(value: object) -> bool | None:
     if value is None or isinstance(value, bool):
         return value
     try:
-        return _DROP_PARAMS_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
+        return _LAX_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
     except ValidationError:
         return None
+
+
+def normalize_drop_params(value: object) -> bool | None:
+    return lax_bool(value)
+
+
+def drops_unsupported_params(drop_params: object) -> bool:
+    return litellm.drop_params is True or normalize_drop_params(drop_params) is True
 
 
 def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool:
@@ -75,17 +331,19 @@ def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
 
 
-def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
-    configured: Final = environ.get(DROP_PARAMS_ENV_VAR, "").strip()
+def env_flag(environ: Mapping[str, str], name: str, logger: logging.Logger) -> bool:
+    configured: Final = environ.get(name, "").strip()
     if configured == "":
         return False
-    normalized: Final = normalize_drop_params(configured)
+    normalized: Final = lax_bool(configured)
     if normalized is None:
-        logger.warning(
-            "%s=%r is not a flag value, treating it as on. Set it to true or false", DROP_PARAMS_ENV_VAR, configured
-        )
+        logger.warning("%s=%r is not a flag value, treating it as on. Set it to true or false", name, configured)
         return True
     return normalized
+
+
+def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
+    return env_flag(environ, DROP_PARAMS_ENV_VAR, logger)
 
 
 def safe_divide(
@@ -207,8 +465,12 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "tool_use": "tool_calls",
     "refusal": "content_filter",
     "compaction": "length",
+    "pause_turn": "length",
+    "model_context_window_exceeded": "length",
     # Cohere
     "COMPLETE": "stop",
+    "STOP_SEQUENCE": "stop",
+    "TOOL_CALL": "tool_calls",
     "ERROR_TOXIC": "content_filter",
     "ERROR": "stop",
     # HuggingFace / Together AI
@@ -217,6 +479,7 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     # Gemini / Vertex AI
     "STOP": "stop",
     "MAX_TOKENS": "length",
+    "CONTINUATION": "length",
     "SAFETY": "content_filter",
     "RECITATION": "content_filter",
     "FINISH_REASON_UNSPECIFIED": "stop",
@@ -275,7 +538,13 @@ def remove_index_from_tool_calls(
                         tool_call.pop("index", None)
 
 
-def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> None:
+class _PoppableByIndex(Protocol):
+    def __len__(self) -> int: ...
+
+    def pop(self, index: int, /) -> object: ...
+
+
+def remove_items_at_indices(items: _PoppableByIndex | None, indices: Iterable[int]) -> None:
     """Remove items from a list in-place by index"""
     if items is None:
         return
@@ -284,16 +553,19 @@ def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> 
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: Mapping[str, object]) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'.
+    and user_api_key values are in 'metadata'. The proxy receive stamp rides along for the same
+    reason: a guardrail hook can plant `litellm_metadata` on a chat request after the proxy stamped
+    `metadata`, and the response timing headers anchor on that stamp.
     """
     potential_spend_tracking_metadata_substring: Final = "user_api_key"
-    for key, value in metadata.items():
-        if potential_spend_tracking_metadata_substring in key:
+    for key, value in dict(metadata).items():
+        carry_receive_stamp = key == "litellm_received_at" and key not in litellm_metadata
+        if potential_spend_tracking_metadata_substring in key or carry_receive_stamp:
             litellm_metadata[key] = value
     return litellm_metadata
 
@@ -349,6 +621,91 @@ def proxy_stamped_used_client_oauth_token(metadata: object, litellm_params: Mapp
     if isinstance(litellm_metadata, Mapping) and "used_client_oauth_token" in litellm_metadata:
         return litellm_metadata["used_client_oauth_token"]
     return metadata.get("used_client_oauth_token") if isinstance(metadata, Mapping) else None
+
+
+def _claude_subscription_headers(headers: Mapping[str, object] | None) -> Mapping[str, str]:
+    return {
+        key.lower().removeprefix("llm_provider-"): value
+        for key, value in (headers or {}).items()
+        if isinstance(value, str)
+    }
+
+
+def claude_subscription_usage(
+    call_details: Mapping[str, object], response: object = None
+) -> "ClaudeSubscriptionUsage | None":
+    params: Final = as_str_mapping(call_details.get("litellm_params"))
+    metadata: Final = params.get("metadata") if params is not None else None
+    if (
+        call_details.get("custom_llm_provider") != "anthropic"
+        or proxy_stamped_used_client_oauth_token(metadata, params) is not True
+    ):
+        return None
+    hidden: Final = as_str_mapping(attribute_or_none(response, "_hidden_params"))
+    additional: Final = as_str_mapping(hidden.get("additional_headers")) if hidden is not None else None
+    raw: Final = as_str_mapping(call_details.get("response_headers"))
+    headers: Final = {**_claude_subscription_headers(additional), **_claude_subscription_headers(raw)}
+    prefix: Final = "anthropic-ratelimit-unified-"
+    status: Final = headers.get(f"{prefix}status")
+    overage_status: Final = headers.get(f"{prefix}overage-status")
+    is_overage: Final = headers.get(f"{prefix}overage-in-use") == "true" or (
+        status == "rejected" and overage_status in ("allowed", "allowed_warning")
+    )
+    if status is None and not is_overage:
+        return None
+    return {
+        "is_overage": is_overage,
+        "status": status,
+        "overage_status": overage_status,
+    }
+
+
+def proxy_stamped_kubernetes_pod_routing(
+    metadata: object,
+    litellm_params: Mapping[str, object] | None,
+) -> "StandardLoggingKubernetesPodRouting | None":
+    litellm_metadata: Final = litellm_params.get("litellm_metadata") if litellm_params is not None else None
+    litellm_routing: Final = _standard_logging_kubernetes_pod_routing(litellm_metadata)
+    if litellm_routing is not None:
+        return litellm_routing
+    return _standard_logging_kubernetes_pod_routing(metadata)
+
+
+def _standard_logging_kubernetes_pod_routing(
+    metadata: object,
+) -> "StandardLoggingKubernetesPodRouting | None":
+    if not isinstance(metadata, Mapping):
+        return None
+    metadata_mapping: Final = cast(  # cast-ok: routing metadata is a string-keyed mapping
+        Mapping[str, object], metadata
+    )
+    routing: Final = metadata_mapping.get(KUBERNETES_POD_ROUTING_KEY)
+    if not isinstance(routing, Mapping):
+        return None
+    routing_mapping: Final = cast(  # cast-ok: pod routing records use string keys
+        Mapping[str, object], routing
+    )
+    service_host: Final = routing_mapping.get("service_host")
+    pod_ip: Final = routing_mapping.get("pod_ip")
+    pod_count: Final = routing_mapping.get("pod_count")
+    selection: Final = routing_mapping.get("selection")
+    if (
+        not isinstance(service_host, str)
+        or not isinstance(pod_ip, str)
+        or not isinstance(pod_count, int)
+        or isinstance(pod_count, bool)
+        or pod_count < 1
+    ):
+        return None
+    if selection in ("round_robin", "session_affinity", "session_affinity_retry"):
+        routing_record: Final[StandardLoggingKubernetesPodRouting] = {
+            "service_host": service_host,
+            "pod_ip": pod_ip,
+            "pod_count": pod_count,
+            "selection": selection,
+        }
+        return routing_record
+    return None
 
 
 def get_litellm_metadata_from_kwargs(kwargs: dict):
@@ -432,7 +789,7 @@ def reconstruct_model_name(
 
 # Helper functions used for OTEL logging
 def get_parent_otel_span_from_kwargs(
-    kwargs: dict[str, object] | None = None,
+    kwargs: Mapping[str, object] | None = None,
 ) -> Span | None:
     try:
         if kwargs is None:
@@ -517,17 +874,45 @@ def process_response_headers(
     return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
-def preserve_upstream_non_openai_attributes(
-    model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
-):
+def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream", original_chunk: object):
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    expected_keys: Final = set(type(model_response).model_fields.keys()).union({"usage"})
-    for key, value in original_chunk.model_dump().items():
-        if key not in expected_keys:
-            setattr(model_response, key, value)
+    expected_keys: Final = frozenset(type(model_response).model_fields) | frozenset({"usage"})
+    chunk_model: Final = original_chunk if isinstance(original_chunk, BaseModel) else None
+    if chunk_model is None:
+        raise AttributeError(
+            f"type object '{type(original_chunk).__name__}' has no attribute 'model_fields'",
+            name="model_fields",
+            obj=type(original_chunk),
+        )
+    candidate_keys: Final = tuple(
+        key
+        for key in (*type(chunk_model).model_fields, *(chunk_model.__pydantic_extra__ or {}))
+        if key not in expected_keys
+    )
+    if not candidate_keys:
+        return
+    candidate_values: Final[tuple[tuple[str, object], ...]] = tuple(
+        (
+            key,
+            cast(  # cast-ok: Pydantic extras are scalar-checked before assignment
+                object,
+                getattr(chunk_model, key),
+            ),
+        )
+        for key in candidate_keys
+    )
+    if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
+        _assign_attributes(model_response, candidate_values)
+        return
+    _assign_attributes(model_response, chunk_model.model_dump(include=set(candidate_keys)).items())
+
+
+def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:
+    for key, value in values:
+        set_extra_attribute(target, key, value)
 
 
 def safe_deep_copy(data):
@@ -653,6 +1038,10 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
         Filtered data structure with Exception and callable objects removed, or None if the
         entire input was an Exception or callable
     """
+    return _filter_exceptions_from_params(data, max_depth)
+
+
+def _filter_exceptions_from_params(data: object, max_depth: int) -> object:
     if max_depth <= 0:
         return data
 
@@ -674,7 +1063,7 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
                 continue
             try:
-                filtered = filter_exceptions_from_params(v, max_depth - 1)
+                filtered = _filter_exceptions_from_params(v, max_depth - 1)
                 if filtered is not None:
                     result[k] = filtered
             except Exception:
@@ -688,7 +1077,7 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
                 continue
             try:
-                filtered = filter_exceptions_from_params(item, max_depth - 1)
+                filtered = _filter_exceptions_from_params(item, max_depth - 1)
                 if filtered is not None:
                     result_list.append(filtered)
             except Exception:
@@ -699,36 +1088,8 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
         return data
 
 
-def filter_internal_params(data: dict, additional_internal_params: set | None = None) -> dict:
-    """
-    Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
-
-    This removes internal/MCP-related parameters that are used by LiteLLM internally
-    but should not be included in API requests to providers.
-
-    Args:
-        data: Dictionary of parameters to filter
-        additional_internal_params: Optional set of additional internal parameter names to filter
-
-    Returns:
-        Filtered dictionary with internal parameters removed
-    """
-    if not isinstance(data, dict):
-        return data
-
-    # Known internal parameters that should never be sent to provider APIs
-    internal_params: Final = {
-        "skip_mcp_handler",
-        "mcp_handler_context",
-        "_skip_mcp_handler",
-    }
-
-    # Add any additional internal params if provided
-    if additional_internal_params:
-        internal_params.update(additional_internal_params)
-
-    # Filter out internal parameters
-    return {k: v for k, v in data.items() if k not in internal_params}
+def filter_internal_params(data: Mapping[str, _Value]) -> dict[str, _Value]:
+    return {k: v for k, v in data.items() if k not in MCP_HANDLER_KWARG_NAMES}
 
 
 def redact_nested_match_and_regex_keys(
@@ -782,6 +1143,128 @@ class _CarriesHiddenParams(Protocol):
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
+
+
+_USAGE_BLOCK_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _usage_field(usage: object, name: str) -> object:
+    if isinstance(usage, Mapping):
+        return _USAGE_BLOCK_ADAPTER.validate_python(usage).get(name)
+    return getattr(usage, name, None)
+
+
+def finite_cost(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def single_log_line(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
+def finite_reported_cost(value: object) -> float | None:
+    cost: Final = finite_cost(value)
+    if cost is None and isinstance(value, float):
+        verbose_logger.warning("Ignoring a non-finite provider-reported cost %s", value)
+    return cost
+
+
+def _reported_cost_value(value: object) -> float | None:
+    """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
+    raw: Final[object] = value
+    if isinstance(value, Mapping):
+        return finite_reported_cost(_usage_field(raw, "total_cost"))
+    return finite_reported_cost(value)
+
+
+def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
+    additional_headers: Final[object] = response.hidden_params.get("additional_headers")
+    if not isinstance(additional_headers, Mapping):
+        return None
+    return finite_reported_cost(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+
+
+def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:
+    """Replace the cost an earlier builder stamped so every reader of the hidden params agrees with the header."""
+    set_response_cost_in_hidden_params(response, cost)
+    hidden_params: Final = response.hidden_params
+    hidden_params["response_cost"] = cost
+
+
+def chunk_usage(chunk: object) -> object:
+    """Stream chunks reach the builders both as mappings and as ModelResponseStream objects."""
+    if isinstance(chunk, Mapping):
+        return _USAGE_BLOCK_ADAPTER.validate_python(chunk).get("usage")
+    return getattr(chunk, "usage", None)
+
+
+PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS: Final = frozenset({"xai", "perplexity", "opencode_go"})
+
+
+UPSTREAM_USAGE_COST: Final = "upstream_usage_cost"
+
+
+def _numeric(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def stamp_litellm_bill_on_usage(response: object, usage: object, bill: float) -> None:
+    """Writes litellm's bill into ``usage.cost`` and the hidden ``response_cost`` cache, keeping the upstream's own
+    ``usage.cost`` under ``upstream_usage_cost`` so a later pricing pass still bills the upstream's charge instead of
+    reading litellm's bill back as if the upstream had reported it."""
+    hidden: Final[object] = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        hidden_params: Final = cast(dict[str, object], hidden)  # cast-ok: hidden params ride on the response as a dict
+        upstream: Final = (
+            hidden_params[UPSTREAM_USAGE_COST]
+            if UPSTREAM_USAGE_COST in hidden_params
+            else _numeric(getattr(usage, "cost", None))
+        )
+        hidden_params.update({"response_cost": bill, UPSTREAM_USAGE_COST: upstream})
+    setattr(usage, "cost", bill)
+
+
+def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
+    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, skipped for providers billed from their own
+    usage fields. Once litellm wrote its own bill into ``usage.cost`` (the stream builder and the Responses terminal
+    event do), the upstream's figure is read from ``upstream_usage_cost`` instead."""
+    if custom_llm_provider in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS:
+        return None
+    hidden: Final = as_str_mapping(getattr(response, "_hidden_params", None))
+    cost: Final = (
+        _numeric(hidden[UPSTREAM_USAGE_COST])
+        if hidden is not None and UPSTREAM_USAGE_COST in hidden
+        else provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+    )
+    return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
+
+
+_MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
+
+
+def reports_native_messages_cost(custom_llm_provider: object) -> bool:
+    """Whether a Messages upstream is one whose own reported cost litellm bills from instead of the price map."""
+    return isinstance(custom_llm_provider, str) and custom_llm_provider in _MESSAGES_REPORTED_COST_PROVIDERS
+
+
+def native_messages_reported_cost(usage: object, custom_llm_provider: object) -> float | None:
+    """Only a Messages upstream known to price its own responses is trusted, every other one keeps the price map."""
+    if not isinstance(custom_llm_provider, str) or not reports_native_messages_cost(custom_llm_provider):
+        return None
+    return provider_reported_usage_cost(usage, custom_llm_provider)
+
+
+def provider_reported_usage_cost(usage: object, custom_llm_provider: str | None) -> float | None:
+    """The request cost a provider states on its usage block, as a number or a breakdown with ``total_cost``.
+
+    OpenCode Go reports the model's list price (peak hours and long-context tiers included) under
+    ``usage.opencode.list_cost``, while its ``usage.cost`` is what hit the prepaid balance, 0 inside the plan.
+    """
+    if custom_llm_provider == "opencode_go":
+        return _reported_cost_value(_usage_field(_usage_field(usage, "opencode"), "list_cost"))
+    return _reported_cost_value(_usage_field(usage, "cost"))
 
 
 def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: float | None) -> None:

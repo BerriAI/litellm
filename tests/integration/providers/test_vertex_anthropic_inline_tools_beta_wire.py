@@ -19,13 +19,13 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.vertex import service_account_json
+from integration._support.vertex import assert_vertex_authorization, service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _INLINE_TOOLS: Final = "inline-tools-2026-09-15"
 _THINKING: Final = "interleaved-thinking-2025-05-14"
-_VERTEX_UNSUPPORTED: Final = "effort-2025-11-24"
+_VERTEX_UNSUPPORTED: Final = "skills-2025-10-02"
 _UNKNOWN: Final = "not-a-beta-2099-01-01"
 _BACKEND: Final = "claude-opus-5-5"
 _PROJECT: Final = "scripted-project"
@@ -92,7 +92,7 @@ def _streams(request: Request) -> bool:
 
 def _peer(request: Request) -> Reply:
     if request.target in (_VERTEX_TARGET, _VERTEX_STREAM_TARGET):
-        assert request.headers["authorization"] == "Bearer scripted-token", request.headers
+        assert_vertex_authorization(request.headers["authorization"], _PROJECT)
     elif request.target == _ANTHROPIC_TARGET:
         assert request.headers["x-api-key"] == _ANTHROPIC_KEY, request.headers
     else:
@@ -512,15 +512,19 @@ def test_upstream_outage_mid_run_recovers_with_inline_tools_still_forwarded(gate
             seen: Final = tuple(sum(marker in sent.body for sent in delivered) for _, marker in results)
             assert seen == (1,) * len(clients), seen
 
-        with wire_server(_peer) as wire:
-            port: Final = int(wire.url.rsplit(":", 1)[1])
-            model: Final = _vertex_deployment(gateway, scenario, wire.url)
-            forwarded(wire, wave("before outage"))
+        down: Final = threading.Event()
+        wire: Final = stack.enter_context(
+            wire_server(lambda request: Reply(drop_connection=True) if down.is_set() else _peer(request))
+        )
+        model: Final = _vertex_deployment(gateway, scenario, wire.url)
+        forwarded(wire, wave("before outage"))
+        down.set()
         outage: Final = wave("during outage")
         assert all(status is not None and status >= 500 for status, _ in outage), outage
         assert gateway.request("GET", "/health/liveliness").status_code == 200
-        with wire_server(_peer, port=port) as revived:
-            forwarded(revived, wave("after outage"))
+        wire.drain()
+        down.clear()
+        forwarded(wire, wave("after outage"))
 
 
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)

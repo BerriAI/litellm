@@ -1,5 +1,7 @@
+import asyncio
 import warnings
 from collections.abc import Mapping
+from functools import partial
 from typing import Final
 
 import httpx
@@ -8,6 +10,7 @@ from pydantic import TypeAdapter
 from litellm.decisions.call import (
     DecisionsAudioClips,
     DecisionsCall,
+    DecisionsPromptCacheOptions,
     DecisionsVideoClips,
     OpenAIDecisionQuestions,
     OpenAIDecisionRequestFields,
@@ -15,7 +18,9 @@ from litellm.decisions.call import (
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
+    log_caller_request,
     prepare_call,
+    reject_images_next_to_input,
     send,
 )
 from litellm.types.decisions import DecisionsJSON, DecisionsResponse, OpenAIDecisionInput, OpenAIDecisionResponse
@@ -26,21 +31,29 @@ _SYSTEMONE_QUESTIONS_ADAPTER: Final[TypeAdapter[SystemOneQuestions | None]] = Ty
 _OPENAI_QUESTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionQuestions | None]] = TypeAdapter(
     OpenAIDecisionQuestions | None
 )
+_SYSTEMONE_FIELDS: Final = frozenset({"state", "images", "assets"})
 
 
 def _request_fields(
+    *,
+    model: str,
     decision_input: OpenAIDecisionInput | None,
     questions: OpenAIDecisionQuestions | SystemOneQuestions | None,
     audio: DecisionsAudioClips | None,
     videos: DecisionsVideoClips | None,
+    prompt_cache_key: str | None,
+    prompt_cache_options: DecisionsPromptCacheOptions | None,
     kwargs: Mapping[str, object],
 ) -> RequestFields:
     if "state" not in kwargs:
+        reject_images_next_to_input(model=model, kwargs=kwargs)
         return OpenAIDecisionRequestFields(
             input=decision_input,
             questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(questions),
             audio=audio,
             videos=videos,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_options=prompt_cache_options,
         )
     warnings.warn(
         "litellm.decisions(state=...) is deprecated, call litellm.systemone for the System One request format",
@@ -50,6 +63,8 @@ def _request_fields(
     return SystemOneRequestFields(
         state=_STATE_ADAPTER.validate_python(kwargs["state"]),
         questions=_SYSTEMONE_QUESTIONS_ADAPTER.validate_python(questions),
+        images=kwargs.get("images"),
+        assets=kwargs.get("assets"),
         audio=audio,
         videos=videos,
     )
@@ -63,6 +78,8 @@ def _prepare_decisions_call(
     safety_identifier: str | None,
     audio: DecisionsAudioClips | None,
     videos: DecisionsVideoClips | None,
+    prompt_cache_key: str | None,
+    prompt_cache_options: DecisionsPromptCacheOptions | None,
     api_key: str | None,
     api_base: str | None,
     timeout: float | httpx.Timeout | None,
@@ -70,16 +87,37 @@ def _prepare_decisions_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    log_caller_request(
+        kwargs,
+        {
+            "input": decision_input,
+            "questions": questions,
+            "audio": audio,
+            "videos": videos,
+            "prompt_cache_key": prompt_cache_key,
+            "prompt_cache_options": prompt_cache_options,
+            **{key: kwargs[key] for key in _SYSTEMONE_FIELDS if key in kwargs},
+        },
+    )
     return prepare_call(
         model=model,
-        fields=_request_fields(decision_input, questions, audio, videos, kwargs),
+        fields=_request_fields(
+            model=model,
+            decision_input=decision_input,
+            questions=questions,
+            audio=audio,
+            videos=videos,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_options=prompt_cache_options,
+            kwargs=kwargs,
+        ),
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
-        kwargs={key: value for key, value in kwargs.items() if key != "state"},
+        kwargs={key: value for key, value in kwargs.items() if key not in _SYSTEMONE_FIELDS},
     )
 
 
@@ -96,21 +134,28 @@ async def adecisions(
     extra_headers: Mapping[str, str] | None = None,
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
+    prompt_cache_key: str | None = None,
+    prompt_cache_options: DecisionsPromptCacheOptions | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
-    call: Final = _prepare_decisions_call(
-        model=model,
-        decision_input=input,
-        questions=questions,
-        safety_identifier=safety_identifier,
-        audio=audio,
-        videos=videos,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+    call: Final = await asyncio.to_thread(
+        partial(
+            _prepare_decisions_call,
+            model=model,
+            decision_input=input,
+            questions=questions,
+            safety_identifier=safety_identifier,
+            audio=audio,
+            videos=videos,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_options=prompt_cache_options,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            kwargs=kwargs,
+        )
     )
     return await asend(call)
 
@@ -128,6 +173,8 @@ def decisions(
     extra_headers: Mapping[str, str] | None = None,
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
+    prompt_cache_key: str | None = None,
+    prompt_cache_options: DecisionsPromptCacheOptions | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
     call: Final = _prepare_decisions_call(
@@ -137,6 +184,8 @@ def decisions(
         safety_identifier=safety_identifier,
         audio=audio,
         videos=videos,
+        prompt_cache_key=prompt_cache_key,
+        prompt_cache_options=prompt_cache_options,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,

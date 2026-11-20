@@ -5,10 +5,18 @@ from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, decisions_text
+from litellm.llms.base_llm.decisions.transformation import (
+    BaseDecisionsConfig,
+    DecisionsResponseValidationError,
+    decisions_text,
+)
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
+    DecisionsImage,
     DecisionsIRAnswer,
+    DecisionsIRBoxAnswer,
+    DecisionsIRBoxQuestion,
     DecisionsIRChoiceAnswer,
     DecisionsIRChoiceOption,
     DecisionsIRChoiceProbability,
@@ -27,13 +35,19 @@ from litellm.types.decisions import (
     DecisionsIRState,
     DecisionsIRUsage,
     DecisionsJSON,
+    OpenAIBoxAnswer,
+    OpenAIBoxQuestion,
     OpenAIChoiceAnswer,
     OpenAIChoiceProbability,
     OpenAIChoiceQuestion,
     OpenAIDecisionAnswer,
     OpenAIDecisionInput,
+    OpenAIDecisionInputImage,
+    OpenAIDecisionInputMessage,
+    OpenAIDecisionInputText,
     OpenAIDecisionInputTokensDetails,
     OpenAIDecisionOutputTokensDetails,
+    OpenAIDecisionPromptCacheOptions,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
@@ -54,7 +68,7 @@ _SINGLE_OPTION: Final = UnsupportedDecisionsRequest(
 )
 
 
-def _ir_input(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
+def openai_input_to_ir(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
     if isinstance(decision_input, str):
         return DecisionsIRState(state=decision_input)
     return DecisionsIRMessages(messages=tuple(decision_input))
@@ -81,17 +95,27 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
                     DecisionsIRScoreLevel(label=level.label, description=level.description) for level in question.levels
                 ),
             )
+        case OpenAIBoxQuestion():
+            return DecisionsIRBoxQuestion(name=question.name, instructions=question.instructions)
         case _:
             assert_never(question)
 
 
+def _nonempty_prompt_cache_options(
+    options: OpenAIDecisionPromptCacheOptions | None,
+) -> OpenAIDecisionPromptCacheOptions | None:
+    return options if options is not None and options.model_dump(exclude_none=True) else None
+
+
 def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
-        input=_ir_input(request.input),
+        input=openai_input_to_ir(request.input),
         audio=request.audio,
         videos=request.videos,
         questions=tuple(_ir_question(question) for question in request.questions),
         safety_identifier=request.safety_identifier,
+        prompt_cache_key=request.prompt_cache_key,
+        prompt_cache_options=_nonempty_prompt_cache_options(request.prompt_cache_options),
     )
 
 
@@ -141,12 +165,33 @@ def _openai_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
                     for level in question.levels
                 ],
             }
+        case DecisionsIRBoxQuestion():
+            return {
+                "type": "box",
+                **_text_field("name", question.name),
+                "instructions": decisions_text(question.instructions),
+            }
         case _:
             assert_never(question)
 
 
+def _image_url(image: DecisionsImage) -> str:
+    return image if isinstance(image, str) else f"data:{image.content_type};base64,{image.base64}"
+
+
+def _state_message(state: DecisionsIRState) -> OpenAIDecisionInputMessage:
+    return OpenAIDecisionInputMessage(
+        content=(
+            *(OpenAIDecisionInputImage(type="input_image", image_url=_image_url(image)) for image in state.images),
+            OpenAIDecisionInputText(type="input_text", text=decisions_text(state.state)),
+        )
+    )
+
+
 def _openai_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> str | Sequence[Mapping[str, object]]:
     match decision_input:
+        case DecisionsIRState() if decision_input.images:
+            return [_state_message(decision_input).model_dump(mode="json", exclude_none=True)]
         case DecisionsIRState():
             return decisions_text(decision_input.state)
         case DecisionsIRMessages():
@@ -165,6 +210,10 @@ def _has_one_option(question: DecisionsIRQuestion) -> bool:
             return False
 
 
+def _prompt_cache_options_field(options: OpenAIDecisionPromptCacheOptions | None) -> Mapping[str, object]:
+    return {} if options is None else {"prompt_cache_options": options.model_dump(mode="json", exclude_none=True)}
+
+
 def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object] | UnsupportedDecisionsRequest:
     if request.audio or request.videos:
         return UnsupportedDecisionsRequest(reason="audio/video input is not supported by this Decisions provider")
@@ -175,6 +224,8 @@ def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str
         "input": _openai_input(request.input),
         "questions": [_openai_question(question) for question in request.questions],
         **_text_field("safety_identifier", request.safety_identifier),
+        **_text_field("prompt_cache_key", request.prompt_cache_key),
+        **_prompt_cache_options_field(request.prompt_cache_options),
     }
 
 
@@ -208,23 +259,53 @@ def _ir_answer(question: DecisionsIRQuestion, answer: OpenAIDecisionAnswer | Non
                     for item in answer.probabilities
                 ),
             )
+        case DecisionsIRBoxQuestion(), OpenAIBoxAnswer():
+            return DecisionsIRBoxAnswer(box=answer.box, confidence=answer.confidence)
         case _:
             return DecisionsIRRefusal()
 
 
+def _unmatched_answers(reason: str) -> DecisionsResponseValidationError:
+    return DecisionsResponseValidationError(
+        status_code=500,
+        message=f"Decisions provider returned answers that cannot be matched to the requested questions: {reason}",
+    )
+
+
+def _answers_in_question_order(
+    questions: Sequence[DecisionsIRQuestion], answers: Sequence[OpenAIDecisionAnswer]
+) -> tuple[OpenAIDecisionAnswer | None, ...] | DecisionsResponseValidationError:
+    question_names: Final = tuple(question.name for question in questions)
+    answer_names: Final = tuple(answer.name for answer in answers)
+    if answer_names == question_names[: len(answer_names)]:
+        return (*answers, *(None for _ in questions[len(answers) :]))
+    unknown: Final = tuple(name for name in answer_names if name not in question_names)
+    if unknown:
+        return _unmatched_answers(f"no requested question is named {unknown[0]!r}")
+    ambiguous: Final = tuple(
+        name for name in answer_names if answer_names.count(name) > 1 or question_names.count(name) > 1
+    )
+    if ambiguous:
+        return _unmatched_answers(f"answers are out of order and the name {ambiguous[0]!r} is used more than once")
+    by_name: Final = {answer.name: answer for answer in answers}
+    return tuple(by_name.get(name) for name in question_names)
+
+
 def openai_response_to_ir(response: OpenAIDecisionResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    answers: Final = response.answers
+    answers: Final = _answers_in_question_order(request.questions, response.answers)
+    if isinstance(answers, DecisionsResponseValidationError):
+        raise answers
     return DecisionsIRResponse(
         model=response.model,
         answers=tuple(
-            _ir_answer(question, answers[index] if index < len(answers) else None)
-            for index, question in enumerate(request.questions)
+            _ir_answer(question, answer) for question, answer in zip(request.questions, answers, strict=True)
         ),
         usage=DecisionsIRUsage(
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             cached_tokens=response.usage.input_tokens_details.cached_tokens,
             cache_write_tokens=response.usage.input_tokens_details.cache_write_tokens,
+            cache_write_tokens_details=response.usage.input_tokens_details.cache_write_tokens_details,
             reasoning_tokens=response.usage.output_tokens_details.reasoning_tokens,
         ),
     )
@@ -236,10 +317,9 @@ def _openai_choice_answer(question: DecisionsIRChoiceQuestion, answer: Decisions
         name=question.name,
         choice=answer.choice,
         probabilities=tuple(
-            OpenAIChoiceProbability(
-                value=option.value, probability=probabilities.get(systemone_choice_key(option.value), 0.0)
-            )
+            OpenAIChoiceProbability(value=option.value, probability=probabilities[systemone_choice_key(option.value)])
             for option in question.choices
+            if systemone_choice_key(option.value) in probabilities
         ),
         confidence=answer.confidence,
     )
@@ -251,10 +331,9 @@ def _openai_score_answer(question: DecisionsIRScoreQuestion, answer: DecisionsIR
         name=question.name,
         score=answer.score,
         probabilities=tuple(
-            OpenAIScoreProbability(
-                value=index, label=decisions_text(level.label), probability=probabilities.get(index, 0.0)
-            )
+            OpenAIScoreProbability(value=index, label=decisions_text(level.label), probability=probabilities[index])
             for index, level in enumerate(question.levels)
+            if index in probabilities
         ),
         confidence=answer.confidence,
     )
@@ -268,35 +347,47 @@ def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> 
             return _openai_choice_answer(question, answer)
         case DecisionsIRScoreQuestion(), DecisionsIRScoreAnswer():
             return _openai_score_answer(question, answer)
+        case DecisionsIRBoxQuestion(), DecisionsIRBoxAnswer():
+            return OpenAIBoxAnswer(name=question.name, box=answer.box, confidence=answer.confidence)
         case _:
             return OpenAIRefusalAnswer(name=question.name)
 
 
 def ir_to_openai_response(
-    response: DecisionsIRResponse, request: DecisionsIRRequest, requested_model: str
+    response: DecisionsIRResponse,
+    request: DecisionsIRRequest,
+    requested_model: str,
+    evidence_fields: frozenset[str] = frozenset(),
 ) -> OpenAIDecisionResponse:
-    return OpenAIDecisionResponse(
+    usage: Final = response.usage or DecisionsIRUsage()
+    formatted: Final = OpenAIDecisionResponse(
         model=response.model or requested_model,
         answers=tuple(
             _openai_answer(question, answer)
             for question, answer in zip(request.questions, response.answers, strict=True)
         ),
         usage=OpenAIDecisionUsage(
-            input_tokens=response.usage.input_tokens,
+            input_tokens=usage.input_tokens,
             input_tokens_details=OpenAIDecisionInputTokensDetails(
-                cached_tokens=response.usage.cached_tokens,
-                cache_write_tokens=response.usage.cache_write_tokens,
+                cached_tokens=usage.cached_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
+                cache_write_tokens_details=usage.cache_write_tokens_details,
             ),
-            output_tokens=response.usage.output_tokens,
-            output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=response.usage.reasoning_tokens),
-            total_tokens=response.usage.input_tokens + response.usage.output_tokens,
+            output_tokens=usage.output_tokens,
+            output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=usage.reasoning_tokens),
+            total_tokens=usage.input_tokens + usage.output_tokens,
         ),
     )
+    return formatted.model_copy(update={name: response.extra[name] for name in evidence_fields & response.extra.keys()})
 
 
 class OpenAIDecisionsConfig(BaseDecisionsConfig):
     path = "/v1/decisions"
     supports_safety_identifier = True
+    supports_prompt_cache = True
+    supports_developer_and_system_messages = True
+    supports_images = True
+    supports_json_input = True
 
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"
@@ -313,10 +404,15 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
-    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        return resolve_openai_bearer_token(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
+
+    def supports_audio_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
         return False
 
-    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_video_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
         return False
 
     def transform_decisions_request(
