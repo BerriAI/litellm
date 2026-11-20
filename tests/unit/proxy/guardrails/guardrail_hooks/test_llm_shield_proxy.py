@@ -761,6 +761,34 @@ class TestRequestCoverage:
         assert block["name"] == "send", "the tool name has to arrive unchanged for the call to route"
 
     @pytest.mark.asyncio
+    async def test_decisions_input_json_data_is_redacted(self):
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]", "[PHONE_1]", "[NAME_1]"]})
+
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_json",
+                            "data": {"to": "jane.doe@example.com", "meta": [{"phone": "555-0100"}]},
+                        },
+                        {"type": "input_json", "data": "Jane Doe"},
+                    ],
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="adecisions")
+
+        assert sorted(mock.call_args_list[0].kwargs["json"]["texts"]) == ["555-0100", "Jane Doe", "jane.doe@example.com"]
+        parts = data["input"][0]["content"]
+        assert "jane.doe@example.com" not in str(parts)
+        assert "555-0100" not in str(parts)
+        assert "Jane Doe" not in str(parts)
+        assert {part["type"] for part in parts} == {"input_json"}
+
+    @pytest.mark.asyncio
     async def test_responses_reasoning_summary_is_redacted(self):
         """A replayed reasoning item quotes the conversation in its summary parts."""
         guardrail = _guardrail()

@@ -306,8 +306,13 @@ _PNG_RECEIPT: Final = (
 
 @pytest.mark.parametrize(
     ("image_url", "expected"),
-    [(_GIF_RECEIPT, ["json"] * 3), (_PNG_RECEIPT, ["no-json"] * 3)],
-    ids=["gif-the-deployment-drops", "png-the-deployment-keeps"],
+    [
+        (_GIF_RECEIPT, ["json"] * 3),
+        (_PNG_RECEIPT, ["no-json"] * 3),
+        ("https://example.com/receipt.gif", ["json"] * 3),
+        ("data:image/png;base64,", ["json"] * 3),
+    ],
+    ids=["gif-the-deployment-drops", "png-the-deployment-keeps", "remote-url-of-unknown-type", "malformed-data-url"],
 )
 def test_drop_params_counts_only_the_image_types_a_deployment_keeps(
     make_core: MakeCore, host: EndpointHost, image_url: str, expected: list[str]

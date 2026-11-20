@@ -181,6 +181,18 @@ def iter_tool_json_text(value: object) -> Iterator[str]:
         yield text
 
 
+def iter_json_keys(value: object) -> Iterator[str]:
+    pending: Final[list[object]] = [value]  # mutable-ok: owned DFS stack avoids recursion
+    while pending:
+        current = pending.pop()
+        fields = _text_object(current)
+        if fields is not None:
+            yield from (key for key in fields if key)
+            pending.extend(reversed(tuple(fields.values())))
+            continue
+        pending.extend(reversed(_object_list(current) or ()))
+
+
 @dataclass(frozen=True, slots=True)
 class _ToolFrame:
     source: object
@@ -197,7 +209,7 @@ class _ToolFrame:
         raise ValueError("Invalid tool JSON payload")
 
 
-def map_tool_json_text(value: object, visit: Callable[[str], str]) -> JsonValue:
+def map_tool_json_text(value: object, visit: Callable[[str], str], *, rewrite_keys: bool = False) -> JsonValue:
     root: Final[list[JsonValue]] = [None]  # mutable-ok: one owned root slot receives the iterative result
     pending: Final[list[_ToolFrame]] = [_ToolFrame(value, root, 0)]  # mutable-ok: owned traversal stack
     while pending:
@@ -211,9 +223,10 @@ def map_tool_json_text(value: object, visit: Callable[[str], str]) -> JsonValue:
             continue
         fields = _text_object(current)
         if fields is not None:
-            mapped: dict[str, JsonValue] = {key: None for key in fields}  # mutable-ok: owned output slots
+            renamed = tuple((visit(key) if rewrite_keys and key else key, child) for key, child in fields.items())
+            mapped: dict[str, JsonValue] = {key: None for key, _ in renamed}  # mutable-ok: owned output slots
             frame.write(mapped)
-            pending.extend(_ToolFrame(child, mapped, key) for key, child in reversed(tuple(fields.items())))
+            pending.extend(_ToolFrame(child, mapped, key) for key, child in reversed(renamed))
             continue
         children = _object_list(current)
         if children is None:
@@ -350,6 +363,7 @@ def walk_user_text(
     visit_tool: Callable[[JsonValue], JsonValue] | None = None,
     *,
     skip_tool_message: bool = False,
+    visit_json: Callable[[JsonValue], JsonValue] | None = None,
 ) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
@@ -368,6 +382,16 @@ def walk_user_text(
             return payload
         visited += 1  # rebind-ok: tally the structured payload inspected by this callback
         return visit_tool(payload) if visit_tool is not None else map_tool_json_text(payload, visit)
+
+    def _rewrite_json(value: object) -> JsonValue:
+        nonlocal visited
+        if visit_json is None:
+            return _rewrite_tool(value)
+        payload: Final = _tool_json(value)
+        if next(iter_tool_json_text(payload), None) is None and next(iter_json_keys(payload), None) is None:
+            return payload
+        visited += 1  # rebind-ok: tally the JSON input payload inspected by this callback
+        return visit_json(payload)
 
     def _rewrite_arguments(arguments: object) -> object:
         nonlocal visited
@@ -399,7 +423,7 @@ def walk_user_text(
         if native and part.get("type") == "tool_use" and "input" in part:
             return {**rewritten, "input": _rewrite_tool(part["input"])}
         if native and _is_json_part(part):
-            return {**rewritten, "data": _rewrite_tool(part["data"])}
+            return {**rewritten, "data": _rewrite_json(part["data"])}
         return rewritten
 
     def _rewrite_content(content: object, native: bool = True) -> object:

@@ -293,6 +293,28 @@ async def test_pre_call_hook_redacts_credentials_inside_decisions_json_input():
     assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
 
 
+@pytest.mark.asyncio
+async def test_pre_call_hook_redacts_secret_keys_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the key usage."},
+                    {"type": "input_json", "data": {"usage": {AWS_KEY: {"calls": 3}}}},
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {"usage": {"[REDACTED]": {"calls": 3}}}
+    assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     (

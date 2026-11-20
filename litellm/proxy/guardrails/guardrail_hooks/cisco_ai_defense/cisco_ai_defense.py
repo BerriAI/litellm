@@ -37,6 +37,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     tool_calls_with_server_tool_calls,
@@ -1755,6 +1756,12 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         return out or None
 
     @staticmethod
+    def _carries_json_part(request_input: object) -> bool:
+        items: Final = parts_of(request_input)
+        nested: Final = chain.from_iterable(parts_of(message_field(item, "content")) for item in items)
+        return any(message_field(part, "type") == "input_json" for part in chain(items, nested))
+
+    @staticmethod
     def _rewrite_responses_input_text(original_input: object, sanitized_text: str) -> object | None:
         """Apply ``sanitized_text`` to a Responses API ``input`` value.
 
@@ -1764,7 +1771,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         """
         if isinstance(original_input, str):
             return sanitized_text
-        if not isinstance(original_input, list):
+        if CiscoAIDefenseGuardrail._carries_json_part(original_input) or not isinstance(original_input, list):
             return None
 
         text_types: Final = CiscoAIDefenseGuardrail._TEXT_PART_TYPES
@@ -2021,6 +2028,9 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
                 part_type = part.get("type")
                 if part_type in CiscoAIDefenseGuardrail._TEXT_PART_TYPES and part.get("text"):
                     parts.append(str(part["text"]))
+                    continue
+                if part_type == "input_json" and "data" in part:
+                    parts.append(json.dumps(part["data"], ensure_ascii=False))
                     continue
                 nested = part.get("content")
                 if nested is not None:
