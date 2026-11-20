@@ -916,6 +916,7 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
 from litellm.proxy.middleware.budget_reservation_release_middleware import (
     BudgetReservationReleaseMiddleware,
 )
+from litellm.proxy.middleware.litellm_response_headers_middleware import LiteLLMResponseHeadersMiddleware
 from litellm.proxy.middleware.redis_request_batch_middleware import RedisRequestBatchMiddleware
 from litellm.proxy.plugin_routes import (
     register_plugins_from_config,
@@ -2682,6 +2683,10 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
     return JSONResponse(status_code=422, content={"detail": public_errors})
 
 
+def _include_litellm_headers() -> bool:
+    return litellm.include_litellm_headers is not False
+
+
 @app.exception_handler(Exception)
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
@@ -2691,6 +2696,10 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     litellm_call_id: Final = attribute_of(request.state, "litellm_call_id")
     if isinstance(litellm_call_id, str):
         response.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
+    if not _include_litellm_headers():
+        response.raw_headers[:] = [
+            (name, value) for name, value in response.raw_headers if not name.lower().startswith(b"x-litellm-")
+        ]
     return response
 
 
@@ -3911,7 +3920,7 @@ async def customer_accounting_counters(
     now: Final = utc_datetime(started_at) if started_at is not None else datetime.now(timezone.utc)
     return tuple(
         chain.from_iterable(
-            customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in scopes
+            customer_window_counters(scope.key, scope.entity_id, scope.accounting_limits(), now=now) for scope in scopes
         )
     )
 
@@ -3945,6 +3954,7 @@ async def accounting_window_keys(
             "entity_id": counter.entity_id,
             "window_duration": counter.window_duration,
             "window_start": counter.window_start.isoformat(),
+            **({"reset_at": counter.reset_at.isoformat()} if counter.reset_at is not None else {}),
         }
         for counter in customer_counters
         if counter.window_start is not None
@@ -4568,6 +4578,7 @@ async def _enqueue_window_spend_row_update(
                 window_start=window_start,
                 spend=increment,
                 started_at=request_started_at,
+                reset_at=reset_at,
             )
         )
     except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
@@ -23396,6 +23407,8 @@ app.add_middleware(
     get_settings=lambda: get_admission_control_settings(general_settings),
     state=admission_control_state,
 )
+app.add_middleware(LiteLLMResponseHeadersMiddleware, include_litellm_headers=_include_litellm_headers)
+
 # Added last on purpose - last-added is outermost, and the client-visible URL
 # prefix must be resolved into scope["root_path"] before any inner middleware
 # or the router inspects the path. Only added when SERVER_ROOT_PATHS is

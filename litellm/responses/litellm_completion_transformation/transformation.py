@@ -122,6 +122,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    ChatCompletionToolReferenceObject,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
     IncompleteDetails,
@@ -480,8 +481,16 @@ def _attribute_fields(value: object) -> dict[str, object]:
     return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
 
 
+def _decode_tool_output_part(part: Mapping[str, object], keep_tool_references: bool) -> ToolMessageContentPart | None:
+    match part:
+        case {"type": "tool_reference", "tool_name": str(tool_name)} if keep_tool_references and tool_name:
+            return ChatCompletionToolReferenceObject(type="tool_reference", tool_name=tool_name)
+        case _:
+            return decode_responses_media(part)
+
+
 def tool_output_to_chat_content(
-    output: object,
+    output: object, *, keep_tool_references: bool = False
 ) -> str | list[ToolMessageContentPart]:
     if output is None:
         return ""
@@ -505,7 +514,7 @@ def tool_output_to_chat_content(
                     text_acc.append(txt)
                     if txt:
                         normalized_blocks.append({"type": "text", "text": txt})
-            elif (media := decode_responses_media(part)) is not None:
+            elif (media := _decode_tool_output_part(part, keep_tool_references)) is not None:
                 normalized_blocks.append(media)
 
         if any(b.get("type") != "text" for b in normalized_blocks):
@@ -1462,6 +1471,9 @@ class LiteLLMCompletionResponsesConfig:
             route_fills_empty_user_turns=partial(
                 target_fills_empty_user_turns, model, custom_llm_provider, _routed_base_model(request_kwargs)
             ),
+            keep_tool_references=chat_config_builds_anthropic_request(
+                _resolved_chat_config(model, custom_llm_provider)
+            ),
         )
         malformed_field_error: Final = (
             _first_invalid_input_type(
@@ -1551,6 +1563,7 @@ class LiteLLMCompletionResponsesConfig:
         member_name: Callable[[str, str], str] = chat_member_name,
         tool_names: SentToolNames | None = None,
         route_fills_empty_user_turns: Callable[[], bool] | None = None,
+        keep_tool_references: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1631,6 +1644,7 @@ class LiteLLMCompletionResponsesConfig:
             self_named_namespace_members=names.self_named_namespace_members,
             member_chat_names=names.member_chat_names,
             member_name=member_name,
+            keep_tool_references=keep_tool_references,
         )
         try:
             converted: Final = (
@@ -1720,6 +1734,7 @@ class LiteLLMCompletionResponsesConfig:
                 if request_input is None or not target_refuses_blank_text(model, provider)
                 else empty_user_turn_replay_text(request_kwargs.get("user_continue_message"))
             ),
+            keep_tool_references=chat_config_builds_anthropic_request(_resolved_chat_config(model, provider)),
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -1839,6 +1854,7 @@ class LiteLLMCompletionResponsesConfig:
         self_named_namespace_members: Container[str] = frozenset(),
         member_chat_names: Mapping[str, str] = MappingProxyType({}),
         member_name: Callable[[str, str], str] = chat_member_name,
+        keep_tool_references: bool = False,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1868,6 +1884,7 @@ class LiteLLMCompletionResponsesConfig:
                         self_named_namespace_members=self_named_namespace_members,
                         member_chat_names=member_chat_names,
                         member_name=member_name,
+                        keep_tool_references=keep_tool_references,
                     )
                 )
 
@@ -2583,6 +2600,7 @@ class LiteLLMCompletionResponsesConfig:
         self_named_namespace_members: Container[str] = frozenset(),
         member_chat_names: Mapping[str, str] = MappingProxyType({}),
         member_name: Callable[[str, str], str] = chat_member_name,
+        keep_tool_references: bool = False,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -2628,7 +2646,7 @@ class LiteLLMCompletionResponsesConfig:
             # handle executed tool call results
             return (
                 LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
-                    tool_call_output=input_item
+                    tool_call_output=input_item, keep_tool_references=keep_tool_references
                 )
             )
         elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
@@ -2838,7 +2856,7 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(
-        tool_call_output: Mapping[str, object],
+        tool_call_output: Mapping[str, object], *, keep_tool_references: bool = False
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         ChatCompletionToolMessage is used to indicate the output from a tool call
@@ -2849,7 +2867,9 @@ class LiteLLMCompletionResponsesConfig:
         if not call_id:
             return []
 
-        tool_content: Final = tool_output_to_chat_content(tool_call_output.get("output"))
+        tool_content: Final = tool_output_to_chat_content(
+            tool_call_output.get("output"), keep_tool_references=keep_tool_references
+        )
         output_cache_control: Final = _input_item_cache_control(tool_call_output)
         tool_output_message: Final = (
             ChatCompletionToolMessage(role="tool", content=tool_content, tool_call_id=str(call_id))

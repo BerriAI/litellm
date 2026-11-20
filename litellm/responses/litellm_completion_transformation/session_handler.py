@@ -479,6 +479,7 @@ class ResponsesSessionHandler:
         tool_call_provider_fields: bool = False,
         stored_turns: StoredTurns | None = None,
         empty_user_turn_text: str | None = None,
+        keep_tool_references: bool = False,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -523,6 +524,7 @@ class ResponsesSessionHandler:
             item_cache_control,
             tool_call_provider_fields,
             empty_user_turn_text,
+            keep_tool_references,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
@@ -531,6 +533,7 @@ class ResponsesSessionHandler:
             item_cache_control,
             tool_call_provider_fields,
             empty_user_turn_text,
+            keep_tool_references,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -593,6 +596,7 @@ class ResponsesSessionHandler:
         item_cache_control: bool,
         tool_call_provider_fields: bool,
         empty_user_turn_text: str | None = None,
+        keep_tool_references: bool = False,
     ) -> list["SessionMessage"]:
         return reduce(
             lambda history, turn: ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
@@ -603,6 +607,7 @@ class ResponsesSessionHandler:
                 tool_call_provider_fields=tool_call_provider_fields,
                 empty_user_turn_text=empty_user_turn_text,
                 tool_names=turn[2],
+                keep_tool_references=keep_tool_references,
             ),
             zip(spend_logs, proxy_server_requests, sent_tool_names, strict=True),
             [],
@@ -622,6 +627,7 @@ class ResponsesSessionHandler:
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
         empty_user_turn_text: str | None = None,
+        keep_tool_references: bool = False,
         *,
         tool_names: SentToolNames = _NO_TOOL_NAMES,
     ):
@@ -669,6 +675,7 @@ class ResponsesSessionHandler:
                 only_since_compaction=True,
                 replay_tool_search=True,
                 tool_names=tool_names,
+                keep_tool_references=keep_tool_references,
             )
             input_before_blank_tail: Final = without_blank_user_tail(stored_input)
             inference_continues_the_blank_tail: Final = empty_user_turn_text == "" and len(

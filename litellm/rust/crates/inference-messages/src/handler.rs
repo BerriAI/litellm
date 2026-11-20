@@ -419,7 +419,10 @@ async fn provider_call(
         .map(|fallback_context| (trimmed.clone(), fallback_context));
     let body = config.request_body(
         tool_custom_field.apply(
-            config.transform_anthropic_messages_request(trimmed, &transform_context)?,
+            config.transform_anthropic_messages_request(
+                config.without_rejected_params(trimmed, &connection_params)?,
+                &transform_context,
+            )?,
             shaping.settings.drops_unsupported_params,
         ),
         &validated.headers,

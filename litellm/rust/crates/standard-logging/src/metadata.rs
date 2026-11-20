@@ -1,6 +1,14 @@
 use std::collections::BTreeMap;
 
+use serde::Serialize;
 use serde_json::{Map, Value};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ClaudeSubscriptionUsage {
+    pub is_overage: bool,
+    pub status: Option<String>,
+    pub overage_status: Option<String>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Metadata {
@@ -18,4 +26,5 @@ pub struct Metadata {
     pub team_alias: Option<String>,
     pub team_id: Option<String>,
     pub used_client_oauth_token: Option<bool>,
+    pub claude_subscription_usage: Option<ClaudeSubscriptionUsage>,
 }
