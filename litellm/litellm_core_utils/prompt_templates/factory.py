@@ -21,6 +21,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
@@ -1202,23 +1203,40 @@ def infer_protocol_value(
     return "unknown"
 
 
+def _parsed_gemini_function_call(name: str, arguments: object) -> VertexFunctionCall:
+    text: Final = arguments.decode() if isinstance(arguments, (bytes, bytearray)) else arguments
+    if text == "":  # pass empty dict, if arguments is empty string - prevents call from failing
+        return VertexFunctionCall(name=name, args={"type": "object"})
+    if text is not None and not isinstance(text, str):
+        raise ValueError(f"Tool call arguments for tool '{name}' must be a JSON string, got {type(text).__name__}")
+    args: Final = _DECODED_JSON.validate_python(
+        parse_tool_call_arguments(text, tool_name=name, context="Gemini tool invoke")
+    )
+    mapping: Final = as_str_mapping(args)
+    if args is not None and mapping is None:
+        raise ValueError(f"Tool call arguments for tool '{name}' must be a JSON object, got {type(args).__name__}")
+    return VertexFunctionCall(name=name, args=None if mapping is None else dict(mapping))
+
+
+def _gemini_function_call(name: str, arguments: object, *, drop_params: bool) -> VertexFunctionCall:
+    try:
+        return _parsed_gemini_function_call(name, arguments)
+    except ValueError:
+        if not drop_params:
+            raise
+        return VertexFunctionCall(name=name, args={})
+
+
 def _gemini_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
     tool_call_id: str | None = None,
+    *,
+    drop_params: bool = False,
 ) -> VertexFunctionCall | None:
-    name: Final = function_call_params.get("name", "") or ""
-    arguments: Final = function_call_params.get("arguments", "")
-    if (
-        isinstance(arguments, str) and len(arguments) == 0
-    ):  # pass empty dict, if arguments is empty string - prevents call from failing
-        arguments_dict = {
-            "type": "object",
-        }
-    else:
-        arguments_dict = json.loads(arguments)
-    function_call: Final = VertexFunctionCall(
-        name=name,
-        args=arguments_dict,
+    function_call: Final = _gemini_function_call(
+        function_call_params.get("name", "") or "",
+        function_call_params.get("arguments", ""),
+        drop_params=drop_params,
     )
     if tool_call_id:
         clean_id: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
@@ -1328,6 +1346,8 @@ def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
     model: str | None = None,
     forward_function_call_id: bool = False,
+    custom_llm_provider: str | None = None,
+    drop_params: bool = False,
 ) -> list[VertexPartType]:
     """
     OpenAI tool invokes:
@@ -1385,6 +1405,7 @@ def convert_to_gemini_tool_call_invoke(
                     gemini_function_call: VertexFunctionCall | None = _gemini_tool_call_invoke_helper(
                         function_call_params=tool["function"],
                         tool_call_id=(tool.get("id") if forward_function_call_id else None),
+                        drop_params=drop_params,
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {"function_call": gemini_function_call}
@@ -1404,7 +1425,9 @@ def convert_to_gemini_tool_call_invoke(
                             f"function_call missing. Received tool call with 'type': 'function'. No function call in argument - {tool}"
                         )
         elif function_call is not None:
-            gemini_function_call = _gemini_tool_call_invoke_helper(function_call_params=function_call)
+            gemini_function_call = _gemini_tool_call_invoke_helper(
+                function_call_params=function_call, drop_params=drop_params
+            )
             if gemini_function_call is not None:
                 part_dict_function: Final[VertexPartType] = {"function_call": gemini_function_call}
 
@@ -1430,7 +1453,11 @@ def convert_to_gemini_tool_call_invoke(
                 )
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
+        raise litellm.BadRequestError(
+            message=f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}",
+            model=model or "",
+            llm_provider=custom_llm_provider or "vertex_ai",
+        ) from e
 
 
 def _json_children(node: JsonValue) -> Iterable[JsonValue]:
@@ -4691,6 +4718,53 @@ def _as_thinking_block(item: object) -> ChatCompletionThinkingBlock | ChatComple
             return None
 
 
+def _non_string_guarded_text(item: object, model: str, llm_provider: str) -> BadRequestError:
+    return BadRequestError(
+        message=f"Bedrock Converse needs a string `text` in every guarded_text part, got {item!r}",
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
+def _guard_content_blocks(item: object, sends_guarded_parts: bool) -> tuple[BedrockContentBlock, ...]:
+    match item:
+        case {"type": "guarded_text", "text": str() as text} if sends_guarded_parts and text.strip():
+            return (BedrockContentBlock(guardContent={"text": {"text": text}}),)
+        case _:
+            return ()
+
+
+def _rstripped_guard_content(block: BedrockContentBlock) -> BedrockContentBlock:
+    match block:
+        case {"guardContent": {"text": {"text": str() as text}}}:
+            return BedrockContentBlock(guardContent={"text": {"text": text.rstrip()}})
+        case _:
+            return block
+
+
+def _assistant_turn_with_its_final_guard_content_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlock:
+    if message["role"] != "assistant":
+        return message
+    blocks: Final = message["content"]
+    last_text_index: Final = max(
+        (index for index, block in enumerate(blocks) if "text" in block or "guardContent" in block), default=None
+    )
+    return BedrockMessageBlock(
+        role="assistant",
+        content=[
+            _rstripped_guard_content(block) if index == last_text_index else block for index, block in enumerate(blocks)
+        ],
+    )
+
+
+def _user_guard_content_block(item: object, model: str, llm_provider: str) -> BedrockContentBlock:
+    match item:
+        case {"text": str() as text}:
+            return BedrockContentBlock(guardContent={"text": {"text": text}})
+        case _:
+            raise _non_string_guarded_text(item, model, llm_provider)
+
+
 class BedrockConverseMessagesProcessor:
     @staticmethod
     def _initial_message_setup(
@@ -4738,6 +4812,7 @@ class BedrockConverseMessagesProcessor:
         assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
         deployment_model: str | None = None,
         base_model: str | None = None,
+        sends_guarded_assistant_parts: bool = True,
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import (
             bedrock_converse_accepts_redacted_thinking,
@@ -4771,9 +4846,7 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "guarded_text":
-                                # Wrap guarded_text in guardContent block
-                                _part = BedrockContentBlock(guardContent={"text": {"text": element["text"]}})
-                                _parts.append(_part)
+                                _parts.append(_user_guard_content_block(element, model, llm_provider))
                             elif element["type"] in ("grounding_source", "query"):
                                 # Contextual grounding tags are guardrail metadata; the
                                 # model only needs the underlying text, so render them
@@ -4928,6 +5001,8 @@ class BedrockConverseMessagesProcessor:
                                 if element.get("text", "").strip():
                                     assistants_part = BedrockContentBlock(text=element["text"])
                                     assistants_parts.append(assistants_part)
+                            elif guard_blocks := _guard_content_blocks(element, sends_guarded_assistant_parts):
+                                assistants_parts.extend(guard_blocks)
                             elif element["type"] == "image_url":
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
@@ -4993,7 +5068,15 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+        converse_messages: Final = _ensure_document_messages_have_text(
+            _rename_duplicate_bedrock_document_names(contents)
+        )
+        if not (to_claude and converse_messages):
+            return converse_messages
+        return [
+            *converse_messages[:-1],
+            _assistant_turn_with_its_final_guard_content_rstripped(converse_messages[-1]),
+        ]
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
@@ -5183,6 +5266,7 @@ def _bedrock_converse_messages_pt(
     assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
     deployment_model: str | None = None,
     base_model: str | None = None,
+    sends_guarded_assistant_parts: bool = True,
 ) -> list[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -5223,9 +5307,7 @@ def _bedrock_converse_messages_pt(
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "guarded_text":
-                            # Wrap guarded_text in guardContent block
-                            _part = BedrockContentBlock(guardContent={"text": {"text": element["text"]}})
-                            _parts.append(_part)
+                            _parts.append(_user_guard_content_block(element, model, llm_provider))
                         elif element["type"] in ("grounding_source", "query"):
                             # Contextual grounding tags are guardrail metadata; the
                             # model only needs the underlying text, so render them as
@@ -5383,6 +5465,8 @@ def _bedrock_converse_messages_pt(
                             if element.get("text", "").strip():
                                 assistants_part = BedrockContentBlock(text=element["text"])
                                 assistants_parts.append(assistants_part)
+                        elif guard_blocks := _guard_content_blocks(element, sends_guarded_assistant_parts):
+                            assistants_parts.extend(guard_blocks)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
@@ -5441,7 +5525,10 @@ def _bedrock_converse_messages_pt(
                 llm_provider=llm_provider,
             )
 
-    return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    converse_messages: Final = _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    if not (to_claude and converse_messages):
+        return converse_messages
+    return [*converse_messages[:-1], _assistant_turn_with_its_final_guard_content_rstripped(converse_messages[-1])]
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
