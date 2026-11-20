@@ -16,7 +16,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyMapping};
 
-use crate::cost::{self, NativeRateCard, NativeReceipt};
+use crate::cost::{self, NativeRateCard};
+use litellm_callbacks_legacy_python::NativeReceipt;
 
 pub(crate) use fetch::{NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched};
 use live::LiveDict;
@@ -50,6 +51,13 @@ fn capability_rules(rules: &Bound<'_, PyAny>) -> CapabilityRules {
         .filter_map(|rule| from_py_argument(&rule).ok())
         .collect();
     CapabilityRules::new(&read)
+}
+
+/// The pricing a Messages route call reads, over the snapshot of the published table taken as the call is set up
+pub(crate) fn route_pricing(py: Python<'_>) -> PyResult<cost::RoutePricing> {
+    Ok(cost::RoutePricing::new(
+        host::inputs(py)?.get().cost_snapshot(py)?,
+    ))
 }
 
 /// The cost map's inputs, the name index over `litellm.model_cost` and its pricing snapshots
@@ -697,5 +705,74 @@ def write(key, row):
         assert!(same_snapshot);
         assert_eq!(before, Some(1e-6));
         assert_eq!(after, Some(3e-6));
+    }
+
+    /// The total a route call to `claude-opus-5-5` on Anthropic costs for 1000 prompt tokens
+    fn route_total(pricing: &cost::RoutePricing) -> Option<f64> {
+        let usage = litellm_cost::query::TokenUsage {
+            prompt_tokens: 1000,
+            input: litellm_cost::query::Modalities {
+                text: 1000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        litellm_inference_messages::Pricing::price(
+            pricing,
+            &litellm_inference_messages::PricedCall {
+                provider: "anthropic".into(),
+                request_model: "claude-opus-5-5".into(),
+                response_model: Some("claude-opus-5-5".into()),
+                identity: litellm_inference_messages::PricingIdentity::default(),
+                usage,
+                service_tier: None,
+            },
+        )
+        .map(|receipt| receipt.total)
+    }
+
+    #[rstest]
+    fn a_route_call_prices_over_the_row_the_table_holds_when_it_finishes_as_main_logging_did() {
+        let _host = HOST_MODULE.lock().unwrap_or_else(PoisonError::into_inner);
+        Python::initialize();
+        let outcome = Python::attach(|py| -> PyResult<(Option<f64>, Option<f64>)> {
+            let cost_map = Py::new(py, NativeModelCostMap::bundled(0, 0.0)?)?;
+            let module_name = std::ffi::CString::new(host::MODULE).unwrap();
+            let host =
+                PyModule::from_code(py, PRICING_HOST, c_str!("host_model_cost.py"), &module_name)?;
+            host.setattr("cost_map", &cost_map)?;
+            py.run(
+                c_str!("def inputs():\n    return cost_map\n"),
+                Some(&host.dict()),
+                None,
+            )?;
+            let modules = py.import("sys")?.getattr("modules")?;
+            let packages = ["litellm", "litellm.rust_bridge", "litellm.rust_bridge.host"];
+            for package in packages {
+                modules.set_item(package, PyModule::new(py, package)?)?;
+            }
+            modules.set_item(host::MODULE, &host)?;
+            let priced = (|| -> PyResult<(Option<f64>, Option<f64>)> {
+                let set_up = route_pricing(py)?;
+                let row = host.getattr("Row")?.call(
+                    (),
+                    Some(&pyo3::types::IntoPyDict::into_py_dict(
+                        [("litellm_provider", "anthropic")],
+                        py,
+                    )?),
+                )?;
+                row.set_item("input_cost_per_token", 2e-6)?;
+                host.getattr("write")?.call1(("claude-opus-5-5", row))?;
+                Ok((route_total(&set_up), route_total(&route_pricing(py)?)))
+            })();
+            for name in [host::MODULE].into_iter().chain(packages) {
+                modules.del_item(name)?;
+            }
+            priced
+        });
+
+        let (set_up, later) = outcome.unwrap();
+        assert_eq!(set_up, Some(1000.0 * 2e-6));
+        assert_eq!(later, set_up);
     }
 }

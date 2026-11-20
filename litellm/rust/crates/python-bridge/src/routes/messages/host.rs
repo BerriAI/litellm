@@ -884,6 +884,8 @@ impl MessagesPythonHost {
             vertex,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
+                inject_stream_cost: settings.stream_cost_model.is_some()
+                    && settings.settings.pricing.is_some(),
                 presanitized,
                 intercepted: self.may_intercept(py)?,
                 unencodable_request_header,
@@ -1241,7 +1243,10 @@ impl MessagesPythonHost {
         let settings = self
             .host_settings(py, arguments)
             .map_err(InvokeError::Python)?;
-        self.stream_cost_model = settings.stream_cost_model.clone();
+        self.stream_cost_model = settings
+            .stream_cost_model
+            .clone()
+            .filter(|_| settings.settings.pricing.is_none());
         self.projection(py, arguments, settings)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
