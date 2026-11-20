@@ -3,7 +3,7 @@ import copy
 import logging
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Final
 
 import orjson
 import pytest
@@ -220,6 +220,25 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
 
     assert response.status_code == 200
     assert captured["n"] == "two"
+
+
+def test_image_edit_bracketed_image_config_reaches_the_provider_as_one_object(monkeypatch):
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the stubbed provider records the request it receives
+
+    response: Final = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        data={
+            "model": "gemini-3.1-flash-image",
+            "prompt": "add a hat",
+            "imageConfig[aspectRatio]": "9:16",
+            "imageConfig[imageSize]": "2K",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "2K"}
+    assert not [key for key in captured if key.startswith("imageConfig[")]
 
 
 @pytest.mark.parametrize(

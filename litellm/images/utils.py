@@ -3,6 +3,7 @@ from io import BufferedReader, BytesIO
 from typing import Any, Final, cast, get_type_hints
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.files import FILE_MIME_TYPES, FileType
@@ -15,7 +16,7 @@ class ImageEditRequestUtils:
         model: str,
         image_edit_provider_config: BaseImageEditConfig,
         image_edit_optional_params: ImageEditOptionalRequestParams,
-        drop_params: bool | None = None,
+        drop_params: object = None,
         additional_drop_params: list[str] | None = None,
     ) -> dict:
         """
@@ -33,7 +34,7 @@ class ImageEditRequestUtils:
         """
         supported_params: Final = image_edit_provider_config.get_supported_openai_params(model)
 
-        should_drop: Final = litellm.drop_params is True or drop_params is True
+        should_drop: Final = drops_unsupported_params(drop_params)
 
         filtered_optional_params: Final = dict(image_edit_optional_params)
         if additional_drop_params:
