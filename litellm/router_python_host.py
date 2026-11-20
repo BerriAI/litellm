@@ -119,9 +119,9 @@ class PythonHost:
         return without_global_fallbacks_around(endpoint)
 
     def deployment_attempt_recorder(
-        self, *, fallback_level: object, retry: object
+        self, op: str, *, stream: object, fallback_level: object, retry: object
     ) -> Callable[[DeploymentAttemptResult], None] | None:
-        if not litellm.callbacks:
+        if op != "acompletion" or stream or not litellm.callbacks:
             return None
 
         from litellm.integrations.prometheus import PrometheusLogger
