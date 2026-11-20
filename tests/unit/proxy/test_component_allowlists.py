@@ -424,3 +424,23 @@ def test_admin_mcp_survives_only_management_component_lifespans(
             assert response.status_code == expected_status, response.text
             if response.status_code == 200:
                 assert response.json()["result"]["serverInfo"]["name"] == "litellm-admin-mcp"
+
+
+@pytest.mark.parametrize("prefix", ("tripo", "cn.tripo"))
+@pytest.mark.parametrize("method, endpoint", (("POST", "v3/generation/text-to-model"), ("GET", "v3/tasks/task-id")))
+def test_gateway_serves_tripo_requests_after_startup(prefix: str, method: str, endpoint: str) -> None:
+    async def echo_request(request: Request) -> JSONResponse:
+        return JSONResponse({"endpoint": request.path_params["endpoint"], "method": request.method})
+
+    @asynccontextmanager
+    async def lifespan(application: Starlette) -> AsyncGenerator[None, None]:
+        yield
+
+    application: Final = Starlette(
+        routes=[Route(f"/{prefix}/{{endpoint:path}}", echo_request, methods=["GET", "POST"])],
+        lifespan=partial(_gateway_lifespan, lifespan=lifespan),
+    )
+    with TestClient(application) as client:
+        response: Final = client.request(method, f"/{prefix}/{endpoint}")
+    assert response.status_code == 200
+    assert response.json() == {"endpoint": endpoint, "method": method}

@@ -685,6 +685,7 @@ scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry 
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
 assemblyai_models: Set = set()
+tripo_models: Set = set()
 snowflake_models: Set = set()
 gradient_ai_models: Set = set()
 llama_models: Set = set()
@@ -967,6 +968,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             aiml_models.add(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.add(key)
+        elif value.get("litellm_provider") == "tripo":
+            tripo_models.add(key)
         elif value.get("litellm_provider") == "jina_ai":
             jina_ai_models.add(key)
         elif value.get("litellm_provider") == "snowflake":
@@ -1169,6 +1172,7 @@ model_list = list(
     | azure_text_models
     | novita_models
     | assemblyai_models
+    | tripo_models
     | jina_ai_models
     | snowflake_models
     | gradient_ai_models
@@ -1300,6 +1304,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "nebius": nebius_models | nebius_embedding_models,
         "aiml": aiml_models,
         "assemblyai": assemblyai_models,
+        "tripo": tripo_models,
         "jina_ai": jina_ai_models,
         "snowflake": snowflake_models,
         "gradient_ai": gradient_ai_models,

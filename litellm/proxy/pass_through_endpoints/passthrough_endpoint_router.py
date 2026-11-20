@@ -1,7 +1,7 @@
 import json
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
@@ -20,6 +20,7 @@ from litellm.secret_managers.main import (
     resolve_local_oidc_reference,
 )
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.passthrough_endpoints.tripo import tripo_region_from_url
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 class _PassThroughCredentials:
     api_key: str
     api_base: str | None
+    model_name: str | None = None
 
 
 def _get_proxy_llm_router() -> "Router | None":
@@ -112,6 +114,21 @@ class PassthroughEndpointRouter:
         )
         return _resolve_oidc_reference(get_secret_str(_env_variable_name))
 
+    def get_credentials_with_api_base(
+        self,
+        custom_llm_provider: str,
+        region_name: str | None,
+    ) -> _PassThroughCredentials | None:
+        deployment_credentials: Final = self._get_deployment_credentials(
+            custom_llm_provider=custom_llm_provider,
+            region_name=region_name,
+            include_team_deployments=False,
+        )
+        if deployment_credentials is not None:
+            api_key: Final = _resolve_oidc_reference(deployment_credentials.api_key)
+            return replace(deployment_credentials, api_key=api_key) if api_key else None
+        return None
+
     def get_proxy_wide_credentials(self, custom_llm_provider: str) -> _PassThroughCredentials | None:
         deployment_credentials: Final = self._get_deployment_credentials(
             custom_llm_provider=custom_llm_provider,
@@ -170,7 +187,7 @@ class PassthroughEndpointRouter:
         deployments: Final = llm_router.registry().deployments() or ()
         return next(
             (
-                credentials
+                replace(credentials, model_name=deployment["model_name"])
                 for deployment in deployments
                 if (include_team_deployments or not _is_team_deployment(deployment))
                 and (
@@ -422,6 +439,8 @@ class PassthroughEndpointRouter:
         if custom_llm_provider == "assemblyai":
             if api_base and "eu" in api_base:
                 return "eu"
+        if custom_llm_provider == "tripo":
+            return tripo_region_from_url(api_base) if api_base else None
         return None
 
     @staticmethod

@@ -232,6 +232,8 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=(
             "/anthropic/",
             "/assemblyai/",
+            "/tripo/",
+            "/cn.tripo/",
             "/azure/",
             "/azure_ai/",
             "/azure_speech/",

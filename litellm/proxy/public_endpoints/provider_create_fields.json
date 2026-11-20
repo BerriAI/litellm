@@ -567,6 +567,37 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Tripo",
+    "provider_display_name": "Tripo",
+    "litellm_provider": "tripo",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": "Select the Tripo region.",
+        "required": true,
+        "field_type": "select",
+        "options": [
+          "https://openapi.tripo3d.ai/v3",
+          "https://openapi.tripo3d.com/v3"
+        ],
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "Tripo API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "tripo/task"
+  },
+  {
     "provider": "AUTO_ROUTER",
     "provider_display_name": "Auto Router",
     "litellm_provider": "auto_router",

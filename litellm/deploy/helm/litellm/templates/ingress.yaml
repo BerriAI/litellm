@@ -114,6 +114,7 @@
     (list "/assemblyai" "/eu.assemblyai") (list "/fal_ai" "/deepgram") (list "/vllm" "/langfuse")
     (list "/mistral" "/typesafe") (list "/openrouter" "/nvidia_nim") (list "/groq" "/voyage")
     (list "/cursor" "/milvus") (list "/tinyfish" "/openai_passthrough") (list "/watsonx")
+    (list "/tripo" "/cn.tripo")
     (list "/health" "/metrics")
 -}}
 {{- $gatewayPrefixes := list -}}
