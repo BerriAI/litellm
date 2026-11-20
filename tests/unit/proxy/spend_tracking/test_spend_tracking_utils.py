@@ -5043,9 +5043,7 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
-def _fallback_after_a_failed_follow_up(
-    cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})
-):
+def _fallback_after_a_failed_follow_up(cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})):
     from litellm.litellm_core_utils.hidden_params import set_hidden_param
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import ModelResponse, Usage
@@ -5769,7 +5767,9 @@ def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call
     ],
     ids=["charged", "free", "unpriced", "non_finite"],
 )
-def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(status_call_type, response_cost, status_id):
+def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(
+    status_call_type, response_cost, status_id
+):
     """A custom provider charges the video on the poll that sees it completed, so that poll needs
     a row apart from the create row, which answers with the same video id and would drop it on the
     skip_duplicates insert. A poll that charges nothing keeps the bare id, so it still lands on the
@@ -5790,7 +5790,10 @@ def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(st
             start_time=datetime.datetime.now(timezone.utc),
             end_time=datetime.datetime.now(timezone.utc),
         )
-        for call_type, call_id, cost in (("avideo_generation", "call-1", 0.42), (status_call_type, "call-2", response_cost))
+        for call_type, call_id, cost in (
+            ("avideo_generation", "call-1", 0.42),
+            (status_call_type, "call-2", response_cost),
+        )
     )
 
     assert create["request_id"] == "video_abc"
@@ -6631,6 +6634,37 @@ def test_caller_forged_autorouter_savings_is_discarded(bucket):
     )
     metadata = json.loads(payload["metadata"])
     assert metadata["autorouter_savings"] is None
+
+
+def _saved_cache_cost_metadata(cache_hit: bool, request_metadata: Mapping[str, object]) -> dict:
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "cache_hit": cache_hit,
+            "litellm_params": {"metadata": {"user_api_key": "test-key", **request_metadata}},
+            "standard_logging_object": {"saved_cache_cost": 0.05, "metadata": {}, "model_map_information": None},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-saved-cache-cost", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    return json.loads(payload["metadata"])
+
+
+def test_cache_hit_row_stores_the_saved_cache_cost_from_the_logging_payload():
+    assert _saved_cache_cost_metadata(cache_hit=True, request_metadata={})["saved_cache_cost"] == 0.05
+
+
+@pytest.mark.parametrize("request_metadata", [{}, {"saved_cache_cost": 999.0}], ids=["plain", "caller_supplied_value"])
+def test_row_that_is_not_a_cache_hit_stores_no_saved_cache_cost(request_metadata):
+    assert "saved_cache_cost" not in _saved_cache_cost_metadata(cache_hit=False, request_metadata=request_metadata)
+
+
+def test_caller_supplied_saved_cache_cost_cannot_replace_the_computed_one():
+    assert (
+        _saved_cache_cost_metadata(cache_hit=True, request_metadata={"saved_cache_cost": 999.0})["saved_cache_cost"]
+        == 0.05
+    )
 
 
 def test_get_logging_payload_includes_fallback_info_in_spend_logs_metadata():
@@ -7799,6 +7833,7 @@ def test_spend_logs_payload(model_id: str | None):
     expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {
         "is_silent_experiment",
         "upstream_provider",
+        "saved_cache_cost",
         "route_call_type",
         "user_api_key_customer_org_id",
         "user_api_key_customer_org_alias",

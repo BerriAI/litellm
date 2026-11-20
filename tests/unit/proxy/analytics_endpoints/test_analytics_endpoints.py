@@ -50,6 +50,8 @@ GROUP_ROWS = [
         "failed_requests": 200,
         "cached_completion_tokens": 12000,
         "generated_completion_tokens": 48000,
+        "saved_cache_cost": 4.25,
+        "unpriced_cache_hits": 12,
     },
     {
         "call_type": "Unknown",
@@ -58,6 +60,8 @@ GROUP_ROWS = [
         "failed_requests": 110,
         "cached_completion_tokens": 0,
         "generated_completion_tokens": 0,
+        "saved_cache_cost": 0.0,
+        "unpriced_cache_hits": 0,
     },
 ]
 ERROR_ROWS = [
@@ -112,6 +116,8 @@ async def test_returns_groups_totals_and_filter_options(mock_prisma: MagicMock):
     assert response.totals.failed_requests == 310
     assert response.totals.cached_completion_tokens == 12000
     assert response.totals.cache_hit_ratio == pytest.approx((300 / 1610) * 100)
+    assert response.totals.saved_cache_cost == pytest.approx(4.25)
+    assert response.totals.unpriced_cache_hits == 12
     assert response.filter_options.key_aliases == ["Unnamed Key", "my-key"]
     assert response.filter_options.models == ["gpt-5.1"]
     assert [(bucket.error_code, bucket.error_class, bucket.count) for bucket in response.error_breakdown] == [
@@ -226,9 +232,31 @@ def test_totals_denominator_includes_failed_requests():
         failed_requests=20,
         cached_completion_tokens=0,
         generated_completion_tokens=0,
+        saved_cache_cost=0.0,
+        unpriced_cache_hits=0,
     )
 
     assert compute_totals([group]).cache_hit_ratio == pytest.approx(20.0)
+
+
+def test_totals_add_up_saved_cache_cost_and_unpriced_hits_across_call_types():
+    groups = [
+        CacheActivityGroup(
+            call_type=call_type,
+            api_requests=0,
+            cache_hits=hits,
+            failed_requests=0,
+            cached_completion_tokens=0,
+            generated_completion_tokens=0,
+            saved_cache_cost=saved,
+            unpriced_cache_hits=unpriced,
+        )
+        for call_type, hits, saved, unpriced in (("acompletion", 2, 0.07, 0), ("aembedding", 3, 0.01, 1))
+    ]
+
+    totals = compute_totals(groups)
+
+    assert (totals.saved_cache_cost, totals.unpriced_cache_hits) == (pytest.approx(0.08), 1)
 
 
 def test_groups_sql_splits_failures_and_labels_empty_call_type_unknown():

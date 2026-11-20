@@ -25,6 +25,8 @@ class CacheActivityGroup(LiteLLMBaseModel):
     failed_requests: int
     cached_completion_tokens: int
     generated_completion_tokens: int
+    saved_cache_cost: float
+    unpriced_cache_hits: int
 
 
 class CacheActivityTotals(LiteLLMBaseModel):
@@ -33,6 +35,8 @@ class CacheActivityTotals(LiteLLMBaseModel):
     failed_requests: int
     cached_completion_tokens: int
     cache_hit_ratio: float
+    saved_cache_cost: float
+    unpriced_cache_hits: int
 
 
 class CacheActivityFilterOptions(LiteLLMBaseModel):
@@ -65,7 +69,16 @@ GROUPS_SQL: Final = """
         SUM(CASE WHEN COALESCE(sl."cache_hit", '') = 'True' THEN sl."completion_tokens" ELSE 0 END)::int
             AS cached_completion_tokens,
         SUM(CASE WHEN COALESCE(sl."cache_hit", '') != 'True' THEN sl."completion_tokens" ELSE 0 END)::int
-            AS generated_completion_tokens
+            AS generated_completion_tokens,
+        COALESCE(SUM(CASE
+            WHEN COALESCE(sl."cache_hit", '') = 'True'
+                AND jsonb_typeof(sl."metadata" -> 'saved_cache_cost') = 'number'
+            THEN (sl."metadata" ->> 'saved_cache_cost')::double precision
+            ELSE 0 END), 0)::double precision AS saved_cache_cost,
+        SUM(CASE
+            WHEN COALESCE(sl."cache_hit", '') = 'True'
+                AND jsonb_typeof(sl."metadata" -> 'saved_cache_cost') IS DISTINCT FROM 'number'
+            THEN 1 ELSE 0 END)::int AS unpriced_cache_hits
     FROM "LiteLLM_SpendLogs" sl
     LEFT JOIN "LiteLLM_VerificationToken" vt ON sl."api_key" = vt."token"
     WHERE
@@ -161,6 +174,8 @@ def compute_totals(groups: Sequence[CacheActivityGroup]) -> CacheActivityTotals:
         failed_requests=failed_requests,
         cached_completion_tokens=sum(group.cached_completion_tokens for group in groups),
         cache_hit_ratio=(cache_hits / all_requests) * 100 if all_requests > 0 else 0.0,
+        saved_cache_cost=sum(group.saved_cache_cost for group in groups),
+        unpriced_cache_hits=sum(group.unpriced_cache_hits for group in groups),
     )
 
 

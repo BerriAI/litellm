@@ -6395,7 +6395,10 @@
       "stats": {
         "cacheHitRatio": "缓存命中率",
         "cacheHits": "缓存命中次数",
-        "cachedCompletionTokens": "缓存的输出 Token 数"
+        "cachedCompletionTokens": "缓存的输出 Token 数",
+        "costAvoided": "预计节省的供应商费用（USD）",
+        "costAvoidedHelp": "由响应缓存返回的请求原本需要支付给供应商的费用。这是未扣除缓存基础设施成本的粗略估算，不包含供应商提示词缓存的折扣。",
+        "unpricedHits_other": "{{count}} 次缓存命中没有记录费用，未计入。"
       },
       "series": {
         "apiRequests": "LLM API 请求",

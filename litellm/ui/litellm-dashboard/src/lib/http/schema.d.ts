@@ -31040,6 +31040,10 @@ export interface components {
             failed_requests: number;
             /** Generated Completion Tokens */
             generated_completion_tokens: number;
+            /** Saved Cache Cost */
+            saved_cache_cost: number;
+            /** Unpriced Cache Hits */
+            unpriced_cache_hits: number;
         };
         /** CacheActivityResponse */
         CacheActivityResponse: {
@@ -31062,6 +31066,10 @@ export interface components {
             cached_completion_tokens: number;
             /** Failed Requests */
             failed_requests: number;
+            /** Saved Cache Cost */
+            saved_cache_cost: number;
+            /** Unpriced Cache Hits */
+            unpriced_cache_hits: number;
         };
         /** CacheCostScenario */
         CacheCostScenario: {

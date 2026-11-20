@@ -20,12 +20,18 @@ import {
   useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { RefreshCw } from "lucide-react";
 import { cachingHealthCheckCall } from "@/components/networking";
 import { deriveErrorMessage } from "@/lib/http/client";
+import { getSpendString } from "@/utils/dataUtils";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { useCacheActivity, type CacheActivityGroup } from "@/app/(dashboard)/hooks/caching/useCacheActivity";
+import {
+  useCacheActivity,
+  type CacheActivityGroup,
+  type CacheActivityResponse,
+} from "@/app/(dashboard)/hooks/caching/useCacheActivity";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
@@ -61,6 +67,24 @@ const resolveDrilldownCallType = (selected: string | null, groups: readonly Cach
   selected !== null && groups.some((group) => group.call_type === selected && group.failed_requests > 0)
     ? selected
     : null;
+
+interface StatCard {
+  label: string;
+  value: string;
+  help?: string;
+}
+
+const costAvoidedStat = (totals: CacheActivityResponse["totals"] | undefined, t: TFunction): StatCard => {
+  const savedCacheCost = totals?.saved_cache_cost ?? 0;
+  const unpricedCacheHits = totals?.unpriced_cache_hits ?? 0;
+  const unpricedNote =
+    unpricedCacheHits > 0 ? [t("caching.dashboard.stats.unpricedHits", { count: unpricedCacheHits })] : [];
+  return {
+    label: t("caching.dashboard.stats.costAvoided"),
+    value: savedCacheCost > 0 ? getSpendString(savedCacheCost, 2) : "$0.00",
+    help: [t("caching.dashboard.stats.costAvoidedHelp"), ...unpricedNote].join(" "),
+  };
+};
 
 function valueFormatterNumbers(number: number) {
   const formatter = new Intl.NumberFormat("en-US", {
@@ -155,7 +179,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
   const totals = activity?.totals;
   const hasRequests = totals != null && totals.api_requests + totals.cache_hits + totals.failed_requests > 0;
-  const statCards = [
+  const statCards: StatCard[] = [
     {
       label: t("caching.dashboard.stats.cacheHitRatio"),
       value: `${hasRequests ? totals.cache_hit_ratio.toFixed(2) : "0"}%`,
@@ -165,6 +189,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
       label: t("caching.dashboard.stats.cachedCompletionTokens"),
       value: valueFormatterNumbers(totals?.cached_completion_tokens ?? 0),
     },
+    costAvoidedStat(totals, t),
   ];
 
   return (
@@ -299,11 +324,14 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               />
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {statCards.map((stat) => (
                 <Card key={stat.label}>
                   <CardContent>
-                    <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
+                    <p className="flex items-center text-sm font-medium text-muted-foreground">
+                      {stat.label}
+                      {stat.help && <SimpleTooltip content={stat.help} />}
+                    </p>
                     <div className="mt-2 flex items-baseline space-x-2.5">
                       <p className="text-3xl font-semibold">{stat.value}</p>
                     </div>

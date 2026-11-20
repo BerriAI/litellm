@@ -1,6 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CacheDashboard from "./cache_dashboard";
 
@@ -26,6 +27,8 @@ const cacheActivity = {
       failed_requests: 200,
       cached_completion_tokens: 12000,
       generated_completion_tokens: 48000,
+      saved_cache_cost: 0.05,
+      unpriced_cache_hits: 0,
     },
     {
       call_type: "aembedding",
@@ -34,6 +37,8 @@ const cacheActivity = {
       failed_requests: 50,
       cached_completion_tokens: 2000,
       generated_completion_tokens: 9000,
+      saved_cache_cost: 0.02,
+      unpriced_cache_hits: 3,
     },
   ],
   totals: {
@@ -42,6 +47,8 @@ const cacheActivity = {
     failed_requests: 250,
     cached_completion_tokens: 14000,
     cache_hit_ratio: (400 / 2200) * 100,
+    saved_cache_cost: 0.07,
+    unpriced_cache_hits: 3,
   },
   filter_options: {
     key_aliases: ["my-key", "Unnamed Key"],
@@ -177,6 +184,37 @@ describe("CacheDashboard cache analytics charts", () => {
     renderDashboard();
 
     expect(await screen.findByText("18.18%")).toBeInTheDocument();
+  });
+
+  it("shows the estimated provider cost avoided by response-cache hits", async () => {
+    renderDashboard();
+
+    expect(await screen.findByText("Estimated provider cost avoided (USD)")).toBeInTheDocument();
+    expect(screen.getByText("$0.07")).toBeInTheDocument();
+  });
+
+  it("explains the estimate and counts unpriced hits in the cost avoided tooltip", async () => {
+    const user = userEvent.setup();
+    renderDashboard();
+
+    await user.hover(await screen.findByLabelText("question-circle"));
+
+    expect(await screen.findByText(/gross estimate before cache infrastructure costs/)).toHaveTextContent(
+      "3 cache hits have no recorded cost and are not counted.",
+    );
+  });
+
+  it("shows $0.00 cost avoided and no unpriced note when there are no priced hits", async () => {
+    const user = userEvent.setup();
+    useCacheActivity.mockReturnValue({
+      data: { ...cacheActivity, totals: { ...cacheActivity.totals, saved_cache_cost: 0, unpriced_cache_hits: 0 } },
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+
+    expect(await screen.findByText("$0.00")).toBeInTheDocument();
+    await user.hover(screen.getByLabelText("question-circle"));
+    expect(await screen.findByText(/gross estimate/)).not.toHaveTextContent("no recorded cost");
   });
 
   it("passes the date range and selected filters to the activity query", () => {
