@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 from prisma.engine.errors import BinaryNotFoundError
 from prisma.errors import DataError
 
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     JWTIssuerConfig,
@@ -279,10 +280,12 @@ async def test_subject_exchange_applies_team_admission_before_returning_an_ident
     )
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwks_url: Final = "https://identity.invalid/exchange/jwks"
-    cache.set_cache(
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache(
         f"litellm_jwt_auth_keys_{jwks_url}",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
     )
+    monkeypatch.setattr(proxy_server, "jwks_cache", jwks_cache)
     cache.set_cache(
         "exchange-user",
         LiteLLM_UserTable(user_id="exchange-user", user_role="internal_user", teams=[team_id] if team_id else []),

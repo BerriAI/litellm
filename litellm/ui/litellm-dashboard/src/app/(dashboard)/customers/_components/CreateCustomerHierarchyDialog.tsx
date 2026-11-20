@@ -112,9 +112,11 @@ function CreateForm(props: Props) {
             budgetMode: fields.budgetEnabled ? "custom" : "profile",
             budgetId: fields.templateId,
             budgetAmount: fields.maxBudget,
-            budgetDuration: fields.budgetDuration === "12mo" ? "12mo" : "1mo",
+            budgetDuration: fields.budgetDuration,
             tpm: fields.tpm,
             rpm: fields.rpm,
+            softBudget: fields.softBudget,
+            allowedModels: fields.allowedModels,
           }}
           profiles={props.kind === "member" ? props.organization.default_budgets : undefined}
           disabled={pending}
@@ -137,6 +139,8 @@ function CreateForm(props: Props) {
               ...(patch.budgetDuration !== undefined ? { budgetDuration: patch.budgetDuration } : {}),
               ...(patch.tpm !== undefined ? { tpm: patch.tpm } : {}),
               ...(patch.rpm !== undefined ? { rpm: patch.rpm } : {}),
+              ...(patch.softBudget !== undefined ? { softBudget: patch.softBudget } : {}),
+              ...(patch.allowedModels !== undefined ? { allowedModels: patch.allowedModels } : {}),
             }))
           }
         />

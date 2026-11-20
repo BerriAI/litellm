@@ -367,31 +367,35 @@ describe("customer hierarchy management", () => {
     };
     fetchMock.mockImplementation(async () => json(initial));
     renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&tab=budget_groups" });
-    const monthly = await screen.findByRole("spinbutton", { name: "Group 1 monthly budget (USD)" });
+    await screen.findByRole("row", { name: "Standard" });
+    const monthlyInput = () =>
+      within(screen.getByRole("row", { name: "Standard" })).getByRole("spinbutton", {
+        name: "Additional spend limit (USD)",
+      });
     act(() => {
-      fireEvent.change(monthly, { target: { value: "15" } });
+      fireEvent.change(monthlyInput(), { target: { value: "15" } });
     });
     await user.click(screen.getByRole("combobox", { name: "New members join" }));
     await user.click(await screen.findByRole("option", { name: "Alternate", exact: true }));
     fetchMock.mockImplementation(async () => json(refreshed));
     await act(() => testQueryClient.invalidateQueries({ queryKey: ["customer-hierarchy"] }));
     expect(await screen.findByRole("heading", { name: "Refreshed customer" })).toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(15);
+    expect(monthlyInput()).toHaveValue(15);
     expect(screen.getByRole("combobox", { name: "New members join" })).toHaveTextContent("Alternate");
     fetchMock.mockClear();
     fetchMock.mockImplementation(async () => json({ detail: "Budget groups changed. Reload before saving." }, 409));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Budget groups changed.");
-    expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(15);
+    expect(monthlyInput()).toHaveValue(15);
     const request = fetchMock.mock.calls[0][0];
     if (!(request instanceof Request)) throw new Error("Expected HTTP request");
     expect(await request.clone().json()).toMatchObject({ expected_revision: initial.budget_groups_revision });
     fetchMock.mockImplementation(async () => json(refreshed));
     await user.click(screen.getByRole("button", { name: "Discard edits and reload" }));
     expect(await screen.findByDisplayValue("Added elsewhere")).toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(10);
+    expect(monthlyInput()).toHaveValue(10);
     act(() => {
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" }), {
+      fireEvent.change(monthlyInput(), {
         target: { value: "15" },
       });
     });
@@ -401,7 +405,7 @@ describe("customer hierarchy management", () => {
     fetchMock.mockImplementation(async () => json(saved));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled());
-    expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(15);
+    expect(monthlyInput()).toHaveValue(15);
     expect(screen.getByRole("combobox", { name: "New members join" })).toHaveTextContent("Alternate");
     const writes = fetchMock.mock.calls
       .map(([input]) => input)

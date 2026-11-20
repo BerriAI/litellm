@@ -3764,8 +3764,9 @@ class TestNativeWebSocketGuardrailMasking:
         assert msg["response"]["model"] == "auth-model"
         assert msg["model"] == "auth-model"
 
+    @pytest.mark.parametrize("event_type", ["response.completed", "response.incomplete"])
     @pytest.mark.asyncio
-    async def test_unmask_response_event_completed(self):
+    async def test_unmask_response_event_completed(self, event_type):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
             request_data={
@@ -3776,7 +3777,7 @@ class TestNativeWebSocketGuardrailMasking:
 
         event = json.dumps(
             {
-                "type": "response.completed",
+                "type": event_type,
                 "response": {
                     "output": [
                         {
@@ -4054,8 +4055,9 @@ class TestNativeWebSocketGuardrailMasking:
             "<EMAIL_ADDRESS_1>": "alice@example.com"
         }
 
+    @pytest.mark.parametrize("terminal_type", ["response.completed", "response.incomplete"])
     @pytest.mark.asyncio
-    async def test_backend_to_client_suppresses_deltas_and_masks_completed(self):
+    async def test_backend_to_client_suppresses_deltas_and_masks_the_terminal_event(self, terminal_type):
         from unittest.mock import AsyncMock
 
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
@@ -4071,7 +4073,7 @@ class TestNativeWebSocketGuardrailMasking:
                 ),
                 json.dumps(
                     {
-                        "type": "response.completed",
+                        "type": terminal_type,
                         "response": {
                             "output": [
                                 {
@@ -4105,7 +4107,7 @@ class TestNativeWebSocketGuardrailMasking:
 
         websocket.send_text.assert_awaited_once()
         forwarded = json.loads(websocket.send_text.await_args[0][0])
-        assert forwarded["type"] == "response.completed"
+        assert forwarded["type"] == terminal_type
         assert (
             forwarded["response"]["output"][0]["content"][0]["text"]
             == "contact <EMAIL_ADDRESS_1>"

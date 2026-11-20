@@ -27,7 +27,6 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
-from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
@@ -202,13 +201,27 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
         logging_obj.record_bridged_responses_api_response(result)
 
 
-def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+def _sent_responses_fields(request_params: Mapping[str, object], fields: Sequence[str]) -> Mapping[str, object]:
     extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
     dropped: Final = drop_policy(request_params).additional_drop_params
-    placement_fields: Final = ("previous_response_id", "conversation", "truncation")
-    top_level: Final = {key: request_params.get(key) for key in placement_fields if key not in dropped}
-    sent: Final = {key: extra_body.get(key, top_level.get(key)) for key in placement_fields}
-    return bool(sent["previous_response_id"] or sent["conversation"]) or sent["truncation"] == "auto"
+    top_level: Final = {key: request_params.get(key) for key in fields if key not in dropped}
+    return {key: extra_body.get(key, top_level.get(key)) for key in fields}
+
+
+def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+    sent: Final = _sent_responses_fields(request_params, ("conversation", "truncation"))
+    return bool(sent["conversation"]) or sent["truncation"] == "auto"
+
+
+_PREVIOUS_RESPONSE_ID_UNSUPPORTED: Final = (
+    "`previous_response_id` is not supported on the Messages API. Continue a stored response on the "
+    "Responses API (`/v1/responses`), or send the earlier turns in `messages`."
+)
+
+
+def previous_response_id_error(request_params: Mapping[str, object]) -> str | None:
+    sent: Final = _sent_responses_fields(request_params, ("previous_response_id",))
+    return _PREVIOUS_RESPONSE_ID_UNSUPPORTED if sent["previous_response_id"] is not None else None
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -319,8 +332,15 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
-    reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    unsupported_param_error: Final = previous_response_id_error(forwarded_kwargs)
+    if unsupported_param_error is not None:
+        raise litellm.UnsupportedParamsError(
+            message=unsupported_param_error,
+            model=model,
+            llm_provider=target_provider if isinstance(target_provider, str) else None,
+        )
+    reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     request_tools: Final = tools_without_mcp_servers(
         forwarded_kwargs.get("mcp_servers"),
         tools or (),
@@ -484,7 +504,7 @@ def _messages_without_rejected_reasoning(
 async def _aresponses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
 ) -> tuple[Mapping[str, object], _ResponsesResult]:
-    responses_kwargs: Final = await awithout_stored_instructions(responses_kwargs_for(messages))
+    responses_kwargs: Final = responses_kwargs_for(messages)
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
@@ -495,14 +515,14 @@ async def _aresponses_without_rejected_reasoning(
         )
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = await awithout_stored_instructions(responses_kwargs_for(replayed_messages))
+        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
         return replay_kwargs, await litellm.aresponses(**replay_kwargs)
 
 
 def _responses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
 ) -> tuple[Mapping[str, object], _SyncResponsesResult]:
-    responses_kwargs: Final = without_stored_instructions(responses_kwargs_for(messages))
+    responses_kwargs: Final = responses_kwargs_for(messages)
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
@@ -513,7 +533,7 @@ def _responses_without_rejected_reasoning(
         )
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = without_stored_instructions(responses_kwargs_for(replayed_messages))
+        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
         return replay_kwargs, litellm.responses(**replay_kwargs)
 
 

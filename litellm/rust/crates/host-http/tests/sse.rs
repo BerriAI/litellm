@@ -7,7 +7,10 @@ use std::{
 use axum::body::to_bytes;
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
-use http::{StatusCode, header::CONTENT_TYPE};
+use http::{
+    StatusCode,
+    header::{CACHE_CONTROL, CONTENT_TYPE},
+};
 use litellm_host::{
     call::{CallOutput, hosted_call},
     machine::MachineFault,
@@ -68,6 +71,8 @@ async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case]
     let response = serve(machine, (), (), adapter, None).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
+    assert_eq!(response.headers()[CACHE_CONTROL], "no-cache");
+    assert_eq!(response.headers()["x-accel-buffering"], "no");
     assert_eq!(errors.load(Ordering::SeqCst), 0);
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
     assert_eq!(
