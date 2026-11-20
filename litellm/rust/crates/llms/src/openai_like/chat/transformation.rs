@@ -2,7 +2,7 @@
 //! OpenAI-compatible endpoint shares. The body is already OpenAI-shaped, so
 //! parameters pass through verbatim; the port keeps Python's two deviations,
 //! the `max_completion_tokens` -> `max_tokens` rename and the usage
-//! `*_tokens` null-to-zero sanitize.
+//! `*_tokens` null-to-zero sanitize. Usage otherwise passes through as the host sent it.
 
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
@@ -12,8 +12,9 @@ use litellm_core_utils::{
 };
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-    ChatCompletionsUsage, ChatMessage, PromptTokensDetails,
+    ChatCompletionsUsage, ChatMessage,
 };
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -64,6 +65,8 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 const CONFIG_PARAMS: &[&str] = &["custom_endpoint", "extra_headers", "max_retries"];
 
 const REASONING_FIELDS: &[&str] = &[THINKING_BLOCKS_FIELD, "reasoning_content"];
+
+const USAGE_COUNTS: [&str; 3] = ["prompt_tokens", "completion_tokens", "total_tokens"];
 
 pub struct OpenAILikeChatConfig;
 
@@ -149,14 +152,12 @@ impl BaseConfig for OpenAILikeChatConfig {
         model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let mut body = response.body;
-        sanitize_usage(&mut body);
-        let body =
-            body.as_object()
-                .ok_or(Error::InvalidResponse(crate::ErrorDetail::Expected {
-                    subject: "chat response",
-                    expected: "an object",
-                }))?;
+        let Value::Object(mut body) = response.body else {
+            return Err(Error::InvalidResponse(crate::ErrorDetail::Expected {
+                subject: "chat response",
+                expected: "an object",
+            }));
+        };
 
         let choices = body
             .get("choices")
@@ -167,14 +168,12 @@ impl BaseConfig for OpenAILikeChatConfig {
             .map(|(position, choice)| normalize_choice(position, choice))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let usage = body.get("usage").and_then(Value::as_object);
-        let field = |name: &str| {
-            usage
-                .and_then(|usage| usage.get(name))
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
+        let usage = match body.remove("usage") {
+            Some(Value::Object(usage)) => {
+                host_usage_or_counts(Value::Object(sanitize_usage(usage)))
+            }
+            _ => ChatCompletionsUsage::default(),
         };
-        let details = usage.and_then(|usage| usage.get("prompt_tokens_details"));
 
         Ok(ChatCompletionsResponse {
             created: body
@@ -187,25 +186,7 @@ impl BaseConfig for OpenAILikeChatConfig {
                 .unwrap_or(model)
                 .to_string(),
             choices,
-            usage: ChatCompletionsUsage {
-                prompt_tokens: field("prompt_tokens"),
-                completion_tokens: field("completion_tokens"),
-                total_tokens: field("total_tokens"),
-                prompt_tokens_details: PromptTokensDetails {
-                    cached_tokens: details
-                        .and_then(|d| d.get("cached_tokens"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    cache_creation_tokens: details
-                        .and_then(|d| d.get("cache_creation_tokens"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    text_tokens: details
-                        .and_then(|d| d.get("text_tokens"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                },
-            },
+            usage,
         })
     }
 
@@ -250,9 +231,6 @@ impl BaseConfig for OpenAILikeChatConfig {
     }
 }
 
-/// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
-/// `*_tokens` entry breaks OpenAI clients, so nulls become 0. Python scrubs
-/// every top-level usage key ending in `_tokens`.
 fn without_null_fields(message: ChatMessage) -> ChatMessage {
     ChatMessage {
         extra: message
@@ -264,14 +242,38 @@ fn without_null_fields(message: ChatMessage) -> ChatMessage {
     }
 }
 
-fn sanitize_usage(body: &mut Value) {
-    if let Some(usage) = body.get_mut("usage").and_then(Value::as_object_mut) {
-        for (key, value) in usage.iter_mut() {
-            if key.ends_with("_tokens") && value.is_null() {
-                *value = json!(0);
-            }
+/// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
+/// `*_tokens` entry breaks OpenAI clients, so nulls become 0. Python scrubs
+/// every top-level usage key ending in `_tokens`, and its `Usage` reads a missing count as 0.
+fn sanitize_usage(usage: Map<String, Value>) -> Map<String, Value> {
+    let missing_counts: Vec<&str> = USAGE_COUNTS
+        .into_iter()
+        .filter(|count| !usage.contains_key(*count))
+        .collect();
+    usage
+        .into_iter()
+        .map(|(key, value)| match value {
+            Value::Null if key.ends_with("_tokens") => (key, json!(0)),
+            value => (key, value),
+        })
+        .chain(
+            missing_counts
+                .into_iter()
+                .map(|count| (count.to_string(), json!(0))),
+        )
+        .collect()
+}
+
+fn host_usage_or_counts(usage: Value) -> ChatCompletionsUsage {
+    ChatCompletionsUsage::deserialize(&usage).unwrap_or_else(|_| {
+        let count = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+        ChatCompletionsUsage {
+            completion_tokens: count("completion_tokens"),
+            prompt_tokens: count("prompt_tokens"),
+            total_tokens: count("total_tokens"),
+            ..ChatCompletionsUsage::default()
         }
-    }
+    })
 }
 
 fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsChoice, Error> {
@@ -585,19 +587,69 @@ mod tests {
         assert_eq!(response.usage.total_tokens, 8);
     }
 
+    fn usage_of(usage: Option<Value>) -> Value {
+        let choices =
+            json!([{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}]);
+        let body = match usage {
+            Some(usage) => json!({"model": "m", "choices": choices, "usage": usage}),
+            None => json!({"model": "m", "choices": choices}),
+        };
+        let response = transform_response(body).expect("response normalizes");
+        serde_json::to_value(response.usage).unwrap()
+    }
+
     #[rstest]
-    fn null_token_fields_in_usage_become_zero() {
-        // `_sanitize_usage_obj`: providers that return null token values break
-        // OpenAI clients, so the response is scrubbed at the source.
-        let response = transform_response(json!({
-            "model": "m",
-            "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 3, "completion_tokens": null, "total_tokens": null},
-        }))
-        .expect("response normalizes");
-        assert_eq!(response.usage.completion_tokens, 0);
-        assert_eq!(response.usage.total_tokens, 0);
-        assert_eq!(response.usage.prompt_tokens, 3);
+    #[case::gpt_5_4_mini_capture(json!({
+        "prompt_tokens": 5726, "completion_tokens": 4, "total_tokens": 5730,
+        "prompt_tokens_details": {"cached_tokens": 5504, "audio_tokens": 0},
+        "completion_tokens_details": {
+            "reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0
+        }
+    }))]
+    #[case::no_text_tokens_reported(json!({
+        "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+        "prompt_tokens_details": {"cached_tokens": 1}
+    }))]
+    #[case::host_extension(json!({
+        "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+        "prompt_cache_hit_tokens": 1, "cost": 0.25
+    }))]
+    fn passes_the_host_usage_through_like_python(#[case] usage: Value) {
+        assert_eq!(usage_of(Some(usage.clone())), usage);
+    }
+
+    #[rstest]
+    #[case::absent(None, json!({"completion_tokens": 0, "prompt_tokens": 0, "total_tokens": 0}))]
+    #[case::null(Some(Value::Null), json!({"completion_tokens": 0, "prompt_tokens": 0, "total_tokens": 0}))]
+    #[case::null_and_missing_counts(
+        Some(json!({"prompt_tokens": 3, "completion_tokens": null})),
+        json!({"completion_tokens": 0, "prompt_tokens": 3, "total_tokens": 0})
+    )]
+    fn reports_a_null_or_missing_count_as_zero_like_python(
+        #[case] usage: Option<Value>,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(usage_of(usage), expected);
+    }
+
+    #[rstest]
+    #[case::count_that_is_not_a_token_count(
+        json!({"prompt_tokens": "3", "completion_tokens": 1, "total_tokens": 4}),
+        json!({"completion_tokens": 1, "prompt_tokens": 0, "total_tokens": 4})
+    )]
+    #[case::detail_that_is_not_a_token_count(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": "2"}}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+    )]
+    #[case::details_that_are_not_an_object(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "completion_tokens_details": "none"}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+    )]
+    fn a_usage_outside_the_contract_keeps_its_counts_instead_of_failing(
+        #[case] usage: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(usage_of(Some(usage)), expected);
     }
 
     #[rstest]

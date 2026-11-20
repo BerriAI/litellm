@@ -38,23 +38,55 @@ pub enum ChatCompletionThinkingBlock {
     },
 }
 
-/// OpenAI `usage`, including the `prompt_tokens_details` split LiteLLM's Python
-/// path reports so cost tracking sees the same numbers on either path.
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Default)]
+pub struct CacheCreationTokenDetails {
+    pub ephemeral_5m_input_tokens: Option<u64>,
+    pub ephemeral_1h_input_tokens: Option<u64>,
+}
+
+#[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct PromptTokensDetails {
-    pub cached_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub text_tokens: u64,
+    pub cached_tokens: Option<u64>,
+    pub text_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub cache_creation_tokens: Option<u64>,
+    pub cache_creation_token_details: Option<CacheCreationTokenDetails>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Default)]
+pub struct CompletionTokensDetails {
+    pub reasoning_tokens: Option<u64>,
+    pub text_tokens: Option<u64>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// OpenAI `usage` with the fields LiteLLM's Python `Usage` adds, in its order, so cost
+/// tracking and a Python `ModelResponse` built from it see the same numbers on either path.
+#[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ChatCompletionsUsage {
-    pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub prompt_tokens: u64,
     pub total_tokens: u64,
-    pub prompt_tokens_details: PromptTokensDetails,
+    pub completion_tokens_details: Option<CompletionTokensDetails>,
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+    pub cache_creation_input_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
+    pub inference_geo: Option<String>,
+    pub speed: Option<String>,
+    pub service_tier: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -89,4 +121,47 @@ pub struct ChatCompletionsResponse {
     pub model: String,
     pub choices: Vec<ChatCompletionsChoice>,
     pub usage: ChatCompletionsUsage,
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::{Value, json};
+
+    use super::ChatCompletionsUsage;
+    use crate::test_support::round_trip;
+
+    #[rstest]
+    #[case::python_anthropic_usage(json!({
+        "completion_tokens": 4, "prompt_tokens": 17, "total_tokens": 21,
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 4},
+        "prompt_tokens_details": {
+            "cached_tokens": 0, "text_tokens": 17, "cache_write_tokens": 0, "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}
+        },
+        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+        "inference_geo": "global", "speed": "standard", "service_tier": "standard"
+    }))]
+    #[case::openai_detail_keys(json!({
+        "prompt_tokens": 5726, "completion_tokens": 4, "total_tokens": 5730,
+        "prompt_tokens_details": {"cached_tokens": 5504, "audio_tokens": 0},
+        "completion_tokens_details": {
+            "reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0
+        }
+    }))]
+    #[case::host_extension(json!({
+        "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4,
+        "prompt_cache_hit_tokens": 2, "future": {"k": null}
+    }))]
+    fn usage_round_trips_without_losing_fields(#[case] wire: Value) {
+        round_trip::<ChatCompletionsUsage>(wire);
+    }
+
+    #[rstest]
+    #[case::missing_prompt_tokens(json!({"completion_tokens": 1, "total_tokens": 1}))]
+    #[case::missing_completion_tokens(json!({"prompt_tokens": 1, "total_tokens": 1}))]
+    #[case::missing_total_tokens(json!({"prompt_tokens": 1, "completion_tokens": 1}))]
+    fn usage_without_a_count_is_rejected(#[case] wire: Value) {
+        assert!(serde_json::from_value::<ChatCompletionsUsage>(wire).is_err());
+    }
 }
