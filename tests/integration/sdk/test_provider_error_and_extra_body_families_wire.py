@@ -32,7 +32,6 @@ _TOKEN_REPLY: Final = Reply(
 _STATUS_MAPPED_JSON_PROVIDERS: Final = (
     "veniceai",
     "xiaomi_mimo",
-    "scaleway",
     "abliteration",
     "llamagate",
     "gmi",
@@ -44,7 +43,7 @@ _STATUS_MAPPED_JSON_PROVIDERS: Final = (
     "neosantara",
     "empiriolabs",
 )
-_EXTRA_BODY_MEMBERS: Final = (*_STATUS_MAPPED_JSON_PROVIDERS, "inferenceapis")
+_EXTRA_BODY_MEMBERS: Final = (*_STATUS_MAPPED_JSON_PROVIDERS, "inferenceapis", "scaleway")
 _OPENAI_COMPATIBLE_JSON_MEMBER: Final = "nano-gpt"
 _PLAIN_BUILDERS: Final = (
     *_STATUS_MAPPED_JSON_PROVIDERS,

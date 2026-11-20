@@ -80,6 +80,7 @@ from litellm.constants import (
     MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
     NON_INFERENCE_CALL_TYPES,
+    OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
     OPENAI_EMBEDDING_PARAMS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOGETHER_AI_API_KEY_ENV_VARS,
@@ -4864,14 +4865,16 @@ def get_optional_params_transcription(
                     )
             return non_default_params
 
-    provider_config: BaseAudioTranscriptionConfig | None = None
-    if custom_llm_provider is not None:
-        provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
+    provider_config: Final[BaseAudioTranscriptionConfig | None] = (
+        ProviderConfigManager.get_provider_audio_transcription_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
         )
+        if custom_llm_provider is not None
+        else None
+    )
 
-    if custom_llm_provider == "openai" or custom_llm_provider == "azure":
+    if sends_through_openai_sdk:
         optional_params = non_default_params
     elif custom_llm_provider == "groq":
         supported_params = litellm.GroqSTTConfig().get_supported_openai_params_stt()
@@ -4882,6 +4885,10 @@ def get_optional_params_transcription(
             model=model,
             drop_params=normalized_drop_params if normalized_drop_params is not None else False,
         )
+    elif provider_config is None and custom_llm_provider in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS:
+        optional_params = {
+            k: v for k, v in non_default_params.items() if k not in _OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS
+        }
     elif custom_llm_provider == "bedrock":
         from litellm.llms.bedrock.audio_transcription import (
             UnsupportedTranscriptionParams,
@@ -10839,12 +10846,6 @@ class ProviderConfigManager:
             )
 
             return OVHCloudAudioTranscriptionConfig()
-        elif litellm.LlmProviders.SCALEWAY == provider:
-            from litellm.llms.scaleway.audio_transcription.transformation import (
-                ScalewayAudioTranscriptionConfig,
-            )
-
-            return ScalewayAudioTranscriptionConfig()
         elif litellm.LlmProviders.MISTRAL == provider:
             from litellm.llms.mistral.audio_transcription.transformation import (
                 MistralAudioTranscriptionConfig,

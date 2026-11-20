@@ -11975,6 +11975,34 @@ def test_openai_sdk_transcription_params_pass_through_to_other_providers(custom_
     assert {key: forwarded.get(key) for key in hints} == hints
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["scaleway", "hostinger_router"])
+def test_openai_compatible_provider_without_a_transcription_config_keeps_openai_transcription_params(
+    custom_llm_provider: str,
+) -> None:
+    openai_params: Final = {
+        "language": "fr",
+        "prompt": "Bonjour",
+        "response_format": "verbose_json",
+        "temperature": 0.2,
+        "timestamp_granularities": ["word"],
+    }
+
+    kept: Final = get_optional_params_transcription(
+        model="whisper-large-v3", custom_llm_provider=custom_llm_provider, **openai_params
+    )
+    kept_when_dropping: Final = get_optional_params_transcription(
+        model="whisper-large-v3",
+        custom_llm_provider=custom_llm_provider,
+        languages=["en"],
+        drop_params=True,
+        **openai_params,
+    )
+
+    expected: Final = {**openai_params, "extra_body": {"prompt": "Bonjour", "temperature": 0.2}}
+    assert kept == expected
+    assert kept_when_dropping == expected
+
+
 @respx.mock
 def test_drop_params_keeps_openai_sdk_transcription_params_out_of_a_deepgram_request() -> None:
     route: Final = respx.post(url__startswith="https://api.deepgram.com/v1/listen").mock(
