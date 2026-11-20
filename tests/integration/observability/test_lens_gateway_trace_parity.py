@@ -22,9 +22,8 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans
 from pydantic import BaseModel, JsonValue
 
-from litellm.integrations.lens.proxy.internal import LENS_AGENT
-
 _MODEL: Final = "claude-haiku-4-5"
+LENS_AGENT: Final = "lens-signals"
 _TRACE_PATH: Final = "/v1/traces"
 
 
