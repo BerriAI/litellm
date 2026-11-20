@@ -14,7 +14,7 @@ kwargs lack the flag and these tests fail.
 
 import json
 from collections.abc import Mapping, Sequence
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -22,7 +22,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -209,15 +209,19 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     client: Final = AsyncHTTPHandler()
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
 
-    response = await litellm.aresponses(
-        model="azure_ai/claude-sonnet-4-6",
-        api_base="https://fake-foundry-resource.services.ai.azure.com",
-        api_key="fake-api-key",
-        input="Double it",
-        previous_response_id="resp_turn_one",
-        client=client,
-        **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
-    )
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        SimpleNamespace(db=_StoredTurns((_stored_mcp_turn("resp_turn_one"),))),
+    ):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            previous_response_id="resp_turn_one",
+            client=client,
+            **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
+        )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert ADDRESSED_RESPONSE_ID_FIELD not in provider.request_body, (
@@ -295,6 +299,100 @@ def _stored_mcp_turn(request_id: str) -> Mapping[str, object]:
             ],
         },
     }
+
+
+_TURN_ONE_ID: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+    custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+)
+
+
+def _turn_stored_without_prompts(request_id: str) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "turn-one-session",
+        "proxy_server_request": "{}",
+        "response": "{}",
+    }
+
+
+async def _bridged_follow_up(
+    asynchronous: bool, provider: _RecordingAnthropicHandler, proxy_fields: Mapping[str, object] = MappingProxyType({})
+) -> object:
+    request: Final = {
+        **proxy_fields,
+        "model": "azure_ai/claude-sonnet-4-6",
+        "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+        "api_key": "fake-api-key",
+        "input": "Double it",
+        "previous_response_id": _TURN_ONE_ID,
+    }
+    if not asynchronous:
+        sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(provider)))
+        return litellm.responses(**request, client=sync_client)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    return await litellm.aresponses(**request, client=client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "prisma_client",
+    [
+        None,
+        SimpleNamespace(db=_StoredTurns(())),
+        SimpleNamespace(db=_StoredTurns((_turn_stored_without_prompts(_TURN_ONE_ID),))),
+    ],
+    ids=["no_database", "unknown_id", "prompts_not_stored"],
+)
+async def test_bridged_follow_up_without_a_replayable_previous_turn_is_refused_before_the_provider_call(
+    asynchronous: bool, prisma_client: SimpleNamespace | None
+):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await _bridged_follow_up(asynchronous, provider)
+
+    assert provider.request_body is None, "the follow-up reached the provider with no conversation history"
+    assert (refused.value.status_code, refused.value.param, refused.value.code) == (
+        400,
+        "previous_response_id",
+        "previous_response_not_found",
+    )
+    assert f"Previous response with id '{_TURN_ONE_ID}' not found." in refused.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_a_refused_proxy_follow_up_names_the_id_the_client_sent(asynchronous: bool):
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredTurns(()))):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await _bridged_follow_up(
+                asynchronous,
+                _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD),
+                {ADDRESSED_RESPONSE_ID_FIELD: "resp_the_client_held"},
+            )
+
+    assert "Previous response with id 'resp_the_client_held' not found." in refused.value.message
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_bridged_follow_up_replays_the_stored_previous_turn(asynchronous: bool):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredTurns((_stored_mcp_turn(_TURN_ONE_ID),)))
+    ):
+        await _bridged_follow_up(asynchronous, provider)
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
+        ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
+        ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
+        ("user", json.dumps([{"type": "text", "text": "Double it"}])),
+    ]
 
 
 @pytest.mark.asyncio

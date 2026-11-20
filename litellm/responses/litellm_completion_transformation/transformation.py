@@ -615,6 +615,24 @@ def _invalid_input_type(field_path: str, value: object) -> BadRequestError:
     return BadRequestError(message=invalid_type_message(field_path, value), model="", llm_provider="")
 
 
+def _previous_response_not_found(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
+    message: Final = (
+        f"Previous response with id '{client_response_id}' not found. LiteLLM rebuilds this model's conversation "
+        "from its spend logs, which needs a database and `store_prompts_in_spend_logs: true`."
+    )
+    return BadRequestError(
+        message=message,
+        model=model,
+        llm_provider=provider,
+        body={
+            "message": message,
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "previous_response_not_found",
+        },
+    )
+
+
 def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
 
@@ -1733,6 +1751,12 @@ class LiteLLMCompletionResponsesConfig:
         _messages: Final = litellm_completion_request.get("messages") or []
         route: Final = CompletionRoute(model=model, custom_llm_provider=provider)
         session_history: Final = chat_completion_session.get("messages") or []
+        if previous_response_id and not session_history and not input_replaces_history:
+            raise _previous_response_not_found(
+                previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
+                model,
+                provider,
+            )
         stored_messages: Final = LiteLLMCompletionResponsesConfig._with_compaction_blocks_the_route_takes(
             _instruction_messages(session_history) if input_replaces_history else session_history,
             route,
@@ -1751,9 +1775,6 @@ class LiteLLMCompletionResponsesConfig:
             else _messages[:instructions_end]
         )
 
-        # If session messages are empty (e.g., no database in test environment),
-        # we still need to process the new input messages
-        # Store original _messages before combining for safety check
         original_new_messages: Final = _OBJECT_LIST_ADAPTER.validate_python(_messages)
 
         new_messages: Final = (
