@@ -13,7 +13,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
-from litellm.llms.bedrock.base_aws_llm import run_aws_signing
+from litellm.llms.bedrock.base_aws_llm import AwsAuthError, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
@@ -27,24 +27,38 @@ class BedrockCountTokensRequestError(BedrockError):
 
 
 class BedrockCountTokensCredentialsError(BedrockError):
-    def __init__(self, cause: Exception) -> None:
-        super().__init__(
-            status_code=401,
-            message=(
-                f"No usable AWS credentials are set, so Bedrock can't count tokens ({cause}). Set "
-                "aws_access_key_id and aws_secret_access_key, aws_profile_name, aws_role_name, or api_key on the "
-                "deployment, or AWS credentials in the proxy environment."
-            ),
-        )
+    def __init__(self, status_code: int, problem: str) -> None:
+        super().__init__(status_code=status_code, message=problem)
 
 
-def missing_credentials_error(error: Exception) -> BedrockCountTokensCredentialsError | None:
+def aws_credentials_error(error: Exception) -> BedrockCountTokensCredentialsError | None:
     ensure_optional_import("botocore")
-    from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ProfileNotFound
+    from botocore.exceptions import (
+        NoCredentialsError,
+        PartialCredentialsError,
+        ProfileNotFound,
+        SSOTokenLoadError,
+        UnauthorizedSSOTokenError,
+    )
 
-    if isinstance(error, (NoCredentialsError, PartialCredentialsError, ProfileNotFound)):
-        return BedrockCountTokensCredentialsError(error)
-    return None
+    match error:
+        case AwsAuthError():
+            return BedrockCountTokensCredentialsError(error.status_code, error.message)
+        case (
+            NoCredentialsError()
+            | PartialCredentialsError()
+            | ProfileNotFound()
+            | SSOTokenLoadError()
+            | UnauthorizedSSOTokenError()
+        ):
+            return BedrockCountTokensCredentialsError(
+                401,
+                f"No usable AWS credentials are set, so Bedrock can't count tokens ({error}). Set "
+                "aws_access_key_id and aws_secret_access_key, aws_profile_name, aws_role_name, or api_key on the "
+                "deployment, or AWS credentials in the proxy environment.",
+            )
+        case _:
+            return None
 
 
 class BedrockCountTokensHandler(BedrockCountTokensConfig):
@@ -166,9 +180,9 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 response=e.response,
             )
         except Exception as e:
-            missing_credentials: Final = missing_credentials_error(e)
-            if missing_credentials is not None:
-                raise missing_credentials from e
+            credentials_error: Final = aws_credentials_error(e)
+            if credentials_error is not None:
+                raise credentials_error from e
             verbose_logger.error("Error in CountTokens handler: %s", e)
             raise BedrockError(
                 status_code=500,

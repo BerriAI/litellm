@@ -208,12 +208,20 @@ async def test_mantle_failure_is_reported_with_its_status() -> None:
 
 @pytest.fixture
 def _no_aws_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    empty: Final = tmp_path / "empty-aws-config"
-    empty.write_text("")
+    config: Final = tmp_path / "aws-config"
+    config.write_text(
+        "[profile litellm-test-sso-never-logged-in]\n"
+        "sso_start_url = https://litellm-test-never-logged-in.awsapps.com/start\n"
+        "sso_region = us-east-1\n"
+        "sso_account_id = 123456789012\n"
+        "sso_role_name = litellm-test\n"
+    )
+    credentials: Final = tmp_path / "aws-credentials"
+    credentials.write_text("")
     for name in tuple(name for name in os.environ if name.startswith("AWS_")):
         monkeypatch.delenv(name)
-    monkeypatch.setenv("AWS_CONFIG_FILE", str(empty))
-    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(empty))
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
 
 
@@ -225,8 +233,9 @@ def _no_aws_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
         ({}, {}),
         ({"aws_profile_name": "litellm-test-missing-profile"}, {}),
         ({}, {"AWS_ACCESS_KEY_ID": "AKIATESTACCESSKEY"}),
+        ({"aws_profile_name": "litellm-test-sso-never-logged-in"}, {}),
     ),
-    ids=("none", "unknown-profile", "access-key-without-secret"),
+    ids=("none", "unknown-profile", "access-key-without-secret", "sso-never-logged-in"),
 )
 @pytest.mark.parametrize(
     "model_to_use",
@@ -253,6 +262,39 @@ async def test_count_without_usable_aws_credentials_is_a_401_rejected_before_cal
     assert (result.error_message or "").startswith(
         "No usable AWS credentials are set, so Bedrock can't count tokens"
     ), result.error_message
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_aws_credentials")
+@pytest.mark.parametrize(
+    "model_to_use",
+    ("global.anthropic.claude-sonnet-5-5", "bedrock_mantle/anthropic.claude-opus-5-5"),
+    ids=("runtime", "mantle"),
+)
+async def test_count_whose_web_identity_token_cannot_be_read_is_a_401_rejected_before_calling_bedrock(
+    model_to_use: str,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment={
+            "litellm_params": {
+                "aws_region_name": "us-east-1",
+                "aws_role_name": "arn:aws:iam::123456789012:role/litellm-test",
+                "aws_session_name": "litellm-test",
+                "aws_web_identity_token": "litellm-test-unset-oidc-token",
+            }
+        },
+        request_model="claude-sonnet-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 401, True)
+    assert result.error_message == "OIDC token could not be retrieved from secret manager."
     assert bedrock.posted_hosts() == ()
 
 
