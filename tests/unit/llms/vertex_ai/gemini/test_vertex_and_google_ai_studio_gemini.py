@@ -2563,6 +2563,17 @@ GEMINI_FINAL_IMAGE: Final = {
     "index": 0,
     "type": "image_url",
 }
+GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS: Final = [
+    {"text": "Sketching the layout first", "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "Zmlyc3Q="}, "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "ZHJhZnQ="}, "thought": True},
+]
+GEMINI_LAST_THOUGHT_IMAGE: Final = {
+    "image_url": {"url": "data:image/png;base64,ZHJhZnQ=", "detail": "auto"},
+    "index": 0,
+    "type": "image_url",
+}
+GEMINI_TRUNCATED_USAGE: Final = {"promptTokenCount": 13, "candidatesTokenCount": 64, "totalTokenCount": 77}
 
 
 @pytest.mark.usefixtures("_gemini_httpx_transport")
@@ -2619,9 +2630,110 @@ async def test_gemini_image_generation_stream_leaves_thought_images_out_of_image
         stream=True,
         api_key="test-api-key",
     )
-    images_per_chunk: Final = [getattr(chunk.choices[0].delta, "images", None) async for chunk in response]
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in response]
 
-    assert [images for images in images_per_chunk if images] == [[GEMINI_FINAL_IMAGE]]
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
+        [GEMINI_FINAL_IMAGE]
+    ]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_cut_off_before_final_image_returns_last_thought_image(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS},
+                        "finishReason": "MAX_TOKENS",
+                    }
+                ],
+                "usageMetadata": GEMINI_TRUNCATED_USAGE,
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        max_tokens=64,
+        api_key="test-api-key",
+    )
+
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.images == [GEMINI_LAST_THOUGHT_IMAGE]
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        pytest.param(
+            (
+                *(
+                    {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                    for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+                ),
+                {
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": [{"text": "", "thoughtSignature": "c2ln"}]},
+                            "finishReason": "MAX_TOKENS",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": GEMINI_TRUNCATED_USAGE,
+                },
+            ),
+            id="finish-in-its-own-chunk",
+        ),
+        pytest.param(
+            (
+                *(
+                    {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                    for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS[:-1]
+                ),
+                {
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS[-1:]},
+                            "finishReason": "MAX_TOKENS",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": GEMINI_TRUNCATED_USAGE,
+                },
+            ),
+            id="finish-with-the-last-thought-image",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_cut_off_before_final_image_sends_last_thought_image(
+    respx_mock: respx.MockRouter,
+    events: tuple[dict[str, object], ...],
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(*events)
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        max_tokens=64,
+        stream=True,
+        api_key="test-api-key",
+    )
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in response]
+
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["length"]
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
+        [GEMINI_LAST_THOUGHT_IMAGE]
+    ]
 
 
 @pytest.mark.respx(assert_all_called=True)
