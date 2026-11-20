@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from itertools import chain
-from typing import Final, Literal, NamedTuple, TypedDict
+from typing import Final, Literal, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, call
 from urllib.parse import urlsplit
 
@@ -22,7 +22,7 @@ from httpx import Response
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, Span
 from pydantic import JsonValue, TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import (
     AGENT_TRACING_AGENT_LIST_LIMIT,

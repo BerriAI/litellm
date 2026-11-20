@@ -4,7 +4,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Generic,
+    Literal,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    cast,  # noqa: TID251  # generated Prisma raw-query signatures need a structural protocol boundary
+)
 from uuid import uuid4
 
 from pydantic import ConfigDict, Field, TypeAdapter, model_validator
@@ -32,6 +41,7 @@ from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.list_api.common import escape_like
 from litellm.proxy.management_helpers.customer_budget_usage import customer_budget_usage
+from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, lock_budget_limits
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, count_in, delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
@@ -821,6 +831,12 @@ class CustomerHierarchyStore:
 
             await validate_budget_windows_update(self.db, budget_id)
         patch: Final = _VALUES.validate_python(budget.model_dump(exclude_unset=True))
+        if "budget_limits" in patch:
+            await lock_budget_limits(
+                cast("BudgetLimitsTransaction", self.db),  # cast-ok: Prisma transaction implements raw queries
+                "LiteLLM_BudgetTable",
+                budget_id,
+            )
         stored: Final = await self.budgets.find_unique(where={"budget_id": budget_id})
         current: Final = _StoredWindow.model_validate(stored, from_attributes=True) if stored is not None else None
         await update_budget_row(

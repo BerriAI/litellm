@@ -67,6 +67,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.responses.additional_tools import additional_tools_in_input
+from litellm.responses.instructions_length import with_long_instructions_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
@@ -1503,7 +1504,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if headers:
             request_data["extra_headers"] = headers
 
-        return request_data
+        return dict(with_long_instructions_in_input(request_data))
 
     @staticmethod
     def _convert_response_output_to_choices(

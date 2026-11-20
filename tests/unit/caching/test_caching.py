@@ -1105,6 +1105,17 @@ _FILE_BLOCK_ITEM: Final = {"type": "file", "file": {"file_data": "data:video/mp4
         pytest.param({"input": "one prompt"}, True, id="string-input-is-one-message"),
         pytest.param({"input": ["a", "b", "c", "d", "e"]}, True, id="embedding-strings-are-not-messages"),
         pytest.param({"input": [_FILE_BLOCK_ITEM] * 5}, True, id="embedding-file-blocks-are-not-messages"),
+        pytest.param(
+            {"input": [{"type": "text", "text": "chunk"}] * 5}, True, id="embedding-text-blocks-are-not-messages"
+        ),
+        pytest.param(
+            {"input": [{"type": ["message"], "content": "hi"}] * 5}, False, id="unhashable-item-types-still-count"
+        ),
+        pytest.param(
+            {"input": [{"type": "message", "role": "user", "content": "hi"}] * 5},
+            False,
+            id="five-typed-responses-messages-skip-the-cache",
+        ),
     ],
 )
 def test_should_use_cache_stops_past_the_default_max_messages(kwargs: dict[str, object], expected: bool) -> None:

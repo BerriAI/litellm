@@ -16,15 +16,21 @@ import math
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # generated Prisma transactions need a structural protocol boundary
+)
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
-from litellm.models.budget import BudgetLimit, BudgetLimits, carry_budget_limit_resets, initialize_budget_limits
+from litellm.models.budget import BudgetLimit, carry_budget_limit_resets, initialize_budget_limits
 from litellm.proxy._types import *
 from litellm.proxy.auth.customer_hierarchy_auth import (
     forget_customer_hierarchies,
@@ -48,10 +54,12 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     PrismaRecord,
     budget_group_ids,
     budget_limit_json,
+    budget_row_values,
     delete_unattached_customer_budget,
 )
 from litellm.proxy.management_helpers.utils import validate_budget_windows_update
-from litellm.proxy.utils import jsonify_object
+from litellm.proxy.utils import PrismaClient, jsonify_object
+from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, lock_budget_limits
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.prisma_protocols import TableActions
@@ -61,9 +69,53 @@ from litellm.repositories.table_repositories import (
     CustomerTeamRepository,
 )
 
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
 router: Final = APIRouter()
 _WRITE_VALUES: Final = TypeAdapter(Mapping[str, object])
-_STORED_LIMITS: Final[TypeAdapter[tuple[BudgetLimit, ...] | None]] = TypeAdapter(BudgetLimits | None)
+
+
+class _BudgetUpdateTx(BudgetLimitsTransaction, Protocol):
+    @property
+    def litellm_budgettable(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]: ...
+
+
+def _stored_budget_limit(window: Mapping[str, object]) -> BudgetLimit | None:
+    try:
+        return BudgetLimit.model_validate(window)
+    except ValidationError:
+        return None
+
+
+async def _write_budget_update(
+    prisma_client: PrismaClient,
+    budget_id: str,
+    data: Mapping[str, object],
+    limits: tuple[BudgetLimit, ...] | None,
+) -> "prisma_models.LiteLLM_BudgetTable | None":
+    if "budget_limits" not in data:
+        return await BudgetRepository(prisma_client).table.update(where={"budget_id": budget_id}, data=data)
+    async with prisma_client.tx() as tx_ctx:
+        tx: Final = cast("_BudgetUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
+        current: Final = await lock_budget_limits(tx, "LiteLLM_BudgetTable", budget_id)
+        previous: Final = tuple(
+            limit for window in current or () if (limit := _stored_budget_limit(window)) is not None
+        )
+        window_data: Final = budget_row_values(
+            {
+                "budget_limits": initialize_budget_limits(
+                    carry_budget_limit_resets(limits, previous),
+                    get_budget_reset_settings(),
+                    datetime.now(timezone.utc),
+                )
+                if limits is not None
+                else None
+            }
+        )
+        if limits:
+            await validate_budget_windows_update(tx, budget_id)
+        return await tx.litellm_budgettable.update(where={"budget_id": budget_id}, data={**data, **window_data})
 
 
 async def new_budget(
@@ -241,31 +293,11 @@ async def update_budget(
         )
     )
 
-    stored: Final = (
-        await BudgetRepository(prisma_client).table.find_unique(where={"budget_id": budget_obj.budget_id})
-        if isinstance(budget_obj, BudgetWriteRequest) and budget_obj.budget_limits
-        else None
-    )
-    window_data: Final = (
-        {
-            "budget_limits": budget_limit_json(
-                initialize_budget_limits(
-                    carry_budget_limit_resets(
-                        budget_obj.budget_limits,
-                        (_STORED_LIMITS.validate_python(stored.budget_limits) or ()) if stored is not None else (),
-                    ),
-                    get_budget_reset_settings(),
-                    datetime.now(timezone.utc),
-                )
-            )
-        }
-        if isinstance(budget_obj, BudgetWriteRequest) and budget_obj.budget_limits is not None
-        else {}
-    )
-    if isinstance(budget_obj, BudgetWriteRequest) and budget_obj.budget_limits:
-        await validate_budget_windows_update(prisma_client.db, budget_obj.budget_id)
-    response: Final = await BudgetRepository(prisma_client).table.update(
-        where={"budget_id": budget_obj.budget_id}, data={**budget_obj_jsonified, **window_data}
+    response: Final = await _write_budget_update(
+        prisma_client,
+        budget_obj.budget_id,
+        budget_obj_jsonified,
+        budget_obj.budget_limits if isinstance(budget_obj, BudgetWriteRequest) else None,
     )
     await evict_and_broadcast((app_budget_cache_key(budget_obj.budget_id),), user_api_key_cache)
     members: Final = await CustomerMemberRepository(prisma_client).table.find_many(
