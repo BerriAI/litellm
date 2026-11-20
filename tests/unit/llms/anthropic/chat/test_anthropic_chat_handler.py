@@ -1,6 +1,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Mapping
 from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messag
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -198,6 +200,52 @@ def test_anthropic_completion_answers_400_for_guarded_extra_body_keys_without_dr
         )
 
     assert not route.called
+
+
+def _anthropic_beta_header_sent(
+    respx_mock: respx.MockRouter, request_fields: Mapping[str, object]
+) -> tuple[str, Mapping[str, object]]:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_beta",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_key="test-key",
+        max_tokens=16,
+        **request_fields,
+    )
+    sent: Final = route.calls.last.request
+    return sent.headers.get("anthropic-beta", ""), json.loads(sent.content)
+
+
+def test_anthropic_completion_adds_the_same_beta_header_for_a_field_in_extra_body(
+    respx_mock: respx.MockRouter,
+) -> None:
+    context_management: Final = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+    top_level_beta, top_level_body = _anthropic_beta_header_sent(
+        respx_mock, {"context_management": context_management}
+    )
+    extra_body_beta, extra_body_body = _anthropic_beta_header_sent(
+        respx_mock, {"extra_body": {"context_management": context_management}}
+    )
+
+    assert ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value in top_level_beta.split(",")
+    assert extra_body_beta == top_level_beta
+    assert extra_body_body["context_management"] == top_level_body["context_management"] == context_management
 
 
 def test_anthropic_completion_rejects_a_non_object_extra_body_before_calling_anthropic() -> None:

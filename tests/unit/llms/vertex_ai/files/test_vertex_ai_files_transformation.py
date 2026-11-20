@@ -2276,7 +2276,9 @@ class TestVertexClaudeBatch:
         assert "stream" not in row["request"]
         assert "stream_options" not in row["request"]
 
-    def test_claude_row_extra_body_keys_litellm_builds_follow_drop_params(self, config, monkeypatch):
+    def test_claude_row_extra_body_keys_litellm_builds_follow_drop_params(
+        self, config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
         monkeypatch.setattr(litellm, "drop_params", False)
