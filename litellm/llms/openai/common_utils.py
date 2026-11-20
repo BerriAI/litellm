@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import os
+import posixpath
 import ssl
 import time
 import uuid
@@ -101,6 +102,18 @@ class OpenAIAsyncHTTPClient(httpx.AsyncClient):
 def is_openai_backed_api_base(api_base: str) -> bool:
     hostname: Final = urlsplit(api_base).hostname
     return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
+
+
+def _openai_api_resource_segments(path: str) -> tuple[str, ...]:
+    segments: Final = tuple(segment for segment in path.split("/") if segment)
+    return segments[1:] if segments[:1] == ("v1",) else segments
+
+
+def is_openai_batch_create(method: str, path: str) -> bool:
+    if method.upper() != "POST":
+        return False
+    sent_path: Final = posixpath.normpath(f"/{httpx.URL(path).path}")
+    return _openai_api_resource_segments(sent_path) == ("batches",)
 
 
 class OpenAIError(BaseLLMException):
