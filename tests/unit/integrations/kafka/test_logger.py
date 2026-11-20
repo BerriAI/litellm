@@ -531,10 +531,23 @@ def test_a_stalled_kafka_constructor_does_not_hold_the_next_accounting_callback(
         await logger.async_log_success_event(event(), None, NOW, NOW)
         accounted.set()
 
+    async def before_next_loop_turn() -> None:
+        loop: Final = asyncio.get_running_loop()
+        checkpoint: Final[asyncio.Future[None]] = loop.create_future()
+        callback: Final = asyncio.create_task(callback_chain())
+        loop.call_soon(checkpoint.set_result, None)
+        try:
+            await checkpoint
+            assert callback.done(), "Kafka preparation held the accounting callback across an event-loop turn"
+            await callback
+        finally:
+            callback.cancel()
+            await asyncio.gather(callback, return_exceptions=True)
+
     publisher.start()
     try:
         assert entered.wait(5)
-        asyncio.run(asyncio.wait_for(callback_chain(), 5))
+        asyncio.run(asyncio.wait_for(before_next_loop_turn(), 5))
         assert accounted.is_set()
         assert not release.is_set()
     finally:

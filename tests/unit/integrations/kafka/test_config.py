@@ -65,6 +65,25 @@ def test_sasl_credentials_and_ca_are_forwarded_with_hostname_verification(mechan
     assert config["ssl.endpoint.identification.algorithm"] == "https"
 
 
+def test_mutual_tls_forwards_the_client_certificate_and_encrypted_key() -> None:
+    params: Final = KafkaInitParams(
+        bootstrap_servers="broker:9093",
+        topic="events",
+        security_protocol="SSL",
+        ssl_certificate_location="/certificates/client.pem",
+        ssl_key_location="/certificates/client.key",
+        ssl_key_password=SecretStr("encrypted-key-password"),
+    )
+    config: Final = producer_config(params)
+
+    assert config["ssl.certificate.location"] == params.ssl_certificate_location
+    assert config["ssl.key.location"] == params.ssl_key_location
+    assert params.ssl_key_password is not None
+    assert config["ssl.key.password"] == params.ssl_key_password.get_secret_value()
+    assert config["enable.ssl.certificate.verification"] is True
+    assert config["ssl.endpoint.identification.algorithm"] == "https"
+
+
 def test_plaintext_configuration_does_not_send_a_sasl_mechanism() -> None:
     config: Final = producer_config(KafkaInitParams(bootstrap_servers="broker:9092", topic="events"))
 
