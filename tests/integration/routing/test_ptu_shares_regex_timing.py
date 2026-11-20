@@ -18,7 +18,7 @@ from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 240), pytest.mark.shares_worker_state]
 
 _WORST_GROUP: Final = "ptu-regex-worst"
 _CONTROL_GROUP: Final = "ptu-regex-unshared-worst"

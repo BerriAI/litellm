@@ -6,10 +6,14 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from integration._support.client import Gateway, JsonValue, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _MODEL: Final = "claude-sonnet-4-5-20250929"
 _KEY: Final = "synthetic-anthropic-key"

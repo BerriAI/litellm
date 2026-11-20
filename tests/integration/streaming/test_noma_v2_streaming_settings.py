@@ -21,6 +21,8 @@ from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_pr
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 Endpoint: TypeAlias = Literal["chat", "messages", "responses"]
 Spelling: TypeAlias = Literal["noma_v2", "noma_use_v2", "stored", "custom"]
 Variant: TypeAlias = Literal[
@@ -67,12 +69,12 @@ SAMPLED_SCANS: Final = range(2, 7)
 BUFFERED_BLOCK_STATUS: Final[Mapping[Endpoint, int]] = {"chat": 400, "messages": 400, "responses": 200}
 BUFFERED_OUTAGE_STATUS: Final[Mapping[Endpoint, int]] = {"chat": 503, "messages": 503, "responses": 200}
 PIECES: Final = (
-    " Contact",
-    " me",
+    f" {SECRET}",
+    " is",
+    " my",
+    " contact",
     " at",
     " work",
-    " via",
-    f" {SECRET}",
     " for",
     " the",
     " quarterly",

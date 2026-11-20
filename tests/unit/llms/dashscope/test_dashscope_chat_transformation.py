@@ -5,14 +5,49 @@ These tests validate the DashScopeConfig class which extends OpenAIGPTConfig.
 DashScope is an OpenAI-compatible provider with minor customizations.
 """
 
+from typing import Final
 
+import pytest
 
 from litellm.types.llms.openai import AllMessageValues
-import pytest
 
 import litellm
 from litellm import completion
 from litellm.llms.dashscope.chat.transformation import DashScopeChatConfig
+
+WORKSPACE: Final = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
+
+
+def test_get_complete_url_derives_the_compatible_base_from_any_standard_base():
+    config: Final = DashScopeChatConfig()
+
+    for api_base in (
+        WORKSPACE,
+        f"{WORKSPACE}/compatible-mode/v1",
+        f"{WORKSPACE}/apps/anthropic",
+        f"{WORKSPACE}/api/v1",
+    ):
+        url: Final = config.get_complete_url(
+            api_base=api_base,
+            api_key="sk-test",
+            model="qwen3.7-plus",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == f"{WORKSPACE}/compatible-mode/v1/chat/completions"
+
+
+def test_get_complete_url_keeps_unrecognized_hosts():
+    url: Final = DashScopeChatConfig().get_complete_url(
+        api_base="https://gateway.example.com/v1",
+        api_key="sk-test",
+        model="qwen3.7-plus",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert url == "https://gateway.example.com/v1/chat/completions"
 
 
 class TestDashScopeConfig:
