@@ -7,12 +7,12 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig, extra_body_without_guarded_keys
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, admitted_extra_body
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
-_EXTRA_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
@@ -24,12 +24,15 @@ def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
     route those keys must reach the request body and be validated, so promote
     them. The caller's values overwrite mapped top-level duplicates, matching
     the native ``anthropic`` provider, and like it never replace the model,
-    messages, system prompt, tools, or stream flag litellm builds.
+    messages, system prompt, tools, or stream flag litellm builds, or raise its max_tokens.
     """
     extra_body: Final = optional_params.get("extra_body")
     if not isinstance(extra_body, dict) or not extra_body:
         return
-    optional_params.update(extra_body_without_guarded_keys(_EXTRA_BODY_ADAPTER.validate_python(extra_body)))
+    admitted: Final = admitted_extra_body(
+        _PARAMS_ADAPTER.validate_python(extra_body), _PARAMS_ADAPTER.validate_python(optional_params)
+    )
+    optional_params.update(admitted)
     optional_params.pop("extra_body", None)
 
 

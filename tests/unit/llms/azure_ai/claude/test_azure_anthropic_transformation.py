@@ -398,6 +398,7 @@ class TestAzureAnthropicConfig:
                     "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
                     "stream": True,
                     "stop_sequences": ["5"],
+                    "max_tokens": 4096,
                 },
             },
             litellm_params={"api_key": "test-key"},
@@ -405,6 +406,7 @@ class TestAzureAnthropicConfig:
         )
 
         assert result["model"] == "claude-opus-4-6"
+        assert result["max_tokens"] == 100
         assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
         assert {"system", "tools", "stream"}.isdisjoint(result)
         assert result["stop_sequences"] == ["5"]

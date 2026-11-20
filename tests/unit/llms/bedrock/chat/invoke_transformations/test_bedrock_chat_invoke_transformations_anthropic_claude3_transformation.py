@@ -2100,6 +2100,7 @@ def test_bedrock_invoke_claude_extra_body_never_replaces_the_model_conversation_
                 "system": "unchecked",
                 "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
                 "stop_sequences": ["5"],
+                "max_tokens": 4096,
             },
         )
     finally:
@@ -2109,3 +2110,4 @@ def test_bedrock_invoke_claude_extra_body_never_replaces_the_model_conversation_
     assert request_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
     assert {"model", "system", "tools"}.isdisjoint(request_body)
     assert request_body["stop_sequences"] == ["5"]
+    assert request_body["max_tokens"] == 16
