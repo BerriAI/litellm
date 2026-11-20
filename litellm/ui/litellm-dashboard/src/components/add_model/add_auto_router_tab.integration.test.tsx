@@ -397,6 +397,52 @@ describe("AddAutoRouterTab", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "LLM", exact: true }));
     expect(screen.getByRole("combobox", { name: "Judge model" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("claude-opus-5-5");
+    fireEvent.click(screen.getByRole("radio", { name: "Decisions Model", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    expect(screen.getByRole("button", { name: "Balanced", exact: true })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("saves the chosen classifier and judge while keeping simple model preferences available", async () => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["claude-haiku-5-5", "claude-opus-5-5", "judge-model"].map((model_group) => ({ model_group, mode: "chat" })),
+    );
+    renderWithProviders(<Harness />);
+    await screen.findByRole("combobox", { name: "Everyday model" });
+    fireEvent.click(screen.getByRole("radio", { name: "LLM", exact: true }));
+    await selectAutoRouterOption("Judge model", "judge-model");
+    fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      classifier_type: "llm",
+      classifier_llm_config: { model: "judge-model" },
+      tiers: {
+        SIMPLE: ["claude-haiku-5-5"],
+        MEDIUM: ["claude-haiku-5-5"],
+        COMPLEX: ["claude-opus-5-5"],
+        REASONING: ["claude-opus-5-5"],
+      },
+    });
+  });
+
+  it.each(["Capability", "Fuse v2"])("restores simple setup after leaving %s", async (approach) => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["claude-haiku-5-5", "claude-opus-5-5"].map((model_group) => ({ model_group, mode: "chat" })),
+    );
+    renderWithProviders(<Harness />);
+    await screen.findByRole("combobox", { name: "Everyday model" });
+    await selectAutoRouterApproach(approach);
+    expect(screen.getByRole("button", { name: "Routing approach" })).toHaveTextContent(approach);
+    expect(screen.queryByRole("combobox", { name: "Everyday model" })).not.toBeInTheDocument();
+    await selectAutoRouterOption("Routing approach", "Complexity");
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("claude-opus-5-5");
+    fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
     expectTierModel("Simple", "claude-haiku-5-5");
     expectTierModel("Reasoning", "claude-opus-5-5");
   });
