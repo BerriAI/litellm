@@ -2,11 +2,10 @@ from collections.abc import AsyncGenerator, Callable, Generator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from typing import Final
 
-from typing_extensions import override
-
 import httpx
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import override
 
 import litellm
 from litellm._logging import verbose_proxy_logger
