@@ -16,6 +16,32 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 FIXED_TIME: Final[datetime] = datetime(2025, 1, 1, 12, 0, 0)
 
 
+@pytest.mark.parametrize("cached_fields", [{}, {"cached_tokens": None}, {"cached_tokens": 0}, {"cached_tokens": 6}])
+@pytest.mark.parametrize("convert", [False, True])
+def test_image_response_null_cached_tokens_match_absent(cached_fields: dict[str, int | None], convert: bool) -> None:
+    payload: Final = {
+        "created": 1700000000,
+        "data": [{"b64_json": "AA=="}],
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_tokens_details": {"text_tokens": 4, "image_tokens": 6, **cached_fields},
+        },
+    }
+    response: Final = (
+        LiteLLMResponseObjectHandler.convert_to_image_response(payload) if convert else ImageResponse(**payload)
+    )
+    assert response.usage is not None
+    assert response.usage.input_tokens_details.model_dump() == {
+        "text_tokens": 4,
+        "image_tokens": 6,
+        "cached_tokens": cached_fields.get("cached_tokens") or 0,
+        "cached_tokens_details": None,
+    }
+    assert response.data[0].b64_json == "AA=="
+
+
 def test_reused_ollama_ids_have_distinct_response_and_spend_ids() -> None:
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 

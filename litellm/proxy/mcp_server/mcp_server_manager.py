@@ -29,7 +29,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache, partial
 from itertools import chain, groupby
 from types import EllipsisType, MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import ParseResult, urlparse
 
 import anyio
@@ -169,6 +169,7 @@ from litellm.proxy.mcp_server.result_conversion import (
     WireCompat,
     complete_call_tool_result,
     handler_outcome,
+    is_url_elicitation_required,
     to_gateway_tool,
 )
 from litellm.proxy.mcp_server.sampling_handler import (
@@ -2016,6 +2017,24 @@ def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
 
 class _InternalNetworkSettings(Protocol):
     def get(self, key: Literal["mcp_internal_ip_ranges"], /) -> list[str] | None: ...
+
+
+_Gathered: Final = TypeVar("_Gathered")
+
+
+async def _gather_before_relaying_url_elicitation(tasks: Sequence[asyncio.Task[_Gathered]]) -> Sequence[_Gathered]:
+    try:
+        return await asyncio.gather(*tasks)
+    except Exception as error:
+        if not is_url_elicitation_required(error):
+            raise
+        settled: Final = await asyncio.gather(*tasks, return_exceptions=True)
+        rejection: Final = next(
+            (outcome for outcome in settled if isinstance(outcome, BaseException) and outcome is not error), None
+        )
+        if rejection is None:
+            raise
+        raise rejection from None
 
 
 class MCPServerManager:
@@ -6811,6 +6830,8 @@ class MCPServerManager:
                     persistent_session=persistent_session,
                 )
         except Exception as exc:
+            if is_url_elicitation_required(exc):
+                raise
             auth_failure: Final = _extract_upstream_auth_failure(exc)
             if auth_failure is None and not isinstance(exc, UpstreamSessionClosedError):
                 return MCPClient.error_tool_result(exc)
@@ -7050,6 +7071,8 @@ class MCPServerManager:
                             persistent_session=persistent_session,
                         )
                     except Exception as e:
+                        if is_url_elicitation_required(e):
+                            raise
                         required_scope: Final = upstream_insufficient_scope(e) if managed_per_user else None
                         if required_scope is not None:
                             await _note_scope_refusal(mcp_server, user_api_key_auth, e)
@@ -7087,7 +7110,9 @@ class MCPServerManager:
 
         _timeout: Final = mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
         try:
-            mcp_responses: Final = await asyncio.wait_for(asyncio.gather(*tasks), timeout=_timeout)
+            mcp_responses: Final = await asyncio.wait_for(
+                _gather_before_relaying_url_elicitation(tasks), timeout=_timeout
+            )
         except asyncio.TimeoutError:
             raise HTTPException(
                 status_code=504,
