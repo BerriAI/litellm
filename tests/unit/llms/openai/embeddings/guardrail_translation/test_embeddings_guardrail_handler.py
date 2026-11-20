@@ -133,6 +133,25 @@ class _BlockingGuardrail(CustomGuardrail):
         raise _BlockedError("secret found")
 
 
+class _RecordingFixedTextsGuardrail(CustomGuardrail):
+    """Returns fixed texts and keeps the raw `texts` value it was handed."""
+
+    def __init__(self, texts: Sequence[str]) -> None:
+        super().__init__(guardrail_name="recording-test-guardrail")
+        self.texts: Final = texts
+        self.raw_texts: object = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.raw_texts = inputs.get("texts")
+        return GenericGuardrailAPIInputs(texts=list(self.texts))
+
+
 class _FixedTextsGuardrail(CustomGuardrail):
     def __init__(self, texts: Sequence[str]) -> None:
         super().__init__(guardrail_name="fixed-texts-test-guardrail")
@@ -175,16 +194,10 @@ def _text_block(text: str) -> dict[str, object]:
         ),
         pytest.param([_text_block("")], ("",), [_text_block("")], id="empty-text"),
         pytest.param(
-            [f"a {SECRET}", {"type": "text", "text": 5}],
-            (f"a {SECRET}",),
-            [f"a {MASK}", {"type": "text", "text": 5}],
-            id="string-first-with-malformed-text-block",
-        ),
-        pytest.param(
-            [f"a {SECRET}", FILE_BLOCK],
-            (f"a {SECRET}",),
-            [f"a {MASK}", FILE_BLOCK],
-            id="string-first-with-file-block",
+            [f"a {SECRET}", _text_block(f"b {SECRET}"), {"type": "text", "text": 5}],
+            (f"a {SECRET}", f"b {SECRET}"),
+            [f"a {MASK}", _text_block(f"b {MASK}"), {"type": "text", "text": 5}],
+            id="malformed-text-block-beside-a-valid-one",
         ),
     ],
 )
@@ -254,6 +267,27 @@ async def test_inputs_without_text_blocks_keep_skipping_the_guardrail(embedding_
 
     assert guardrail.seen is None
     assert data["input"] is embedding_input
+
+
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param([f"a {SECRET}", FILE_BLOCK], id="string-then-file-block"),
+        pytest.param([f"a {SECRET}", {"type": "text", "text": 5}], id="string-then-malformed-text-block"),
+        pytest.param([f"a {SECRET}", 7], id="string-then-token-id"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_string_first_lists_without_text_blocks_keep_the_raw_guardrail_contract(
+    embedding_input: Sequence[object],
+) -> None:
+    guardrail: Final = _RecordingFixedTextsGuardrail(["guardrailed"])
+    data: Final = {"input": embedding_input}
+
+    await OpenAIEmbeddingsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert guardrail.raw_texts is embedding_input
+    assert data["input"] == ["guardrailed"]
 
 
 @pytest.mark.asyncio
