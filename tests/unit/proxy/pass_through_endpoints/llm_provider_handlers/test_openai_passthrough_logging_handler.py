@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,6 +25,14 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrou
     count_relayed_prompt_tokens,
 )
 from litellm.proxy._types import SpendLogsPayload
+from litellm.interactions.background_cost_polling import PollSchedule
+from litellm.proxy.pass_through_endpoints.background_response_creator import PrismaBackgroundResponseCreatorStore
+from litellm.proxy.pass_through_endpoints.background_response_polling import (
+    BackgroundResponsePoller,
+    BackgroundResponsePollRequest,
+    Fetched,
+    FetchOutcome,
+)
 from litellm.proxy.pass_through_endpoints.background_response_settlement import (
     PrismaBackgroundResponseSettlementStore,
 )
@@ -2995,6 +3004,635 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert not input_tokens["kwargs"].get("response_cost")
         assert background_retrieve["kwargs"]["response_cost"] > 0
         assert compact["kwargs"]["response_cost"] > 0
+
+
+CREATE_CALL_ID: Final = "0d4b7e19-6a2c-4f83-9e51-2c8a7f3b6d40"
+READ_CALL_ID: Final = "c71e5a93-2f0d-4b68-a4c9-8e3d1b7f2a05"
+BACKGROUND_COST_REQUEST_ID: Final = f"{STORED_RESPONSE_ID}_background_cost"
+CREATOR_METADATA: Final = {
+    "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+    "user_api_key_team_id": "team-creator",
+    "user_api_key_user_id": "user-creator",
+    "user_api_key_budget_reservation": {"reserved_cost": 0.5, "counter_keys": ["spend:key:creator"]},
+}
+READER_METADATA: Final = {
+    "user_api_key": "4a5ec0ad6c1e9b3fd0a8b2c7e91f3d6a5b4c2e1f0a9b8c7d6e5f4a3b2c1d0e9f",
+    "user_api_key_team_id": "team-reader",
+    "user_api_key_user_id": "user-reader",
+}
+UPSTREAM_AUTHORIZATION: Final = "Bearer upstream-openai-key"
+CREATOR_RECORDED_AT: Final = datetime(2026, 10, 17, 13, 47, 4, tzinfo=timezone.utc)
+FAST_POLLS: Final = PollSchedule(initial_interval_seconds=0.001, max_interval_seconds=0.001, timeout_seconds=5.0)
+
+
+@dataclass(frozen=True, slots=True)
+class _CreatorRow:
+    response_id: str
+    upstream_url: str
+    create_context: object
+    created_at: datetime
+
+
+class _CreatorTable:
+    def __init__(self) -> None:
+        self.rows: Final[dict[str, _CreatorRow]] = {}
+        self.forgotten: Final = asyncio.Event()
+
+    async def create(self, *, data: Mapping[str, object]) -> _CreatorRow:
+        stored_context: Final = data["create_context"]
+        row: Final = _CreatorRow(
+            response_id=str(data["response_id"]),
+            upstream_url=str(data["upstream_url"]),
+            create_context=json.loads(json.dumps(getattr(stored_context, "data", stored_context))),
+            created_at=CREATOR_RECORDED_AT,
+        )
+        self.rows[row.response_id] = row
+        return row
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> _CreatorRow | None:
+        return self.rows.get(where["response_id"])
+
+    async def find_many(self, *, where: Mapping[str, Mapping[str, datetime]]) -> list[_CreatorRow]:
+        return [row for row in self.rows.values() if row.created_at > where["created_at"]["gt"]]
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        removed: Final = self.rows.pop(where["response_id"], None)
+        self.forgotten.set()
+        return 0 if removed is None else 1
+
+
+class _ScriptedFetch:
+    def __init__(self) -> None:
+        self.outcomes: Final[asyncio.Queue[FetchOutcome]] = asyncio.Queue()
+        self.requests: Final[list[BackgroundResponsePollRequest]] = []
+
+    async def __call__(self, request: BackgroundResponsePollRequest) -> FetchOutcome:
+        self.requests.append(request)
+        return await self.outcomes.get()
+
+
+@dataclass(frozen=True, slots=True)
+class _DispatchedRow:
+    metadata: Mapping[str, object]
+    spend_row: SpendLogsPayload
+
+
+class _DispatchedSpendRows:
+    def __init__(self) -> None:
+        self.rows: Final[list[_DispatchedRow]] = []
+
+    async def __call__(
+        self,
+        *,
+        logging_obj: LiteLLMLoggingObj,
+        standard_logging_response_object: object,
+        result: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+        **kwargs: object,
+    ) -> None:
+        await PassThroughEndpointLogging().handle_logging(
+            logging_obj=logging_obj,
+            standard_logging_response_object=standard_logging_response_object,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
+            **kwargs,
+        )
+        await GLOBAL_LOGGING_WORKER.flush()
+        self.rows.append(
+            _DispatchedRow(
+                metadata=dict(logging_obj.model_call_details["litellm_params"]["metadata"]),
+                spend_row=get_logging_payload(
+                    kwargs=logging_obj.model_call_details,
+                    response_obj=standard_logging_response_object,
+                    start_time=start_time,
+                    end_time=end_time,
+                ),
+            )
+        )
+
+    def spend_rows(self) -> tuple[SpendLogsPayload, ...]:
+        return tuple(row.spend_row for row in self.rows)
+
+    def logged_for(self, team_id: str) -> tuple[SpendLogsPayload, ...]:
+        return tuple(row for row in self.spend_rows() if row["team_id"] == team_id)
+
+    def billed(self) -> tuple[_DispatchedRow, ...]:
+        return tuple(row for row in self.rows if row.spend_row["spend"])
+
+
+@dataclass(frozen=True, slots=True)
+class _FirstClaimWaitsUntilTheCreatorIsForgotten:
+    table: _SettlementTable
+    creators: _CreatorTable
+    first_claim_inserted: asyncio.Event
+
+    async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        inserted: Final = await self.table.create_many(data, skip_duplicates=skip_duplicates)
+        if inserted:
+            self.first_claim_inserted.set()
+            await self.creators.forgotten.wait()
+        return inserted
+
+
+class _ClaimUnrecordedOnCall:
+    def __init__(self, table: _SettlementTable, failing_call: int) -> None:
+        self.table: Final = table
+        self.failing_call: Final = failing_call
+        self.calls: Final[list[Sequence[Mapping[str, str]]]] = []
+
+    async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        self.calls.append(data)
+        if len(self.calls) == self.failing_call:
+            raise ConnectionResetError("server closed the connection unexpectedly")
+        return await self.table.create_many(data, skip_duplicates=skip_duplicates)
+
+
+class _CreatorDispatchFailsAfterTheCreate:
+    def __init__(self, rows: _DispatchedSpendRows) -> None:
+        self.rows: Final = rows
+        self.refused: Final[list[str]] = []
+
+    async def __call__(self, *, logging_obj: LiteLLMLoggingObj, **kwargs: Any) -> None:
+        creator_team: Final = CREATOR_METADATA["user_api_key_team_id"]
+        team_id: Final = logging_obj.model_call_details["litellm_params"]["metadata"].get("user_api_key_team_id")
+        if team_id == creator_team and self.rows.logged_for(creator_team):
+            self.refused.append(logging_obj.litellm_call_id)
+            raise ConnectionResetError("spend log queue closed")
+        await self.rows(logging_obj=logging_obj, **kwargs)
+
+
+def _creator_billing_passthrough_logging(
+    rows: _DispatchedSpendRows | _CreatorDispatchFailsAfterTheCreate,
+    settlements: _SettlementTable | _FirstClaimWaitsUntilTheCreatorIsForgotten | _ClaimUnrecordedOnCall,
+    creators: _CreatorTable,
+    fetch: _ScriptedFetch,
+    polls: bool,
+) -> PassThroughEndpointLogging:
+    return PassThroughEndpointLogging(
+        log_dispatch=rows,
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(
+            table=lambda: settlements, timeout_seconds=5
+        ),
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(
+            fetch=fetch,
+            schedule=FAST_POLLS,
+            database_configured=lambda: polls,
+            now=lambda: CREATOR_RECORDED_AT + timedelta(seconds=1),
+        ),
+    )
+
+
+def _identified_logging_obj(
+    litellm_call_id: str,
+    metadata: Mapping[str, object],
+    stream: bool = False,
+    callbacks: tuple[CustomLogger, ...] = (),
+) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=DISPATCH_TIME,
+        litellm_call_id=litellm_call_id,
+        function_id="1245",
+        dynamic_async_success_callbacks=list(callbacks),
+    )
+    logging_obj.update_environment_variables(
+        model="unknown",
+        user="unknown",
+        optional_params={},
+        litellm_params={"metadata": dict(metadata)},
+        call_type="pass_through_endpoint",
+    )
+    return logging_obj
+
+
+async def _passed_through(
+    passthrough_logging: PassThroughEndpointLogging,
+    logging_obj: LiteLLMLoggingObj,
+    upstream_request: httpx.Request,
+    url_route: str,
+    request_body: dict[str, object],
+    response_body: dict[str, object],
+) -> None:
+    await passthrough_logging.pass_through_async_success_handler(
+        httpx_response=httpx.Response(200, json=response_body, request=upstream_request),
+        response_body=response_body,
+        logging_obj=logging_obj,
+        url_route=url_route,
+        result="",
+        start_time=DISPATCH_TIME,
+        end_time=DISPATCH_TIME,
+        cache_hit=False,
+        request_body=request_body,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(
+            url=url_route, request_body=request_body, request_method=upstream_request.method
+        ),
+        custom_llm_provider="openai",
+        finalize_before_dispatch=True,
+    )
+
+
+async def _background_create(
+    passthrough_logging: PassThroughEndpointLogging,
+    responses_url: str = RESPONSES_URL,
+    response_id: str = STORED_RESPONSE_ID,
+) -> None:
+    request_body: Final = {**CREATE_REQUEST, "background": True}
+    await _passed_through(
+        passthrough_logging,
+        _identified_logging_obj(CREATE_CALL_ID, CREATOR_METADATA),
+        httpx.Request("POST", responses_url, headers={"authorization": UPSTREAM_AUTHORIZATION}, json=request_body),
+        responses_url,
+        request_body,
+        {**_stored_response("queued", True, None), "id": response_id},
+    )
+
+
+async def _finished_read(passthrough_logging: PassThroughEndpointLogging) -> None:
+    url_route: Final = f"{RESPONSES_URL}/{STORED_RESPONSE_ID}"
+    await _passed_through(
+        passthrough_logging,
+        _identified_logging_obj(READ_CALL_ID, READER_METADATA),
+        httpx.Request("GET", url_route, headers={"authorization": UPSTREAM_AUTHORIZATION}),
+        url_route,
+        {},
+        _stored_response("completed", True, RESPONSES_USAGE),
+    )
+
+
+async def _reader_paid_spend() -> float:
+    rows: Final = _DispatchedSpendRows()
+    await _finished_read(
+        _creator_billing_passthrough_logging(rows, _SettlementTable(), _CreatorTable(), _ScriptedFetch(), polls=False)
+    )
+    return rows.rows[0].spend_row["spend"]
+
+
+async def _poll_settled(creators: _CreatorTable) -> None:
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(creators.forgotten.wait(), timeout=5)
+
+
+async def _resumed_poll_headers(api_base: str) -> Mapping[str, str]:
+    return {"authorization": "Bearer resumed-openai-key"}
+
+
+def _assert_billed_to_the_creator(row: _DispatchedRow, create_row: SpendLogsPayload, spend: float) -> None:
+    assert row.spend_row["team_id"] == CREATOR_METADATA["user_api_key_team_id"]
+    assert row.spend_row["user"] == CREATOR_METADATA["user_api_key_user_id"]
+    assert row.spend_row["api_key"] == create_row["api_key"]
+    assert row.spend_row["request_id"] == BACKGROUND_COST_REQUEST_ID
+    assert row.spend_row["spend"] == pytest.approx(spend)
+    assert spend > 0
+
+
+class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
+    @pytest.mark.asyncio
+    async def test_a_finished_read_by_another_key_bills_the_key_that_created_the_response(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), _CreatorTable(), _ScriptedFetch(), polls=False
+        )
+
+        await _background_create(passthrough_logging)
+        await _finished_read(passthrough_logging)
+
+        create_row: Final = rows.spend_rows()[0]
+        (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], create_row, await _reader_paid_spend())
+        assert read_row["request_id"] == READ_CALL_ID
+        assert read_row["team_id"] == READER_METADATA["user_api_key_team_id"]
+        assert not read_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_a_background_response_nobody_reads_is_billed_once_to_its_creator(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+
+        await _background_create(passthrough_logging)
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("in_progress", True, None)))
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+
+        await _poll_settled(creators)
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+        assert [str(request.url) for request in fetch.requests] == [f"{RESPONSES_URL}/{STORED_RESPONSE_ID}"] * 2
+        assert ("authorization", UPSTREAM_AUTHORIZATION) in fetch.requests[0].headers
+        assert not {"content-length", "content-type"} & {name.lower() for name, _ in fetch.requests[0].headers}
+
+    @pytest.mark.asyncio
+    async def test_a_read_after_the_poll_billed_the_creator_is_not_billed_again(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+        await _background_create(passthrough_logging)
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await _poll_settled(creators)
+
+        await _finished_read(passthrough_logging)
+
+        read_row: Final = rows.spend_rows()[-1]
+        assert [row.spend_row["team_id"] for row in rows.billed()] == [CREATOR_METADATA["user_api_key_team_id"]]
+        assert read_row["request_id"] == READ_CALL_ID
+        assert not read_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_a_read_that_claims_while_the_poll_loses_the_claim_still_bills_the_creator_once(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        first_claim_inserted: Final = asyncio.Event()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows,
+            _FirstClaimWaitsUntilTheCreatorIsForgotten(_SettlementTable(), creators, first_claim_inserted),
+            creators,
+            fetch,
+            polls=True,
+        )
+        await _background_create(passthrough_logging)
+
+        read: Final = asyncio.create_task(_finished_read(passthrough_logging))
+        await asyncio.wait_for(first_claim_inserted.wait(), timeout=5)
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await read
+
+        create_row: Final = rows.spend_rows()[0]
+        (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], create_row, await _reader_paid_spend())
+        assert not read_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_a_restarted_proxy_polls_only_creators_on_its_configured_openai_base(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+        settlements: Final = _SettlementTable()
+        creators: Final = _CreatorTable()
+        other_base_response_id: Final = "resp_0c5e9a71f2b84d36a1e07b9c4d2f8a63"
+        before_restart: Final = _creator_billing_passthrough_logging(
+            rows, settlements, creators, _ScriptedFetch(), polls=False
+        )
+        await _background_create(before_restart)
+        await _background_create(
+            before_restart, "https://my-resource.openai.azure.com/openai/v1/responses", other_base_response_id
+        )
+        create_row: Final = rows.spend_rows()[0]
+        fetch: Final = _ScriptedFetch()
+        after_restart: Final = _creator_billing_passthrough_logging(rows, settlements, creators, fetch, polls=True)
+
+        polls: Final = await after_restart.resume_background_response_polls(
+            api_base="https://api.openai.com/", poll_headers=_resumed_poll_headers
+        )
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await asyncio.wait_for(asyncio.gather(*polls), timeout=5)
+
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], create_row, await _reader_paid_spend())
+        assert [str(request.url) for request in fetch.requests] == [f"{RESPONSES_URL}/{STORED_RESPONSE_ID}"]
+        assert fetch.requests[0].headers == (("authorization", "Bearer resumed-openai-key"),)
+        assert set(creators.rows) == {other_base_response_id}
+
+    @pytest.mark.asyncio
+    async def test_the_creator_bill_does_not_settle_the_create_budget_reservation_again(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+
+        await _background_create(passthrough_logging)
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+
+        await _poll_settled(creators)
+        create, bill = rows.rows
+        assert create.metadata["user_api_key_budget_reservation"] == CREATOR_METADATA["user_api_key_budget_reservation"]
+        assert bill.spend_row["team_id"] == CREATOR_METADATA["user_api_key_team_id"]
+        assert "user_api_key_budget_reservation" not in bill.metadata
+
+    @pytest.mark.asyncio
+    async def test_a_poll_that_finds_the_response_ended_without_usage_bills_nobody(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+        await _background_create(passthrough_logging)
+
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("cancelled", True, None)))
+
+        await _poll_settled(creators)
+        assert len(fetch.requests) == 1
+        assert creators.rows == {}
+        assert rows.billed() == ()
+
+    @pytest.mark.asyncio
+    async def test_only_a_create_that_leaves_a_background_response_running_records_its_creator(
+        self, local_model_cost_map
+    ):
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            _DispatchedSpendRows(), _SettlementTable(), creators, fetch, polls=True
+        )
+        foreground: Final = {**CREATE_REQUEST, "background": False}
+        background: Final = {**CREATE_REQUEST, "background": True}
+        creates: Final = (
+            (foreground, {**_stored_response("completed", False, RESPONSES_USAGE), "id": "resp_foreground"}),
+            (background, {**_stored_response("completed", True, RESPONSES_USAGE), "id": "resp_finished_at_create"}),
+            (background, {**_stored_response("queued", True, None), "id": "resp_a/../b"}),
+            (background, {**_stored_response("queued", True, None), "id": STORED_RESPONSE_ID}),
+        )
+
+        for request_body, response_body in creates:
+            await _passed_through(
+                passthrough_logging,
+                _identified_logging_obj(CREATE_CALL_ID, CREATOR_METADATA),
+                httpx.Request("POST", RESPONSES_URL, json=request_body),
+                RESPONSES_URL,
+                request_body,
+                response_body,
+            )
+
+        assert set(creators.rows) == {STORED_RESPONSE_ID}
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("cancelled", True, None)))
+        await _poll_settled(creators)
+        assert [str(request.url) for request in fetch.requests] == [f"{RESPONSES_URL}/{STORED_RESPONSE_ID}"]
+
+    @pytest.mark.asyncio
+    async def test_a_creator_row_this_version_cannot_read_leaves_the_reader_billed(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        await creators.create(
+            data={"response_id": STORED_RESPONSE_ID, "upstream_url": RESPONSES_URL, "create_context": {"v": 2}}
+        )
+
+        await _finished_read(
+            _creator_billing_passthrough_logging(rows, _SettlementTable(), creators, _ScriptedFetch(), polls=False)
+        )
+
+        (read_row,) = rows.spend_rows()
+        assert read_row["team_id"] == READER_METADATA["user_api_key_team_id"]
+        assert read_row["request_id"] == BACKGROUND_COST_REQUEST_ID
+        assert read_row["spend"] > 0
+
+    @pytest.mark.asyncio
+    async def test_a_finished_read_with_no_recorded_creator_bills_the_reader(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+
+        await _finished_read(
+            _creator_billing_passthrough_logging(
+                rows, _SettlementTable(), _CreatorTable(), _ScriptedFetch(), polls=False
+            )
+        )
+
+        (read_row,) = rows.spend_rows()
+        assert read_row["request_id"] == BACKGROUND_COST_REQUEST_ID
+        assert read_row["team_id"] == READER_METADATA["user_api_key_team_id"]
+        assert read_row["user"] == READER_METADATA["user_api_key_user_id"]
+        assert read_row["spend"] > 0
+
+    @pytest.mark.asyncio
+    async def test_a_poll_claim_the_database_drops_is_retried_and_bills_the_creator_once(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _ClaimUnrecordedOnCall(_SettlementTable(), failing_call=1), creators, fetch, polls=True
+        )
+        await _background_create(passthrough_logging)
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+
+        await _poll_settled(creators)
+        assert len(fetch.requests) == 2
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+        await _finished_read(passthrough_logging)
+
+        (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
+        assert len(rows.billed()) == 1
+        assert not read_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_a_poll_claim_the_database_drops_after_a_read_billed_the_creator_does_not_bill_again(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _ClaimUnrecordedOnCall(_SettlementTable(), failing_call=2), creators, fetch, polls=True
+        )
+        await _background_create(passthrough_logging)
+        await _finished_read(passthrough_logging)
+        creators.forgotten.clear()
+
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+
+        await _poll_settled(creators)
+        assert len(fetch.requests) == 2
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+    @pytest.mark.asyncio
+    async def test_a_background_create_that_finishes_at_create_is_not_billed_again_by_a_read(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), _CreatorTable(), _ScriptedFetch(), polls=False
+        )
+        request_body: Final = {**CREATE_REQUEST, "background": True}
+        await _passed_through(
+            passthrough_logging,
+            _identified_logging_obj(CREATE_CALL_ID, CREATOR_METADATA),
+            httpx.Request("POST", RESPONSES_URL, json=request_body),
+            RESPONSES_URL,
+            request_body,
+            _stored_response("completed", True, RESPONSES_USAGE),
+        )
+
+        await _finished_read(passthrough_logging)
+
+        (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
+        assert [row.spend_row["team_id"] for row in rows.billed()] == [CREATOR_METADATA["user_api_key_team_id"]]
+        assert rows.billed()[0].spend_row["spend"] == pytest.approx(await _reader_paid_spend())
+        assert not read_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_a_finished_streamed_read_by_another_key_bills_the_key_that_created_the_response(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), _CreatorTable(), _ScriptedFetch(), polls=False
+        )
+        await _background_create(passthrough_logging)
+        recorder: Final = _SpendRowRecorder()
+        reader: Final = _identified_logging_obj(READ_CALL_ID, READER_METADATA, stream=True, callbacks=(recorder,))
+        reader.model_call_details["custom_llm_provider"] = "openai"
+
+        await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=reader,
+            passthrough_success_handler_obj=passthrough_logging,
+            url_route=f"{RESPONSES_URL}/{STORED_RESPONSE_ID}?stream=true",
+            request_body={},
+            endpoint_type=EndpointType.OPENAI,
+            start_time=DISPATCH_TIME,
+            raw_bytes=_completed_stream_bytes(_stored_response("completed", True, RESPONSES_USAGE)),
+            end_time=DISPATCH_TIME,
+        )
+        streamed_read: Final = await asyncio.wait_for(recorder.call, timeout=5)
+
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+        assert streamed_read.spend_row["team_id"] == READER_METADATA["user_api_key_team_id"]
+        assert not streamed_read.spend_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_a_creator_bill_that_fails_still_logs_the_unbilled_read_and_stops_tracking_the_creator(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        dispatch: Final = _CreatorDispatchFailsAfterTheCreate(rows)
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            dispatch, _SettlementTable(), creators, _ScriptedFetch(), polls=False
+        )
+
+        await _background_create(passthrough_logging)
+        await _finished_read(passthrough_logging)
+
+        (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
+        assert dispatch.refused == [CREATE_CALL_ID]
+        assert read_row["request_id"] == READ_CALL_ID
+        assert not read_row["spend"]
+        assert rows.billed() == ()
+        assert creators.rows == {}
 
 
 DECISIONS_URL: Final = "https://api.openai.com/v1/decisions"

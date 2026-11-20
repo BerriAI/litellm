@@ -302,6 +302,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_BudgetWindowSpend",
         "LiteLLM_BackgroundInteractionSettlement",
         "LiteLLM_BackgroundResponseSettlement",
+        "LiteLLM_BackgroundResponseCreator",
         "LiteLLM_ErrorLogs",
         "LiteLLM_UserNotifications",
         "LiteLLM_UserProviderCredentials",

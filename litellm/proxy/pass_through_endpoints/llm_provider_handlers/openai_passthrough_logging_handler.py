@@ -27,6 +27,7 @@ from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy.pass_through_endpoints.background_response_polling import POLLABLE_BACKGROUND_RESPONSE_STATUSES
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
 )
@@ -120,7 +121,7 @@ _is_openai_compatible_url: Final = is_openai_compatible_url
 ResponsesCallBilling: TypeAlias = Literal["unbilled", "billed", "background_settlement"]
 
 
-def _is_finished_background_response(response_body: Mapping[str, object]) -> bool:
+def is_finished_background_response(response_body: Mapping[str, object]) -> bool:
     return is_background_response(response_body) and response_body.get("usage") is not None
 
 
@@ -132,6 +133,14 @@ def _responses_sub_route(path: str) -> tuple[str, ...] | None:
     segments: Final = path.rstrip("/").split("/")
     anchor: Final = max((index for index, segment in enumerate(segments) if segment == "responses"), default=None)
     return None if anchor is None else tuple(segments[anchor + 1 :])
+
+
+def _finishes_at_create(method: str, url_route: str, response_body: Mapping[str, object]) -> bool:
+    return (
+        method == "POST"
+        and _responses_sub_route(urlparse(url_route).path) == ()
+        and is_finished_background_response(response_body)
+    )
 
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -275,7 +284,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             case ("POST", ("input_tokens",)) | ("GET", (_, "input_items")) | ("DELETE", (_,)):
                 return "unbilled"
             case ("GET", (_,)) | ("POST", (_, "cancel")):
-                settles: Final = not settled_before and _is_finished_background_response(response_body)
+                settles: Final = not settled_before and is_finished_background_response(response_body)
                 return "background_settlement" if settles else "unbilled"
             case _:
                 return "billed"
@@ -286,7 +295,21 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     ) -> str | None:
         response_id: Final = response_body.get("id")
         billing: Final = OpenAIPassthroughLoggingHandler.openai_responses_call_billing(method, url_route, response_body)
-        return response_id if billing == "background_settlement" and isinstance(response_id, str) else None
+        settles: Final = billing == "background_settlement" or _finishes_at_create(method, url_route, response_body)
+        return response_id if settles and isinstance(response_id, str) else None
+
+    @staticmethod
+    def creates_pollable_background_response(
+        method: str, url_route: str, request_body: Mapping[str, object], response_body: Mapping[str, object]
+    ) -> bool:
+        return (
+            method == "POST"
+            and OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+            and _responses_sub_route(urlparse(url_route).path) == ()
+            and request_body.get("background") is True
+            and response_body.get("status") in POLLABLE_BACKGROUND_RESPONSE_STATUSES
+            and isinstance(response_body.get("id"), str)
+        )
 
     @staticmethod
     def stream_may_settle_background_response(url_route: str, request_body: Mapping[str, object]) -> bool:
@@ -298,11 +321,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         )
 
     @staticmethod
-    def background_response_settled_by_stream(all_chunks: Sequence[str]) -> str | None:
+    def background_response_settled_by_stream(all_chunks: Sequence[str]) -> ResponsesAPIResponse | None:
         terminal_response: Final = OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(all_chunks)
         if terminal_response is None or not _settles_background_response(terminal_response):
             return None
-        return terminal_response.id
+        return terminal_response
 
     @staticmethod
     def is_openai_agents_route(url_route: str) -> bool:

@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -18,8 +18,32 @@ class BackgroundResponseSettlementTable(Protocol):
     def create_many(self, data: Sequence[_NewSettlementRow], *, skip_duplicates: bool) -> Awaitable[int]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class Claimed:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedBefore:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimUnrecorded:
+    pass
+
+
+ClaimOutcome: TypeAlias = Claimed | ClaimedBefore | ClaimUnrecorded
+
+CLAIMED: Final = Claimed()
+CLAIMED_BEFORE: Final = ClaimedBefore()
+CLAIM_UNRECORDED: Final = ClaimUnrecorded()
+
+
 class BackgroundResponseSettlementStore(Protocol):
     async def claim(self, response_id: str) -> bool: ...
+
+    async def claim_outcome(self, response_id: str) -> ClaimOutcome: ...
 
 
 def _proxy_settlement_table() -> BackgroundResponseSettlementTable | None:
@@ -36,17 +60,20 @@ class PrismaBackgroundResponseSettlementStore:
     timeout_seconds: float = BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
 
     async def claim(self, response_id: str) -> bool:
+        return not isinstance(await self.claim_outcome(response_id), ClaimedBefore)
+
+    async def claim_outcome(self, response_id: str) -> ClaimOutcome:
         try:
             table: Final = self.table()
             if table is None:
-                return True
+                return CLAIM_UNRECORDED
             inserted: Final = await asyncio.wait_for(
                 table.create_many([_NewSettlementRow(response_id=response_id)], skip_duplicates=True),
                 timeout=self.timeout_seconds,
             )
-        except Exception as e:  # noqa: BLE001  # any DB failure must bill as before rather than drop the charge
+        except Exception as e:  # noqa: BLE001  # a DB failure comes back as a value so each caller picks its side
             verbose_proxy_logger.warning(
-                "Could not record the settlement of background response %s, billing it anyway: %s", response_id, e
+                "Could not record the settlement of background response %s: %s", response_id, e
             )
-            return True
-        return inserted > 0
+            return CLAIM_UNRECORDED
+        return CLAIMED if inserted > 0 else CLAIMED_BEFORE

@@ -71,6 +71,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
+    openai_passthrough_poll_headers,
     openai_proxy_route,
     openrouter_proxy_route,
     relay_nvidia_nim_request,
@@ -4490,6 +4491,45 @@ async def test_openai_passthrough_never_sends_workload_identity_token_to_foreign
             user_api_key_dict=MagicMock(),
         )
     assert upstream.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_reads_with_the_configured_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-configured-upstream")
+
+    headers: Final = await openai_passthrough_poll_headers("https://api.openai.com/")
+
+    assert headers == {"authorization": "Bearer sk-configured-upstream", "api-key": "sk-configured-upstream"}
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_reads_with_the_workload_identity_token_without_a_key(
+    openai_wif_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+
+        headers: Final = await openai_passthrough_poll_headers("https://api.openai.com/")
+
+    assert headers is not None
+    assert headers["authorization"] == "Bearer wif-bearer"
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_has_no_headers_without_an_openai_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_IDENTITY_PROVIDER_ID", raising=False)
+    monkeypatch.delenv("OPENAI_SERVICE_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("OPENAI_IDENTITY_TOKEN_FILE", raising=False)
+
+    assert await openai_passthrough_poll_headers("https://api.openai.com/") is None
 
 
 class TestCursorProxyRoute:
