@@ -1590,6 +1590,50 @@ async def test_user_api_key_auth_websocket():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "authorization",
+    ["bearer some_api_key", "BEARER some_api_key", "bEaReR some_api_key", "bearer  some_api_key "],
+)
+async def test_user_api_key_auth_websocket_accepts_a_non_canonical_case_of_the_bearer_scheme(authorization):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": authorization}
+    mock_websocket.scope = {"headers": [(b"authorization", authorization.encode())]}
+    mock_websocket.url = URL(url="/ws")
+
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
+        await user_api_key_auth_websocket(mock_websocket)
+
+        assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
+        mock_websocket.close.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "authorization",
+    ["Basic some_api_key", "Bearersome_api_key", "bearer", "NotBearer some_api_key", "Token some_api_key"],
+)
+async def test_user_api_key_auth_websocket_rejects_a_non_bearer_authorization_header(authorization):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": authorization}
+    mock_websocket.scope = {"headers": [(b"authorization", authorization.encode())]}
+    mock_websocket.url = URL(url="/ws")
+
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
+        with pytest.raises(HTTPException) as exc_info:
+            await user_api_key_auth_websocket(mock_websocket)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Invalid Authorization header format"
+    mock_user_api_key_auth.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_auth_websocket_carries_asgi_path():
     """
     The synthetic Request must carry the ASGI scope's ``path`` so
@@ -2868,6 +2912,13 @@ async def _presented_key(pairs: tuple[tuple[str, str], ...]) -> str | None:
     [
         pytest.param((("authorization", "Bearer sk-1"),), "sk-1", id="bearer"),
         pytest.param((("authorization", "bearer sk-1"),), "sk-1", id="lowercase_bearer"),
+        pytest.param((("authorization", "BEARER sk-1"),), "sk-1", id="uppercase_bearer"),
+        pytest.param((("authorization", "bEaReR sk-1"),), "sk-1", id="mixed_case_bearer"),
+        pytest.param((("authorization", "Bearer Bearer sk-1"),), "sk-1", id="doubled_scheme"),
+        pytest.param((("authorization", "bearer bearer sk-1"),), "sk-1", id="doubled_lowercase_scheme"),
+        pytest.param((("authorization", "BEARER"),), "", id="scheme_without_credential"),
+        pytest.param((("authorization", "BEARERsk-1"),), "", id="scheme_glued_to_credential"),
+        pytest.param((("authorization", "BEARER\tsk-1"),), "", id="tab_is_not_a_separator"),
         pytest.param((("authorization", "Basic sk-1"),), "sk-1", id="basic"),
         pytest.param((("authorization", "Bearer sk-Bearer 1"),), "sk-1", id="every_occurrence_stripped"),
         pytest.param((("authorization", "Token sk-1"),), "", id="unknown_scheme_is_no_key"),
@@ -2876,6 +2927,8 @@ async def _presented_key(pairs: tuple[tuple[str, str], ...]) -> str | None:
         pytest.param((("authorization", "AWS4-HMAC-SHA256 Signature=abc"),), "", id="aws_without_credential"),
         pytest.param((("x-litellm-api-key", "Bearer sk-1"),), "sk-1", id="litellm_header_bearer"),
         pytest.param((("x-litellm-api-key", "sk-1"),), "sk-1", id="litellm_header_raw"),
+        pytest.param((("x-litellm-api-key", "BEARER sk-1"),), "sk-1", id="litellm_header_uppercase_bearer"),
+        pytest.param((("x-litellm-api-key", "Bearer Bearer sk-1"),), "sk-1", id="litellm_header_doubled_scheme"),
         pytest.param(
             (("x-litellm-api-key", "AWS4-HMAC-SHA256 x"),),
             "AWS4-HMAC-SHA256 x",
