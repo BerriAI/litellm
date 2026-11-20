@@ -489,15 +489,34 @@ def admitted_extra_body(
             message=f"extra_body can't set {', '.join(guarded)}, since litellm builds them from the request. "
             "Send them as request fields, or set drop_params to drop them",
         )
+    if guarded:
+        litellm.verbose_logger.warning("drop_params dropped extra_body keys %s, since litellm builds them", guarded)
     unguarded: Final = {key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS}
     match unguarded.get("max_tokens"), request.get("max_tokens"):
+        case (int() as requested_cap, int() as admitted_cap) if requested_cap > admitted_cap and not drop_params:
+            return AnthropicError(
+                status_code=400,
+                message=f"extra_body can't raise max_tokens above the request's max_tokens ({admitted_cap}). "
+                "Send max_tokens as a request field, or set drop_params to cap it",
+            )
         case (int() as requested_cap, int() as admitted_cap) if requested_cap > admitted_cap:
             return MappingProxyType({**unguarded, "max_tokens": admitted_cap})
         case _:
             return MappingProxyType(unguarded)
 
 
-def _request_extra_body(extra_body: object) -> Mapping[str, object] | AnthropicError:
+def with_extra_body_fields(params: Mapping[str, object]) -> Mapping[str, object]:
+    extra_body: Final = request_extra_body(params.get("extra_body"))
+    fields: Final[Mapping[str, object]] = MappingProxyType({}) if isinstance(extra_body, AnthropicError) else extra_body
+    return MappingProxyType(
+        {
+            **{key: value for key, value in params.items() if key != "extra_body"},
+            **{key: value for key, value in fields.items() if key not in EXTRA_BODY_GUARDED_KEYS},
+        }
+    )
+
+
+def request_extra_body(extra_body: object) -> Mapping[str, object] | AnthropicError:
     match extra_body:
         case None:
             return MappingProxyType({})
@@ -2435,15 +2454,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
             dict[str, object], optional_params
         )
-        extra_body: Final = _request_extra_body(request_params.pop("extra_body", None))
+        extra_body: Final = request_extra_body(request_params.get("extra_body"))
         if isinstance(extra_body, AnthropicError):
             raise extra_body
         self.update_headers_with_optional_anthropic_beta(
             headers=headers,
-            optional_params={
-                **request_params,
-                **{key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS},
-            },
+            optional_params=dict(with_extra_body_fields(request_params)),
             messages=anthropic_messages,
         )
 
@@ -2528,9 +2544,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_body: Final = {
             "model": model,
             "messages": anthropic_messages,
-            **request_params,
+            **{key: value for key, value in request_params.items() if key != "extra_body"},
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
+        self._apply_output_config(data=request_body, model=model, optional_params=optional_params)
         admitted: Final = admitted_extra_body(
             extra_body,
             request_body,
@@ -2538,11 +2555,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         if isinstance(admitted, AnthropicError):
             raise admitted
-        data: Final = {**request_body, **admitted}
-
-        self._apply_output_config(data=data, model=model, optional_params=optional_params)
-
-        return data
+        return {**request_body, **admitted}
 
     def transform_extra_body(
         self,
@@ -2551,8 +2564,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, object]:
+        fields: Final = request_extra_body(extra_body)
+        if isinstance(fields, AnthropicError):
+            raise fields
         admitted: Final = admitted_extra_body(
-            extra_body, request, drops_unsupported_params(litellm_params.get("drop_params"))
+            fields, request, drops_unsupported_params(litellm_params.get("drop_params"))
         )
         if isinstance(admitted, AnthropicError):
             raise admitted

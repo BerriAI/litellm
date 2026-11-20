@@ -2149,7 +2149,7 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
 
 
 def _bedrock_invoke_claude_with_extra_body(
-    extra_body: Mapping[str, object], drop_params: bool
+    extra_body: Mapping[str, object] | str, drop_params: bool
 ) -> tuple[httpx.Request, ...]:
     captured_requests: Final[list[httpx.Request]] = []
 
@@ -2179,11 +2179,32 @@ def _bedrock_invoke_claude_with_extra_body(
             client=client,
             max_tokens=16,
             drop_params=drop_params,
-            extra_body=dict(extra_body),
+            extra_body=dict(extra_body) if isinstance(extra_body, Mapping) else extra_body,
         )
     finally:
         client.close()
     return tuple(captured_requests)
+
+
+def test_bedrock_invoke_claude_extra_body_caps_a_raised_max_tokens_only_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't raise max_tokens"):
+        _bedrock_invoke_claude_with_extra_body({"max_tokens": 4096}, drop_params=False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body({"max_tokens": 4096}, drop_params=True)
+
+    assert json.loads(requests[0].content)["max_tokens"] == 16
+
+
+def test_bedrock_invoke_claude_rejects_a_non_object_extra_body_before_calling_bedrock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid type for 'extra_body': expected an object, got str"):
+        _bedrock_invoke_claude_with_extra_body('{"top_k": 5}', drop_params=False)
 
 
 _GUARDED_EXTRA_BODY: Final = MappingProxyType(

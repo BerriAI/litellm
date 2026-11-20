@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -5,9 +6,12 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.anthropic.common_utils import AnthropicError
@@ -396,7 +400,6 @@ class TestAzureAnthropicConfig:
                 "extra_body": {
                     "model": "claude-opus-5-5",
                     "messages": [{"role": "user", "content": "unchecked"}],
-                    "system": "unchecked",
                     "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
                     "stream": True,
                     "stop_sequences": ["5"],
@@ -410,7 +413,7 @@ class TestAzureAnthropicConfig:
         assert result["model"] == "claude-opus-4-6"
         assert result["max_tokens"] == 100
         assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
-        assert {"system", "tools", "stream"}.isdisjoint(result)
+        assert {"tools", "stream"}.isdisjoint(result)
         assert result["stop_sequences"] == ["5"]
 
     def test_extra_body_promotion_answers_400_for_guarded_keys_without_drop_params(
@@ -418,7 +421,7 @@ class TestAzureAnthropicConfig:
     ) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
 
-        with pytest.raises(AnthropicError, match="extra_body can't set system, tools") as raised:
+        with pytest.raises(AnthropicError, match="extra_body can't set tools, since") as raised:
             AzureAnthropicConfig().transform_request(
                 model="claude-opus-4-6",
                 messages=[{"role": "user", "content": "Hello"}],
@@ -531,3 +534,52 @@ def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_mo
         "role": "system",
         "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
     }
+
+
+@pytest.mark.parametrize(
+    ("messages", "drop_params", "sent_system"),
+    [
+        ([{"role": "user", "content": "Hello"}], False, "Answer in French"),
+        ([{"role": "user", "content": "Hello"}], True, "Answer in French"),
+        (
+            [{"role": "system", "content": "Answer in German"}, {"role": "user", "content": "Hello"}],
+            False,
+            [{"type": "text", "text": "Answer in German"}],
+        ),
+    ],
+)
+def test_azure_ai_claude_sends_a_system_kwarg_unless_a_system_message_sets_the_prompt(
+    messages: list[dict[str, str]],
+    drop_params: bool,
+    sent_system: object,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://example.services.ai.azure.com/anthropic/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_system",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Bonjour"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="azure_ai/claude-sonnet-5-5",
+        messages=messages,
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com/anthropic",
+        max_tokens=16,
+        drop_params=drop_params,
+        system="Answer in French",
+    )
+
+    assert json.loads(route.calls.last.request.content)["system"] == sent_system
