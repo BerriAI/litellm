@@ -253,6 +253,7 @@ class AmazonNovaEmbeddingConfig:
         response_list: list[dict],
         model: str,
         batch_data: list[dict] | None = None,
+        metered_input_tokens: int | None = None,
     ) -> EmbeddingResponse:
         """
         Transform Nova response to OpenAI format.
@@ -318,9 +319,10 @@ class AmazonNovaEmbeddingConfig:
                 image_count=image_count,
             )
 
+        prompt_tokens: Final = total_tokens if metered_input_tokens is None else metered_input_tokens
         usage: Final = Usage(
-            prompt_tokens=total_tokens,
-            total_tokens=total_tokens,
+            prompt_tokens=prompt_tokens,
+            total_tokens=prompt_tokens,
             prompt_tokens_details=prompt_tokens_details,
         )
 
@@ -331,8 +333,9 @@ class AmazonNovaEmbeddingConfig:
         response_list: list[dict[str, object]],  # mutable-ok: mirrors override contract
         model: str,
         batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
+        metered_input_tokens: int | None = None,
     ) -> EmbeddingResponse:
-        return self._transform_response(response_list, model, batch_data)
+        return self._transform_response(response_list, model, batch_data, metered_input_tokens)
 
     def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
         """

@@ -1935,9 +1935,10 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
     with patch(
         "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call"
     ) as mock_call:
-        mock_call.return_value = {
-            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
-        }
+        mock_call.return_value = (
+            {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"},
+            None,
+        )
 
         response = litellm.embedding(
             model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
@@ -1999,9 +2000,10 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
     with patch(
         "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call"
     ) as mock_call:
-        mock_call.return_value = {
-            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
-        }
+        mock_call.return_value = (
+            {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"},
+            None,
+        )
 
         response = await litellm.aembedding(
             model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
@@ -2299,6 +2301,40 @@ def _sent_body(
         **params,
     )
     return json.loads(route.calls.last.request.read())
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_bedrock_nova_embedding_reports_the_input_tokens_bedrock_metered(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    metered_per_input: Final = (3, 403)
+    route: Final = respx_mock.post(
+        f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke"
+    ).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={"x-amzn-bedrock-input-token-count": str(metered)},
+                json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1] * 3072}]},
+            )
+            for metered in metered_per_input
+        ]
+    )
+    params: Final = dict(
+        model=f"bedrock/{_NOVA_MODEL_ID}",
+        input=["hi", "a much longer input"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    response: Final = litellm.embedding(**params) if sync_mode else await litellm.aembedding(**params)
+
+    assert route.call_count == 2
+    assert (response.usage.prompt_tokens, response.usage.total_tokens) == (406, 406)
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        406 * litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"]
+    )
 
 
 @pytest.mark.parametrize(
