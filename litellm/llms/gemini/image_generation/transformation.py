@@ -14,6 +14,7 @@ from litellm.llms.gemini.common_utils import (
     map_gemini_image_tools_params,
     map_openai_image_params_to_gemini,
 )
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import (
     transform_gemini_image_usage,
 )
@@ -39,52 +40,6 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
     Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
 )
-
-
-def raise_if_image_gen_flagged(
-    response_object: Mapping[str, object],
-    model: str,
-    raw_response: httpx.Response,
-    llm_provider: str = "gemini",
-) -> None:
-    """
-    Gemini image-gen returns a candidate with a flagged finishReason (e.g.
-    IMAGE_SAFETY / IMAGE_PROHIBITED_CONTENT) and no inlineData on a refusal.
-    The chat path surfaces these; the image path used to drop them silently
-    and return an empty ImageResponse. Raise so callers can tell a refusal
-    apart from an unrelated failure. Reasons go through the central finish-reason
-    map (content_filter == flagged).
-    """
-    from litellm.exceptions import ContentPolicyViolationError
-    from litellm.litellm_core_utils.core_helpers import map_finish_reason
-
-    # A prompt blocked before generation has promptFeedback.blockReason and no
-    # candidates; the chat path maps this to content_filter as well.
-    prompt_feedback = response_object.get("promptFeedback")
-    if isinstance(prompt_feedback, Mapping):
-        block_reason = prompt_feedback.get("blockReason")
-        if isinstance(block_reason, str):
-            raise ContentPolicyViolationError(
-                message=f"Gemini image generation prompt blocked with blockReason={block_reason}",
-                model=model,
-                llm_provider=llm_provider,
-                response=raw_response,
-                provider_specific_fields={
-                    "block_reason": block_reason,
-                    "block_reason_message": prompt_feedback.get("blockReasonMessage"),
-                },
-            )
-
-    for candidate in _JSON_OBJECTS.validate_python(response_object.get("candidates", [])):
-        finish_reason = candidate.get("finishReason")
-        if isinstance(finish_reason, str) and map_finish_reason(finish_reason) == "content_filter":
-            raise ContentPolicyViolationError(
-                message=f"Gemini image generation blocked with finishReason={finish_reason}",
-                model=model,
-                llm_provider=llm_provider,
-                response=raw_response,
-                provider_specific_fields={"finish_reason": finish_reason},
-            )
 
 
 class GoogleImageGenConfig(BaseImageGenerationConfig):
@@ -272,11 +227,6 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                                 )
                             )
 
-            # A safety/prohibited block returns a candidate with finishReason and
-            # no inlineData — surface it instead of returning empty data.
-            if not model_response.data:
-                raise_if_image_gen_flagged(response_object, model, raw_response)
-
             # Extract usage metadata for Gemini models
             if "usageMetadata" in response_data:
                 model_response.usage = transform_gemini_image_usage(
@@ -285,6 +235,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
             if web_search_requests and model_response.usage is not None:
                 setattr(model_response.usage, "web_search_requests", web_search_requests)
+            if not model_response.data:
+                raise empty_image_response_error(response_object, model, "gemini", raw_response)
         else:
             # Original Imagen format - predictions with generated images
             predictions: Final = _JSON_OBJECTS.validate_python(

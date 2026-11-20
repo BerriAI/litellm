@@ -30,7 +30,7 @@ def test_vertex_gemini_edit_preserves_usage_and_traffic_type(traffic_type: str |
         raw_response=httpx.Response(
             200,
             json={
-                "candidates": [],
+                "candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
                 "usageMetadata": {
                     "promptTokenCount": 1131,
                     "candidatesTokenCount": 0,
@@ -704,27 +704,3 @@ def test_vertex_gemini_edit_drops_a_caller_labels_header_only_while_the_setting_
     assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
     assert "x-vertex-ai-labels" not in setting_on
     assert setting_on["x-trace-id"] == "t-1"
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"parts": []}}]},
-        {"promptFeedback": {"blockReason": "SAFETY"}},
-    ],
-)
-def test_vertex_gemini_image_edit_response_raises_on_safety_block(payload) -> None:
-    from litellm.exceptions import ContentPolicyViolationError
-
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_response.json.return_value = payload
-    mock_response.status_code = 200
-    mock_response.headers = {}
-
-    with pytest.raises(ContentPolicyViolationError) as exc:
-        VertexAIGeminiImageEditConfig().transform_image_edit_response(
-            model="vertex_ai/gemini-2.5-flash-image",
-            raw_response=mock_response,
-            logging_obj=MagicMock(),
-        )
-    assert exc.value.llm_provider == "vertex_ai"

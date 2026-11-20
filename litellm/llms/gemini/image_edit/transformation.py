@@ -12,7 +12,7 @@ from litellm.llms.gemini.common_utils import (
     get_gemini_image_generation_config,
     map_openai_image_params_to_gemini,
 )
-from litellm.llms.gemini.image_generation.transformation import raise_if_image_gen_flagged
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import (
     transform_gemini_image_usage,
 )
@@ -152,7 +152,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         model_response.data = cast(list[OpenAIImage], data_list)
         if not data_list:
-            raise_if_image_gen_flagged(response_json, model, raw_response)
+            raise empty_image_response_error(response_json, model, "gemini", raw_response)
         if "usageMetadata" in response_json:
             model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
         return model_response
