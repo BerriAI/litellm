@@ -2542,6 +2542,7 @@ async def _execute_mcp_tool(
                 guardrail_auth=effective_guardrail_auth,
                 request_data=kwargs,
                 start_time=start_time,
+                server_guardrails=tuple(mcp_server.guardrails or ()),
             )
         )
 
@@ -2669,6 +2670,7 @@ async def _relay_guarded_url_elicitation(
     guardrail_auth: UserAPIKeyAuth | None,
     request_data: Mapping[str, object],
     start_time: datetime,
+    server_guardrails: tuple[str, ...] = (),
 ) -> CallToolResult | InputRequiredResult:
     elicitation_error: Final = await _result_or_url_elicitation(execution)
     if not isinstance(elicitation_error, MCPError):
@@ -2690,6 +2692,7 @@ async def _relay_guarded_url_elicitation(
         original_auth=original_auth,
         guardrail_auth=guardrail_auth,
         request_data=request_data,
+        server_guardrails=server_guardrails,
     )
     checked: Final = (
         await logging_obj.async_post_mcp_tool_call_hook(  # pyright: ignore[reportUnknownMemberType]  # hook takes the logger's untyped call details

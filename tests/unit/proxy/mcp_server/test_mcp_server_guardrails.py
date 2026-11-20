@@ -1,11 +1,13 @@
 """Per-MCP-server ``guardrails``: a server's listed guardrails run for its tool calls only."""
 
 import logging
+from datetime import datetime, timezone
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from mcp.types import CallToolResult, ListToolsResult, TextContent
+from mcp import MCPError
+from mcp.types import URL_ELICITATION_REQUIRED, CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 from pydantic import ValidationError
 
@@ -16,6 +18,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server import operations
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+from litellm.proxy.mcp_server.server import MCPRequestHandler
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -317,3 +320,69 @@ async def test_post_call_guardrails_receive_server_guardrails() -> None:
         )
 
     assert [d[MCP_SERVER_GUARDRAILS_KEY] for d in seen_request_data] == [[SCOPED]]
+
+
+class _ShoutingResultGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name=SCOPED, event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Logging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": [text.upper() for text in inputs.get("texts", [])]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("listed", "expected"),
+    [((SCOPED,), "OPEN THE CONSENT PAGE"), (None, "open the consent page")],
+    ids=["listed", "unlisted"],
+)
+async def test_server_listed_guardrail_checks_an_upstream_url_elicitation_message(
+    monkeypatch: pytest.MonkeyPatch, listed: tuple[str, ...] | None, expected: str
+) -> None:
+    server: Final = _server(listed)
+
+    async def ask_for_consent(**_: object) -> CallToolResult:
+        raise MCPError(
+            code=URL_ELICITATION_REQUIRED,
+            message="open the consent page",
+            data={
+                "elicitations": [
+                    {
+                        "mode": "url",
+                        "elicitationId": "el-1",
+                        "url": "https://consent.example.invalid",
+                        "message": "open the consent page",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(litellm, "callbacks", [_ShoutingResultGuardrail()])
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    try:
+        with (
+            patch.object(operations.global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server),
+            patch.object(operations, "_handle_managed_mcp_tool", new=ask_for_consent),
+            patch.object(MCPRequestHandler, "is_tool_allowed", return_value=True),
+            patch.object(operations.global_mcp_tool_registry, "get_tool", return_value=None),
+            pytest.raises(MCPError) as raised,
+        ):
+            await operations.execute_mcp_tool(
+                name="tickets-get_ticket",
+                arguments={},
+                allowed_mcp_servers=[server],
+                start_time=datetime.now(timezone.utc),
+            )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert raised.value.error.message == expected
+    assert cast(dict[str, list[dict[str, str]]], raised.value.error.data)["elicitations"][0]["message"] == expected
