@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-from litellm.litellm_core_utils import model_cost_table
-from litellm.litellm_core_utils.fallback_generalizations import get_fallback_generalization_rules
+from litellm.litellm_core_utils import fallback_generalizations, model_cost_table
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry, Landing
 
 
@@ -31,7 +31,8 @@ def generation() -> tuple[
 
     table: Final = model_cost_table.published()
     version: Final = model_cost_table.model_cost_version()
-    rules: Final = get_fallback_generalization_rules()
+    installed: Final = as_object_list(fallback_generalizations.get_fallback_generalization_rules())  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the rule registry keeps the raw untyped list
+    rules: Final = installed if installed is not None else ()
     return (
         table,
         (version.table, version.size, version.writes, fallback_generalizations.fallback_generalizations_version()),

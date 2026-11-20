@@ -323,7 +323,7 @@ def _get_additional_costs(
     custom_llm_provider: str | None,
     prompt_tokens: int,
     completion_tokens: int,
-) -> dict | None:
+) -> dict[str, float] | None:
     """
     Calculate additional costs beyond standard token costs.
 
@@ -1813,12 +1813,70 @@ def _adjusted_provider_billed_cost(
     return adjusted.cost
 
 
-def _hidden_params_of(completion_response: object) -> Mapping[str, object]:
-    hidden_params: Final[object] = getattr(completion_response, "_hidden_params", None)
-    return hidden_params if isinstance(hidden_params, Mapping) else _NO_HIDDEN_PARAMS
+def _adjusted_stored_cost(
+    *,
+    original_cost: float,
+    prompt_cost: float,
+    completion_cost: float,
+    tool_cost: float,
+    additional_costs: dict[str, float] | None,
+    custom_llm_provider: str | None,
+    pricing_provider: str | None,
+    model: str | None,
+    discount_model: str | None,
+    region_name: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    usage: Usage | None,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+    custom_cost_per_token: CostPerToken | None,
+    bedrock_model_info: ModelInfo | None,
+) -> float:
+    adjusted: Final = adjusted_cost(original_cost, custom_llm_provider, discount_model, region_name)
+    token_breakdown: Final = (
+        get_token_type_cost_breakdown(
+            model=model,
+            custom_llm_provider=pricing_provider,
+            usage=usage,
+            service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            custom_cost_per_token=custom_cost_per_token,
+            model_info=bedrock_model_info,
+        )
+        if litellm_logging_obj is not None and usage is not None and model
+        else None
+    )
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=prompt_cost,
+        completion_tokens_cost_usd_dollar=completion_cost,
+        cost_for_built_in_tools_cost_usd_dollar=tool_cost,
+        total_cost_usd_dollar=adjusted.cost,
+        original_cost=original_cost,
+        additional_costs=additional_costs,
+        discount_percent=adjusted.discount_percent,
+        discount_amount=adjusted.discount_amount,
+        margin_percent=adjusted.margin_percent,
+        margin_fixed_amount=adjusted.margin_fixed_amount,
+        margin_total_amount=adjusted.margin_total_amount,
+        cache_read_cost=None if token_breakdown is None else token_breakdown.cache_read_cost,
+        cache_creation_cost=None if token_breakdown is None else token_breakdown.cache_creation_cost,
+        reasoning_cost=None if token_breakdown is None else token_breakdown.reasoning_cost,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        billed_token_rates=None if token_breakdown is None else token_breakdown.rates,
+    )
+    return adjusted.cost
 
 
 _NO_HIDDEN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _hidden_params_of(completion_response: object) -> Mapping[str, object]:
+    return as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or _NO_HIDDEN_PARAMS
 
 
 def _reports_web_search_another_way(completion_response: object, usage: Usage) -> bool:
@@ -1863,34 +1921,35 @@ def rust_priced_cost(
     """``completion_cost`` of a Claude token call on the /v1/messages providers, priced in Rust. ``None`` where
     ``completion_cost`` prices the call the old way: another provider or call kind, built-in tools other than a
     reported web search, a provider-stated cost, or a call the Rust core leaves to Python."""
-    if (
-        call_type not in _RUST_PRICED_CALL_TYPES
-        or not isinstance(custom_llm_provider, str)
-        or custom_llm_provider not in _RUST_PRICED_PROVIDERS
-        or model is None
-        or usage is None
-        or not isinstance(completion_response, (ModelResponse, dict))
-        or (reported_cost_applies and billed_usage_cost(completion_response, custom_llm_provider) is not None)
-    ):
+    if call_type not in _RUST_PRICED_CALL_TYPES or model is None or usage is None:
         return None
-    hidden_params: Final = _hidden_params_of(completion_response)
+    if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _RUST_PRICED_PROVIDERS:
+        return None
+    response: Final = (
+        completion_response if isinstance(completion_response, ModelResponse) else as_str_mapping(completion_response)
+    )
+    if response is None:
+        return None
+    if reported_cost_applies and billed_usage_cost(response, custom_llm_provider) is not None:
+        return None
+    hidden_params: Final = _hidden_params_of(response)
     hidden_region: Final[object] = hidden_params.get("region_name", region_name)
     hidden_models: Final = (hidden_params.get("model"), hidden_params.get("litellm_model_name"))
     tools_params: Final[Mapping[str, object]] = standard_built_in_tools_params or _NO_HIDDEN_PARAMS
     web_search_options: Final[object] = tools_params.get("web_search_options")
-    search_context: Final[object] = (
-        web_search_options.get("search_context_size") if isinstance(web_search_options, Mapping) else None
-    )
-    if (
-        hidden_params.get("custom_llm_provider", custom_llm_provider) != custom_llm_provider
-        or not (hidden_region is None or isinstance(hidden_region, str))
-        or _reports_web_search_another_way(completion_response, usage)
-        or any(isinstance(name, str) and azure_ai_is_model_router_name(name) for name in hidden_models)
-        or any(value for key, value in tools_params.items() if key != "web_search_options")
-    ):
+    search_context: Final[object] = (as_str_mapping(web_search_options) or _NO_HIDDEN_PARAMS).get("search_context_size")
+    if hidden_params.get("custom_llm_provider", custom_llm_provider) != custom_llm_provider:
+        return None
+    if not (hidden_region is None or isinstance(hidden_region, str)):
+        return None
+    if _reports_web_search_another_way(response, usage):
+        return None
+    if any(isinstance(name, str) and azure_ai_is_model_router_name(name) for name in hidden_models):
+        return None
+    if any(value for key, value in tools_params.items() if key != "web_search_options"):
         return None
     region: Final = hidden_region if isinstance(hidden_region, str) and hidden_region else None
-    response_model: Final = _get_response_model(completion_response)
+    response_model: Final = _get_response_model(response)
     hidden_model: Final[object] = hidden_params.get("model")
     receipt: Final = price(
         CallFacts(
@@ -1911,7 +1970,7 @@ def rust_priced_cost(
         priced_usage(
             usage,
             web_search_use(
-                _web_search_requests_for_rust(completion_response, usage),
+                _web_search_requests_for_rust(response, usage),
                 search_context if isinstance(search_context, str) else None,
             ),
         ),
@@ -2398,29 +2457,25 @@ def completion_cost(
                     # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
                     _final_cost = prompt_cost + completion_cost_result
 
-                    search_adjusted: Final = adjusted_cost(
-                        _final_cost,
-                        custom_llm_provider,
-                        model,
-                        region_name if isinstance(region_name, str) else None,
-                    )
-                    _store_cost_breakdown_in_logging_obj(
-                        litellm_logging_obj=litellm_logging_obj,
-                        prompt_tokens_cost_usd_dollar=prompt_cost,
-                        completion_tokens_cost_usd_dollar=completion_cost_result,
-                        cost_for_built_in_tools_cost_usd_dollar=0.0,
-                        total_cost_usd_dollar=search_adjusted.cost,
+                    return _adjusted_stored_cost(
                         original_cost=_final_cost,
-                        discount_percent=search_adjusted.discount_percent,
-                        discount_amount=search_adjusted.discount_amount,
-                        margin_percent=search_adjusted.margin_percent,
-                        margin_fixed_amount=search_adjusted.margin_fixed_amount,
-                        margin_total_amount=search_adjusted.margin_total_amount,
+                        prompt_cost=prompt_cost,
+                        completion_cost=completion_cost_result,
+                        tool_cost=0.0,
+                        additional_costs=None,
+                        custom_llm_provider=custom_llm_provider,
+                        pricing_provider=custom_llm_provider,
+                        model=model,
+                        discount_model=model,
+                        region_name=region_name if isinstance(region_name, str) else None,
+                        litellm_logging_obj=litellm_logging_obj,
+                        usage=None,
                         service_tier=service_tier,
                         data_residency=data_residency,
+                        vertex_location=None,
+                        custom_cost_per_token=None,
+                        bedrock_model_info=None,
                     )
-
-                    return search_adjusted.cost
                 elif call_type == _AREALTIME_CALL_TYPE and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):
@@ -2578,61 +2633,29 @@ def completion_cost(
                 if additional_costs:
                     _final_cost += sum(additional_costs.values())
 
-                token_adjusted: Final = adjusted_cost(
-                    _final_cost,
-                    custom_llm_provider,
-                    model_for_discount,
-                    region_name if isinstance(region_name, str) else None,
+                return _adjusted_stored_cost(
+                    original_cost=_final_cost,
+                    prompt_cost=prompt_tokens_cost_usd_dollar,
+                    completion_cost=completion_tokens_cost_usd_dollar,
+                    tool_cost=cost_for_built_in_tools,
+                    additional_costs=additional_costs,
+                    custom_llm_provider=custom_llm_provider,
+                    pricing_provider=_pricing_provider_for_cost_candidate(
+                        candidate_provider=candidate_pricing_provider,
+                        request_provider=candidate_request_provider,
+                        current_provider=custom_llm_provider,
+                    ),
+                    model=model,
+                    discount_model=model_for_discount,
+                    region_name=region_name if isinstance(region_name, str) else None,
+                    litellm_logging_obj=litellm_logging_obj,
+                    usage=cost_per_token_usage_object,
+                    service_tier=service_tier,
+                    data_residency=data_residency,
+                    vertex_location=vertex_location,
+                    custom_cost_per_token=custom_cost_per_token,
+                    bedrock_model_info=bedrock_model_info,
                 )
-
-                # Store cost breakdown in logging object if available
-                if litellm_logging_obj is not None:
-                    _reasoning_cost: float | None = None
-                    _cache_read_cost: float | None = None
-                    _cache_creation_cost: float | None = None
-                    _billed_token_rates: BilledTokenRates | None = None
-                    if cost_per_token_usage_object is not None and model:
-                        _token_type_breakdown = get_token_type_cost_breakdown(
-                            model=model,
-                            custom_llm_provider=_pricing_provider_for_cost_candidate(
-                                candidate_provider=candidate_pricing_provider,
-                                request_provider=candidate_request_provider,
-                                current_provider=custom_llm_provider,
-                            ),
-                            usage=cost_per_token_usage_object,
-                            service_tier=service_tier,
-                            data_residency=data_residency,
-                            vertex_location=vertex_location,
-                            custom_cost_per_token=custom_cost_per_token,
-                            model_info=bedrock_model_info,
-                        )
-                        _reasoning_cost = _token_type_breakdown.reasoning_cost
-                        _cache_read_cost = _token_type_breakdown.cache_read_cost
-                        _cache_creation_cost = _token_type_breakdown.cache_creation_cost
-                        _billed_token_rates = _token_type_breakdown.rates
-                    _store_cost_breakdown_in_logging_obj(
-                        litellm_logging_obj=litellm_logging_obj,
-                        prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
-                        completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
-                        cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
-                        total_cost_usd_dollar=token_adjusted.cost,
-                        original_cost=_final_cost,
-                        additional_costs=additional_costs,
-                        discount_percent=token_adjusted.discount_percent,
-                        discount_amount=token_adjusted.discount_amount,
-                        margin_percent=token_adjusted.margin_percent,
-                        margin_fixed_amount=token_adjusted.margin_fixed_amount,
-                        margin_total_amount=token_adjusted.margin_total_amount,
-                        cache_read_cost=_cache_read_cost,
-                        cache_creation_cost=_cache_creation_cost,
-                        reasoning_cost=_reasoning_cost,
-                        service_tier=service_tier,
-                        data_residency=data_residency,
-                        vertex_location=vertex_location,
-                        billed_token_rates=_billed_token_rates,
-                    )
-
-                return token_adjusted.cost
             except Exception as e:
                 verbose_logger.debug(
                     "litellm.cost_calculator.py::completion_cost() - Error calculating cost for model=%s - %s", model, e
