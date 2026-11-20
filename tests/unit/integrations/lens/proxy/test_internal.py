@@ -39,7 +39,7 @@ def gateway() -> FastAPI:
     ),
     ids=("bare", "versioned", "uppercase", "another_agent", "longer_name", "absent"),
 )
-async def test_only_a_call_from_the_lens_agent_is_lens_analysis_with_private_messages(
+async def test_only_a_call_from_the_lens_agent_is_lens_analysis_and_its_message_logging_is_unchanged(
     user_agent: str | None, internal: bool
 ) -> None:
     headers: Final = {"Authorization": "Bearer gateway-key", **({"User-Agent": user_agent} if user_agent else {})}
@@ -47,7 +47,7 @@ async def test_only_a_call_from_the_lens_agent_is_lens_analysis_with_private_mes
         transport=httpx.ASGITransport(app=gateway()), base_url="http://gateway.test"
     ) as client:
         response: Final = await client.post("/chat/completions", headers=headers)
-    assert response.json() == {"internal": internal, "privacy": True if internal else None}
+    assert response.json() == {"internal": internal, "privacy": None}
     assert not is_lens_analysis()
 
 
