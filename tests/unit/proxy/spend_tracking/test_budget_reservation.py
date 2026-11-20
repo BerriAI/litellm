@@ -9,40 +9,39 @@ from typing import Final
 from unittest.mock import patch
 
 import pytest
+from fastapi import Request
 
 import litellm
 from litellm.caching import DualCache
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
-    LiteLLM_OrganizationTable,
-    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    project_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
-    _get_team_member_budget_counter,
     _get_budget_counters,
+    _get_team_member_budget_counter,
+    count_request_input_tokens,
     estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
-    release_unbound_budget_reservation,
-    count_request_input_tokens,
+    reconcile_budget_reservation,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
-from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore, user_window_counter
+from litellm.router import Router
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -61,6 +60,190 @@ TOKEN_COUNTING_ROUTES: Final = (
 
 def _budgeted_token() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", token="hashed-token", max_budget=100.0, spend=0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/messages", "/v1/chat/completions", "/anthropic/v1/messages"])
+@pytest.mark.parametrize("oauth,operator,skip", [(True, False, True), (False, False, False), (True, True, False)])
+@pytest.mark.parametrize(
+    "fallback",
+    [
+        None,
+        "fallbacks",
+        "context_window_fallbacks",
+        "content_policy_fallbacks",
+        "default_fallbacks",
+        "request_fallbacks",
+        "request_models",
+        "router_settings_override",
+        "user_config",
+        "key_settings",
+        "team_settings",
+    ],
+)
+async def test_only_forwarded_subscription_oauth_skips_budget_hold(
+    route: str,
+    oauth: bool,
+    operator: bool,
+    skip: bool,
+    spend_counter_store: SpendCounterStore,
+    monkeypatch: pytest.MonkeyPatch,
+    fallback: str | None,
+):
+    credential: Final = "sk-ant-oat-test" if oauth else "sk-ant-api-test"
+    request: Final = Request(
+        {
+            "type": "http",
+            "path": route,
+            "headers": [(b"authorization", f"Bearer {credential}".encode()), (b"x-litellm-api-key", b"sk-test")],
+        }
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "api_key": "operator-key",
+                    "use_in_pass_through": True,
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            }
+        ],
+        fallbacks=[{"claude": ["paid"]}] if fallback == "fallbacks" else None,
+        context_window_fallbacks=[{"claude": ["paid"]}] if fallback == "context_window_fallbacks" else None,
+        content_policy_fallbacks=[{"claude": ["paid"]}] if fallback == "content_policy_fallbacks" else None,
+        default_fallbacks=["paid"] if fallback == "default_fallbacks" else None,
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(proxy_server, "llm_router", router if operator else None)
+    identity: Final = _budgeted_token().model_copy(
+        update={
+            **({"router_settings": {"fallbacks": [{"claude": ["paid"]}]}} if fallback == "key_settings" else {}),
+            **({"team_id": "oauth-budget-team"} if fallback == "team_settings" else {}),
+        }
+    )
+    if fallback == "team_settings":
+        cache: Final = UserApiKeyCache()
+        cache.set_cache(
+            key="team_id:oauth-budget-team",
+            value=LiteLLM_TeamTableCachedObj(
+                team_id="oauth-budget-team",
+                router_settings={"fallbacks": [{"claude": ["paid"]}]},
+            ),
+        )
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace())
+    result: Final = await reserve_budget_for_request(
+        request_body={
+            "model": "claude",
+            "messages": ANTHROPIC_MESSAGES,
+            "max_tokens": 1,
+            **({"fallbacks": ["paid"]} if fallback == "request_fallbacks" else {}),
+            **({"models": ["claude", "paid"]} if fallback == "request_models" else {}),
+            **(
+                {"router_settings_override": {"fallbacks": [{"claude": ["paid"]}]}}
+                if fallback == "router_settings_override"
+                else {}
+            ),
+            **({"user_config": {"fallbacks": [{"claude": ["paid"]}]}} if fallback == "user_config" else {}),
+            "metadata": {"used_client_oauth_token": True, "claude_subscription_usage": {"is_overage": False}},
+        },
+        route=route,
+        llm_router=router,
+        valid_token=identity,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        request=request,
+    )
+    expected_skip: Final = (fallback is None or route.startswith("/anthropic/")) and (
+        skip or (oauth and operator and not route.startswith("/anthropic/"))
+    )
+    if expected_skip:
+        assert result is None
+        return
+    assert result is not None
+    assert result["reserved_cost"] > 0
+    assert len(result["entries"]) == 1
+    assert result["entries"][0]["reserved_cost"] == pytest.approx(result["reserved_cost"])
+    await reconcile_budget_reservation(result, actual_cost=0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/messages", "/v1/chat/completions"])
+@pytest.mark.parametrize("source", ["bare", "bearer", "key", "team", "global", "group", "cli", "completion"])
+async def test_subscription_hold_uses_consumed_credential_and_prepared_model(
+    route: str,
+    source: str,
+    spend_counter_store: SpendCounterStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            },
+            {
+                "model_name": "paid",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            },
+        ]
+    )
+    identity: Final = _budgeted_token().model_copy(
+        update={
+            **({"aliases": {"claude": "paid"}} if source == "key" else {}),
+            **({"team_model_aliases": {"claude": "paid"}} if source == "team" else {}),
+            **({"router_settings": {"model_group_alias": {"claude": "paid"}}} if source == "group" else {}),
+        }
+    )
+    monkeypatch.setattr(litellm, "model_alias_map", {"claude": "paid"} if source == "global" else {})
+    monkeypatch.setattr(proxy_server, "user_model", "paid" if source == "cli" else None)
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"completion_model": "paid"} if source == "completion" else {}
+    )
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "operator-bearer")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    credential: Final = "sk-ant-oat-test" if source == "bare" else "Bearer sk-ant-oat-test"
+    result: Final = await reserve_budget_for_request(
+        request_body={"model": "claude", "messages": ANTHROPIC_MESSAGES, "max_tokens": 1},
+        route=route,
+        llm_router=router,
+        valid_token=identity,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        request=Request(
+            {
+                "type": "http",
+                "path": route,
+                "headers": [
+                    (b"authorization", credential.encode()),
+                    (b"x-litellm-api-key", b"sk-test"),
+                ],
+            }
+        ),
+    )
+    if source == "bearer":
+        assert result is None
+        return
+    assert result is not None
+    assert result["reserved_cost"] > 0
+    await reconcile_budget_reservation(result, actual_cost=0.0)
 
 
 @pytest.mark.asyncio
@@ -190,6 +373,42 @@ def _tiered_deployment(input_cost_per_token: float) -> Deployment:
 
 
 TIERED_BODY: Final = {"model": "tiered-group", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10}
+
+
+CUSTOMER: Final = CustomerHierarchyAuth(
+    customer_org_id="org-1",
+    scopes=(CustomerScopeAuth(key="customer_org", entity_id="org-1", max_budget=10000),),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("margin", "customer", "factor"),
+    [(None, CUSTOMER, 1.0), (0.02, CUSTOMER, 1.02), (10, CUSTOMER, 11.0), (0.02, None, 1.0)],
+)
+async def test_customer_margin_scales_the_reservation_only_for_customer_requests(
+    spend_counter_store, margin: float | None, customer: CustomerHierarchyAuth | None, factor: float
+) -> None:
+    router: Final = Router(model_list=[_tiered_deployment(0.1).model_dump()])
+    estimate: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
+    input_estimate: Final = estimate_request_input_cost(
+        request_body=TIERED_BODY, route="/chat/completions", llm_router=router
+    )
+    with patch.dict(litellm.cost_margin_config, {} if margin is None else {"customer": margin}, clear=True):
+        reservation: Final = await reserve_budget_for_request(
+            request_body=TIERED_BODY,
+            route="/chat/completions",
+            llm_router=router,
+            valid_token=UserAPIKeyAuth(token="margin-allowed", max_budget=10000, customer_hierarchy=customer),
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert estimate is not None and input_estimate is not None and reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(estimate * factor)
+    assert reservation["input_cost"] == pytest.approx(input_estimate * factor)
 
 
 def test_repeated_estimates_reuse_cached_model_cost_info() -> None:

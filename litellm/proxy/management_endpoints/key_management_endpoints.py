@@ -64,6 +64,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
@@ -144,6 +145,8 @@ from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_regeneration_access_group_membership,
     sync_key_update_access_group_membership,
 )
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
+from litellm.proxy.management_helpers.budget_limits_usage import budget_limit_windows, build_budget_limits_usage
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.management_helpers.managed_resource_owner_sync import repoint_key_owned_managed_resources
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -170,7 +173,6 @@ from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
     rotate_sso_identity_assertions_master_key,
 )
 from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
-from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
     _is_master_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -1098,7 +1100,7 @@ def _validate_caller_can_change_key_ownership(
     """
     Non-admin callers must not rebind a key's ``user_id`` to a different
     user. The ``user_id`` on a verification token is what
-    ``_return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
+    ``return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
     to derive the request's role; a non-admin rebinding their own key's
     ``user_id`` to a ``PROXY_ADMIN`` row promotes themselves.
 
@@ -3183,7 +3185,7 @@ async def prepare_key_update_data(
                 non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
 
     if "budget_limits" in non_default_values:
-        requested_windows: Final = _budget_limit_windows(data.budget_limits)
+        requested_windows: Final = budget_limit_windows(data.budget_limits)
         if requested_windows:
             stored_windows: Final = stored_budget_windows(existing_key_row)
             non_default_values["budget_limits"] = json.dumps(
@@ -3411,6 +3413,7 @@ async def _process_single_key_update(
     """
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
+    validate_budget_duration(update_key_request.budget_duration)
 
     check_permissions_caller_permission(
         data=update_key_request,
@@ -4467,6 +4470,8 @@ async def bulk_update_keys(
         - key: str - The key identifier (token) to update
         - budget_id: Optional[str] - Budget ID associated with the key
         - max_budget: Optional[float] - Max budget for key
+        - budget_duration: Optional[str] - Budget reset period, or null to stop resetting
+        - user_id: Optional[str] - Owner user ID, or null to remove the owner
         - team_id: Optional[str] - Team ID associated with key
         - tags: Optional[List[str]] - Tags for organizing keys
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
@@ -5012,61 +5017,15 @@ async def _build_model_max_budget_usage(
     )
 
 
-def _window_max_budget(window: Mapping[str, object]) -> float | None:
-    """A window's max_budget as a float; None when absent or unparseable."""
-    value: Final = window.get("max_budget")
-    if not isinstance(value, (int, float, str)):
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
-
-
-async def _budget_window_usage(
-    window: Mapping[str, object], api_key_hash: str
-) -> tuple[str, Mapping[str, object]] | None:
-    """
-    (budget_duration, usage entry) for one budget window; None when the window
-    has no budget_duration to key it by.
-
-    Reads the same cross-pod counter (spend:key:{hashed_token}:window:{budget_duration})
-    that _virtual_key_multi_budget_check enforces against, passing the same
-    window_duration + window_start so a stale-low counter is re-checked against
-    the LiteLLM_BudgetWindowSpend row instead of a spend-log aggregate.
-    """
-    from litellm.proxy.proxy_server import get_current_spend
-
-    duration: Final = window.get("budget_duration")
-    if not isinstance(duration, str) or not duration:
-        return None
-    spend: Final = await get_current_spend(
-        counter_key=key_window_counter(api_key_hash, duration),
-        fallback_spend=0.0,
-        max_budget=_window_max_budget(window),
-        window_entity_type="Key",
-        window_entity_id=api_key_hash,
-        window_duration=duration,
-        window_start=get_budget_window_start(window),
-    )
-    return duration, MappingProxyType({"current_spend": round(spend, 4)})
-
-
 async def _build_budget_limits_usage(
     budget_limits: Sequence[object] | str | None, api_key_hash: str
 ) -> Mapping[str, Mapping[str, object]] | None:
-    """
-    Current-window spend per budget window, keyed by budget_duration, reported
-    next to the stored budget_limits (which is returned untouched). None when
-    the key has no windows, so the field only appears on keys that have them.
-    """
-    windows: Final = _budget_limit_windows(budget_limits)
-    if not windows:
-        return None
-    usages: Final = await asyncio.gather(
-        *(_budget_window_usage(window=window, api_key_hash=api_key_hash) for window in windows)
+    return await build_budget_limits_usage(
+        budget_limits=budget_limits,
+        counter_key=lambda duration: key_window_counter(api_key_hash, duration),
+        entity_type="Key",
+        entity_id=api_key_hash,
     )
-    return MappingProxyType({duration: usage for duration, usage in (u for u in usages if u is not None)})
 
 
 @router.post(
@@ -5237,12 +5196,13 @@ async def info_key_fn(
     )
 
     try:
+        if user_api_key_dict.impersonated_by is not None and key is None:
+            raise HTTPException(status_code=400, detail="A key must be specified when impersonating a user.")
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
         if not key:
             raise ProxyException(
@@ -5271,7 +5231,7 @@ async def info_key_fn(
         if (
             await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
-                key=key,
+                key=hashed_key,
                 key_info=key_info,
             )
             is not True
@@ -6082,13 +6042,14 @@ async def rotate_master_key(
         - ModelTable
             - [{"model_name": "str", "litellm_params": {}}]
         - ConfigTable
-    3. Encrypt the values with the new master key
+    3. Encrypt the values with LITELLM_SALT_KEY when set, otherwise the new master key
     4. Update the values in the DB
     """
     import prisma
 
     from litellm.proxy.proxy_server import proxy_config
 
+    encryption_key: Final = os.environ.get(SALT_KEY_ENV_VAR, new_master_key)
     try:
         models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
             "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
@@ -6108,7 +6069,7 @@ async def rotate_master_key(
                         model_params=Deployment(**model),
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
-                        new_encryption_key=new_master_key,
+                        new_encryption_key=encryption_key,
                         should_create_model_in_db=False,
                     )
                 )
@@ -6141,7 +6102,7 @@ async def rotate_master_key(
             )
             encrypted_env_vars: Final = proxy_config.encrypt_env_variables(
                 environment_variables=decrypted_env_vars,
-                new_encryption_key=new_master_key,
+                new_encryption_key=encryption_key,
             )
 
             if encrypted_env_vars:
@@ -6154,7 +6115,7 @@ async def rotate_master_key(
         from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 
         await GuardrailRegistry.rotate_guardrail_params_master_key(
-            prisma_client=prisma_client, new_master_key=new_master_key
+            prisma_client=prisma_client, new_master_key=encryption_key
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate guardrail params: %s", str(e))
@@ -6164,7 +6125,7 @@ async def rotate_master_key(
         await rotate_mcp_server_credentials_master_key(
             prisma_client=prisma_client,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP server credentials: %s", str(e))
@@ -6173,7 +6134,7 @@ async def rotate_master_key(
     try:
         await rotate_mcp_user_credentials_master_key(
             prisma_client=prisma_client,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP user credentials: %s", str(e))
@@ -6182,7 +6143,7 @@ async def rotate_master_key(
     try:
         await rotate_mcp_user_env_vars_master_key(
             prisma_client=prisma_client,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP user env vars: %s", str(e))
@@ -6191,13 +6152,13 @@ async def rotate_master_key(
     try:
         await rotate_sso_identity_assertions_master_key(
             prisma_client=prisma_client,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
 
     try:
-        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=new_master_key)
+        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=encryption_key)
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate search tool credentials: %s", str(e))
 
@@ -6215,7 +6176,7 @@ async def rotate_master_key(
                 encrypted_cred = update_db_credential(
                     db_credential=cred,
                     updated_patch=decrypted_cred,
-                    new_encryption_key=new_master_key,
+                    new_encryption_key=encryption_key,
                 )
                 _cred_data = dict[str, object](_as_object_dict(encrypted_cred.model_dump(exclude_none=True)))
                 if "credential_values" in _cred_data:
@@ -6976,23 +6937,6 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
     return reset_to
 
 
-def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple[Mapping[str, object], ...]:
-    """Coerce a key's stored `budget_limits` into a tuple of plain window dicts.
-
-    It is a DB Json column, so a caller reading it straight off `find_unique`
-    gets an already-parsed list; one reading it off `json.dumps`'d text (or a
-    raw SQL row) gets the string form. Either way each entry is a plain dict,
-    except wherever a caller already validated the field through a pydantic
-    model (e.g. `UserAPIKeyAuth.budget_limits`), which yields `BudgetLimitEntry`
-    objects instead -- coerced here via `model_dump()`, matching
-    `_set_budget_reset_at`'s identical coercion in team_endpoints.py.
-    """
-    if not budget_limits:
-        return ()
-    raw_windows: Final = json.loads(budget_limits) if isinstance(budget_limits, str) else budget_limits
-    return tuple(raw_window if isinstance(raw_window, dict) else raw_window.model_dump() for raw_window in raw_windows)
-
-
 def _window_with_reset_at(
     window: Mapping[str, object], stored_windows: Sequence[BudgetLimitEntry]
 ) -> Mapping[str, object]:
@@ -7062,7 +7006,7 @@ async def _reset_key_budget_windows(
     """
     from litellm.proxy.proxy_server import set_spend_counter_with_floor_and_broadcast
 
-    windows: Final = _budget_limit_windows(budget_limits)
+    windows: Final = budget_limit_windows(budget_limits)
     if not windows:
         return
 
@@ -8277,20 +8221,23 @@ async def block_key(
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                request_data=with_audit_actor(
+                    LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="blocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
                     ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="blocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
+                    user_api_key_dict,
                 )
             )
         )
@@ -8391,20 +8338,23 @@ async def unblock_key(
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                request_data=with_audit_actor(
+                    LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="unblocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
                     ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="unblocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
+                    user_api_key_dict,
                 )
             )
         )
@@ -8522,8 +8472,8 @@ async def _can_user_query_key_info(
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
-        or user_api_key_dict.api_key == key
-        or key_info.user_id == user_api_key_dict.user_id
+        or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
+        or (key_info.user_id and key_info.user_id == user_api_key_dict.user_id)
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,
             existing_key_row=key_info,

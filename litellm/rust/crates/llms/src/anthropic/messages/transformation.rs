@@ -10,6 +10,7 @@ use litellm_llms_types::{
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value, json};
 
 use super::{
@@ -28,16 +29,17 @@ use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling, OauthToken,
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        existing_betas, get_auth_header, has_advisor_tool, has_anthropic_credential,
+        existing_betas, get_api_key, get_auth_header, has_advisor_tool, has_anthropic_credential,
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
         is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
         minted_oauth_environment, optionally_handle_anthropic_oauth,
         requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
-        strip_raw_encrypted_reasoning_blocks,
-        strip_thinking_blocks_from_anthropic_messages_request, tools_without_strict,
+        strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
+        strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
+        tools_without_strict,
     },
     base_llm::{
         auth::AuthScheme,
@@ -201,7 +203,7 @@ fn is_foundry_url(url: &str) -> bool {
         })
 }
 
-pub(crate) fn is_claude_model(model: &str) -> bool {
+pub fn is_claude_model(model: &str) -> bool {
     model.to_lowercase().contains("claude")
 }
 
@@ -292,6 +294,14 @@ fn anthropic_environment(
             auth: AuthScheme::Forwarded,
         });
     }
+    if let Some(token) =
+        get_api_key(api_key, env_lookup).filter(|key| OauthToken::parse(key).is_some())
+    {
+        return FederatedEnvironment::Validated(minted_oauth_environment(
+            headers,
+            SecretValue::new(token),
+        ));
+    }
     match get_auth_header(api_key, env_lookup) {
         Some(auth) => FederatedEnvironment::Validated(ValidatedEnvironment { headers, auth }),
         None => FederatedEnvironment::Unauthenticated {
@@ -336,15 +346,24 @@ pub(crate) fn transform_messages_request(
     } else {
         messages
     };
-    Ok(MessagesRequest {
-        messages: map_messages(
+    let messages = map_messages(
+        messages,
+        strip_encrypted_reasoning_blocks_restoring_redacted_data,
+        strip_raw_encrypted_reasoning_blocks,
+    );
+    let messages = if context.claude_base_model || is_claude_model(&request.model) {
+        map_messages(
             messages,
-            strip_encrypted_reasoning_blocks_restoring_redacted_data,
-            strip_raw_encrypted_reasoning_blocks,
-        ),
+            strip_unsigned_thinking_blocks,
+            strip_raw_unsigned_thinking_blocks,
+        )
+    } else {
+        messages
+    };
+    Ok(MessagesRequest {
+        messages,
         params: MessagesOptionalParams {
             context_management,
-            extra: without_null_safeguards(request.params.extra),
             ..request.params
         },
         ..request
@@ -429,13 +448,6 @@ fn drop_non_string_tool_result_texts(
         .collect()
 }
 
-fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
-    extra
-        .into_iter()
-        .filter(|(key, value)| key != "safeguards" || !value.is_null())
-        .collect()
-}
-
 pub(crate) fn update_headers_with_anthropic_beta(
     headers: Headers,
     request: &MessagesRequest,
@@ -475,7 +487,7 @@ fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
 }
 
 fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
-    let Some(Value::Object(thread)) = params.extra.get("thread") else {
+    let Some(Value::Object(thread)) = &params.thread else {
         return false;
     };
     thread.get("type").and_then(Value::as_str) == Some("continue")
@@ -485,10 +497,7 @@ fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
 }
 
 fn is_threaded(params: &MessagesOptionalParams) -> bool {
-    params
-        .extra
-        .get("thread")
-        .is_some_and(|thread| !thread.is_null())
+    params.thread.is_some()
 }
 
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
@@ -532,7 +541,9 @@ fn context_management_betas(
 ) -> impl Iterator<Item = AnthropicBeta> {
     let edits = context_management
         .and_then(Recognized::known)
-        .and_then(|context_management| context_management.edits.as_deref())
+        .and_then(|context_management| context_management.edits.as_ref())
+        .and_then(Recognized::known)
+        .map(Vec::as_slice)
         .unwrap_or_default();
     let compact = edits.iter().any(is_compact_edit);
     let other = edits.iter().any(|edit| !is_compact_edit(edit));
@@ -548,14 +559,16 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
             .output_config
             .as_ref()
             .and_then(Recognized::known)
-            .is_some_and(|config| config.format.is_some())
+            .is_some_and(|config| {
+                config
+                    .format
+                    .as_ref()
+                    .is_some_and(|format| !format.is_null())
+            })
 }
 
 fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
-    params
-        .extra
-        .get("safeguards")
-        .is_some_and(|value| !value.is_null())
+    params.safeguards.is_some()
 }
 
 /// Python's `messages_carry_output_config` reads any mapping, so a message that did not parse,
@@ -598,7 +611,7 @@ fn uses_thinking_block_binding(params: &MessagesOptionalParams) -> bool {
 
 fn is_tool_reference_change(block: &ContentBlock) -> bool {
     matches!(
-        &block.block_type,
+        block.known_type(),
         Some(ContentBlockType::Other(block_type))
             if block_type == "tool_addition" || block_type == "tool_removal"
     ) && block
@@ -758,7 +771,7 @@ pub fn map_openai_context_management_to_anthropic(
         return context_management;
     }
     Recognized::Known(ContextManagement {
-        edits: Some(edits),
+        edits: Some(Recognized::Known(edits)),
         extra: Map::new(),
     })
 }
@@ -1301,6 +1314,58 @@ mod tests {
         );
     }
 
+    fn tool_turn(opening: Option<Value>) -> Value {
+        let pending: Vec<Value> = opening
+            .into_iter()
+            .chain([json!({"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}})])
+            .collect();
+        json!([
+            {"role": "user", "content": "List the files."},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "claude plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                {"type": "text", "text": "Draft."}
+            ]},
+            {"role": "user", "content": "Now list them."},
+            {"role": "assistant", "content": pending},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]}
+        ])
+    }
+
+    #[rstest]
+    #[case::empty(json!({"type": "thinking", "thinking": "open model plan", "signature": ""}))]
+    #[case::null(json!({"type": "thinking", "thinking": "open model plan", "signature": null}))]
+    #[case::missing(json!({"type": "thinking", "thinking": "open model plan"}))]
+    fn unsigned_thinking_never_reaches_claude_even_on_the_pending_tool_turn(
+        #[case] unsigned: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        assert_eq!(
+            transform(
+                json!({"messages": tool_turn(Some(unsigned))}),
+                unmapped,
+                false
+            ),
+            Ok(body(json!({"messages": tool_turn(None)})))
+        );
+    }
+
+    #[rstest]
+    fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
+        let messages = tool_turn(Some(
+            json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        ));
+        assert_eq!(
+            transform(
+                json!({"model": "deepseek-v4-pro", "messages": messages.clone()}),
+                unmapped,
+                false
+            ),
+            Ok(body(
+                json!({"model": "deepseek-v4-pro", "messages": messages})
+            ))
+        );
+    }
+
     #[test]
     fn thinking_is_translated_with_the_context_budgets() {
         let context = MessagesTransformContext::with_lookup(
@@ -1340,10 +1405,12 @@ mod tests {
                         },
                         drop_params: true,
                         keeps_display_updates: false,
+                        warns_dropped_disabled_thinking: false,
                     },
                     drop_params: true,
                     drops_unsupported_params: false,
                     global_drop_params: false,
+                    claude_base_model: false,
                 }
             );
             return;
@@ -1500,12 +1567,26 @@ mod tests {
         &[],
         Some(("Authorization", "env-token")),
     )]
-    #[case::oauth_env_key_as_a_bearer(
-        &[],
+    #[case::oauth_env_key_as_a_bearer_with_the_oauth_beta(
+        &[("anthropic-beta", "web-search-2025-03-05")],
         None,
         &[("ANTHROPIC_API_KEY", "sk-ant-oat01-env")],
-        &[],
+        &[("anthropic-beta", "oauth-2025-04-20,web-search-2025-03-05")],
         Some(("Authorization", "sk-ant-oat01-env")),
+    )]
+    #[case::padded_oauth_api_key_as_a_bearer_with_the_oauth_beta(
+        &[],
+        Some(" sk-ant-oat01-param "),
+        &[],
+        &[("anthropic-beta", OAUTH_BETA)],
+        Some(("Authorization", "sk-ant-oat01-param")),
+    )]
+    #[case::bearer_prefixed_oauth_env_key_without_the_oauth_beta(
+        &[],
+        None,
+        &[("ANTHROPIC_API_KEY", OAUTH_BEARER)],
+        &[],
+        Some(("Authorization", OAUTH_TOKEN)),
     )]
     fn validate_environment_shapes_the_headers_and_names_the_credential(
         #[case] forwarded: &[(&str, &str)],
@@ -1542,6 +1623,8 @@ mod tests {
     #[case::no_features(json!({}), &[])]
     #[case::output_format(json!({"output_format": {"type": "json_schema"}}), &["structured-outputs-2025-11-13"])]
     #[case::null_output_format(json!({"output_format": null}), &[])]
+    #[case::null_output_config_format(json!({"output_config": {"format": null}}), &[])]
+    #[case::null_context_management_edits(json!({"context_management": {"edits": null}}), &[])]
     #[case::output_config_format(
         json!({"output_config": {"format": {"type": "json_schema"}, "effort": "xhigh"}}),
         &["structured-outputs-2025-11-13"]

@@ -146,6 +146,10 @@ fn fields_fill_the_model_the_credentials_and_every_group() {
     assert_eq!(typed.api_key, Some(SecretValue::new("api_key")));
     assert_eq!(typed.api_base.as_deref(), Some("api_base"));
     assert_eq!(typed.api_version.as_deref(), Some("api_version"));
+    assert_eq!(
+        typed.aws_bedrock_project_id.as_deref(),
+        Some("aws_bedrock_project_id")
+    );
     assert_eq!(nulls(serde_json::to_value(&typed.aws).unwrap()), 0);
     assert_eq!(nulls(serde_json::to_value(&typed.vertex).unwrap()), 0);
     assert!(typed.extra.is_empty());

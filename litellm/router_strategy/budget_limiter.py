@@ -43,7 +43,6 @@ from litellm.litellm_core_utils.batch_utils import (
     job_to_charge_once,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    get_metadata_variable_name_from_kwargs,
     require_attributes,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
@@ -262,7 +261,6 @@ class RouterBudgetLimiting(CustomLogger):
                 potential_deployments=potential_deployments,
                 request_tags=get_tags_from_request_kwargs(
                     request_kwargs=request_kwargs,
-                    metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
                 ),
             )
 
@@ -389,7 +387,6 @@ class RouterBudgetLimiting(CustomLogger):
         if self.tag_budget_config:
             _request_tags = get_tags_from_request_kwargs(
                 request_kwargs=request_kwargs,
-                metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
             )
 
         for deployment in healthy_deployments:
@@ -618,7 +615,6 @@ class RouterBudgetLimiting(CustomLogger):
 
         request_tags: Final = get_tags_from_request_kwargs(
             callback_fields,
-            metadata_variable_name=get_metadata_variable_name_from_kwargs(callback_fields),
         )
         if len(request_tags) > 0:
             for _tag in request_tags:
