@@ -1322,20 +1322,20 @@ class RustAuthStep:
         def token(self) -> str: ...
 
     @final
-    class CachedJson(RustAuthStep):
+    class CachedDocument(RustAuthStep):
         __match_args__: tuple[Literal["key"]] = ("key",)
-        def __new__(cls, key: str) -> RustAuthStep.CachedJson: ...
+        def __new__(cls, key: str) -> RustAuthStep.CachedDocument: ...
         @property
         def key(self) -> str: ...
 
     @final
-    class CacheJson(RustAuthStep):
+    class CacheDocument(RustAuthStep):
         __match_args__: tuple[Literal["key"], Literal["value"], Literal["ttl_seconds"]] = (
             "key",
             "value",
             "ttl_seconds",
         )
-        def __new__(cls, key: str, value: object, ttl_seconds: float) -> RustAuthStep.CacheJson: ...
+        def __new__(cls, key: str, value: object, ttl_seconds: float) -> RustAuthStep.CacheDocument: ...
         @property
         def key(self) -> str: ...
         @property
@@ -1344,11 +1344,53 @@ class RustAuthStep:
         def ttl_seconds(self) -> float: ...
 
     @final
-    class ForgetJson(RustAuthStep):
-        __match_args__: tuple[Literal["key"]] = ("key",)
-        def __new__(cls, key: str) -> RustAuthStep.ForgetJson: ...
+    class CachedKeyMapping(RustAuthStep):
+        __match_args__: tuple[Literal["claim_field"], Literal["claim_value"], Literal["issuer"]] = (
+            "claim_field",
+            "claim_value",
+            "issuer",
+        )
+        def __new__(cls, claim_field: str, claim_value: str, issuer: str | None) -> RustAuthStep.CachedKeyMapping: ...
         @property
-        def key(self) -> str: ...
+        def claim_field(self) -> str: ...
+        @property
+        def claim_value(self) -> str: ...
+        @property
+        def issuer(self) -> str | None: ...
+
+    @final
+    class CacheKeyMapping(RustAuthStep):
+        __match_args__: tuple[
+            Literal["claim_field"], Literal["claim_value"], Literal["issuer"], Literal["value"], Literal["ttl_seconds"]
+        ] = ("claim_field", "claim_value", "issuer", "value", "ttl_seconds")
+        def __new__(
+            cls, claim_field: str, claim_value: str, issuer: str | None, value: object, ttl_seconds: float
+        ) -> RustAuthStep.CacheKeyMapping: ...
+        @property
+        def claim_field(self) -> str: ...
+        @property
+        def claim_value(self) -> str: ...
+        @property
+        def issuer(self) -> str | None: ...
+        @property
+        def value(self) -> object: ...
+        @property
+        def ttl_seconds(self) -> float: ...
+
+    @final
+    class ForgetKeyMapping(RustAuthStep):
+        __match_args__: tuple[Literal["claim_field"], Literal["claim_value"], Literal["issuer"]] = (
+            "claim_field",
+            "claim_value",
+            "issuer",
+        )
+        def __new__(cls, claim_field: str, claim_value: str, issuer: str | None) -> RustAuthStep.ForgetKeyMapping: ...
+        @property
+        def claim_field(self) -> str: ...
+        @property
+        def claim_value(self) -> str: ...
+        @property
+        def issuer(self) -> str | None: ...
 
     @final
     class Team(RustAuthStep):
