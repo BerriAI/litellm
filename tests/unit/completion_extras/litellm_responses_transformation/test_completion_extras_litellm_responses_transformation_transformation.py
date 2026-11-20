@@ -6898,24 +6898,32 @@ def test_responses_only_field_set_on_the_deployment_is_not_rejected(in_extra_bod
 
 
 @pytest.mark.parametrize(
-    ("deployment_params", "request_params", "caller_sent"),
+    ("deployment_params", "request_params", "rejected_field"),
     [
-        ({"max_output_tokens": 64, "instructions": "Be brief."}, {}, ()),
-        ({"max_output_tokens": 64}, {"reasoning": {"effort": "low"}}, ("reasoning",)),
-        ({"instructions": "Be brief."}, {"extra_body": {"instructions": "Be long."}}, ("instructions",)),
+        ({"max_output_tokens": 64, "instructions": "Be brief."}, {}, None),
+        ({"max_output_tokens": 64}, {"reasoning": {"effort": "low"}}, "reasoning"),
+        ({"instructions": "Be brief."}, {"extra_body": {"instructions": "Be long."}}, "instructions"),
     ],
 )
-def test_router_records_the_responses_only_fields_the_caller_sent(
-    deployment_params: dict[str, object], request_params: dict[str, object], caller_sent: tuple[str, ...]
+def test_router_rejects_only_the_responses_only_fields_the_caller_sent(
+    deployment_params: dict[str, object], request_params: dict[str, object], rejected_field: str | None
 ) -> None:
     router: Final = litellm.Router(
         model_list=[
             {"model_name": "bridged", "litellm_params": {"model": "openai/responses/gpt-6.2-sol", **deployment_params}}
-        ]
+        ],
+        num_retries=0,
     )
-    with patch("litellm.completion", return_value=litellm.ModelResponse()) as completion:
+
+    reached_provider: Final = litellm.RateLimitError("reached the provider", "openai", "gpt-6.2-sol")
+    with (
+        patch("litellm.responses", side_effect=reached_provider),
+        pytest.raises(litellm.RateLimitError if rejected_field is None else litellm.UnsupportedParamsError) as raised,
+    ):
         router.completion(model="bridged", messages=[{"role": "user", "content": "hi"}], **request_params)
-    assert completion.call_args.kwargs["metadata"]["_caller_sent_responses_fields"] == caller_sent
+    if rejected_field is not None:
+        assert f"`{rejected_field}` is only supported on the Responses API" in str(raised.value)
+        assert "max_output_tokens" not in str(raised.value)
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
