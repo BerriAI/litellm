@@ -144,11 +144,16 @@ def get_next_standardized_reset_time(
         anchor: Final = _setup_timezone(normalize_budget_window_start(reset_at), timezone_str)[0].astimezone(
             moment.tzinfo
         )
-        if anchor > moment:
+        if anchor.astimezone(timezone.utc) > moment.astimezone(timezone.utc):
             return anchor
         if value > 0 and unit in ("s", "m", "h", "d", "w") and (value, unit) != (30, "d"):
             period: Final = timedelta(seconds=duration_in_seconds(duration))
-            return anchor + period * ((moment - anchor) // period + 1)
+            candidate: Final = anchor + period * max(1, (moment - anchor) // period + 1)
+            return (
+                candidate + period
+                if candidate.astimezone(timezone.utc) <= moment.astimezone(timezone.utc)
+                else candidate
+            )
 
     # Midnight of the current day in the specified timezone
     base_midnight: Final = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
