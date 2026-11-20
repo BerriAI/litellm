@@ -201,17 +201,27 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
         logging_obj.record_bridged_responses_api_response(result)
 
 
-def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+def _sent_responses_fields(request_params: Mapping[str, object], fields: Sequence[str]) -> Mapping[str, object]:
     extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
     dropped: Final = drop_policy(request_params).additional_drop_params
-    placement_fields: Final = ("store", "previous_response_id", "conversation", "truncation")
-    top_level: Final = {key: request_params.get(key) for key in placement_fields if key not in dropped}
-    sent: Final = {key: extra_body.get(key, top_level.get(key)) for key in placement_fields}
-    return (
-        sent["store"] is not False
-        or bool(sent["previous_response_id"] or sent["conversation"])
-        or sent["truncation"] == "auto"
-    )
+    top_level: Final = {key: request_params.get(key) for key in fields if key not in dropped}
+    return {key: extra_body.get(key, top_level.get(key)) for key in fields}
+
+
+def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+    sent: Final = _sent_responses_fields(request_params, ("conversation", "truncation"))
+    return bool(sent["conversation"]) or sent["truncation"] == "auto"
+
+
+_PREVIOUS_RESPONSE_ID_UNSUPPORTED: Final = (
+    "`previous_response_id` is not supported on the Messages API. Continue a stored response on the "
+    "Responses API (`/v1/responses`), or send the earlier turns in `messages`."
+)
+
+
+def previous_response_id_error(request_params: Mapping[str, object]) -> str | None:
+    sent: Final = _sent_responses_fields(request_params, ("previous_response_id",))
+    return _PREVIOUS_RESPONSE_ID_UNSUPPORTED if sent["previous_response_id"] is not None else None
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -322,8 +332,15 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
-    reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    unsupported_param_error: Final = previous_response_id_error(forwarded_kwargs)
+    if unsupported_param_error is not None:
+        raise litellm.UnsupportedParamsError(
+            message=unsupported_param_error,
+            model=model,
+            llm_provider=target_provider if isinstance(target_provider, str) else None,
+        )
+    reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     request_tools: Final = tools_without_mcp_servers(
         forwarded_kwargs.get("mcp_servers"),
         tools or (),

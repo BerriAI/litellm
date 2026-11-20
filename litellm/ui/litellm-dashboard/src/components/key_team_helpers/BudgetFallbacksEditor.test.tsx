@@ -40,7 +40,7 @@ describe("BudgetFallbacksEditor", () => {
   it("removes an entry and emits updated dict", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    const { container } = render(
+    render(
       <BudgetFallbacksEditor
         value={{ "gpt-4": ["gpt-3.5-turbo"], "claude-3": ["claude-haiku"] }}
         onChange={onChange}
@@ -48,10 +48,9 @@ describe("BudgetFallbacksEditor", () => {
       />,
     );
 
-    const removeButtons = container.querySelectorAll<HTMLButtonElement>(".relative > button[type='button']");
-    expect(removeButtons.length).toBe(2);
+    expect(screen.getAllByRole("button", { name: /^Remove (gpt-4|claude-3)$/ })).toHaveLength(2);
 
-    await user.click(removeButtons[0]);
+    await user.click(screen.getByRole("button", { name: "Remove gpt-4" }));
     expect(onChange).toHaveBeenLastCalledWith({ "claude-3": ["claude-haiku"] });
   });
 

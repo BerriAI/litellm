@@ -8,6 +8,7 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
@@ -1314,6 +1315,27 @@ class _TagsRequestBeforeCall(CustomLogger):
 
 class _InheritsPreCallHook(_TagsRequestBeforeCall):
     pass
+
+
+class _ReadsItsTeamFromTheCache(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        data["team_seen_by_hook"] = await cache.async_get_cache(key="team_id:t1")
+        return data
+
+
+@pytest.mark.asyncio
+async def test_a_custom_pre_call_hook_still_reads_auth_objects_through_its_cache(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_ReadsItsTeamFromTheCache()])
+    auth_cache = UserApiKeyCache()
+    await auth_cache.async_set_cache(key="team_id:t1", value={"team_id": "t1"})
+
+    result = await ProxyLogging(user_api_key_cache=auth_cache).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        data={"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="completion",
+    )
+
+    assert result["team_seen_by_hook"] == {"team_id": "t1"}
 
 
 @pytest.mark.asyncio

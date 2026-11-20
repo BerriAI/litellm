@@ -24,6 +24,11 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 MODEL = "global.openai.gpt-5.6-sol"
+API_BASES_BEHIND_A_RUNTIME_ENDPOINT: Final = (
+    None,
+    "https://signing-host.example.com",
+    "https://signing-host.example.com/openai/v1/chat/completions",
+)
 
 
 def _cfg():
@@ -31,6 +36,10 @@ def _cfg():
 
 
 class TestCompleteURL:
+    @pytest.fixture(autouse=True)
+    def no_env_runtime_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+
     def test_default_host_and_path(self):
         url = _cfg().get_complete_url(None, {"aws_region_name": "us-east-1"})
         assert url == "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/responses"
@@ -49,17 +58,40 @@ class TestCompleteURL:
             "https://proxy.example.com/v1",
             "https://proxy.example.com/v1/responses",
             "https://proxy.example.com/responses",
+            "https://proxy.example.com/openai/v1/chat/completions",
+            "https://proxy.example.com/v1/chat/completions",
+            "https://proxy.example.com/chat/completions/",
         ],
     )
     def test_custom_host_is_preserved_and_path_never_doubles(self, api_base):
         url = _cfg().get_complete_url(api_base, {"aws_region_name": "us-east-1"})
         assert url == "https://proxy.example.com/openai/v1/responses"
 
-    def test_runtime_endpoint_param_is_honoured(self):
-        url = _cfg().get_complete_url(
-            None, {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": "https://vpce.example.com"}
+    @pytest.mark.parametrize("api_base", API_BASES_BEHIND_A_RUNTIME_ENDPOINT)
+    def test_runtime_endpoint_param_wins_over_api_base_like_converse(self, api_base: str | None) -> None:
+        url: Final = _cfg().get_complete_url(
+            api_base, {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": "https://vpce.example.com"}
         )
         assert url == "https://vpce.example.com/openai/v1/responses"
+
+    def test_env_runtime_endpoint_is_used_without_api_base(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://env-egress.example.com/")
+        url: Final = _cfg().get_complete_url(None, {"aws_region_name": "us-east-1"})
+        assert url == "https://env-egress.example.com/openai/v1/responses"
+
+    @pytest.mark.parametrize(
+        "api_base", ["https://signing-host.example.com", "https://signing-host.example.com/openai/v1/chat/completions"]
+    )
+    def test_api_base_wins_over_env_runtime_endpoint(self, monkeypatch: pytest.MonkeyPatch, api_base: str) -> None:
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://env-egress.example.com/")
+        url: Final = _cfg().get_complete_url(api_base, {"aws_region_name": "us-east-1"})
+        assert url == "https://signing-host.example.com/openai/v1/responses"
+
+    def test_empty_runtime_endpoint_counts_as_unset(self) -> None:
+        url: Final = _cfg().get_complete_url(
+            "https://signing-host.example.com", {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": ""}
+        )
+        assert url == "https://signing-host.example.com/openai/v1/responses"
 
 
 class TestAuth:

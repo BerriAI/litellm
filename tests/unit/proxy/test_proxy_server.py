@@ -4596,3 +4596,7 @@ async def test_customer_and_app_accounting_use_the_requests_original_budget_wind
         "app_customer_org",
     }
     assert {counter.window_start for counter in counters} == {datetime.fromisoformat(window_start)}
+    windows: Final = await proxy_server.accounting_window_keys(None, None, customer_counters=counters)
+    assert tuple(window["reset_at"] for window in windows) == tuple(
+        counter.reset_at.isoformat() for counter in counters if counter.reset_at is not None
+    )

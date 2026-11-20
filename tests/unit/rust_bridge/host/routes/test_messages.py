@@ -18,6 +18,7 @@ from typing import Final
 
 import httpx
 import pytest
+from google.auth import exceptions as google_auth
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -2592,6 +2593,41 @@ def test_an_unsupported_param_logs_the_call_flag_python_s_handler_set_first(
     assert params.get("aanthropic_messages") is flagged
 
 
+@pytest.mark.parametrize(
+    ("attributed_model", "llm_provider", "model"),
+    [
+        pytest.param(
+            "claude-sonnet-4-5", "vertex_ai", "claude-sonnet-4-5", id="vertex_version_names_provider_and_model"
+        ),
+        pytest.param(None, None, None, id="unattributed_names_neither"),
+    ],
+)
+def test_an_attributed_unsupported_param_names_the_provider_and_model(
+    attributed_model: str | None, llm_provider: str | None, model: str | None
+) -> None:
+    text: Final = (
+        "claude-sonnet-4-5 does not support anthropic-version=latest. "
+        "To drop unsupported params, set `litellm.drop_params = True`."
+    )
+    rejected: Final = ValueError(text)
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
+    rejected.messages_unsupported_param = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
+    if attributed_model is not None:
+        rejected.messages_unsupported_param_model = attributed_model  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected, {"model": "vertex_ai/claude-sonnet-4-5", "messages": []}, "vertex_ai", True
+    )
+
+    assert isinstance(mapped, litellm.UnsupportedParamsError)
+    assert (mapped.llm_provider, mapped.model, mapped.status_code, str(mapped)) == (
+        llm_provider,
+        model,
+        400,
+        f"litellm.UnsupportedParamsError: {text}",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _TokenEndpointCertificates:
     ca: str
@@ -3209,6 +3245,151 @@ def test_a_credential_failure_text_without_the_marker_keeps_the_native_mapping()
 
     assert isinstance(mapped, litellm.APIConnectionError | litellm.InternalServerError)
     assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+
+
+_VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+
+
+def test_a_vertex_connect_failure_without_an_api_base_keeps_rust_s_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: True)
+    native: Final = (
+        f"could not reach the provider: {_TRANSPORT} (Connect): dns error: "
+        "error resolving DNS: failed to lookup address information: Name or service not known"
+    )
+
+    mapped: Final = messages_host.map_failure(
+        RuntimeError(native),
+        {"model": _VERTEX_CLAUDE, "messages": [], "custom_llm_provider": "vertex_ai", "vertex_location": "elsewhere"},
+        "vertex_ai",
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert mapped.llm_provider == "vertex_ai"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert str(mapped).endswith(native)
+
+
+_TLS_CLOSED: Final = (
+    f"upstream network error: {_TRANSPORT} (SendRequest): connection error: peer closed connection without "
+    "sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"
+)
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "provider", "model", "text"),
+    [
+        (True, "vertex_ai", _VERTEX_CLAUDE, "Server disconnected"),
+        (False, "vertex_ai", _VERTEX_CLAUDE, "Server disconnected without sending a response."),
+        (True, "anthropic", _ADAPTIVE_OPUS, "peer closed connection without sending TLS close_notify"),
+    ],
+    ids=("vertex_aiohttp", "vertex_httpx", "anthropic_keeps_main_s_text"),
+)
+def test_a_tls_close_before_headers_reads_as_a_disconnect_on_vertex_ai_only(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, provider: str, model: str, text: str
+) -> None:
+    from litellm.litellm_core_utils.error_normalization import normalize_error
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+
+    mapped: Final = messages_host.map_failure(
+        RuntimeError(_TLS_CLOSED),
+        {"model": model, "messages": [], "custom_llm_provider": provider, "vertex_project": "p"},
+        provider,
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert text in str(mapped)
+    expected: Final = "500_PROVIDER_CONNECTION_ERROR" if provider == "anthropic" else "500_PROVIDER_INTERNAL_ERROR"
+    assert normalize_error(mapped, "500", str(mapped)) == expected
+
+
+def _google_login_failure(name: str, message: str) -> RuntimeError:
+    raised: Final = RuntimeError("provider authentication failed: " + message)
+    raised.messages_google_login_failure = (name, message)  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    return raised
+
+
+def _vertex_logger() -> Logging:
+    return Logging(
+        model=_VERTEX_CLAUDE,
+        messages=[],
+        stream=False,
+        call_type="aanthropic_messages",
+        start_time=None,
+        litellm_call_id="call-1",
+        function_id="fn",
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "error_class"),
+    [
+        ("ValueError", ValueError),
+        ("OSError", OSError),
+        ("google.auth.exceptions.DefaultCredentialsError", google_auth.DefaultCredentialsError),
+        ("google.auth.exceptions.InvalidResource", google_auth.InvalidResource),
+        ("google.auth.exceptions.MalformedError", google_auth.MalformedError),
+        ("google.auth.exceptions.InvalidValue", google_auth.InvalidValue),
+        ("google.auth.exceptions.RefreshError", google_auth.RefreshError),
+        ("google.auth.exceptions.TransportError", google_auth.TransportError),
+        ("google.auth.exceptions.OAuthError", google_auth.OAuthError),
+    ],
+)
+def test_a_vertex_login_failure_raises_the_exception_python_s_load_auth_raises(
+    name: str, error_class: type[Exception]
+) -> None:
+    logger: Final = _vertex_logger()
+
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure(name, "Could not resolve project_id"),
+        {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": logger},
+        "vertex_ai",
+        True,
+    )
+
+    assert type(mapped) is error_class
+    assert str(mapped) == "Could not resolve project_id"
+    assert mapped.__traceback__ is not None
+    assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is True
+
+
+def test_a_vertex_credentials_file_failure_is_raised_as_the_file_failure_rust_names() -> None:
+    message: Final = "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
+
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure("ValueError", message),
+        {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": _vertex_logger()},
+        "vertex_ai",
+    )
+
+    assert type(mapped) is ValueError
+    assert str(mapped) == message
+
+
+def test_a_google_login_failure_outside_vertex_ai_keeps_the_rust_mapping() -> None:
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure("ValueError", "Could not resolve project_id"),
+        {"model": _BEDROCK_INVOKE, "messages": [], **_AWS},
+        "bedrock",
+    )
+
+    assert not isinstance(mapped, ValueError)
+
+
+@pytest.mark.parametrize(
+    "name", ["TypeError", "google.auth.exceptions.GoogleAuthError", "google.auth.exceptions.__class__", "SystemExit"]
+)
+def test_a_vertex_login_failure_class_outside_the_allowlist_keeps_the_rust_mapping(name: str) -> None:
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure(name, "Could not resolve project_id"),
+        {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": _vertex_logger()},
+        "vertex_ai",
+    )
+
+    assert not isinstance(mapped, TypeError | google_auth.GoogleAuthError | SystemExit)
+    assert str(mapped) != "Could not resolve project_id"
 
 
 @pytest.mark.parametrize(

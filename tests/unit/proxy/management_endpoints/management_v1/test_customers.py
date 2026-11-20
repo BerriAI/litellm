@@ -346,6 +346,12 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
         ("GET", "/customer_organizations", None),
         ("GET", "/customer_organization_budget_groups", None),
         ("PATCH", "/customer_organization_budget_groups", {}),
+        ("GET", "/app_customer_organization_budget_groups", None),
+        ("PATCH", "/app_customer_organization_budget_groups", {}),
+        ("GET", "/app_budget_groups", None),
+        ("PATCH", "/app_budget_groups", {}),
+        ("GET", "/app_customer_member_budget_groups", None),
+        ("PATCH", "/app_customer_member_budget_groups", {}),
         ("GET", "/customer_organizations/id", None),
         ("PATCH", "/customer_organizations/id", {}),
         ("DELETE", "/customer_organizations/id", None),
@@ -1092,6 +1098,7 @@ def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collec
         ("cheap", {"max_budget": 80, "budget_limits": [{"budget_duration": "1mo", "max_budget": 7}]}),
         ("same", {"max_budget": 7}),
         ("annual", {"budget_limits": [{"budget_duration": "12mo", "max_budget": 100}]}),
+        ("custom", {"budget_limits": [{"budget_duration": "7d", "max_budget": 9}]}),
         ("zero", {"max_budget": 0}),
     )
     id_field: Final = "customer_team_id" if collection == "customer_teams" else "customer_member_id"
@@ -1105,9 +1112,9 @@ def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collec
         assert created.status_code == 201, created.text
     scope: Final = {"parent_org_id": "sort-org"} if collection == "customer_teams" else {"parent_team_id": "parent"}
     budget_order: Final = (
-        ("zero", "cheap", "same", "expensive", "annual", "empty")
+        ("zero", "cheap", "same", "custom", "expensive", "annual", "empty")
         if sort == "budget_asc"
-        else ("annual", "expensive", "cheap", "same", "zero", "empty")
+        else ("annual", "expensive", "custom", "cheap", "same", "zero", "empty")
     )
     expected: Final = (*budget_order, "parent") if collection == "customer_teams" else budget_order
     for page in range(1, (len(expected) + 1) // 2 + 1):
@@ -2137,13 +2144,12 @@ def test_invalid_grouped_configuration_leaves_existing_groups_untouched(case: st
             "name": "changed" if case == "duplicate_name" else "second",
         },
     ]
-    invalid_default: Final = "missing" if scope == "member" else "changed"
     response: Final = http.patch(
         path,
         json={
             "expected_revision": "0" * 64 if case == "stale" else org["budget_groups_revision"],
             "default_budgets": groups,
-            "default_budget_template": invalid_default
+            "default_budget_template": "missing"
             if case == "missing_default"
             else ("changed" if scope == "member" else None),
         },
@@ -2348,6 +2354,151 @@ def organization_groups(http: TestClient, *groups: Mapping[str, object]) -> Budg
     )
     assert response.status_code == 200, response.text
     return BudgetGroups.model_validate_json(response.content)
+
+
+@pytest.mark.parametrize("path", ("customer_organizations", "customer_organizations/upsert"))
+def test_organization_default_applies_only_to_new_organizations_and_can_be_cleared(path: str) -> None:
+    http: Final = client()
+    endpoint: Final = f"/management/v1/{path}"
+    existing: Final = http.post(endpoint, json={"customer_org_id": "existing"})
+    assert existing.status_code in (200, 201), existing.text
+    groups: Final = organization_groups(http, {"name": "Standard", "tpm_limit": 1000, "rpm_limit": 10})
+    group: Final = groups.default_budgets[0]
+    group_path: Final = "/management/v1/customer_organization_budget_groups"
+    body: Final = {"default_budgets": [{"budget_id": group.budget_id, "name": group.name}]}
+    configured: Final = http.patch(
+        group_path,
+        json={**body, "expected_revision": groups.budget_groups_revision, "default_budget_template": group.name},
+    )
+    assert configured.status_code == 200, configured.text
+    saved: Final = http.get(group_path).json()
+    assert saved["default_budget_template_id"] == group.budget_id
+    created: Final = http.post(endpoint, json={"customer_org_id": "defaulted"})
+    assert created.status_code in (200, 201), created.text
+    assert created.json()["budget_id"] == group.budget_id
+    assert created.json()["budget"]["tpm_limit"] == group.tpm_limit
+    assert created.json()["budget"]["rpm_limit"] == group.rpm_limit
+    assert created.json()["budget_is_shared"] is True
+    renamed: Final = http.post(
+        "/management/v1/customer_organizations/upsert", json={"customer_org_id": "existing", "alias": "Existing"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["budget_id"] is None
+    stale: Final = http.patch(
+        group_path,
+        json={**body, "expected_revision": groups.budget_groups_revision, "default_budget_template": None},
+    )
+    assert stale.status_code == 409, stale.text
+    cleared: Final = http.patch(
+        group_path,
+        json={**body, "expected_revision": saved["budget_groups_revision"], "default_budget_template": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["default_budget_template_id"] is None
+    unlimited: Final = http.post(endpoint, json={"customer_org_id": "unlimited"})
+    assert unlimited.status_code in (200, 201), unlimited.text
+    assert unlimited.json()["budget_id"] is None
+    assert http.get("/management/v1/customer_organizations/defaulted").json()["budget_id"] == group.budget_id
+
+
+@pytest.mark.parametrize("selection", ("null-budget", "null-id", "custom", "profile"))
+def test_explicit_organization_budget_selection_overrides_the_default(selection: str) -> None:
+    http: Final = client()
+    groups: Final = organization_groups(
+        http, {"name": "Standard", "tpm_limit": 1000}, {"name": "Scale", "tpm_limit": 5000}
+    )
+    configured: Final = http.patch(
+        "/management/v1/customer_organization_budget_groups",
+        json={
+            "expected_revision": groups.budget_groups_revision,
+            "default_budgets": [{"budget_id": group.budget_id, "name": group.name} for group in groups.default_budgets],
+            "default_budget_template": "Standard",
+        },
+    )
+    assert configured.status_code == 200, configured.text
+    scale: Final = next(group for group in groups.default_budgets if group.name == "Scale")
+    selections: Final = {
+        "null-budget": {"budget": None},
+        "null-id": {"budget_id": None},
+        "custom": {"budget": {"tpm_limit": 200}},
+        "profile": {"budget_id": scale.budget_id},
+    }
+    created: Final = http.post(
+        "/management/v1/customer_organizations", json={"customer_org_id": "explicit", **selections[selection]}
+    )
+    assert created.status_code == 201, created.text
+    if selection in ("null-budget", "null-id"):
+        assert created.json()["budget_id"] is None
+    elif selection == "profile":
+        assert created.json()["budget_id"] == scale.budget_id
+    else:
+        assert created.json()["budget"]["tpm_limit"] == 200
+        assert created.json()["budget_is_shared"] is False
+
+
+@pytest.mark.parametrize(
+    "catalog", ("app_budget_groups", "app_customer_organization_budget_groups", "app_customer_member_budget_groups")
+)
+def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions(catalog: str) -> None:
+    http: Final = client()
+    organization: Final = organization_groups(http, {"name": "Standard", "tpm_limit": 1000})
+    path: Final = f"/management/v1/{catalog}"
+    other_catalog: Final = (
+        "app_customer_organization_budget_groups" if catalog == "app_budget_groups" else "app_budget_groups"
+    )
+    empty: Final = http.get(path).json()
+    assert empty["default_budgets"] == []
+    created: Final = http.patch(
+        path,
+        json={
+            "expected_revision": empty["budget_groups_revision"],
+            "default_budget_template": None,
+            "default_budgets": [{"name": "Tier 1", "rpm_limit": 100}],
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert http.get(f"/management/v1/{other_catalog}").json() == empty
+    app: Final = BudgetGroups.model_validate_json(created.content)
+    rejected_default: Final = http.patch(
+        path,
+        json={
+            "expected_revision": app.budget_groups_revision,
+            "default_budget_template": "Tier 1",
+            "default_budgets": [{"budget_id": app.default_budgets[0].budget_id, "name": "Tier 1"}],
+        },
+    )
+    assert rejected_default.status_code == 422, rejected_default.text
+    assert app.default_budgets[0].budget_id != organization.default_budgets[0].budget_id
+    assert app.default_budgets[0].rpm_limit == 100
+    assert http.get("/management/v1/customer_organization_budget_groups").json() == organization.model_dump(mode="json")
+    wrong_scope: Final = http.patch(
+        path,
+        json={
+            "expected_revision": app.budget_groups_revision,
+            "default_budget_template": None,
+            "default_budgets": [{"budget_id": organization.default_budgets[0].budget_id, "name": "Wrong scope"}],
+        },
+    )
+    assert wrong_scope.status_code == 422, wrong_scope.text
+    stale: Final = http.patch(
+        path,
+        json={
+            "expected_revision": empty["budget_groups_revision"],
+            "default_budget_template": None,
+            "default_budgets": [],
+        },
+    )
+    assert stale.status_code == 409, stale.text
+    updated: Final = organization_groups(
+        http, {"budget_id": organization.default_budgets[0].budget_id, "name": "Scale", "tpm_limit": 2000}
+    )
+    assert updated.default_budgets[0].tpm_limit == 2000
+    assert http.get(path).json() == app.model_dump(mode="json")
+    rejected: Final = http.post(
+        "/management/v1/customer_organizations",
+        json={"customer_org_id": "wrong-scope", "budget_id": app.default_budgets[0].budget_id},
+    )
+    assert rejected.status_code == 422, rejected.text
 
 
 @pytest.mark.parametrize("method", ("PATCH", "POST"))

@@ -86,6 +86,8 @@ pub enum Error {
     /// A proxy admin without a team named a public model name several teams use.
     #[error("model name `{model}` matches deployments from multiple teams")]
     MultipleTeams { model: String },
+    #[error("model `{model}` matches deployments from multiple model groups")]
+    MultipleModelGroups { model: String },
     /// Every deployment `model` resolved to is reserved for other teams by an active access
     /// window, the first of which ends at `until` (`HH:MM`) in `timezone`.
     #[error("deployment `{model}` is reserved for another team until {until} {timezone}")]
@@ -163,6 +165,7 @@ impl Error {
             | Self::EndpointNotSupported { .. }
             | Self::PtuReserved { .. }
             | Self::MultipleTeams { .. }
+            | Self::MultipleModelGroups { .. }
             | Self::Reserved { .. }
             | Self::ContextWindowExceeded { .. }
             | Self::UnsupportedParams { .. }
@@ -189,6 +192,7 @@ impl Error {
             | Self::NotPassThrough { .. }
             | Self::NoPassThroughDeployments { .. }
             | Self::MultipleTeams { .. }
+            | Self::MultipleModelGroups { .. }
             | Self::Reserved { .. } => (BAD_REQUEST, Some(400)),
             Self::EndpointNotSupported { .. } => (
                 &["EndpointNotSupportedByModelError", "BadRequestError"],
@@ -251,6 +255,9 @@ impl Error {
                 model: model.clone(),
             },
             Self::MultipleTeams { model } => Self::MultipleTeams {
+                model: model.clone(),
+            },
+            Self::MultipleModelGroups { model } => Self::MultipleModelGroups {
                 model: model.clone(),
             },
             Self::Reserved {
