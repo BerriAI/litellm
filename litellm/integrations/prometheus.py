@@ -705,6 +705,16 @@ class PrometheusLogger(CustomLogger):
                 buckets=self.latency_buckets,
             )
 
+            self.litellm_proxy_chat_processing_seconds = (
+                Histogram(
+                    name="litellm_proxy_chat_processing_seconds",
+                    documentation="Non-streaming Chat Completions proxy processing time without provider calls or Router backoff",
+                    buckets=self.latency_buckets,
+                )
+                if self._is_metric_enabled("litellm_proxy_chat_processing_seconds")
+                else NoOpMetric()
+            )
+
             self.litellm_llm_api_time_to_first_token_metric = self._histogram_factory(
                 "litellm_llm_api_time_to_first_token_metric",
                 "Time to first token for a models LLM API call",
@@ -1729,6 +1739,9 @@ class PrometheusLogger(CustomLogger):
         self.litellm_overhead_with_guardrails_latency_metric.labels(**labels).observe(
             ((litellm_overhead_time_ms or 0.0) / 1000) + guardrail_overhead_seconds
         )
+
+    def record_chat_processing_seconds(self, seconds: float) -> None:
+        self.litellm_proxy_chat_processing_seconds.observe(seconds)
 
     def _track_end_user_metric_series(
         self,

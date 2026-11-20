@@ -114,6 +114,7 @@ from litellm.litellm_core_utils.fallback_utils import (
     uses_fallbacks,
     without_global_fallbacks,
 )
+from litellm.litellm_core_utils.gateway_processing import track_gateway_provider_attempt
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     fetch_registration_document,
@@ -2782,7 +2783,8 @@ def client(original_function):
                 else kwargs
             )
             try:
-                result = await original_function(*args, **call_kwargs)
+                with track_gateway_provider_attempt():
+                    result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:

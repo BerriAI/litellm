@@ -62,6 +62,7 @@ from litellm.litellm_core_utils.core_helpers import (
     lax_bool,
     without,
 )
+from litellm.litellm_core_utils.gateway_processing import exclude_gateway_retry_wait
 from litellm.litellm_core_utils.routing_common_utils import (
     format_content_policy_fallback_hint,
     format_fallback_outcome_message,
@@ -3088,7 +3089,8 @@ class RustCore(
                     if (outlasted := _error_outlasting_total_timeout(driver, _sleep_seconds(step))) is not None:
                         driver.close_route_phase()
                         raise outlasted
-                    await self._host.sleep(_sleep_seconds(step))
+                    with exclude_gateway_retry_wait():
+                        await self._host.sleep(_sleep_seconds(step))
                     outcome = None
                 case "allow_fallback":
                     outcome = await driver.allow_fallback(str(step["target"]))

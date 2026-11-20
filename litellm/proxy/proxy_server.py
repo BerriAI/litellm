@@ -990,6 +990,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.prometheus_gateway_processing_middleware import PrometheusGatewayProcessingMiddleware
 from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
@@ -3164,6 +3165,19 @@ app.add_middleware(LensInternalMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
+
+
+def _prometheus_processing_recorder() -> Callable[[float], None] | None:
+    if not litellm.callbacks:
+        return None
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    logger: Final = PrometheusLogger.get_instance()
+    return None if logger is None else logger.record_chat_processing_seconds
+
+
+app.add_middleware(PrometheusGatewayProcessingMiddleware, recorder=_prometheus_processing_recorder)
 
 
 def mount_swagger_ui():

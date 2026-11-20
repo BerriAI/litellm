@@ -15,6 +15,7 @@ from litellm.constants import (
     MAX_BASE64_LENGTH_FOR_LOGGING,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.gateway_processing import exclude_gateway_provider_time
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -381,7 +382,8 @@ def track_llm_api_timing():
             parent_otel_span: Final = _get_parent_otel_span_from_logging_obj(logging_obj)
 
             try:
-                result: Final = await func(*args, **kwargs)
+                with exclude_gateway_provider_time():
+                    result: Final = await func(*args, **kwargs)
                 return result
             finally:
                 end_time: Final = datetime.now()
@@ -428,7 +430,8 @@ def track_llm_api_timing():
             parent_otel_span: Final = _get_parent_otel_span_from_logging_obj(logging_obj)
 
             try:
-                result: Final = func(*args, **kwargs)
+                with exclude_gateway_provider_time():
+                    result: Final = func(*args, **kwargs)
                 return result
             finally:
                 end_time: Final = datetime.now()
