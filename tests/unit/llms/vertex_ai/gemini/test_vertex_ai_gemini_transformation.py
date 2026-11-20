@@ -3071,6 +3071,16 @@ def _function_response_parts(parts: Sequence[PartType]) -> Sequence[PartType]:
             ],
             id="calls split across consecutive assistant messages",
         ),
+        pytest.param(
+            [
+                _assistant_calling(
+                    {"id": "call_custom", "type": "custom", "custom": {"name": "notes", "input": "remember"}},
+                    _get_time_call("call_1"),
+                    _get_time_call("call_2"),
+                )
+            ],
+            id="non-function tool call before the parallel calls",
+        ),
     ],
 )
 def test_gemini_2_keeps_identical_calls_with_distinct_ids(assistant_messages: Sequence[Mapping[str, object]]) -> None:
@@ -3205,3 +3215,77 @@ def test_gemini_2_dedup_of_calls_without_a_new_id_is_unchanged(
         {"role": "user", "parts": [{"text": "What time is it?"}]},
         {"role": "model", "parts": [{"function_call": {"name": name, "args": {}}} for name in expected_call_names]},
     ], f"calls that repeat a seen id or carry no id keep the existing dedup, got {contents}"
+
+
+
+def _placeholder_signature() -> str:
+    from litellm.litellm_core_utils.prompt_templates.factory import get_dummy_thought_signature
+
+    return get_dummy_thought_signature()
+
+
+@pytest.mark.parametrize(
+    ("model", "tool_call_ids", "expected_call_parts"),
+    [
+        pytest.param(
+            "gemini-2.5-flash",
+            ("call_x__thought__c2lnMQ==", "call_x__thought__c2lnMg=="),
+            [{"function_call": {"name": "get_time", "args": {}}, "thoughtSignature": "c2lnMQ=="}],
+            id="gemini-2.5 same id with two embedded signatures",
+        ),
+        pytest.param(
+            "gemini-3.8-flash",
+            ("call_x__thought__c2lnMQ==", "call_x__thought__c2lnMg=="),
+            [{"function_call": {"name": "get_time", "args": {}, "id": "call_x"}, "thoughtSignature": "c2lnMQ=="}],
+            id="gemini-3 same id with two embedded signatures",
+        ),
+        pytest.param(
+            "gemini-2.5-flash",
+            ("call_x", "call_x__thought__c2lnMQ=="),
+            [{"function_call": {"name": "get_time", "args": {}}}],
+            id="gemini-2.5 plain id then its signed form",
+        ),
+        pytest.param(
+            "gemini-3.8-flash",
+            ("call_x", "call_x__thought__c2lnMQ=="),
+            [
+                {
+                    "function_call": {"name": "get_time", "args": {}, "id": "call_x"},
+                    "thoughtSignature": _placeholder_signature(),
+                }
+            ],
+            id="gemini-3 plain id then its signed form",
+        ),
+        pytest.param(
+            "gemini-2.5-flash",
+            ("call_a__thought__c2lnMQ==", "call_b__thought__c2lnMg=="),
+            [
+                {"function_call": {"name": "get_time", "args": {}}, "thoughtSignature": "c2lnMQ=="},
+                {"function_call": {"name": "get_time", "args": {}}, "thoughtSignature": "c2lnMg=="},
+            ],
+            id="gemini-2.5 distinct ids with embedded signatures",
+        ),
+        pytest.param(
+            "gemini-3.8-flash",
+            ("call_a__thought__c2lnMQ==", "call_b__thought__c2lnMg=="),
+            [
+                {"function_call": {"name": "get_time", "args": {}, "id": "call_a"}, "thoughtSignature": "c2lnMQ=="},
+                {"function_call": {"name": "get_time", "args": {}, "id": "call_b"}, "thoughtSignature": "c2lnMg=="},
+            ],
+            id="gemini-3 distinct ids with embedded signatures",
+        ),
+    ],
+)
+def test_calls_whose_ids_embed_thought_signatures_dedup_by_their_call_id(
+    model: str, tool_call_ids: Sequence[str], expected_call_parts: Sequence[Mapping[str, object]]
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "What time is it?"},
+        *(_assistant_calling(_get_time_call(tool_call_id)) for tool_call_id in tool_call_ids),
+    ]
+
+    parts: Final = _parts_of(gemini_convert_messages_with_history(messages=messages, model=model))
+
+    assert _function_call_parts(parts) == expected_call_parts, (
+        f"a call id replayed with a different embedded signature must be sent once, got {parts}"
+    )

@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     GeminiMediaSource,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
@@ -673,7 +674,9 @@ def check_if_part_exists_in_parts(parts: list[PartType], part: PartType, exclude
 
 def _explicit_tool_call_id(tool_call: ChatCompletionAssistantToolCall) -> str | None:
     tool_call_id: Final = tool_call.get("id")
-    return tool_call_id if isinstance(tool_call_id, str) and tool_call_id else None
+    if not isinstance(tool_call_id, str):
+        return None
+    return tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] or None
 
 
 def _function_tool_call_ids(tool_calls: Sequence[ChatCompletionAssistantToolCall]) -> tuple[str | None, ...]:
