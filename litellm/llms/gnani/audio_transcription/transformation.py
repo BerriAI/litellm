@@ -1,5 +1,6 @@
 import json
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final, Literal
@@ -28,10 +29,18 @@ _V25_FIELDS: Final = _SHARED_FIELDS | {"bias_score", "itn_native_numerals"}
 _V3_FIELDS: Final = _SHARED_FIELDS | {"keyterms", "topic", "previous_text", "speaker_names"}
 _V25_MODEL: Final = "prisma-v2.5"
 _NOT_FORWARDED: Final = frozenset(
-    (*OPENAI_TRANSCRIPTION_PARAMS, *GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS, "prompt", "temperature", "extra_body")
+    (
+        *OPENAI_TRANSCRIPTION_PARAMS,
+        *GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS,
+        "prompt",
+        "temperature",
+        "extra_body",
+        "extra_headers",
+    )
 )
 _REGION_CODE: Final = re.compile(r"([A-Za-z]{2})-([A-Za-z]{2})")
-_LANGUAGE_LIST: Final = TypeAdapter(list[str])
+_STRING_LIST: Final = TypeAdapter(list[str])
+_V25_RECOMMENDED_BIAS_SCORE: Final = 1.0
 
 
 class _PrismaTranscript(BaseModel):
@@ -78,7 +87,7 @@ def _is_blank(value: object) -> bool:
 
 def _joined_languages(languages: object) -> object:
     try:
-        return ",".join(_LANGUAGE_LIST.validate_python(languages))
+        return ",".join(_STRING_LIST.validate_python(languages))
     except ValidationError:
         return languages
 
@@ -88,12 +97,57 @@ def _language_hint(fields: Mapping[str, object]) -> object:
     return next((hint for hint in hints if not _is_blank(hint)), None)
 
 
-def _with_keywords_as_terms(fields: Mapping[str, object], model: str) -> Mapping[str, object]:
-    keywords: Final = fields.get("keywords")
-    terms_field: Final = "bias_list" if _is_v25(model) else "keyterms"
-    if keywords is None or fields.get(terms_field) is not None:
+def _is_single_word(term: str) -> bool:
+    return bool(term) and all(unicodedata.category(char)[0] in "LM" for char in term)
+
+
+def _single_words(terms: object) -> tuple[str, ...] | None:
+    try:
+        words: Final = tuple(_STRING_LIST.validate_python(terms))
+    except ValidationError:
+        return None
+    return words if all(map(_is_single_word, words)) else None
+
+
+def _with_keywords_as_keyterms(fields: Mapping[str, object], terms: object) -> Mapping[str, object]:
+    if fields.get("keyterms") is not None or fields.get("bias_list") is not None:
         return fields
-    return {**fields, terms_field: [keywords] if isinstance(keywords, str) else keywords}
+    return {**fields, "keyterms": terms}
+
+
+def _with_keywords_as_bias_list(
+    fields: Mapping[str, object], terms: object, model: str, drops_unsupported: bool
+) -> Mapping[str, object]:
+    if fields.get("bias_list") is not None:
+        return fields
+    words: Final = _single_words(terms)
+    if words is None and drops_unsupported:
+        return fields
+    if words is None:
+        raise UnsupportedParamsError(
+            message=(
+                "Prisma v2.5 keywords must be single words made of letters only. "
+                "Use gnani/prisma-v3.0 for phrases, digits or punctuation, or set drop_params=True to drop them."
+            ),
+            model=model,
+            llm_provider="gnani",
+        )
+    bias_score: Final = fields.get("bias_score")
+    return {
+        **fields,
+        "bias_list": words,
+        "bias_score": _V25_RECOMMENDED_BIAS_SCORE if bias_score is None else bias_score,
+    }
+
+
+def _with_keywords_as_terms(fields: Mapping[str, object], model: str, drops_unsupported: bool) -> Mapping[str, object]:
+    keywords: Final = fields.get("keywords")
+    if keywords is None:
+        return fields
+    terms: Final = [keywords] if isinstance(keywords, str) else keywords
+    if _is_v25(model):
+        return _with_keywords_as_bias_list(fields, terms, model, drops_unsupported)
+    return _with_keywords_as_keyterms(fields, terms)
 
 
 def _form_value(value: object) -> str:
@@ -159,7 +213,8 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             raise AuthenticationError(
                 message="Set GNANI_API_KEY or pass api_key for Gnani transcription", llm_provider="gnani", model=model
             )
-        return {**headers, "X-API-Key-ID": key}
+        extra_headers: Final = as_str_mapping(optional_params.get("extra_headers")) or {}
+        return {**headers, **extra_headers, "X-API-Key-ID": key}
 
     def get_complete_url(
         self,
@@ -187,16 +242,17 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             raise BadRequestError(
                 message="Gnani transcription requires a non-empty audio file", model=model, llm_provider="gnani"
             )
+        drops_unsupported: Final = litellm_params.get("drop_params") is True or litellm.drop_params is True
         fields: Final = _with_keywords_as_terms(
             _with_prompt_as_previous_text(
                 {**(as_str_mapping(optional_params.get("extra_body")) or {}), **optional_params}
             ),
             model,
+            drops_unsupported,
         )
         supported: Final = _V25_FIELDS if _is_v25(model) else _V3_FIELDS
         incompatible: Final = (_V25_FIELDS | _V3_FIELDS) - supported
         unsupported: Final = sorted(key for key in incompatible if fields.get(key) is not None)
-        drops_unsupported: Final = litellm_params.get("drop_params") is True or litellm.drop_params is True
         if unsupported and not drops_unsupported:
             raise UnsupportedParamsError(
                 message=f"{model} does not support {', '.join(unsupported)}. To drop it, set drop_params=True.",
