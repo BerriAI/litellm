@@ -545,6 +545,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _queue_web_search_events(self, call_id: str, web_search_call: object) -> None:
         self._pending_tool_events.extend(self._web_search_events(call_id, web_search_call))
 
+    def _queue_web_search_calls_opening_the_output(self, chunk: ModelResponseStream) -> None:
+        if not self.sent_output_item_added_event:
+            self._queue_arrived_web_search_calls(chunk)
+
     def _queue_arrived_web_search_calls(self, chunk: ModelResponseStream) -> None:
         arrived: Final = self._arrived_web_search_call_ids
         self._arrived_web_search_call_ids = ()
@@ -1173,7 +1177,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                 self._merge_provider_specific_fields(src)
                                 self._reserve_web_search_indexes(src)
                                 self._queue_arrived_tool_search_outputs()
-                        self._queue_arrived_web_search_calls(chunk)
+                        self._queue_web_search_calls_opening_the_output(chunk)
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
@@ -1218,6 +1222,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                 self._reasoning_done_emitted = True
                                 self._reasoning_active = False
 
+                        self._queue_arrived_web_search_calls(chunk)
                         response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
                         if response_api_chunk:
                             self._pending_response_events.append(response_api_chunk)
@@ -1278,7 +1283,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             self._merge_provider_specific_fields(src)
                             self._reserve_web_search_indexes(src)
                             self._queue_arrived_tool_search_outputs()
-                    self._queue_arrived_web_search_calls(chunk)
+                    self._queue_web_search_calls_opening_the_output(chunk)
                     self._ensure_output_item_for_chunk(chunk)
                     # Always snapshot before returning any pending events so that
                     # finish_reason (e.g. content_filter) is captured even when
@@ -1287,6 +1292,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     self.collected_chat_completion_chunks.append(
                         self._snapshot_chunk_for_stream_chunk_builder(cast(ModelResponseStream, chunk))
                     )
+                    self._queue_arrived_web_search_calls(chunk)
                     response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
                     if response_api_chunk:
                         self._pending_response_events.append(response_api_chunk)

@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain
+from types import MappingProxyType
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
@@ -4714,13 +4715,17 @@ _PROVIDER_FOR_ROUTE: Final[Mapping[str, Literal["vertex_ai", "gemini"]]] = {"ver
 
 
 def _mapped_request_body(
-    route: Literal["vertex", "studio"], model: str, params: Mapping[str, object], drop_params: bool = False
+    route: Literal["vertex", "studio"],
+    model: str,
+    params: Mapping[str, object],
+    drop_params: bool = False,
+    preset: Mapping[str, object] = MappingProxyType({}),
 ) -> RequestBody:
     from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 
     config: Final = VertexGeminiConfig() if route == "vertex" else GoogleAIStudioGeminiConfig()
     optional_params: Final = config.map_openai_params(
-        non_default_params=deepcopy(dict(params)), optional_params={}, model=model, drop_params=drop_params
+        non_default_params=deepcopy(dict(params)), optional_params=dict(preset), model=model, drop_params=drop_params
     )
     return transform_request_body(
         messages=[{"role": "user", "content": "Find the newest LiteLLM release, then echo it"}],
@@ -4813,10 +4818,14 @@ _GEMINI_3_IMAGE_MODEL: Final = "gemini-3.9-zeta-image"
         ({"{bare}": {"supports_function_calling": False}}, False),
         ({"{provider}/{bare}": {"supports_function_calling": False}}, False),
         ({"{provider}/{bare}": {"mode": "image_generation"}, "{bare}": {"supports_function_calling": False}}, False),
-        ({"{provider}/{bare}": {"supports_function_calling": True}, "{bare}": {"supports_function_calling": False}}, True),
+        (
+            {"{provider}/{bare}": {"supports_function_calling": True}, "{bare}": {"supports_function_calling": False}},
+            True,
+        ),
         ({"{bare}": {"supports_function_calling": True}}, True),
+        ({}, True),
     ],
-    ids=["bare_row_false", "route_row_false", "route_row_silent", "route_row_wins", "bare_row_true"],
+    ids=["bare_row_false", "route_row_false", "route_row_silent", "route_row_wins", "bare_row_true", "no_rows"],
 )
 @pytest.mark.parametrize("route", ["vertex", "studio"])
 def test_gemini_3_keeps_search_next_to_functions_only_when_the_cost_map_allows_function_calling(
@@ -4832,17 +4841,32 @@ def test_gemini_3_keeps_search_next_to_functions_only_when_the_cost_map_allows_f
 
     body: Final = _mapped_request_body(route, _GEMINI_3_IMAGE_MODEL, {"tools": [{"type": "web_search"}, _EXEC_TOOL]})
 
-    assert _tool_keys(body) == ({"function_declarations", "googleSearch"} if keeps_search else {"function_declarations"})
+    assert _tool_keys(body) == (
+        {"function_declarations", "googleSearch"} if keeps_search else {"function_declarations"}
+    )
     assert ("toolConfig" in body) is keeps_search
 
 
-@pytest.mark.parametrize("flag", ["include_server_side_tool_invocations", "includeServerSideToolInvocations"])
+_GEMINI_3_FUNCTION_MODEL: Final = "gemini-3.9-zeta"
+_SERVER_SIDE_TOOLS_OFF: Final = MappingProxyType({"include_server_side_tool_invocations": False})
+
+
+@pytest.fixture
+def function_calling_gemini_3(monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setitem(litellm.model_cost, _GEMINI_3_FUNCTION_MODEL, {"supports_function_calling": True})
+    return _GEMINI_3_FUNCTION_MODEL
+
+
+@pytest.mark.parametrize("opt_out_in", ["request", "optional_params"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
 def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_side_tools_off(
-    route: Literal["vertex", "studio"], flag: str
+    route: Literal["vertex", "studio"], opt_out_in: str, function_calling_gemini_3: str
 ) -> None:
-    body: Final = _mapped_request_body(
-        route, "gemini-3-flash-preview", {"tools": [{"type": "web_search"}, _EXEC_TOOL], flag: False}
+    tools: Final = {"tools": [{"type": "web_search"}, _EXEC_TOOL]}
+    body: Final = (
+        _mapped_request_body(route, function_calling_gemini_3, {**tools, **_SERVER_SIDE_TOOLS_OFF})
+        if opt_out_in == "request"
+        else _mapped_request_body(route, function_calling_gemini_3, tools, preset=_SERVER_SIDE_TOOLS_OFF)
     )
 
     assert _tool_keys(body) == {"function_declarations"}
@@ -4852,20 +4876,38 @@ def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_si
 @pytest.mark.parametrize(
     ("tools", "kept_keys", "flagged"),
     [
-        ([{"googleSearchRetrieval": {}}, {"googleSearch": {}}, _EXEC_TOOL], {"function_declarations", "googleSearch"}, True),
-        ([{"googleSearchRetrieval": {}}, _EXEC_TOOL], {"function_declarations"}, False),
+        (
+            ({"googleSearchRetrieval": {}}, {"googleSearch": {}}, _EXEC_TOOL),
+            frozenset({"function_declarations", "googleSearch"}),
+            True,
+        ),
+        (({"googleSearchRetrieval": {}}, _EXEC_TOOL), frozenset({"function_declarations"}), False),
     ],
     ids=["retrieval_and_search", "retrieval_only"],
 )
+@pytest.mark.parametrize("caller_flag", [False, True], ids=["no_caller_flag", "caller_flag_on"])
+@pytest.mark.parametrize("drop_params_set", ["per_call", "globally"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
 def test_gemini_3_drops_search_retrieval_next_to_functions_only_under_drop_params(
-    route: Literal["vertex", "studio"], tools: list[object], kept_keys: set[str], flagged: bool
+    route: Literal["vertex", "studio"],
+    tools: tuple[object, ...],
+    kept_keys: frozenset[str],
+    flagged: bool,
+    caller_flag: bool,
+    drop_params_set: str,
+    function_calling_gemini_3: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dropped: Final = _mapped_request_body(route, "gemini-3-flash-preview", {"tools": tools}, drop_params=True)
-    sent_as_is: Final = _mapped_request_body(route, "gemini-3-flash-preview", {"tools": tools})
+    params: Final = {"tools": list(tools), **({"include_server_side_tool_invocations": True} if caller_flag else {})}
+    sent_as_is: Final = _mapped_request_body(route, function_calling_gemini_3, params)
+    if drop_params_set == "globally":
+        monkeypatch.setattr(litellm, "drop_params", True)
+    dropped: Final = _mapped_request_body(
+        route, function_calling_gemini_3, params, drop_params=drop_params_set == "per_call"
+    )
 
     assert _tool_keys(dropped) == kept_keys
-    assert ("toolConfig" in dropped) is flagged
+    assert ("toolConfig" in dropped) is (flagged or caller_flag)
     assert _tool_keys(sent_as_is) == kept_keys | {"googleSearchRetrieval"}
     assert sent_as_is.get("toolConfig") == {"includeServerSideToolInvocations": True}
 
