@@ -415,11 +415,73 @@ _BANNED_PARAMS_ALLOWED_IN_METADATA: Final[frozenset[str]] = VERTEX_TARGET_PARAMS
 )
 
 
-def _entra_params_owned_by_route(route: str | None) -> frozenset[str]:
+_OAUTH_PASS_THROUGH_FIELDS: Final[frozenset[str]] = frozenset(("client_id",))
+
+
+def _is_configured_pass_through_route(
+    route: str | None,
+    general_settings: Mapping[str, object] | None = None,
+) -> bool:
+    if not route:
+        return False
+    endpoints: Any = None
+    if general_settings is not None:
+        endpoints = general_settings.get("pass_through_endpoints")
+    if endpoints is None:
+        try:
+            from litellm.proxy.proxy_server import general_settings as server_gs
+
+            endpoints = server_gs.get("pass_through_endpoints") if isinstance(server_gs, dict) else None
+        except Exception:
+            pass
+
+    if isinstance(endpoints, Sequence):
+        for endpoint in endpoints:
+            if isinstance(endpoint, Mapping):
+                path = endpoint.get("path")
+                if isinstance(path, str):
+                    clean_path = path.split("{")[0].rstrip("/")
+                    if route == path or route == clean_path or (clean_path and route.startswith(clean_path + "/")):
+                        return True
+    return False
+
+
+def _is_pass_through_route(
+    route: str | None,
+    *,
+    request: Request | None = None,
+    general_settings: Mapping[str, object] | None = None,
+) -> bool:
+    if request is not None and request_dispatched_to_pass_through_endpoint(request):
+        return True
+    if route is None:
+        return False
+    if _is_configured_pass_through_route(route, general_settings):
+        return True
+    try:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _entra_params_owned_by_route(
+    route: str | None,
+    *,
+    request: Request | None = None,
+    general_settings: Mapping[str, object] | None = None,
+) -> frozenset[str]:
     if route in _TRANSCRIPTION_SESSION_ROUTES:
         return _TRANSCRIPTION_SESSION_FIELDS
     if route_manages_mcp_servers(route) or route == _TOKEN_INTROSPECTION_ROUTE:
         return _MCP_OAUTH_CLIENT_FORM_FIELDS
+    if _is_pass_through_route(route, request=request, general_settings=general_settings):
+        return _OAUTH_PASS_THROUGH_FIELDS
     return frozenset()
 
 
@@ -991,6 +1053,7 @@ def is_request_body_safe(
     team_id: str | None = None,
     defer_model_checks: bool = False,
     defer_s3_buckets: bool = False,
+    request: Request | None = None,
 ) -> bool:
     """
     Check if the request body is safe.
@@ -1035,7 +1098,9 @@ def is_request_body_safe(
         llm_router,
         manages_deployments=manages_deployments,
         mcp_server_fields_allowed=route_manages_mcp_servers(route),
-        route_owned_params=_entra_params_owned_by_route(route),
+        route_owned_params=_entra_params_owned_by_route(
+            route, request=request, general_settings=general_settings
+        ),
         opt_in_groups=opt_in_groups,
         defer_model_checks=defer_model_checks,
         defer_s3_buckets=defer_s3_buckets,
@@ -1048,6 +1113,9 @@ def is_request_body_safe(
                 general_settings,
                 llm_router,
                 manages_deployments=manages_deployments,
+                route_owned_params=_entra_params_owned_by_route(
+                    route, request=request, general_settings=general_settings
+                ),
                 banned_params=_BANNED_EXTRA_BODY_PARAMS if nested_key == "extra_body" else _BANNED_REQUEST_BODY_PARAMS,
                 opt_in_groups=opt_in_groups,
                 defer_model_checks=defer_model_checks,
@@ -1294,6 +1362,7 @@ async def pre_db_read_auth_checks(
         route=route,
         defer_model_checks=defer_model_checks,
         defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
+        request=request,
     )
 
     # Check 3. Check if IP address is allowed

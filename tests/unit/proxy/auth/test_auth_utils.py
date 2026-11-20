@@ -355,6 +355,88 @@ def test_token_introspection_still_rejects_other_entra_params_and_secret_referen
         )
 
 
+def test_pass_through_endpoint_allows_client_id_query_and_body() -> None:
+    pass_through_settings = {
+        "pass_through_endpoints": [
+            {
+                "path": "/MS_Office/upstream/authorize",
+                "target": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            }
+        ]
+    }
+    assert (
+        is_request_body_safe(
+            request_body={"response_type": "code", "client_id": "test-client-id"},
+            general_settings=pass_through_settings,
+            llm_router=None,
+            model="",
+            route="/MS_Office/upstream/authorize",
+        )
+        is True
+    )
+
+
+def test_pass_through_endpoint_still_rejects_other_entra_params() -> None:
+    pass_through_settings = {
+        "pass_through_endpoints": [
+            {
+                "path": "/MS_Office/upstream/authorize",
+                "target": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="tenant_id"):
+        is_request_body_safe(
+            request_body={"tenant_id": "caller-tenant", "client_id": "test-client-id"},
+            general_settings=pass_through_settings,
+            llm_router=None,
+            model="",
+            route="/MS_Office/upstream/authorize",
+        )
+
+
+def test_pass_through_endpoint_dispatched_request_allows_client_id() -> None:
+    from unittest.mock import MagicMock
+    from fastapi import Request
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+
+    endpoint_func = lambda: None
+    setattr(endpoint_func, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    mock_request = MagicMock(spec=Request)
+    mock_request.scope = {"endpoint": endpoint_func}
+
+    assert (
+        is_request_body_safe(
+            request_body={"client_id": "dispatched-client"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/any/passthrough/route",
+            request=mock_request,
+        )
+        is True
+    )
+
+
+def test_pass_through_endpoint_still_rejects_secret_references_in_client_id() -> None:
+    pass_through_settings = {
+        "pass_through_endpoints": [
+            {
+                "path": "/MS_Office/upstream/authorize",
+                "target": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="client_id holds a secret reference"):
+        is_request_body_safe(
+            request_body={"client_id": "os.environ/LITELLM_MASTER_KEY"},
+            general_settings=pass_through_settings,
+            llm_router=None,
+            model="",
+            route="/MS_Office/upstream/authorize",
+        )
+
+
 _TRANSCRIPTION_SESSION_ROUTES: Final = (
     "/v1/realtime/transcription_sessions",
     "/realtime/transcription_sessions",
