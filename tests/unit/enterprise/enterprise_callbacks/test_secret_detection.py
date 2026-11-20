@@ -819,6 +819,28 @@ async def test_pre_call_hook_records_mask_with_entity_count():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_redacts_credentials_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the deploy config."},
+                    {"type": "input_json", "data": {"deploy": {"env": f"AWS_ACCESS_KEY_ID={AWS_KEY}"}, "replicas": 2}},
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {"deploy": {"env": "AWS_ACCESS_KEY_ID=[REDACTED]"}, "replicas": 2}
+    assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook_clean_request_records_allow():
     """A request with no secrets must be distinguishable from a redacted one."""
     guardrail = _guardrail()

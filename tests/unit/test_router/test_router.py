@@ -322,6 +322,41 @@ async def test_decisions_with_only_json_input_skip_the_leg_that_would_drop_it_al
     assert route.call_count == 5
 
 
+_GIF_RECEIPT: Final = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+_PNG_RECEIPT: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.mark.parametrize(
+    ("image_url", "answering_url"),
+    [(_GIF_RECEIPT, "https://api.openai.com/v1/decisions"), (_PNG_RECEIPT, "https://api.typesafe.ai/v1/systemone")],
+    ids=["gif-the-leg-drops", "png-the-leg-keeps"],
+)
+@pytest.mark.asyncio
+async def test_decisions_with_json_and_an_image_count_only_the_image_types_a_leg_keeps(
+    image_url: str, answering_url: str, respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    router: Final = _json_decisions_router()
+    openai: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+    typesafe: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+        json=_TYPESAFE_DECISIONS_RESPONSE
+    )
+
+    for _ in range(5):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": [{"type": "input_image", "image_url": image_url}, _EVIDENCE_PART]}],
+            questions=_DAMAGED_QUESTIONS,
+            drop_params=True,
+            extra_headers={"typesafe-danger-zone-images": "true"},
+        )
+
+    assert {str(route.calls.last.request.url) for route in (openai, typesafe) if route.call_count == 5} == {
+        answering_url
+    }
+
+
 @pytest.mark.asyncio
 async def test_decisions_with_json_input_on_a_group_where_every_leg_refuses_it_name_input_json() -> None:
     router: Final = Router(
