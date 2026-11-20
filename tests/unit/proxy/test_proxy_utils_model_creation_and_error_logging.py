@@ -2820,6 +2820,33 @@ def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(mo
     assert all(a.usage is usage for a in attempts)
 
 
+def test_a_forwarded_credential_clone_does_not_bill_its_final_timed_out_attempt_as_an_earlier_one():
+    """A request carrying its own credential runs on a clone whose id the retry records carry, while
+    pricing reads the configured deployment's id. The clone's final attempt is still the failure row's."""
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    usage: Final = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+
+    attempts: Final = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={
+            "metadata": {
+                "attempted_retries": 1,
+                "model_info": {"id": "clone-of-configured", "original_model_id": "configured"},
+                "previous_models": (
+                    {"deployment_id": "clone-of-configured", "exception_type": "Timeout", "attempted_retries": 0},
+                    {"deployment_id": "clone-of-configured", "exception_type": "Timeout", "attempted_retries": 1},
+                ),
+            }
+        },
+        estimated_usage=usage,
+        base_model=None,
+        deployment_id="configured",
+    )
+
+    assert [(a.attempted_retries, a.deployment_id) for a in attempts] == [(0, "clone-of-configured")]
+
+
 def test_an_earlier_attempt_on_another_model_is_priced_at_that_models_rate_not_the_final_models(monkeypatch):
     """After a fallback hop the final attempt runs on another model group, so the records of the group
     that timed out first name their own deployment model (and its ``base_model`` when the deployment
