@@ -1602,12 +1602,18 @@ async def test_user_api_key_auth_websocket_accepts_a_non_canonical_case_of_the_b
     mock_websocket.headers = {"authorization": authorization}
     mock_websocket.scope = {"headers": [(b"authorization", authorization.encode())]}
     mock_websocket.url = URL(url="/ws")
+    key_owner: Final = UserAPIKeyAuth(api_key="some_api_key", user_id="key-owner")
 
-    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
-        await user_api_key_auth_websocket(mock_websocket)
+    async def authenticate_only_the_issued_key(request: StarletteRequest, api_key: str) -> UserAPIKeyAuth:
+        if api_key != "Bearer some_api_key":
+            raise HTTPException(status_code=401, detail="invalid key")
+        return key_owner
 
-        assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
-        mock_websocket.close.assert_not_called()
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", side_effect=authenticate_only_the_issued_key):
+        authorized: Final = await user_api_key_auth_websocket(mock_websocket)
+
+    assert authorized == key_owner
+    mock_websocket.close.assert_not_called()
 
 
 @pytest.mark.asyncio
