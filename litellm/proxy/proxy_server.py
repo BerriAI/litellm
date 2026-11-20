@@ -214,6 +214,7 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     tuning_limit_violation,
 )
 from litellm.rust_bridge.catalog import NATIVE_MESSAGES_TARGETS, Target
+from litellm.types.integrations.prometheus import ProxyRequestOutcome
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     CallTypes,
@@ -990,6 +991,11 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.prometheus_request_outcome_middleware import (
+    PrometheusRequestOutcomeMiddleware,
+    mark_request_stream_cancelled,
+    mark_request_stream_failed,
+)
 from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
@@ -3161,7 +3167,20 @@ app.add_middleware(
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(RedisRequestBatchMiddleware)
 app.add_middleware(LensInternalMiddleware)
+
+
+def _prometheus_chat_outcome_recorder() -> Callable[[ProxyRequestOutcome], None] | None:
+    if not litellm.callbacks:
+        return None
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    logger: Final = PrometheusLogger.get_instance()
+    return None if logger is None else logger.record_chat_request_outcome
+
+
 app.add_middleware(InFlightRequestsMiddleware)
+app.add_middleware(PrometheusRequestOutcomeMiddleware, recorder=_prometheus_chat_outcome_recorder)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
@@ -11300,6 +11319,7 @@ async def async_data_generator(
                 except Exception as e:
                     if error_state is not None:
                         raise
+                    mark_request_stream_failed()
                     yield f"data: {e}\n\n"
 
             if pending_fallback_event:
@@ -11325,6 +11345,7 @@ async def async_data_generator(
             )
 
         if error_message is not None:
+            mark_request_stream_failed()
             yield error_message if error_state is None else error_state.format_error_message(error_message)
         # Chat Completions streams terminate with data: [DONE]; Responses and Google GenAI (?alt=sse) streams do not.
         if ends_with_openai_done:
@@ -11340,11 +11361,13 @@ async def async_data_generator(
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
             client_disconnected = True
+            mark_request_stream_cancelled()
         for guarded_layer in (stream_source, stream_iterator):
             if guarded_layer is not response:
                 await close_guarded_stream(guarded_layer)
         raise
     except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
+        mark_request_stream_failed()
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
         replacement: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,

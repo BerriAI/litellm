@@ -73,6 +73,7 @@ from litellm.router_api import deployment_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
+    ProxyRequestOutcome,
     sanitize_prometheus_label_name,
     sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
@@ -100,6 +101,7 @@ if TYPE_CHECKING:
         LiteLLM_EndUserTableInclude,
         LiteLLM_EndUserTableOrderByInput,
     )
+    from prometheus_client import Counter as PrometheusCounter
     from prometheus_client import Gauge
     from prometheus_client.metrics import MetricWrapperBase
 
@@ -686,6 +688,14 @@ class PrometheusLogger(CustomLogger):
                 name="litellm_proxy_total_requests_metric",
                 documentation="Total number of requests made to the proxy server - track number of client side requests",
                 labelnames=self.get_labels_for_metric("litellm_proxy_total_requests_metric"),
+            )
+
+            self.litellm_proxy_chat_request_outcomes_total: PrometheusCounter | _LabeledMetric | NoOpMetric = (
+                self._counter_factory(  # pyright: ignore[reportUnknownMemberType]  # the shared factory is untyped
+                    name="litellm_proxy_chat_request_outcomes_total",
+                    documentation="Final outcomes of client requests to the Chat Completions proxy endpoints",
+                    labelnames=self.get_labels_for_metric("litellm_proxy_chat_request_outcomes_total"),
+                )
             )
 
             # request latency metrics
@@ -3220,6 +3230,19 @@ class PrometheusLogger(CustomLogger):
         if not llm_provider or llm_provider == PROXY_LLM_PROVIDER_FALLBACK:
             return None
         return llm_provider
+
+    def record_chat_request_outcome(self, outcome: ProxyRequestOutcome) -> None:
+        counter: Final = self.litellm_proxy_chat_request_outcomes_total
+        if not self.get_labels_for_metric("litellm_proxy_chat_request_outcomes_total") and not isinstance(
+            counter, _LabeledMetric
+        ):
+            counter.inc()
+            return
+        self._inc_labeled_counter(
+            counter,
+            "litellm_proxy_chat_request_outcomes_total",
+            UserAPIKeyLabelValues(outcome=outcome),
+        )
 
     async def async_post_call_failure_hook(
         self,
