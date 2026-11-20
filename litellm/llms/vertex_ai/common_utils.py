@@ -885,6 +885,30 @@ def _json_schema_type_of(value: JsonValue) -> Literal["boolean", "integer", "num
             return None
 
 
+_TYPES_HOLDING: Final = MappingProxyType(
+    {
+        "boolean": frozenset({"boolean"}),
+        "integer": frozenset({"integer", "number"}),
+        "number": frozenset({"number"}),
+        "string": frozenset({"string"}),
+    }
+)
+
+
+def _declared_type_holds(
+    declared_type: JsonValue, json_type: Literal["boolean", "integer", "number", "string"]
+) -> bool:
+    match declared_type:
+        case None:
+            return True
+        case str():
+            return declared_type.lower() in _TYPES_HOLDING[json_type]
+        case list():
+            return any(isinstance(item, str) and item.lower() in _TYPES_HOLDING[json_type] for item in declared_type)
+        case _:
+            return False
+
+
 def _subschemas(keyword: str, value: JsonValue) -> Iterable[JsonValue]:
     match value:
         case dict() if keyword in _MAP_SCHEMA_KEYWORDS:
@@ -901,7 +925,7 @@ def _pin_scalar_consts(schema: JsonValue, depth: int = 0) -> None:
     if depth > DEFAULT_MAX_RECURSE_DEPTH or not isinstance(schema, dict):
         return
     json_type: Final = _json_schema_type_of(schema.get("const"))
-    if json_type is not None:
+    if json_type is not None and _declared_type_holds(schema.get("type"), json_type):
         schema["enum"] = [schema.pop("const")]  # rebind-ok: the schema builders edit their own copy in place
         schema.setdefault("type", json_type)
     for subschema in chain.from_iterable(starmap(_subschemas, schema.items())):
