@@ -6,6 +6,7 @@ so this config enables direct routing instead of falling back to
 the chat completions → responses conversion pipeline.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -16,6 +17,35 @@ from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import declared_mid_conversation_system_support, deployment_model_info
+
+HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS: Final = (
+    "chat_template_kwargs",
+    "top_k",
+    "repetition_penalty",
+    "presence_penalty",
+    "frequency_penalty",
+    "min_p",
+    "best_of",
+    "stop_token_ids",
+    "spaces_between_special_tokens",
+    "prompt_logprobs",
+    "skip_special_tokens",
+    "include_stop_str_in_output",
+    "guided_json",
+    "guided_regex",
+    "guided_choice",
+    "guided_grammar",
+    "guided_decoding_backend",
+    "guided_whitespace_pattern",
+    "priority",
+)
+
+
+def _vllm_param_value(
+    param: str, optional_params: Mapping[str, object], litellm_params: GenericLiteLLMParams
+) -> object:
+    from_request: Final = optional_params.get(param)
+    return from_request if from_request is not None else getattr(litellm_params, param, None)
 
 
 class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -31,6 +61,13 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.HOSTED_VLLM
+
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: mirrors base signature
+        params: Final[list[str]] = list(  # mutable-ok: accumulator list
+            super().get_supported_openai_params(model)  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # base returns untyped list
+        )
+        params.extend(HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS)
+        return params
 
     def validate_environment(
         self,
@@ -89,13 +126,19 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
             else None
         )
         placed_input, placed_params = folded or (input, response_api_optional_request_params)
-        return super().transform_responses_api_request(
+        request: Final = super().transform_responses_api_request(
             model=model,
             input=placed_input,
             response_api_optional_request_params=dict(placed_params),
             litellm_params=litellm_params,
             headers=headers,
         )
+        vllm_params: Final = {
+            param: value
+            for param in HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS
+            if (value := _vllm_param_value(param, placed_params, litellm_params)) is not None
+        }
+        return {**request, **vllm_params}
 
     def supports_native_websocket(self) -> bool:
         """Hosted vLLM does not support native WebSocket for Responses API"""
