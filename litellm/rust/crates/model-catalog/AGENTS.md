@@ -54,9 +54,35 @@ Every price in a row lowers to one `Price { meter, channel, when }` and its `Uni
   - Entry order is latest-registration order. `landed_on` records which registered keys landed on each row key
 - `write_pass` stops at the first `place` that returns `None` and reports `Pass::Swapped`. Retrying is the host's job
 
-`resolve/` and `model_info.rs` hold types only. The functions over them land with their first caller
-
 Catalog errors use one opaque `Error` with typed causes and JSON Pointer accessors (`path`, `key`, `field`). `Error::rejects` alone decides whether an error fails the document, rejects its row or neither, and `ErrorKind` is the stable name hosts report it by
+
+`model_info.rs` holds types only. The functions over it land with its first caller
+
+`resolve/` turns a call into the rows main tries, in main's order. Each file is a port of named Python functions and says which
+
+- `names.rs` builds the seven names `get_model_info` tries for a known provider (`Candidates::potential`)
+- `bedrock.rs` reads Bedrock model id spellings. `litellm-llms` re-exports it, so the routes and the lookups share one copy
+- `cost.rs` is `Snapshot::candidates`, the `/v1/messages` Claude providers only (`CostProvider`). Any call main would price by another path is `AfterRows::Deferred` with its `Deferral`, so Python keeps pricing it. Rows before a deferral are still tried first, because main tries them first
+- `cost_candidates.json` is main's answer for each test case, captured once from `completion_cost` with `NativePrices` spied. Recapture it when main's selection changes on purpose, never to make a Rust change pass
+
+`snapshot.rs` is one call's view of a host's live table, keyed on `Generation` (main's `ModelCostVersion` plus the identity of `cost_discount_config` and `cost_margin_config`). `Snapshots` hands out one snapshot per generation and shares a row cache across generations, keyed by row object identity, so a row no write replaced is lowered once. A host that edits a row object in place calls `Snapshots::forget_rows`. The snapshot reads rows live from the host table, it never copies the table
+
+- `TableRow` and `LiveTable` are the whole host interface: exact key, folded key through the store, and a row object with its fields and `registered_fields`
+- `KnownNames` is the two lists only Python has, every provider name and the model names `get_model_info` renames
+- A row is lowered with `litellm_provider` replaced by the billed provider, as `NativePrices` does
+
+## Copied from main, fix later
+
+Each line is main's behavior kept on purpose. Fixing one is a separate behavior change
+
+- A deployment's price lives in at least seven places that disagree (`costmap/family_config.md` I1 to I7). Only the row the router registered under the deployment id, as stored, is exposed (`RowProvenance::Registered`, I3). Chat bills a direction the deployment did not declare at 0, while batch, the failure estimate and the model group display carry the published rate (I4, `deployment_pricing_model_info` in `litellm_logging.py`) and `per_call_model_info` (I7, `per_call_pricing.py`) rebuilds the row from the catalog whenever any per-call price is set. The I4 and I7 views land with their first callers
+- A served model wins over a dated or `@version` request row: Vertex `claude-opus-4-5@20251101` bills `vertex_ai/claude-opus-4-5` when the response names `claude-opus-4-5-20251101` (`_served_or_priced_requested_model`, `cost_calculator.py`)
+- A model only a capability rule knows bills from the rule, which prices nothing, so main charges 0 (`get_model_info_helper` generalization). Here it is `Deferral::Generalization`
+- A Bedrock Mantle row without token or tier prices bills 0 instead of trying the next candidate (the `else` branch of `cost_per_token`)
+- `stripped_model_name` keeps a Mantle region path, `us-gov-west-1/anthropic.claude-x` (`get_potential_model_names`)
+- An edit of a row object in place is never seen until the host forgets rows. Main sees it after the next version move, and only where its own caches reread (`VersionCached`)
+- A region path is any `<letters-digits-dashes>/` segment (`is_bedrock_region`), where Python checks a fixed region list (`get_all_bedrock_regions`)
+- A geo or speed multiplier below 1 is dropped, since `Multiplier` refuses it, where Python applies any number
 
 ## Prices
 
@@ -73,6 +99,8 @@ A new `N`, image size or resolution in an existing key shape parses with no Rust
 - Result tiers are left out, since the search calculator prices them
 - A modality input token price that does not parse is 0, where a missing one borrows the text rate
 - Any other contradiction keeps the price read first
+
+`Adjustments::from` also lowers `provider_specific_entry`. `fast` is the `speed: fast` uplift and every other numeric key is a geo uplift, except `global` and `not_available`, which main never uplifts. Applying them only for Anthropic and Bedrock is the pricing core's rule, not the row's
 
 `wire/blocks.rs` reports a malformed off-peak window or weekday and keeps the well-formed ones, so billing skips only what Python skipped while the catalog checks still reject the row
 

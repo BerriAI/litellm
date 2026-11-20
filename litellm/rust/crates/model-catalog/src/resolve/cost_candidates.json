@@ -1,0 +1,1203 @@
+{
+ "captured_from": "litellm.completion_cost(call_type='anthropic_messages') on main 532df6ef85 plus PR #51566, LITELLM_LOCAL_MODEL_COST_MAP=True, NativePrices spied for the rows billed and tried",
+ "known_names": {
+  "providers": [
+   "a2a",
+   "a2a_agent",
+   "abliteration",
+   "ai21",
+   "ai21_chat",
+   "aiand",
+   "aiml",
+   "aiohttp_openai",
+   "amazon_nova",
+   "anthropic",
+   "anthropic_text",
+   "apertis",
+   "assemblyai",
+   "auto_router",
+   "aws_polly",
+   "aws_textract",
+   "azure",
+   "azure_ai",
+   "azure_speech",
+   "azure_text",
+   "baseten",
+   "bedrock",
+   "bedrock_mantle",
+   "bespoke",
+   "bigmodel",
+   "black_forest_labs",
+   "bytez",
+   "cerebras",
+   "charity_engine",
+   "chatgpt",
+   "chutes",
+   "clarifai",
+   "clf_ai_gateway",
+   "cloudflare",
+   "codestral",
+   "cognition",
+   "cohere",
+   "cohere_chat",
+   "cometapi",
+   "compactifai",
+   "coralbricks",
+   "cortecs",
+   "cursor",
+   "custom",
+   "custom_openai",
+   "darkbloom",
+   "dashscope",
+   "databricks",
+   "databricks_agent",
+   "datarobot",
+   "deepgram",
+   "deepinfra",
+   "deepseek",
+   "docker_model_runner",
+   "dotprompt",
+   "edenai",
+   "elevenlabs",
+   "empiriolabs",
+   "empower",
+   "eu_jev",
+   "fal_ai",
+   "featherless_ai",
+   "fireworks_ai",
+   "friendliai",
+   "galadriel",
+   "gdc",
+   "gemini",
+   "gigachat",
+   "github",
+   "github_copilot",
+   "gradient_ai",
+   "groq",
+   "helicone",
+   "heroku",
+   "hosted_vllm",
+   "hostinger_router",
+   "huggingface",
+   "humanloop",
+   "hyperbolic",
+   "inception",
+   "inferenceapis",
+   "infinity",
+   "jina_ai",
+   "kyma",
+   "lambda_ai",
+   "langflow",
+   "langfuse",
+   "langgraph",
+   "laya",
+   "lemonade",
+   "libertai",
+   "litellm_agent",
+   "litellm_proxy",
+   "llamafile",
+   "lm_studio",
+   "manus",
+   "maritalk",
+   "meta",
+   "meta_llama",
+   "microsoft_365_copilot",
+   "milvus",
+   "minimax",
+   "mistral",
+   "modelscope",
+   "mongodb",
+   "moonshot",
+   "morph",
+   "nace",
+   "nadir",
+   "nano-gpt",
+   "nebius",
+   "neosantara",
+   "nlp_cloud",
+   "novita",
+   "nscale",
+   "nvidia_nim",
+   "nvidia_riva",
+   "oci",
+   "ollama",
+   "ollama_chat",
+   "oobabooga",
+   "openai",
+   "openai_like",
+   "opencode_go",
+   "openinfer",
+   "openrouter",
+   "opensearch",
+   "ovhcloud",
+   "parallel_ai",
+   "parasail",
+   "perplexity",
+   "petals",
+   "pg_vector",
+   "pinstripes",
+   "poe",
+   "predibase",
+   "prism",
+   "publicai",
+   "qwen_ai_platform",
+   "qwencloud",
+   "ragflow",
+   "recraft",
+   "reducto",
+   "refuseless",
+   "reka",
+   "replicate",
+   "runwayml",
+   "s3_vectors",
+   "sagemaker",
+   "sagemaker_chat",
+   "sagemaker_nova",
+   "sail",
+   "sambanova",
+   "sap",
+   "scaledown",
+   "scaleway",
+   "scx-ai",
+   "snowflake",
+   "soniox",
+   "stability",
+   "strands_decider",
+   "streamlake",
+   "synthetic",
+   "tencent",
+   "tensormesh",
+   "text-completion-codestral",
+   "text-completion-inception",
+   "text-completion-openai",
+   "together_ai",
+   "topaz",
+   "transcribe",
+   "triton",
+   "typesafe",
+   "v0",
+   "valkey",
+   "vercel_ai_gateway",
+   "vertex_ai",
+   "vertex_ai_beta",
+   "vispark",
+   "vllm",
+   "volcengine",
+   "voyage",
+   "wally",
+   "wandb",
+   "watsonx",
+   "watsonx_text",
+   "xai",
+   "xiaomi_mimo",
+   "xinference",
+   "zai",
+   "zerogpu"
+  ],
+  "renamed_models": [
+   "ada",
+   "azure/gpt-41",
+   "azure/gpt-41-mini",
+   "azure/gpt-41-nano",
+   "gpt-35-turbo",
+   "gpt-35-turbo-instruct"
+  ]
+ },
+ "registered": {
+  "dep-bedrock-custom": {
+   "fields": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 4e-06,
+    "litellm_provider": "bedrock",
+    "mode": "chat"
+   },
+   "registered_fields": [
+    "input_cost_per_token",
+    "litellm_provider",
+    "mode",
+    "output_cost_per_token"
+   ]
+  },
+  "dep-claude-custom": {
+   "fields": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "litellm_provider": "anthropic",
+    "mode": "chat"
+   },
+   "registered_fields": [
+    "input_cost_per_token",
+    "litellm_provider",
+    "mode",
+    "output_cost_per_token"
+   ]
+  },
+  "dep-claude-unpriced": {
+   "fields": {
+    "litellm_provider": "anthropic",
+    "mode": "chat"
+   },
+   "registered_fields": [
+    "litellm_provider",
+    "mode"
+   ]
+  }
+ },
+ "cases": [
+  {
+   "name": "anthropic_dated_response",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-4-5",
+    "response_model": "claude-opus-4-5-20251101",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-4-5-20251101",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_same_response",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_prefixed_request",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "anthropic/claude-sonnet-4-5",
+    "response_model": "claude-sonnet-4-5-20250929",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-sonnet-4-5-20250929",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_no_response_model",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-4-5-20251101",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-4-5-20251101",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-5-20251101"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_unmapped_both",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-9-9",
+    "response_model": "claude-opus-9-9",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "anthropic/claude-opus-9-9",
+   "billed_provider": "anthropic",
+   "tried": [
+    "anthropic/claude-opus-9-9",
+    "anthropic/claude-opus-9-9",
+    "anthropic/claude-opus-9-9"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_unmapped_request",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-9-9",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "anthropic/claude-opus-9-9"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_unmapped_response",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-5-5",
+    "response_model": "claude-opus-9-9",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "anthropic/claude-opus-9-9"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_unmapped_dated_response",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-5-5",
+    "response_model": "claude-opus-5-5-20270101",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "anthropic/claude-opus-5-5-20270101"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_case_folded",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "Claude-Opus-5-5",
+    "response_model": "Claude-Opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_custom_priced_deployment",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": true,
+    "deployment_id": "dep-claude-custom",
+    "region": null
+   },
+   "billed_key": "dep-claude-custom",
+   "billed_provider": "anthropic",
+   "tried": [
+    "dep-claude-custom",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_custom_unpriced_deployment",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": true,
+    "deployment_id": "dep-claude-unpriced",
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_custom_missing_deployment",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": true,
+    "deployment_id": "dep-missing",
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_uncustom_deployment_id_ignored",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": "dep-claude-custom",
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_base_model",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "my-opus",
+    "response_model": "claude-opus-5-5",
+    "base_model": "claude-opus-4-5",
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-4-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-4-5",
+    "claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_repeated_prefix",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "anthropic/anthropic/claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "anthropic_thrice_repeated_prefix",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "anthropic/anthropic/anthropic/claude-opus-5-5",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "claude-opus-5-5",
+   "billed_provider": "anthropic",
+   "tried": [
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_profile_over_served_base_id",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "us.anthropic.claude-opus-5-5",
+    "response_model": "anthropic.claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "us.anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "us.anthropic.claude-opus-5-5",
+    "anthropic.claude-opus-5-5",
+    "us.anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_us_profile",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "us.anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "us.anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "us.anthropic.claude-opus-5-5",
+    "us.anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_invoke_us_profile",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "invoke/us.anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "us.anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "us.anthropic.claude-opus-5-5",
+    "us.anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_global_profile",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "global.anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "global.anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "global.anthropic.claude-opus-5-5",
+    "global.anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_eu_dated_profile",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "response_model": "claude-sonnet-4-5-20250929",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+   "billed_provider": "bedrock",
+   "tried": [
+    "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_base_id",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "anthropic.claude-opus-4-5-20251101-v1:0",
+    "response_model": "claude-opus-4-5-20251101",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "anthropic.claude-opus-4-5-20251101-v1:0",
+   "billed_provider": "bedrock",
+   "tried": [
+    "anthropic.claude-opus-4-5-20251101-v1:0",
+    "anthropic.claude-opus-4-5-20251101-v1:0"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_claude_platform",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "claude_platform/claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "bedrock/claude_platform/claude-opus-5-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "bedrock/claude_platform/claude-opus-5-5",
+    "bedrock/claude_platform/claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_prefixed_no_response",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "bedrock/us.anthropic.claude-opus-5-5",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "us.anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "us.anthropic.claude-opus-5-5",
+    "us.anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_region_path",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "us-gov-west-1/anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "bedrock/us-gov-west-1/anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "bedrock/us-gov-west-1/anthropic.claude-opus-5-5",
+    "bedrock/us-gov-west-1/anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_invoke_apac",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "invoke/apac.anthropic.claude-opus-5",
+    "response_model": "claude-opus-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "apac.anthropic.claude-opus-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "apac.anthropic.claude-opus-5",
+    "apac.anthropic.claude-opus-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_mantle_route",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "mantle/anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "bedrock/mantle/anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "bedrock/mantle/anthropic.claude-opus-5-5",
+    "bedrock/mantle/anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_context_suffix",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "us.anthropic.claude-opus-5-5[1m]",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock",
+   "tried": [
+    "anthropic.claude-opus-5-5",
+    "anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_throughput_suffix",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "anthropic.claude-opus-4-5-20251101-v1:0:51k",
+    "response_model": "claude-opus-4-5-20251101",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "anthropic.claude-opus-4-5-20251101-v1:0",
+   "billed_provider": "bedrock",
+   "tried": [
+    "anthropic.claude-opus-4-5-20251101-v1:0",
+    "anthropic.claude-opus-4-5-20251101-v1:0"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_unmapped_profile",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "us.anthropic.claude-opus-9-9",
+    "response_model": "claude-opus-9-9",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "bedrock/claude-opus-9-9",
+   "billed_provider": "bedrock",
+   "tried": [
+    "bedrock/claude-opus-9-9",
+    "bedrock/claude-opus-9-9",
+    "bedrock/us.anthropic.claude-opus-9-9"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "bedrock_custom_priced_deployment",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "us.anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": true,
+    "deployment_id": "dep-bedrock-custom",
+    "region": null
+   },
+   "billed_key": "dep-bedrock-custom",
+   "billed_provider": "bedrock",
+   "tried": [
+    "dep-bedrock-custom",
+    "us.anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "mantle_us_east",
+   "identity": {
+    "provider": "bedrock_mantle",
+    "request_model": "anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": "us-east-1"
+   },
+   "billed_key": "bedrock_mantle/anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock_mantle",
+   "tried": [
+    "bedrock_mantle/anthropic.claude-opus-5-5",
+    "bedrock_mantle/anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "mantle_gov_region_row",
+   "identity": {
+    "provider": "bedrock_mantle",
+    "request_model": "anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": "us-gov-west-1"
+   },
+   "billed_key": "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock_mantle",
+   "tried": [
+    "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5",
+    "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "mantle_region_in_model",
+   "identity": {
+    "provider": "bedrock_mantle",
+    "request_model": "us-gov-west-1/anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": "us-gov-west-1"
+   },
+   "billed_key": "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock_mantle",
+   "tried": [
+    "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5",
+    "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "mantle_no_region",
+   "identity": {
+    "provider": "bedrock_mantle",
+    "request_model": "anthropic.claude-opus-5",
+    "response_model": "claude-opus-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "bedrock_mantle/anthropic.claude-opus-5",
+   "billed_provider": "bedrock_mantle",
+   "tried": [
+    "bedrock_mantle/anthropic.claude-opus-5",
+    "bedrock_mantle/anthropic.claude-opus-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "mantle_prefixed",
+   "identity": {
+    "provider": "bedrock_mantle",
+    "request_model": "bedrock_mantle/anthropic.claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": "us-east-1"
+   },
+   "billed_key": "bedrock_mantle/anthropic.claude-opus-5-5",
+   "billed_provider": "bedrock_mantle",
+   "tried": [
+    "bedrock_mantle/anthropic.claude-opus-5-5",
+    "bedrock_mantle/anthropic.claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "mantle_unmapped",
+   "identity": {
+    "provider": "bedrock_mantle",
+    "request_model": "anthropic.claude-opus-9-9",
+    "response_model": "claude-opus-9-9",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": "us-east-1"
+   },
+   "billed_key": null,
+   "billed_provider": null,
+   "tried": [],
+   "after_tried": "returned"
+  },
+  {
+   "name": "azure_ai_plain",
+   "identity": {
+    "provider": "azure_ai",
+    "request_model": "claude-opus-4-5",
+    "response_model": "claude-opus-4-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "azure_ai/claude-opus-4-5",
+   "billed_provider": "azure_ai",
+   "tried": [
+    "azure_ai/claude-opus-4-5",
+    "azure_ai/claude-opus-4-5",
+    "azure_ai/claude-opus-4-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "azure_ai_deployment_name",
+   "identity": {
+    "provider": "azure_ai",
+    "request_model": "prod-opus",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "azure_ai/claude-opus-5-5",
+   "billed_provider": "azure_ai",
+   "tried": [
+    "azure_ai/claude-opus-5-5",
+    "azure_ai/claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "azure_ai_base_model",
+   "identity": {
+    "provider": "azure_ai",
+    "request_model": "prod-opus",
+    "response_model": "prod-opus",
+    "base_model": "azure_ai/claude-opus-5-5",
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "azure_ai/claude-opus-5-5",
+   "billed_provider": "azure_ai",
+   "tried": [
+    "azure_ai/claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "azure_ai_bare_base_model",
+   "identity": {
+    "provider": "azure_ai",
+    "request_model": "prod-opus",
+    "response_model": "prod-opus",
+    "base_model": "claude-sonnet-4-5",
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "azure_ai/claude-sonnet-4-5",
+   "billed_provider": "azure_ai",
+   "tried": [
+    "azure_ai/claude-sonnet-4-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "azure_ai_fast_variant",
+   "identity": {
+    "provider": "azure_ai",
+    "request_model": "claude-opus-5-5-fast",
+    "response_model": "claude-opus-5-5-fast",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "azure_ai/claude-opus-5-5-fast",
+   "billed_provider": "azure_ai",
+   "tried": [
+    "azure_ai/claude-opus-5-5-fast",
+    "azure_ai/claude-opus-5-5-fast",
+    "azure_ai/claude-opus-5-5-fast"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "vertex_plain",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "claude-opus-5-5",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "vertex_ai/claude-opus-5-5",
+   "billed_provider": "vertex_ai",
+   "tried": [
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "vertex_versioned",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "claude-opus-4-5@20251101",
+    "response_model": "claude-opus-4-5-20251101",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "vertex_ai/claude-opus-4-5",
+   "billed_provider": "vertex_ai",
+   "tried": [
+    "vertex_ai/claude-opus-4-5",
+    "vertex_ai/claude-opus-4-5",
+    "vertex_ai/claude-opus-4-5@20251101"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "vertex_default_version",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "claude-opus-5-5@default",
+    "response_model": "claude-opus-5-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "vertex_ai/claude-opus-5-5",
+   "billed_provider": "vertex_ai",
+   "tried": [
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5@default"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "vertex_unknown_version",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "claude-sonnet-4-5@20990101",
+    "response_model": "claude-sonnet-4-5-20990101",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "vertex_ai/claude-sonnet-4-5",
+   "billed_provider": "vertex_ai",
+   "tried": [
+    "vertex_ai/claude-sonnet-4-5",
+    "vertex_ai/claude-sonnet-4-5",
+    "vertex_ai/claude-sonnet-4-5@20990101"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "vertex_prefixed",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "vertex_ai/claude-opus-5",
+    "response_model": "claude-opus-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "vertex_ai/claude-opus-5",
+   "billed_provider": "vertex_ai",
+   "tried": [
+    "vertex_ai/claude-opus-5",
+    "vertex_ai/claude-opus-5",
+    "vertex_ai/claude-opus-5"
+   ],
+   "after_tried": "raised"
+  },
+  {
+   "name": "vertex_slash_alias",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "vertex/claude-opus-5",
+    "response_model": "claude-opus-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null
+   },
+   "billed_key": "vertex_ai/claude-opus-5",
+   "billed_provider": "vertex_ai",
+   "tried": [
+    "vertex_ai/claude-opus-5",
+    "vertex_ai/claude-opus-5",
+    "vertex_ai/claude-opus-5"
+   ],
+   "after_tried": "raised"
+  }
+ ],
+ "bedrock_registration": {
+  "key": "anthropic.claude-opus-5-5",
+  "registered": {
+   "input_cost_per_token": 9e-06
+  },
+  "request_model": "us.anthropic.claude-opus-5-5",
+  "response_model": "claude-opus-5-5",
+  "cases": [
+   {
+    "custom_pricing": true,
+    "tried": [
+     "anthropic.claude-opus-5-5",
+     "anthropic.claude-opus-5-5"
+    ]
+   },
+   {
+    "custom_pricing": false,
+    "tried": [
+     "anthropic.claude-opus-5-5",
+     "anthropic.claude-opus-5-5",
+     "anthropic.claude-opus-5-5"
+    ]
+   }
+  ]
+ }
+}
