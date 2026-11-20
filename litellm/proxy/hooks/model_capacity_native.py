@@ -75,6 +75,7 @@ from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate
 from litellm.proxy.request_auth_context import REQUEST_AUTH
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, RateLimitStore
+from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.integrations.custom_logger_v2 import KeyIdentity
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
 from litellm.types.utils import PriorityReservationSettings
@@ -286,7 +287,7 @@ _PAIRS: Final = TypeAdapter(tuple[tuple[str, object], ...])
 
 
 def _registry_unavailable(error: Exception) -> bool:
-    if isinstance(error, RedisCircuitBreakerOpenError | ValidationError):
+    if isinstance(error, RedisCircuitBreakerOpenError | ValidationError | NativeRedisStoreError):
         return True
     try:
         from redis.exceptions import RedisError

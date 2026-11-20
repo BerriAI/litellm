@@ -5,6 +5,7 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 """
 
 import asyncio
+import socket
 import time
 from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime, timedelta
@@ -27,7 +28,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     no_max_tokens_output_floor,
     should_rate_limit,
 )
-from litellm.proxy.hooks.priority_class_share import pool_member
+from litellm.proxy.hooks.priority_class_share import ActiveTeamRegistry, pool_member
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -2656,6 +2657,23 @@ async def test_a_registry_failure_falls_back_to_the_class_pool_instead_of_skippi
 ):
     handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
     handler.active_teams = _UnavailableRegistry()  # pyright: ignore[reportAttributeAccessIssue]  # injected failing registry
+    await _burn(handler, _class_team("team-a"), "interactive", 650)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a"), saturation=0.65, priority="interactive")
+    assert exc.value.headers is not None
+    assert "rate_limited_by" not in exc.value.headers
+    assert "Priority-based rate limit exceeded" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_registry_whose_redis_is_down_falls_back_to_the_class_pool(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: Final = probe.getsockname()[1]
+    usage_cache: Final = handler.logger.delegate.usage_cache
+    usage_cache.redis_cache = RedisCache(host="127.0.0.1", port=port)
+    handler.active_teams = ActiveTeamRegistry(usage_cache)
     await _burn(handler, _class_team("team-a"), "interactive", 650)
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _class_team("team-a"), saturation=0.65, priority="interactive")
