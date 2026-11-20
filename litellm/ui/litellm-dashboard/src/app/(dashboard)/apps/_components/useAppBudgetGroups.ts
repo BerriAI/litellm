@@ -6,6 +6,14 @@ export function useOverallAppBudgetGroups() {
   return $api.useQuery("get", "/management/v1/app_budget_groups", {});
 }
 
+export function useAppMemberBudgetGroups(enabled = true) {
+  const groups = $api.useQuery("get", "/management/v1/app_customer_member_budget_groups", {}, { enabled });
+  return {
+    ...groups,
+    data: groups.data && { ...groups.data, legacy_budgets: [] },
+  };
+}
+
 export function useAppBudgetGroups(existingIds: (string | null | undefined)[] = [], enabled = true) {
   const groups = $api.useQuery("get", "/management/v1/app_customer_organization_budget_groups", {}, { enabled });
   const missingIds = existingIds.filter(

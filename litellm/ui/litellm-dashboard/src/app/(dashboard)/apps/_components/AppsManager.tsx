@@ -209,7 +209,6 @@ const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default
     budgetSource: profiles.some((profile) => profile.budget_id === app?.budget_id)
       ? `profile:${app?.budget_id}`
       : customSource,
-    member: budgetEditorFields(app?.default_customer_member_budget),
     autoCreate: app?.auto_create_customers ?? true,
     surcharge: appSurchargeField(app?.customer_margin),
   };
@@ -234,8 +233,7 @@ function AppDefaultsForm({
         fields.budgetSource === "custom"
           ? permanentBudgetEditorValue(fields.budget, app?.budget)
           : ({ ok: true, value: null } as const);
-      const member = permanentBudgetEditorValue(fields.member, app?.default_customer_member_budget);
-      if (!budget.ok || !member.ok) return { ok: false, error: t("customerPortal.hierarchy.invalidNumber") };
+      if (!budget.ok) return { ok: false, error: t("customerPortal.hierarchy.invalidNumber") };
       const margin = appSurchargeValue(fields.surcharge);
       if (!margin.ok) return { ok: false, error: t("apps.surchargeInvalid") };
       return {
@@ -244,7 +242,6 @@ function AppDefaultsForm({
           ...(fields.budgetSource === "custom"
             ? { budget: { ...budget.value, ...budgetPolicyChanges(fields.policy, app?.budget) } }
             : { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null }),
-          default_customer_member_budget: member.value,
           auto_create_customers: fields.autoCreate,
           customer_margin: margin.value,
         },
@@ -297,15 +294,9 @@ function AppDefaultsForm({
         {t("apps.manageOverallProfiles")}
       </a>
       <div className="border-t pt-6">
-        <AppBudgetEditor
-          modelScope={resource}
-          title={t("apps.memberDefault")}
-          description={t("apps.memberDefaultHint")}
-          id="app-member"
-          fields={fields.member}
-          onChange={(value) => update("member", value)}
-          disabled={pending}
-        />
+        <a href={`${uiHref("customers/settings")}?tab=app-member`} className="text-sm text-primary hover:underline">
+          {t("apps.manageMemberProfiles")}
+        </a>
       </div>
       <div className="space-y-1.5 border-t pt-4">
         <label className="flex items-center gap-2 text-sm font-medium">

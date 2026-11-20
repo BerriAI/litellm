@@ -23,7 +23,7 @@ type Props =
       organization: BudgetGroups;
       onSaved: (groups: BudgetGroups) => void | Promise<void>;
       global: true;
-      scope?: "organization" | "app" | "overall-app";
+      scope?: "organization" | "app" | "overall-app" | "app-member";
     };
 
 export default function CustomerBudgetGroups(props: Props) {
@@ -31,6 +31,7 @@ export default function CustomerBudgetGroups(props: Props) {
   const endpoints = {
     "overall-app": "/management/v1/app_budget_groups",
     app: "/management/v1/app_customer_organization_budget_groups",
+    "app-member": "/management/v1/app_customer_member_budget_groups",
     organization: "/management/v1/customer_organization_budget_groups",
   } as const;
   const globalEndpoint = endpoints[(props.global && props.scope) || "organization"];

@@ -41,7 +41,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
 }));
 const fetchMock = vi.fn<typeof fetch>();
 const onSaved = vi.fn();
-const limitsFor = (name: string) => within(screen.getByRole("row", { name, exact: true }));
+const limitsFor = (name: string) => within(screen.getByRole("row", { name }));
 const emptyOrganization = { ...organization, default_budget_template_id: null, default_budgets: [] };
 const organizationWithBudgets = (...budgets: Budget[]) => ({
   ...organization,
@@ -113,6 +113,7 @@ describe("CustomerBudgetGroups", () => {
       "/management/v1/app_customer_organization_budget_groups",
       "app",
     ],
+    ["App × member budget groups", "App × member", "/management/v1/app_customer_member_budget_groups", "app-member"],
   ] as const;
 
   const catalogCases = catalogs.flatMap(([title, tabTitle, endpoint, scope]) =>
@@ -125,6 +126,7 @@ describe("CustomerBudgetGroups", () => {
       "overall-app": { period: "No reset", duration: null },
       organization: { period: "/ month", duration: "1mo" },
       app: { period: "Custom period", duration: "7d" },
+      "app-member": { period: "/ year", duration: "12mo" },
     }[scope];
     const name = modelOnly ? "Models" : "Starter";
     const budget = {
@@ -165,6 +167,8 @@ describe("CustomerBudgetGroups", () => {
     await user.keyboard("{Escape}");
     expect(editor.queryByRole("radio")).not.toBeInTheDocument();
     expect(editor.queryByRole("combobox", { name: "New members join" })).not.toBeInTheDocument();
+    if (scope === "app-member")
+      expect(editor.queryByRole("combobox", { name: "New organizations join" })).not.toBeInTheDocument();
     await user.click(editor.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(editor.getByRole("button", { name: "Save changes" })).toBeDisabled());
     const request = fetchMock.mock.calls
@@ -249,7 +253,7 @@ describe("CustomerBudgetGroups", () => {
     await user.click(custom.getByRole("button", { name: "Add limit" }));
     await user.click(limitsFor("New").getAllByRole("button", { name: "Remove limit" })[0]);
     await user.click(screen.getByRole("combobox", { name: "New members join" }));
-    await user.click(await screen.findByRole("option", { name: "New", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "New" }));
     await user.click(screen.getByRole("button", { name: "Remove Old" }));
     await chooseSelectOption(
       user,
@@ -336,12 +340,12 @@ describe("CustomerBudgetGroups", () => {
     const defaults = await screen.findByRole("combobox", { name: "New organizations join" });
     expect(defaults).toHaveTextContent("No limit");
     await user.click(defaults);
-    await user.click(await screen.findByRole("option", { name: "Standard", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "Standard" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled());
     expect(defaults).toHaveTextContent("Standard");
     await user.click(defaults);
-    await user.click(await screen.findByRole("option", { name: "No limit", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "No limit" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled());
     expect(defaults).toHaveTextContent("No limit");

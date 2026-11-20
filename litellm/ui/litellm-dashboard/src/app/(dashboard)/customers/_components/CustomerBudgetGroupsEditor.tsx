@@ -17,12 +17,13 @@ export default function CustomerBudgetGroupsEditor({
   onChange: (groups: CustomerBudgetGroupFields[], defaultGroupId: string) => void;
   disabled?: boolean;
   memberGroups?: boolean;
-  scope?: "organization" | "app" | "overall-app";
+  scope?: "organization" | "app" | "overall-app" | "app-member";
 }) {
   const { t } = useTranslation();
   const globalGroupKey = (
     {
       app: "customerPortal.appOrganizationGroups",
+      "app-member": "customerPortal.appMemberGroups",
       "overall-app": "customerPortal.overallAppGroups",
       organization: "customerPortal.organizationGroups",
     } as const

@@ -54,10 +54,16 @@
     "retry": "Retry",
     "spend": "Tracked spend (USD)",
     "appBudget": "Overall app budget",
+    "customerAppBudget": "{{customer}}'s app budget",
+    "customerAppBudgetDescription": "Choose an app and set this customer's total budget. The organization-wide budget also applies.",
     "appBudgetHint": "Optional. Caps total usage across all customer organizations and members in this app.",
     "organizationDefault": "Default for app × customer organizations",
     "memberDefault": "Default per-member budget",
     "memberDefaultHint": "Optional. Applies separately to each member unless they have a more specific app budget.",
+    "memberDefaultsHint": "Set an independent allowance for every member in each app. Each member has their own usage counters, so this is not a shared pool. A more specific member budget takes precedence.",
+    "memberDefaultFor": "Per-member default for {{alias}}",
+    "editMemberDefault": "Edit custom allowance",
+    "applyDefault": "Apply",
     "noAdditionalLimits": "No additional limits at this level",
     "actions": "Actions",
     "none": "None",
@@ -67,6 +73,7 @@
     "profile": "Budget group",
     "manageProfiles": "Manage app × customer organization budget groups",
     "manageOverallProfiles": "Manage overall app budget groups",
+    "manageMemberProfiles": "Manage per-member defaults and budget groups",
     "chooseProfile": "Select a budget group",
     "noDefaultProfile": "No default budget group",
     "defaultProfileHint": "Customers without their own app budget or selected budget group inherit this group.",
@@ -21016,6 +21023,10 @@
       "title": "App × customer organization budget groups",
       "help": "Each customer organization gets these limits separately within an app. Blank means no limit."
     },
+    "appMemberGroups": {
+      "title": "App × member budget groups",
+      "help": "Reusable per-member allowances for apps. Each member receives these limits independently with their own usage counters. Choose a default separately for each app below."
+    },
     "tokenUsage": {
       "tokenBreakdown": "Token breakdown",
       "viewTokenBreakdown": "{{total}} total tokens. View breakdown",
@@ -21039,10 +21050,11 @@
     "budgetGroups": {
       "organizationDefault": "Use organization default",
       "organizationDefaultHelp": "Apply the configured default when this organization is created.",
-      "settingsHint": "Manage separate presets for overall app limits, organization-wide limits, and each customer's usage within an app.",
+      "settingsHint": "Manage separate presets for overall app limits, organization-wide limits, and each customer's or member's usage within an app.",
       "overallAppTab": "Overall App Budget Groups",
       "overallTab": "Overall Organization Budget Groups",
       "appTab": "Per-App Organization Budget Groups",
+      "appMemberTab": "App × member",
       "newOrganizationsJoin": "New organizations join",
       "newOrganizationsHelp": "Use this budget group for new organizations unless you choose another. No limit adds no organization-level cap.",
       "atCap": "At the cap",

@@ -42,7 +42,7 @@ export default function CustomerBudgetGroupsTable({
   groups: CustomerBudgetGroupFields[];
   defaultGroupId: string;
   disabled: boolean;
-  scope: "member" | "organization" | "app" | "overall-app";
+  scope: "member" | "organization" | "app" | "overall-app" | "app-member";
   title: string;
   description: string;
   onUpdate: (id: string, patch: Partial<Omit<CustomerBudgetGroupFields, "id">>) => void;

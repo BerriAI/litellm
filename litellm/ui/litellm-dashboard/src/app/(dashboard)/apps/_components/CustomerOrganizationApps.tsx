@@ -1,12 +1,11 @@
 "use client";
 
-import { compactBudgetEditorFields, permanentBudgetEditorValue } from "../../customers/_components/customerBudgetForm";
+import { compactBudgetEditorFields } from "../../customers/_components/customerBudgetForm";
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CustomerBudgetDialog, CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
 import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
-import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -14,6 +13,7 @@ import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
+import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
 import {
   appDefinitionKey,
@@ -106,17 +106,11 @@ export default function CustomerOrganizationApps({
         open={adding || editing !== null}
         onClose={closeDialog}
         pending={pending}
-        title={adding ? t("apps.addBudget") : t("apps.budgetFor", { alias: editing?.alias })}
-        description={t("apps.organizationHint")}
+        title={t("apps.customerAppBudget", { customer: organizationAlias || organizationId })}
+        description={t("apps.customerAppBudgetDescription")}
         className="sm:max-w-2xl"
       >
-        <div className="grid shrink-0 gap-4 px-6 pt-6 last:pb-6 sm:grid-cols-2">
-          <div className="space-y-2">
-            <label htmlFor="app-budget-customer" className="block text-sm text-muted-foreground">
-              {t("apps.customer")}
-            </label>
-            <Input id="app-budget-customer" value={organizationAlias || organizationId} readOnly />
-          </div>
+        <div className={cn("shrink-0 px-6 pt-6", !editing && "pb-6")}>
           {adding && resourceType ? (
             <OrganizationAppPicker resources={resources} selected={editing} pending={pending} onChange={setEditing} />
           ) : (
@@ -377,12 +371,7 @@ function OrganizationAppForm({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [baseline] = useState(() => ({
-    budget: appBaseBudget(row, inherited),
-    member: row?.customer_member_budget_id ? row.effective_customer_member_budget : null,
-  }));
-  const original = baseline.budget;
-  const memberOriginal = baseline.member;
+  const [original] = useState(() => appBaseBudget(row, inherited));
   const form = useCustomerBudgetForm(
     {
       initial: {
@@ -391,13 +380,11 @@ function OrganizationAppForm({
             ? `profile:${row?.budget_id ?? row?.tier_budget_id}`
             : organizationBudgetSource(row),
         budget: compactBudgetEditorFields(original),
-        member: compactBudgetEditorFields(memberOriginal),
         policy: original,
       },
-      parse: ({ source, budget, member, policy }) => {
+      parse: ({ source, budget, policy }) => {
         const parsed = customerBudgetPatch({ ...budget, budgetEnabled: source === "custom" }, original, row);
-        const memberBudget = permanentBudgetEditorValue(member, memberOriginal);
-        if (!parsed.ok || !memberBudget.ok) return { ok: false, error: t("customerPortal.hierarchy.invalidNumber") };
+        if (!parsed.ok) return { ok: false, error: t("customerPortal.hierarchy.invalidNumber") };
         const policyChanges = budgetPolicyChanges(policy, original);
         return {
           ok: true,
@@ -406,7 +393,6 @@ function OrganizationAppForm({
               ? { ...parsed.value, budget: { ...parsed.value.budget, ...policyChanges } }
               : { budget_id: source.startsWith("profile:") ? source.slice(8) : null }),
             ...(hasLegacyCustomerBudget(row) ? { budget_override: null } : {}),
-            customer_member_budget: memberBudget.value,
           },
         };
       },
@@ -478,31 +464,6 @@ function OrganizationAppForm({
           id="org-app-override"
         />
       </CustomerBudgetEditor>
-      <section aria-labelledby="app-member-limits-heading" className="space-y-4 border-t pt-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <h3 id="app-member-limits-heading" className="font-semibold">
-              {t("apps.optionalMemberLimits")}
-            </h3>
-            <p className="text-sm text-muted-foreground">{t("apps.optionalMemberLimitsHint")}</p>
-          </div>
-          <Switch
-            aria-label={t("apps.enableMemberLimits")}
-            checked={fields.member.budgetEnabled}
-            disabled={pending}
-            onCheckedChange={(budgetEnabled) => update("member", { ...fields.member, budgetEnabled })}
-          />
-        </div>
-        {fields.member.budgetEnabled && (
-          <CustomerBudgetCompactFields
-            modelScope={resource}
-            fields={fields.member}
-            onChange={(value) => update("member", value)}
-            disabled={pending}
-            id="org-app-member"
-          />
-        )}
-      </section>
       <p className="text-xs text-muted-foreground">
         {t("apps.onlyThisPair", { customer: organizationAlias || organizationId, alias: resource.alias })}
       </p>

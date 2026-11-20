@@ -12,9 +12,9 @@ import CustomerBudgetGroups from "../_components/CustomerBudgetGroups";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { uiHref } from "@/utils/uiHref";
-import AppOrganizationDefaults from "../../apps/_components/AppOrganizationDefaults";
+import AppBudgetDefaults from "../../apps/_components/AppBudgetDefaults";
 
-const budgetGroupTab = parseAsStringLiteral(["organization", "app", "overall-app"])
+const budgetGroupTab = parseAsStringLiteral(["organization", "app", "overall-app", "app-member"])
   .withDefault("organization")
   .withOptions({ history: "push" });
 
@@ -37,6 +37,12 @@ const catalogs = [
     endpoint: "/management/v1/app_customer_organization_budget_groups",
     invalidate: ["apps", "app-organization", "app-member"],
   },
+  {
+    scope: "app-member",
+    label: "customerPortal.budgetGroups.appMemberTab",
+    endpoint: "/management/v1/app_customer_member_budget_groups",
+    invalidate: ["apps", "app", "app-organization", "app-member"],
+  },
 ] as const;
 
 function Catalog({ catalog }: { catalog: (typeof catalogs)[number] }) {
@@ -53,7 +59,8 @@ function Catalog({ catalog }: { catalog: (typeof catalogs)[number] }) {
       {groups.data && <CustomerBudgetGroups global scope={scope} organization={groups.data} onSaved={saved} />}
       {groups.isError && <ErrorState onRetry={() => void groups.refetch()} />}
       {groups.isPending && <p>{t("customerPortal.common.loading")}</p>}
-      {scope === "app" && <AppOrganizationDefaults />}
+      {scope === "app" && <AppBudgetDefaults />}
+      {scope === "app-member" && <AppBudgetDefaults scope="member" />}
     </>
   );
 }
@@ -62,7 +69,8 @@ export default function CustomerSettings() {
   const { t } = useTranslation();
   const [tab, setTab] = useQueryState("tab", budgetGroupTab);
   const changeTab = (value: unknown) => {
-    if (value === "organization" || value === "app" || value === "overall-app") void setTab(value);
+    const selected = catalogs.find(({ scope }) => scope === value);
+    if (selected) void setTab(selected.scope);
   };
   const { accessToken, userRole } = useAuthorized();
   const canManage = Boolean(accessToken && isProxyAdminRole(userRole));
