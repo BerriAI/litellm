@@ -5,7 +5,7 @@ use litellm_gateway_auth::AuthenticatedRequest;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::BodyError;
+use crate::{BodyError, ExposedHeader};
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -104,7 +104,9 @@ impl CacheHeaders {
         if let Some(key) = self.0.get()
             && let Ok(value) = axum::http::HeaderValue::from_str(key)
         {
-            response.headers_mut().insert("x-litellm-cache-key", value);
+            response
+                .headers_mut()
+                .insert(axum::http::HeaderName::from(ExposedHeader::CacheKey), value);
         }
         response
     }

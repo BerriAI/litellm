@@ -85,6 +85,80 @@ def test_completion_cost_uses_priority_image_output_rate(
     assert cost == pytest.approx(20 * 3e-06 + (100 - image_tokens) * 5e-06 + image_tokens * image_rate)
 
 
+@pytest.mark.parametrize(
+    ("service_tier", "image_input_rate", "cached_image_rate"),
+    ((None, 6e-07, 4e-08), ("priority", 11e-07, 7e-08), ("flex", 6e-07, 4e-08)),
+)
+def test_completion_cost_uses_priority_image_input_and_cache_read_rates(
+    local_model_cost_map: None, service_tier: str | None, image_input_rate: float, cached_image_rate: float
+) -> None:
+    model: Final = "gemini-synthetic-image-input-priority"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_token": 5e-07,
+                "output_cost_per_token": 3e-06,
+                "cache_read_input_token_cost": 5e-08,
+                "input_cost_per_image_token": 6e-07,
+                "input_cost_per_image_token_priority": 11e-07,
+                "cache_read_input_image_token_cost": 4e-08,
+                "cache_read_input_image_token_cost_priority": 7e-08,
+            }
+        }
+    )
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=100,
+            completion_tokens=4,
+            total_tokens=104,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=50,
+                image_tokens=50,
+                cached_tokens=40,
+                cached_tokens_details=CachedTokensDetails(text_tokens=10, image_tokens=30),
+            ),
+        ),
+    )
+    cost: Final = litellm.completion_cost(
+        completion_response=response, model=model, custom_llm_provider="vertex_ai", service_tier=service_tier
+    )
+    assert cost == pytest.approx(
+        40 * 5e-07 + 10 * 5e-08 + 20 * image_input_rate + 30 * cached_image_rate + 4 * 3e-06
+    )
+
+
+@pytest.mark.parametrize(
+    ("service_tier", "priority_rate", "image_rate"),
+    ((None, 11e-06, 7e-06), ("priority", 11e-06, 11e-06), ("priority", None, 7e-06), ("flex", 11e-06, 7e-06)),
+)
+def test_completion_cost_uses_priority_rate_for_image_only_model(
+    local_model_cost_map: None, service_tier: str | None, priority_rate: float | None, image_rate: float
+) -> None:
+    model: Final = "gemini-synthetic-image-only-priority"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_image_token": 7e-06,
+                "output_cost_per_image_token_priority": priority_rate,
+            }
+        }
+    )
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=20, completion_tokens=100, total_tokens=120),
+    )
+    cost: Final = litellm.completion_cost(
+        completion_response=response, model=model, custom_llm_provider="vertex_ai", service_tier=service_tier
+    )
+    assert cost == pytest.approx(20 * 3e-06 + 100 * image_rate)
+
+
 @pytest.mark.parametrize("prompt_tokens", (199_999, 200_000, 200_001))
 @pytest.mark.parametrize(
     ("service_tier", "flat_rate", "context_rate"),

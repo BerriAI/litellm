@@ -8072,13 +8072,25 @@ async def test_add_litellm_data_to_request_stamps_used_client_oauth_token(path, 
     async def metadata_for(client_headers: dict) -> dict:
         request_mock = _make_request_mock(path, {"Content-Type": "application/json", **client_headers})
         updated = await add_litellm_data_to_request(
-            data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+            data={
+                "model": "anthropic-claude",
+                "messages": [{"role": "user", "content": "hello"}],
+                "metadata": {"used_client_oauth_token": True, "claude_subscription_usage": {"is_overage": False}},
+                "litellm_metadata": {
+                    "used_client_oauth_token": True,
+                    "claude_subscription_usage": {"is_overage": False},
+                },
+            },
             request=request_mock,
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
             proxy_config=MagicMock(),
             general_settings={"forward_client_headers_to_llm_api": True},
             version="test-version",
         )
+        other_metadata = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
+        assert "used_client_oauth_token" not in updated.get(other_metadata, {})
+        assert "claude_subscription_usage" not in updated.get(other_metadata, {})
+        assert "claude_subscription_usage" not in updated[metadata_variable_name]
         return updated[metadata_variable_name]
 
     def spend_log_row_metadata(request_metadata: dict) -> dict:
@@ -10764,12 +10776,30 @@ class TestResolveUserProviderCredentials:
         )
 
         assert data["secret_fields"]["user_provider_credentials"] == {
-            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com", "github_login": "octo"}
         }
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
         # the shared fallback credential is never looked up
         call_where = table.find_many.await_args.kwargs["where"]
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
+
+    @pytest.mark.asyncio
+    async def test_failed_lookup_still_names_the_calling_user(self, monkeypatch):
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        self._env(monkeypatch)
+        monkeypatch.setattr(
+            "litellm.proxy.credential_endpoints.user_provider_credentials.aget_user_provider_credentials",
+            AsyncMock(side_effect=RuntimeError("credential lookup failed")),
+        )
+        data = {"model": "copilot-chat", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=self._router(),
+        )
+        assert data["secret_fields"] == {"user_provider_credentials_user_id": "user-a"}, data["secret_fields"]
 
     @pytest.mark.asyncio
     async def test_service_key_cannot_override_a_per_user_credential(self, monkeypatch):
@@ -11226,7 +11256,7 @@ class TestResolveUserProviderCredentials:
             llm_router=router,
         )
         assert data["secret_fields"]["user_provider_credentials"] == {
-            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com", "github_login": "octo"}
         }
         call_where: Final = table.find_many.await_args.kwargs["where"]
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}

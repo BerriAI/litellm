@@ -1,9 +1,11 @@
 "use client";
 
 import { ChevronDown, ExternalLink } from "lucide-react";
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,7 +21,6 @@ import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/
 import { gatewayUrl, usefulLinkList } from "./hubFormat";
 import { CopyIconButton } from "./HubParts";
 import type { HubTab } from "./useHubUrlState";
-import styles from "./catalog.module.css";
 import type { HubInfo } from "./useHubData";
 
 export type HubStatus = "loading" | "operational" | "degraded" | "unavailable";
@@ -85,14 +86,20 @@ function BaseUrlField() {
 
 export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; status: HubStatus; tab: HubTab }) {
   const { t } = useTranslation();
+  const gridId = useId();
   return (
-    <header className={styles.header}>
-      <div>
-        <p className={styles.eyebrow}>{info?.docs_title || t("publicModelHub.catalog.eyebrow")}</p>
-        <h1 className={styles.title}>
+    <header
+      data-slot="catalog-hero"
+      className="grid min-h-[280px] grid-cols-[minmax(0,1fr)_390px] items-start gap-[30px] pt-10 pb-8 catalog-narrow:min-[800px]:grid-cols-[minmax(0,1fr)_300px] max-[800px]:grid-cols-[minmax(0,1fr)_230px] max-[800px]:gap-2.5 max-[640px]:relative max-[640px]:block max-[640px]:min-h-52 max-[640px]:overflow-hidden max-[640px]:py-8"
+    >
+      <div className="min-w-0 max-[640px]:relative max-[640px]:z-raised">
+        <h1 className="mt-0 mb-5 font-[family-name:var(--font-catalog-display),sans-serif] text-[96px] leading-[0.9] font-semibold tracking-[-2px] uppercase catalog-narrow:min-[800px]:text-[81px] max-[800px]:text-[68px] max-[640px]:text-[clamp(52px,10.6vw,68px)] max-[640px]:tracking-[-1px]">
           {t(tab === "skills" ? "publicModelHub.catalog.skillsHub" : "publicModelHub.catalog.modelHub")}
         </h1>
-        <p className={styles.description}>
+        <p
+          data-slot="catalog-description"
+          className="m-0 max-w-[520px] text-[17px] tracking-[-0.3px] max-[800px]:text-sm max-[640px]:max-w-80"
+        >
           {info?.custom_docs_description ||
             t(
               tab === "skills"
@@ -100,13 +107,43 @@ export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; st
                 : "publicModelHub.catalog.modelsDescription",
             )}
         </p>
+        {status !== "unavailable" && (
+          <Collapsible className="mt-[22px] text-[13px]">
+            <CollapsibleTrigger
+              nativeButton={false}
+              render={<span />}
+              data-slot="catalog-quick-start"
+              className="list-item w-fit list-inside cursor-pointer py-2 font-medium text-primary [list-style-type:disclosure-closed] data-open:[list-style-type:disclosure-open] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
+            >
+              {t("publicModelHub.catalog.quickStart")}
+            </CollapsibleTrigger>
+            <CollapsibleContent className="flex flex-wrap items-start gap-4 py-3">
+              <BaseUrlField />
+              <LinksMenu info={info} />
+            </CollapsibleContent>
+          </Collapsible>
+        )}
       </div>
-      {status !== "unavailable" && (
-        <div className={styles.connection}>
-          <BaseUrlField />
-          <LinksMenu info={info} />
-        </div>
-      )}
+      <svg
+        data-slot="catalog-blueprint"
+        className="h-52 w-full text-primary max-[640px]:absolute max-[640px]:top-[23px] max-[640px]:right-[-70px] max-[640px]:w-[235px] max-[640px]:opacity-[0.14]"
+        viewBox="0 0 360 220"
+        fill="none"
+        aria-hidden="true"
+      >
+        <defs>
+          <pattern id={gridId} width="32" height="32" patternUnits="userSpaceOnUse">
+            <path d="M32 0H0V32" stroke="currentColor" strokeWidth=".7" opacity=".09" />
+          </pattern>
+        </defs>
+        <rect x="20" y="14" width="320" height="192" fill={`url(#${gridId})`} />
+        <g stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="66" y="35" width="228" height="150" rx="8" className="fill-background" />
+          <path opacity=".3" d="M66 70h228M66 108h228M66 146h228M208 70v115" />
+          <path d="M88 52h72M88 89h92M88 127h66M88 165h80M230 89h40M230 127h40M230 165h40" />
+          <circle cx="268" cy="52" r="3" fill="currentColor" stroke="none" />
+        </g>
+      </svg>
     </header>
   );
 }

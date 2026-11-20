@@ -26,10 +26,12 @@ from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsageSt
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_utils import routing_prefetch
+from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.routing_prefetch import arm_cooldowns, read_cooldowns
 from litellm.router_utils.routing_read_batch import RoutingReadBatch
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.router_usage_double import FakeUsageRead
+from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
 
 from .redis_batch_double import (
     FakeNativePending,
@@ -272,6 +274,81 @@ async def test_simple_shuffle_cooldown_prefetch_does_not_arm_usage_reads_or_read
 
     assert deployment in {"dep-a", "dep-b"}
     assert redis_cache.alone == []
+
+
+def _router_recording_cooldown_reads() -> tuple[Router, FakeCooldowns]:
+    """A router beside other groups whose cooldown store records the ids of every read it is asked for."""
+    handle: Final = FakeCooldowns(has_redis=True)
+    router: Final = Router(
+        model_list=[
+            _deployment("dep-a"),
+            _deployment("dep-b"),
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "test", "mock_response": "pong"},
+                "model_info": {"id": "dep-wild"},
+            },
+            {
+                "model_name": "other",
+                "litellm_params": {"model": "anthropic/other", "api_key": "test", "mock_response": "pong"},
+                "model_info": {"id": "dep-other"},
+            },
+        ],
+        model_group_alias={"claude-alias": _MODEL_GROUP},
+        routing_strategy="simple-shuffle",
+    )
+    router.cooldown_cache = CooldownCache(store=RouterCooldownStore(handle), default_cooldown_time=60)
+    return router, handle
+
+
+def _reads(handle: FakeCooldowns) -> list[frozenset[str]]:
+    return [frozenset(ids) for ids in handle.declared]
+
+
+async def _pick(router: Router, model: str) -> str:
+    deployment: Final = await router.async_get_available_deployment(model=model, messages=_PING, request_kwargs={})
+    return deployment["model_info"]["id"]
+
+
+_CLAUDE: Final = frozenset({"dep-a", "dep-b"})
+_WILD: Final = frozenset({"dep-wild"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("armed_for", "routed", "reads", "pickable"),
+    [
+        pytest.param(
+            None, _MODEL_GROUP, [_CLAUDE | {"dep-wild", "dep-other"}], _CLAUDE, id="no_model_reads_every_deployment"
+        ),
+        pytest.param(_MODEL_GROUP, _MODEL_GROUP, [_CLAUDE], _CLAUDE, id="group"),
+        pytest.param("claude-alias", "claude-alias", [_CLAUDE], _CLAUDE, id="alias"),
+        pytest.param("openai/gpt-4o", "openai/gpt-4o", [_WILD], _WILD, id="wildcard"),
+        pytest.param("other", _MODEL_GROUP, [frozenset({"dep-other"}), _CLAUDE], _CLAUDE, id="uncovered"),
+        pytest.param("bedrock/nothing-serves-this", _MODEL_GROUP, [_CLAUDE], _CLAUDE, id="no_candidates_arms_nothing"),
+    ],
+)
+async def test_the_auth_cooldown_prefetch_reads_only_the_requested_models_candidates_and_routing_takes_it(
+    armed_for: str | None, routed: str, reads: list[frozenset[str]], pickable: frozenset[str]
+):
+    router, handle = _router_recording_cooldown_reads()
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        RoutingContext(router).arm_cooldown_prefetch(armed_for)
+        picked: Final = await _pick(router, routed)
+
+    assert (_reads(handle), picked in pickable) == (reads, True)
+
+
+@pytest.mark.asyncio
+async def test_the_request_cooldown_prefetch_reads_only_the_requested_groups_candidates_and_routing_takes_it():
+    router, handle = _router_recording_cooldown_reads()
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        RoutingContext(router).arm_read_prefetch(_MODEL_GROUP, {"metadata": {"user_api_key_team_id": "team-1"}})
+        picked: Final = await _pick(router, _MODEL_GROUP)
+
+    assert (_reads(handle), picked in _CLAUDE) == ([_CLAUDE], True)
 
 
 def _user_entry() -> tuple[_CacheEntry, LiteLLM_UserTable]:

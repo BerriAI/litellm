@@ -1,0 +1,607 @@
+import { appBudgetPolicyCases, chooseAppOption, saveAppBudget } from "./appTestUtils";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { registerBaseUrlGetter } from "@/lib/http/runtime";
+import { uiHref } from "@/utils/uiHref";
+import {
+  jsonResponse as json,
+  renderWithProviders as render,
+  screen,
+  fireEvent,
+  act,
+  waitFor,
+  within,
+  testQueryClient,
+} from "../../../../../tests/test-utils";
+import CustomerOrganizationApps from "./CustomerOrganizationApps";
+import { organizationAppKey } from "./appApi";
+
+const resource = { resource_type: "team", resource_id: "team-chat", alias: "chat", app_id: null };
+const app = {
+  ...resource,
+  app_id: "app-chat",
+  spend: 0,
+  created_at: "",
+  updated_at: "",
+  created_by: "",
+  updated_by: "",
+};
+const assignedBudget = {
+  app_id: app.app_id,
+  customer_org_id: "org-1",
+  tier_budget_id: "standard",
+  spend: 5,
+  effective_budget: {
+    budget_limits: [
+      { budget_duration: "1mo", max_budget: 100 },
+      { budget_duration: "12mo", max_budget: 1000 },
+    ],
+  },
+};
+const fetchMock = vi.fn<typeof fetch>();
+let configured: boolean;
+let bound: boolean;
+let assigned: boolean;
+let requests: Request[];
+let associationStatus: number;
+let customAssociation: object | null;
+
+beforeEach(() => {
+  configured = true;
+  bound = false;
+  assigned = false;
+  associationStatus = 404;
+  customAssociation = null;
+  requests = [];
+  testQueryClient.clear();
+  registerBaseUrlGetter(() => "http://localhost");
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(async (input) => {
+    const request = new Request(input);
+    requests.push(request.clone());
+    const path = new URL(request.url).pathname;
+    if (path.includes("/daily/activity")) return json({ results: [], metadata: { has_more: false, total_pages: 1 } });
+    if (path.endsWith("/apps/definition")) return json({ resource_type: configured ? "team" : null });
+    if (path.endsWith("/apps/resources"))
+      return json([
+        { ...resource, app_id: bound ? app.app_id : null },
+        { ...resource, resource_id: "team-search", alias: "search", app_id: null },
+      ]);
+    if (path.endsWith("/apps")) {
+      if (request.method === "POST") {
+        bound = true;
+        return json(app);
+      }
+      return json(bound ? [app] : []);
+    }
+    if (path.endsWith("/customer_organization_budget_groups"))
+      return json({
+        default_budgets: [
+          { budget_id: "org-standard", name: "Standard", max_budget: 1000 },
+          { budget_id: "org-enterprise", name: "Enterprise", max_budget: 5000 },
+        ],
+      });
+    if (path.endsWith("/app_customer_organization_budget_groups"))
+      return json({
+        default_budgets: [{ budget_id: "standard", name: "Tier 1", max_budget: 100 }],
+        revision: "a".repeat(64),
+      });
+    if (request.method === "PUT") {
+      assigned = true;
+      return json({ app_id: app.app_id, customer_org_id: "org-1", spend: 0 });
+    }
+    if (path.endsWith("/customer_organizations/org-1"))
+      return assigned
+        ? json(customAssociation ?? assignedBudget)
+        : json({ detail: "Association unavailable" }, associationStatus);
+    if (path.endsWith("/models")) return json({ data: [] });
+    throw new Error(`Unexpected request ${path}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+});
+afterEach(() => vi.unstubAllGlobals());
+
+async function openBudget() {
+  const user = userEvent.setup();
+  render(<CustomerOrganizationApps organizationId="org-1" />);
+  await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+  return user;
+}
+
+const saveBudget = (user: UserEvent) => saveAppBudget(user, requests, "Save app budget");
+
+describe("customer app budgets", () => {
+  it.each([null, { "test-model": 10000 }])(
+    "copies the selected preset's hidden policy into Custom %j",
+    async (rates) => {
+      bound = true;
+      assigned = true;
+      const initialPolicy = { model_tpm_limit: { "test-model": 1000 }, model_rpm_limit: { "test-model": 10 } };
+      const selectedPolicy = { model_tpm_limit: rates, model_rpm_limit: null, cap_policy: "pause_allow_increase" };
+      const serve = fetchMock.getMockImplementation()!;
+      fetchMock.mockImplementation(async (input, init) =>
+        new URL((input as Request).url).pathname.endsWith("/app_customer_organization_budget_groups")
+          ? json({
+              default_budgets: [
+                { budget_id: "standard", name: "Tier 1", max_budget: 100, budget_duration: "1mo", ...initialPolicy },
+                { budget_id: "scale", name: "Tier 2", max_budget: 200, budget_duration: "1mo", ...selectedPolicy },
+              ],
+            })
+          : serve(input, init),
+      );
+      const user = await openBudget();
+      const source = screen.getByRole("combobox", { name: "Budget source" });
+      await chooseAppOption(user, source, /^Tier 2/);
+      await chooseAppOption(user, source, "Enter custom limits instead");
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "250" } });
+      expect(await saveBudget(user)).toEqual({
+        budget: { max_budget: 250, budget_duration: "1mo", ...selectedPolicy },
+        customer_member_budget: null,
+      });
+    },
+  );
+
+  it.each(["custom", "legacy"])("allows a %s policy edit when the catalog fails", async (source) => {
+    bound = true;
+    assigned = true;
+    customAssociation = {
+      ...assignedBudget,
+      ...(source === "custom" ? { budget: { rpm_limit: 10 } } : { budget_override: { rpm_limit: 10 } }),
+    };
+    const serve = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) =>
+      new URL((input as Request).url).pathname.endsWith("/app_customer_organization_budget_groups")
+        ? json({ detail: "Catalog unavailable" }, 503)
+        : serve(input, init),
+    );
+    const user = await openBudget();
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Requests per minute" }), {
+      target: { value: "11" },
+    });
+    expect(await saveBudget(user)).toMatchObject({
+      budget: { rpm_limit: 11 },
+    });
+  });
+
+  it("keeps both budget baselines stable across a background association refresh", async () => {
+    bound = true;
+    assigned = true;
+    const policy = { max_budget: 5, budget_duration: "1mo", rpm_limit: 10 };
+    customAssociation = {
+      ...assignedBudget,
+      budget: policy,
+      customer_member_budget_id: "member-policy",
+      effective_customer_member_budget: policy,
+    };
+    const user = await openBudget();
+    customAssociation = {
+      ...customAssociation,
+      budget: { ...policy, max_budget: 25 },
+      effective_customer_member_budget: { ...policy, max_budget: 25 },
+    };
+    await act(() => testQueryClient.refetchQueries({ queryKey: organizationAppKey(app.app_id, "org-1"), exact: true }));
+    for (const input of screen.getAllByRole("spinbutton", { name: "Requests per minute" }))
+      fireEvent.change(input, { target: { value: "11" } });
+    expect(await saveBudget(user)).toEqual({
+      budget: { rpm_limit: 11 },
+      customer_member_budget: { rpm_limit: 11 },
+    });
+  });
+
+  it("should send only entered first-custom fields when leaving an app organization preset", async () => {
+    bound = true;
+    assigned = true;
+    customAssociation = {
+      ...assignedBudget,
+      budget_id: "standard",
+      budget: null,
+      effective_budget: {
+        ...assignedBudget.effective_budget,
+        tpm_limit: 1700,
+        rpm_limit: 17,
+        allowed_models: ["test-model"],
+      },
+    };
+    const user = await openBudget();
+    await chooseAppOption(user, screen.getByRole("combobox", { name: "Budget source" }), "Enter custom limits instead");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+      target: { value: "0" },
+    });
+    expect(await saveBudget(user)).toEqual({
+      budget: { max_budget: 0, budget_duration: null },
+      customer_member_budget: null,
+    });
+  });
+
+  it.each([
+    { source: "expired grant", expiry: "2000-01-01T00:00:00Z", label: "Tier 1" },
+    { source: "active grant", expiry: "2099-01-01T00:00:00Z", label: "Tier 1" },
+    { source: "legacy override", expiry: null, label: "Custom" },
+  ])("labels a $source as $label", async ({ expiry, label }) => {
+    bound = true;
+    assigned = true;
+    customAssociation = {
+      ...assignedBudget,
+      ...(expiry === null ? {} : { budget_id: "standard", budget: null }),
+      budget_override_id: expiry === null ? "legacy-1" : "grant-1",
+      budget_override: { max_budget: 200 },
+      budget_override_expires_at: expiry,
+    };
+    render(<CustomerOrganizationApps organizationId="org-1" />);
+    const table = within(await screen.findByRole("table", { name: "App budgets" }));
+    expect(await table.findByText(label)).toBeInTheDocument();
+    expect(table.queryAllByText("Custom")).toHaveLength(expiry === null ? 1 : 0);
+  });
+
+  it("edits optional member-default rates without resubmitting a displayed temporary cap", async () => {
+    bound = true;
+    assigned = true;
+    customAssociation = {
+      ...assignedBudget,
+      customer_member_budget_id: "member-policy",
+      effective_customer_member_budget: { max_budget: 150, budget_duration: "1mo", rpm_limit: 20 },
+    };
+    const user = await openBudget();
+    const section = within(await screen.findByRole("region", { name: "Per-member limits (optional)" }));
+    expect(section.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(150);
+    fireEvent.change(section.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
+    expect(await saveBudget(user)).toEqual({
+      budget_id: "standard",
+      customer_member_budget: { rpm_limit: 0 },
+    });
+  });
+
+  it("shows current-month app tokens and share of the entire customer spend in the compact table", async () => {
+    bound = true;
+    assigned = true;
+    const serve = fetchMock.getMockImplementation()!;
+    const usageRequests: URL[] = [];
+    let totalAvailable = false;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = new URL(new Request(input, init).url);
+      if (!url.pathname.includes("/daily/activity")) return serve(input, init);
+      usageRequests.push(url);
+      if (url.pathname.endsWith("/aggregated") && !totalAvailable)
+        return json({ detail: "Organization total unavailable" }, 503);
+      const appScoped = url.searchParams.get("app_id") === app.app_id;
+      const metrics = {
+        spend: appScoped ? 20 : 100,
+        total_tokens: 1500,
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        api_requests: 3,
+      };
+      return json({
+        results: [
+          { date: url.searchParams.get("start_date"), metrics, breakdown: { entities: { "org-1": { metrics } } } },
+        ],
+        metadata: { has_more: false, total_pages: 1, total_spend: metrics.spend },
+      });
+    });
+    const user = userEvent.setup();
+    render(<CustomerOrganizationApps organizationId="org-1" />);
+    const table = within(await screen.findByRole("table", { name: "App budgets" }));
+    const tokens = await table.findByRole("button", { name: "1,500 total tokens. View breakdown" });
+    expect(table.getByRole("columnheader", { name: "Budget & usage" })).toBeInTheDocument();
+    expect(table.getByRole("columnheader", { name: "Tokens" })).toBeInTheDocument();
+    const retry = await table.findByRole("button", { name: /Retry/ });
+    expect(retry).toHaveAttribute("title", "Organization total unavailable");
+    expect(tokens).toHaveTextContent("1.5K");
+    totalAvailable = true;
+    await user.click(retry);
+    expect(await table.findByText("20%")).toBeInTheDocument();
+    expect(table.getByRole("meter", { name: "Share of customer spend" })).toHaveAttribute("aria-valuenow", "20");
+    expect(
+      usageRequests.every(
+        (url) => (url.searchParams.get("customer_org_ids") ?? url.searchParams.get("customer_org_id")) === "org-1",
+      ),
+    ).toBe(true);
+    expect(usageRequests.filter((url) => url.searchParams.get("app_id") === app.app_id)).toHaveLength(1);
+    const monthlyTotal = usageRequests.find((url) => url.pathname.endsWith("/aggregated"));
+    expect(monthlyTotal?.searchParams.has("app_id")).toBe(false);
+    expect(
+      usageRequests.some(
+        (url) =>
+          url.searchParams.get("app_id") === app.app_id &&
+          url.searchParams.get("start_date") === monthlyTotal?.searchParams.get("start_date") &&
+          url.searchParams.get("end_date") === monthlyTotal?.searchParams.get("end_date"),
+      ),
+    ).toBe(true);
+    await user.click(tokens);
+    expect(await screen.findByText("Input tokens")).toBeInTheDocument();
+    expect(screen.getByText("1,000")).toBeInTheDocument();
+    expect(screen.getByText("500")).toBeInTheDocument();
+  });
+
+  it.each(["loading", "error"] as const)("keeps a legacy assignment while the catalog is %s", async (status) => {
+    bound = true;
+    assigned = true;
+    const serve = fetchMock.getMockImplementation()!;
+    let legacyAvailable = false;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    fetchMock.mockImplementation(async (input, init) => {
+      const request = input as Request;
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path.endsWith("/customer_organizations/org-1"))
+        return json({ ...assignedBudget, tier_budget_id: "org-standard" });
+      if (path === "/management/v1/customer_organization_budget_groups") {
+        if (status === "loading") await promise;
+        if (status === "error" && !legacyAvailable) return json({ detail: "Legacy catalog unavailable" }, 503);
+      }
+      return serve(input, init);
+    });
+    const user = await openBudget();
+    if (status === "error") expect(await screen.findByText("Legacy catalog unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Budget source" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save app budget" })).not.toBeInTheDocument();
+    if (status === "loading") await act(async () => resolve());
+    else {
+      legacyAvailable = true;
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+    }
+    const source = await screen.findByRole("combobox", { name: "Budget source" });
+    const save = screen.getByRole("button", { name: "Save app budget" });
+    expect(source).toHaveTextContent("Standard");
+    if (status === "loading") {
+      await user.click(source);
+      expect(await screen.findByRole("option", { name: /^Tier 1/ })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /^Enterprise/ })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("option", { name: /^Standard/ }));
+    }
+    await user.click(save);
+    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
+    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+      budget_id: "org-standard",
+      customer_member_budget: null,
+    });
+  });
+
+  it("should show recorded period usage separately from cumulative spend", async () => {
+    bound = true;
+    assigned = true;
+    const usage = [
+      { source: "window", budget_duration: "1mo", max_budget: 100, spend: 7, reset_at: "2026-12-01T00:00:00Z" },
+      { source: "window", budget_duration: "12mo", max_budget: 1000, spend: 12, reset_at: "2027-01-01T00:00:00Z" },
+    ];
+    const serve = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      const request = input as Request;
+      if (new URL(request.url).pathname.endsWith("/customer_organizations/org-1"))
+        return json({ ...assignedBudget, spend: 500, budget_usage: usage });
+      return serve(input, init);
+    });
+    render(<CustomerOrganizationApps organizationId="org-1" />);
+    await screen.findByRole("button", { name: "Edit budget for chat" });
+    const table = within(screen.getByRole("table", { name: "App budgets" }));
+    expect(table.queryByText("$500.00")).not.toBeInTheDocument();
+    expect(table.queryByRole("columnheader", { name: "Tracked spend (USD)" })).not.toBeInTheDocument();
+    expect(table.getByText("$7.00 of $100.00 used")).toBeInTheDocument();
+    const monthlyProgress = table.getByRole("progressbar", { name: "App budget used" });
+    expect(Number(monthlyProgress.getAttribute("aria-valuenow"))).toBeCloseTo(7);
+    expect(table.queryByText("$12.00 / $1,000.00")).not.toBeInTheDocument();
+    expect(table.getByRole("button", { name: "Budget details" })).toBeInTheDocument();
+    expect(table.getByText("$93.00 remaining")).toBeInTheDocument();
+  });
+  it("should summarize the monthly group limit with additional limits in details", async () => {
+    bound = true;
+    assigned = true;
+    render(<CustomerOrganizationApps organizationId="org-1" />);
+    await screen.findByRole("button", { name: "Edit budget for chat" });
+    const table = within(screen.getByRole("table", { name: "App budgets" }));
+    expect(await table.findByRole("cell", { name: "Tier 1", exact: true })).toBeInTheDocument();
+    expect(table.getByText("$100.00")).toBeInTheDocument();
+    expect(table.queryByText("$1,000.00")).not.toBeInTheDocument();
+    expect(table.getByRole("button", { name: "Budget details" })).toBeInTheDocument();
+    expect(table.queryByText("No spend limit")).not.toBeInTheDocument();
+  });
+  it("should route Add app budget to Gateway setup when the app definition is unset", async () => {
+    configured = false;
+    render(<CustomerOrganizationApps organizationId="org-1" />);
+    expect(await screen.findByText(/Define what an app is in your Gateway/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add app budget" })).toHaveAttribute("href", uiHref("apps"));
+    expect(requests.every((request) => request.method === "GET")).toBe(true);
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("should select an existing resource and assign a shared profile with a customer-specific member default", async () => {
+    const user = userEvent.setup();
+    render(<CustomerOrganizationApps organizationId="org-1" organizationAlias="Customer Y" />);
+    await user.click(await screen.findByRole("button", { name: "Add app budget" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Add app budget" }));
+    await chooseAppOption(user, dialog.getByRole("combobox", { name: "Select an app" }), "chat");
+    expect(dialog.getByRole("textbox", { name: "Customer organization" })).toHaveValue("Customer Y");
+    await user.click(screen.getByRole("combobox", { name: "Budget source" }));
+    expect(await screen.findByRole("option", { name: /^Tier 1/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /^Standard/ })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: /^Tier 1/ }));
+    const member = within(screen.getByRole("region", { name: "Per-member limits (optional)" }));
+    await user.click(member.getByRole("switch", { name: "Set per-member limits" }));
+    act(() => {
+      fireEvent.change(member.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "20" } });
+      fireEvent.change(member.getByRole("spinbutton", { name: "Yearly budget" }), { target: { value: "200" } });
+      fireEvent.change(member.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "30000" } });
+      fireEvent.change(member.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "60" } });
+    });
+    await user.click(screen.getByRole("button", { name: "Save app budget" }));
+    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
+    const mutations = requests.filter((request) => request.method !== "GET");
+    expect(mutations.map((request) => request.method)).toEqual(["POST", "PUT"]);
+    expect(await mutations[0].json()).toEqual({ resource_id: "team-chat", resource_type: "team" });
+    expect(new URL(mutations[1].url).pathname).toBe("/management/v1/apps/app-chat/customer_organizations/org-1");
+    expect(await mutations[1].json()).toMatchObject({
+      budget_id: "standard",
+      customer_member_budget: {
+        max_budget: 20,
+        budget_duration: "1mo",
+        budget_limits: [{ budget_duration: "12mo", max_budget: 200 }],
+        tpm_limit: 30000,
+        rpm_limit: 60,
+      },
+    });
+    expect(await screen.findByRole("button", { name: "Edit budget for chat" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("should edit in a modal and start a fresh selection after canceling", async () => {
+    bound = true;
+    assigned = true;
+    const user = userEvent.setup();
+    render(<CustomerOrganizationApps organizationId="org-1" organizationAlias="Customer Y" />);
+    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Budget for chat" }));
+    expect(dialog.getByRole("textbox", { name: "Customer organization" })).toHaveValue("Customer Y");
+    expect(dialog.getByRole("textbox", { name: "App", exact: true })).toHaveValue("chat");
+    expect(dialog.getByRole("combobox", { name: "Budget source" })).toHaveTextContent("Tier 1");
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Add app budget" }));
+    const fresh = within(await screen.findByRole("dialog", { name: "Add app budget" }));
+    expect(fresh.getByRole("combobox", { name: "Select an app" })).toHaveValue("");
+    expect(fresh.getByRole("textbox", { name: "Customer organization" })).toHaveValue("Customer Y");
+    expect(requests.every((request) => request.method === "GET")).toBe(true);
+  });
+
+  it("should save a custom budget without creating a tier or changing the global customer budget", async () => {
+    const user = userEvent.setup();
+    render(<CustomerOrganizationApps organizationId="org-1" />);
+    await user.click(await screen.findByRole("button", { name: "Add app budget" }));
+    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "search");
+    await user.click(screen.getByRole("combobox", { name: "Budget source" }));
+    await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
+    act(() => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "100" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Yearly budget" }), { target: { value: "1000" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "120" } });
+    });
+
+    expect(screen.getByRole("switch", { name: "Set per-member limits" })).not.toBeChecked();
+    expect(await saveBudget(user)).toMatchObject({
+      budget: {
+        max_budget: 100,
+        budget_duration: "1mo",
+        budget_limits: [{ budget_duration: "12mo", max_budget: 1000 }],
+        tpm_limit: 50000,
+        rpm_limit: 120,
+      },
+      customer_member_budget: null,
+    });
+    expect(requests.some((request) => request.method === "PATCH")).toBe(false);
+  });
+
+  it("clears custom and member overrides when switching to a preset and disabling per-member limits", async () => {
+    bound = true;
+    assigned = true;
+    const serve = fetchMock.getMockImplementation()!;
+    const customBudget = {
+      ...assignedBudget,
+      tier_budget_id: null,
+      budget_override_id: "custom-budget",
+      budget_override: assignedBudget.effective_budget,
+      customer_member_budget_id: "member-budget",
+      effective_customer_member_budget: { max_budget: 20, budget_duration: "1mo", rpm_limit: 60 },
+    };
+    fetchMock.mockImplementation(async (input, init) => {
+      const request = input as Request;
+      if (request.method === "GET" && new URL(request.url).pathname.endsWith("/customer_organizations/org-1"))
+        return json(customBudget);
+      return serve(input, init);
+    });
+    const user = await openBudget();
+    const limits = within(screen.getByRole("region", { name: "Budget source" }));
+    expect(limits.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(100);
+    expect(limits.getByRole("spinbutton", { name: "Yearly budget" })).toHaveValue(1000);
+    const member = within(screen.getByRole("region", { name: "Per-member limits (optional)" }));
+    expect(member.getByRole("switch", { name: "Set per-member limits" })).toBeChecked();
+    expect(member.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(20);
+    await user.click(limits.getByRole("combobox", { name: "Budget source" }));
+    await user.click(await screen.findByRole("option", { name: /^Tier 1/ }));
+    await user.click(member.getByRole("switch", { name: "Set per-member limits" }));
+    expect(screen.queryByRole("spinbutton", { name: "Monthly budget" })).not.toBeInTheDocument();
+    expect(await saveBudget(user)).toEqual({
+      budget_id: "standard",
+      budget_override: null,
+      customer_member_budget: null,
+    });
+  });
+
+  it.each(appBudgetPolicyCases)(
+    "should save a private org budget and preserve temporary overrides $source",
+    async ({ legacy, temporary, policy, expectedPatch }) => {
+      bound = true;
+      assigned = true;
+      const serve = fetchMock.getMockImplementation()!;
+      fetchMock.mockImplementation(async (input, init) =>
+        new URL((input as Request).url).pathname.endsWith("/app_customer_organization_budget_groups")
+          ? json({
+              default_budgets: [
+                { budget_id: "standard", name: "Tier 1", rpm_limit: 99, allowed_models: ["inherited-model"] },
+              ],
+            })
+          : serve(input, init),
+      );
+      customAssociation = {
+        ...assignedBudget,
+        ...policy,
+        budget_id: legacy ? null : "private",
+        budget_override_id: legacy || temporary ? "override" : null,
+      };
+      const user = await openBudget();
+      expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(5);
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "7" } });
+      expect(await saveBudget(user)).toEqual({
+        ...expectedPatch,
+        customer_member_budget: null,
+      });
+    },
+  );
+
+  it("should keep association read failures visible instead of overwriting an unknown budget", async () => {
+    bound = true;
+    associationStatus = 503;
+    const user = userEvent.setup();
+    render(<CustomerOrganizationApps organizationId="org-1" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Association unavailable");
+    await user.click(screen.getByRole("button", { name: "Add app budget" }));
+    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "chat");
+    expect(screen.queryByRole("button", { name: "Save app budget" })).not.toBeInTheDocument();
+    expect(requests.every((request) => request.method === "GET")).toBe(true);
+  });
+  it("starts first Custom from the preset and leaves untouched limits and active grants alone", async () => {
+    bound = true;
+    assigned = true;
+    const preset = {
+      budget_id: "standard",
+      name: "Tier 1",
+      max_budget: 500,
+      budget_duration: "1mo",
+      tpm_limit: 10000,
+      rpm_limit: 50,
+      budget_limits: [{ budget_duration: "12mo", max_budget: 5000 }],
+    };
+    customAssociation = {
+      ...assignedBudget,
+      budget: null,
+      budget_id: "standard",
+      budget_override: { max_budget: 900 },
+      budget_override_expires_at: "2027-01-01T00:00:00Z",
+      effective_budget: { ...preset, max_budget: 900 },
+    };
+    const serve = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) =>
+      new URL((input as Request).url).pathname.endsWith("/app_customer_organization_budget_groups")
+        ? json({ default_budgets: [preset] })
+        : serve(input, init),
+    );
+    const user = await openBudget();
+    await user.click(await screen.findByRole("combobox", { name: "Budget source" }));
+    await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
+    expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(500);
+    expect(screen.getByRole("spinbutton", { name: "Yearly budget" })).toHaveValue(5000);
+    expect(screen.getByRole("spinbutton", { name: "Tokens per minute" })).toHaveValue(10000);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "750" } });
+    expect(await saveBudget(user)).toEqual({
+      budget: { max_budget: 750, budget_duration: "1mo" },
+      customer_member_budget: null,
+    });
+  });
+});

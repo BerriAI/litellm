@@ -346,6 +346,12 @@ fn drop_disabled_thinking(request: MessagesRequest, context: &ThinkingContext) -
     {
         return request;
     }
+    if context.warns_dropped_disabled_thinking {
+        litellm_tracing::warn!(
+            "Dropping `thinking={{'type': 'disabled'}}` for model={}: thinking is always on for this model and cannot be disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain thinking blocks, and those thinking tokens are billed as output tokens.",
+            request.model
+        );
+    }
     MessagesRequest {
         params: MessagesOptionalParams {
             thinking: None,
