@@ -1044,6 +1044,7 @@ class LiteLLMCompletionResponsesConfig:
         instructions: str | None,
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
+        client_previous_response_id: str | None = None,
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1067,7 +1068,7 @@ class LiteLLMCompletionResponsesConfig:
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
         if previous_response_id and not stored_messages:
-            raise _previous_response_not_found(previous_response_id, model, provider)
+            raise _previous_response_not_found(client_previous_response_id or previous_response_id, model, provider)
         replayed_messages: Final = (
             LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
                 stored_messages, CompletionRoute.model_validate(litellm_completion_request)

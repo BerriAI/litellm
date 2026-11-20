@@ -77,7 +77,7 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -520,6 +520,11 @@ def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None)
 
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter(list[str])
 _REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
+
+
+def _client_previous_response_id(previous_response_id: str | None, kwargs: Mapping[str, object]) -> str | None:
+    addressed_id: Final = kwargs.get(ADDRESSED_RESPONSE_ID_FIELD)
+    return addressed_id if isinstance(addressed_id, str) and addressed_id else previous_response_id
 
 
 def _explicitly_dropped_fields(kwargs: Mapping[str, object]) -> frozenset[str]:
@@ -1612,6 +1617,7 @@ def responses(
             if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
                 _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
             return litellm_completion_transformation_handler.response_api_handler(
+                _client_previous_response_id(previous_response_id, _REQUEST_KWARGS.validate_python(kwargs)),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,

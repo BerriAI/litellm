@@ -46,6 +46,7 @@ def _with_the_tool_choice_sent(
 
 async def _with_previous_turns(
     previous_response_id: str,
+    client_previous_response_id: str | None,
     litellm_completion_request: Mapping[str, object],
     responses_api_request: ResponsesAPIOptionalRequestParams,
     request_kwargs: Mapping[str, object],
@@ -56,6 +57,7 @@ async def _with_previous_turns(
             litellm_completion_request=dict(litellm_completion_request),
             instructions=responses_api_request.get("instructions"),
             request_kwargs=request_kwargs,
+            client_previous_response_id=client_previous_response_id,
         )
     )
 
@@ -63,6 +65,9 @@ async def _with_previous_turns(
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
+        client_previous_response_id: str | None = None,
+        /,
+        *,
         model: str,
         input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
@@ -103,6 +108,7 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=bridged_input,
                 responses_api_request=echoed_request,
                 previous_response_id=previous_response_id,
+                client_previous_response_id=client_previous_response_id,
                 **kwargs,
             )
 
@@ -111,6 +117,7 @@ class LiteLLMCompletionTransformationHandler:
                 run_async_function(
                     _with_previous_turns,
                     previous_response_id,
+                    client_previous_response_id,
                     litellm_completion_request,
                     echoed_request,
                     _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
@@ -156,12 +163,14 @@ class LiteLLMCompletionTransformationHandler:
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         previous_response_id: str | None,
+        client_previous_response_id: str | None,
         **kwargs,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         request_fields: Final = _REQUEST_KWARGS_ADAPTER.validate_python(litellm_completion_request)
         completion_request: Final[Mapping[str, object]] = (
             await _with_previous_turns(
                 previous_response_id,
+                client_previous_response_id,
                 request_fields,
                 responses_api_request,
                 _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),

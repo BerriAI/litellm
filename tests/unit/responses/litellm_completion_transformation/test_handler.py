@@ -14,7 +14,7 @@ kwargs lack the flag and these tests fail.
 
 import json
 from collections.abc import Mapping
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -271,8 +271,11 @@ def _turn_stored_without_prompts(request_id: str) -> Mapping[str, object]:
     }
 
 
-async def _bridged_follow_up(asynchronous: bool, provider: _RecordingAnthropicHandler) -> object:
+async def _bridged_follow_up(
+    asynchronous: bool, provider: _RecordingAnthropicHandler, proxy_fields: Mapping[str, object] = MappingProxyType({})
+) -> object:
     request: Final = {
+        **proxy_fields,
         "model": "azure_ai/claude-sonnet-4-6",
         "api_base": "https://fake-foundry-resource.services.ai.azure.com",
         "api_key": "fake-api-key",
@@ -313,8 +316,21 @@ async def test_bridged_follow_up_without_a_replayable_previous_turn_is_refused_b
         "previous_response_id",
         "previous_response_not_found",
     )
-    assert f"Previous response with id '{_TURN_ONE_RESPONSE_ID}' not found." in refused.value.message
+    assert f"Previous response with id '{_TURN_ONE_ID}' not found." in refused.value.message
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_a_refused_proxy_follow_up_names_the_id_the_client_sent(asynchronous: bool):
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredTurns(()))):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await _bridged_follow_up(
+                asynchronous,
+                _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD),
+                {ADDRESSED_RESPONSE_ID_FIELD: "resp_the_client_held"},
+            )
+
+    assert "Previous response with id 'resp_the_client_held' not found." in refused.value.message
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
