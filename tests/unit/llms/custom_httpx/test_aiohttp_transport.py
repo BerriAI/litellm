@@ -1082,7 +1082,7 @@ def test_threadsafe_close_done_callback_tolerates_cancelled_future():
     future: "concurrent.futures.Future[None]" = concurrent.futures.Future()
     future.cancel()
 
-    LiteLLMAiohttpTransport._on_threadsafe_close_done(future)
+    assert LiteLLMAiohttpTransport._on_threadsafe_close_done(future) is None
 
 
 @pytest.mark.asyncio
