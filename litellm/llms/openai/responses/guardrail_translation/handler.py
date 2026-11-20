@@ -97,7 +97,10 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     decode_compaction_item,
     with_compaction_summary,
 )
-from litellm.responses.litellm_completion_transformation.custom_tools import without_malformed_tool_flags
+from litellm.responses.litellm_completion_transformation.custom_tools import (
+    serialize_tool_call_arguments,
+    without_malformed_tool_flags,
+)
 from litellm.responses.litellm_completion_transformation.reasoning_items import (
     thinking_block_texts,
     with_thinking_text,
@@ -221,11 +224,16 @@ def _mcp_call_texts(item: object, output_index: int) -> tuple[tuple[_McpCallText
     )
 
 
+def _mcp_call_input_text(item: Mapping[str, object], text_field: _McpCallTextField) -> object:
+    value: Final = item.get(text_field)
+    return serialize_tool_call_arguments(value) if text_field == "arguments" else value
+
+
 def _mcp_call_input_texts(item: Mapping[str, object]) -> tuple[tuple[int, str], ...]:
     return tuple(
         (field_index, text)
         for field_index, text_field in enumerate(_MCP_CALL_TEXT_FIELDS)
-        if isinstance(text := item.get(text_field), str) and text
+        if isinstance(text := _mcp_call_input_text(item, text_field), str) and text
     )
 
 

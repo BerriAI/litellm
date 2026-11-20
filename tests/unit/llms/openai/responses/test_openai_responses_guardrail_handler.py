@@ -1639,6 +1639,26 @@ class TestReplayedMcpCallsReachInputGuardrails:
         assert "persimmon" not in failed["error"] and "unreachable" in failed["error"]
         assert data["input"][3] == {"role": "user", "content": "How many trees?"}
 
+    @pytest.mark.asyncio
+    async def test_replayed_mcp_call_arguments_sent_as_an_object_are_masked_before_the_request_goes_upstream(
+        self,
+    ) -> None:
+        data: Final = {
+            "model": "claude",
+            "input": [
+                {"role": "user", "content": "Look up the orchard"},
+                {
+                    **_mcp_call("mcp_mcptoolu_1", output="two trees").model_dump(exclude_none=True),
+                    "arguments": {"fruit": "persimmon"},
+                },
+            ],
+        }
+
+        await OpenAIResponsesHandler().process_input_messages(data, _persimmon_masking_filter())
+
+        masked_arguments: Final = json.loads(data["input"][1]["arguments"])
+        assert list(masked_arguments) == ["fruit"] and "persimmon" not in masked_arguments["fruit"]
+
 
 class TestOpenAIResponsesHandlerHelperMethods:
     """Test helper methods"""
