@@ -14,7 +14,7 @@ from litellm.litellm_core_utils.core_helpers import (
     normalize_drop_params,
     require_attributes,
 )
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_params
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
@@ -1806,6 +1806,9 @@ class LiteLLMAnthropicMessagesAdapter:
         applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None
         if applied_edits:
             translated_obj["context_management"] = ContextManagementResponse(applied_edits=list(applied_edits))
+
+        if hidden_params := get_hidden_params(response):
+            set_hidden_params(translated_obj, dict(hidden_params))
 
         return translated_obj
 
