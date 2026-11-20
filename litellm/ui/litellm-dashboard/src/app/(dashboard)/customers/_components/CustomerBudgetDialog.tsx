@@ -53,6 +53,7 @@ export function CustomerBudgetForm({
   dirty = true,
   saveLabel,
   label,
+  layout = "dialog",
 }: {
   pending: boolean;
   error: string | null;
@@ -62,16 +63,17 @@ export function CustomerBudgetForm({
   dirty?: boolean;
   saveLabel?: string;
   label?: string;
+  layout?: "dialog" | "page";
 }) {
   const { t } = useTranslation();
   return (
     <form className="flex min-h-0 flex-1 flex-col" onSubmit={onSubmit} aria-label={label}>
-      <div className="min-h-0 overflow-y-auto px-6 py-6">
+      <div className={cn("min-h-0 overflow-y-auto", layout === "dialog" ? "px-6 py-6" : "pb-6")}>
         <fieldset disabled={pending} className="min-w-0 space-y-5">
           {children}
         </fieldset>
       </div>
-      <div className="shrink-0 border-t bg-muted/20 px-6 py-4">
+      <div className={cn("shrink-0 border-t py-4", layout === "dialog" && "bg-muted/20 px-6")}>
         {error && (
           <p role="alert" className="mb-3 text-sm text-destructive">
             {error}

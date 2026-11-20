@@ -38,16 +38,12 @@ export default function AppSettingsForm({
   profiles,
   onClose,
   onPendingChange,
-  overallGroupsHref = `${uiHref("customers/settings")}?tab=overall-app`,
-  memberDefaultsHref = `${uiHref("customers/settings")}?tab=app-member`,
 }: {
   resource: AppResource;
   app?: App;
   profiles: BudgetGroups["default_budgets"];
   onClose?: () => void;
   onPendingChange?: (pending: boolean) => void;
-  overallGroupsHref?: string;
-  memberDefaultsHref?: string;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -104,6 +100,7 @@ export default function AppSettingsForm({
   };
   return (
     <CustomerBudgetForm
+      layout={onClose ? "dialog" : "page"}
       pending={pending}
       dirty={onClose ? true : dirty}
       error={error}
@@ -126,14 +123,16 @@ export default function AppSettingsForm({
           onChange: changeBudgetSource,
         }}
       />
-      <a href={overallGroupsHref} className="text-xs text-primary hover:underline">
+      <a href={`${uiHref("customers/settings")}?tab=overall-app`} className="text-xs text-primary hover:underline">
         {t("apps.manageOverallProfiles")}
       </a>
-      <div className="border-t pt-6">
-        <a href={memberDefaultsHref} className="text-sm text-primary hover:underline">
-          {t("apps.manageMemberProfiles")}
-        </a>
-      </div>
+      {onClose && (
+        <div className="border-t pt-6">
+          <a href={`${uiHref("customers/settings")}?tab=app-member`} className="text-sm text-primary hover:underline">
+            {t("apps.manageMemberProfiles")}
+          </a>
+        </div>
+      )}
       <div className="space-y-1.5 border-t pt-4">
         <label className="flex items-center gap-2 text-sm font-medium">
           <Checkbox

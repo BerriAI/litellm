@@ -7,11 +7,8 @@
     "settings": {
       "sections": "Application settings",
       "budget": "App budget & controls",
-      "members": "Per-member defaults",
-      "groups": "Budget groups",
-      "groupScope": "Budget group scope",
-      "manageMemberGroups": "Manage shared member budget groups",
-      "sharedGroupsHint": "These templates are shared across apps. Editing a template updates the limits for every app or member using it. Choose this app's template in App budget & controls or Per-member defaults."
+      "members": "App × member budget groups",
+      "sharedGroupsHint": "These templates are shared across apps. Editing a template updates the limits for every member using it. Choose this app's default below."
     },
     "usage": {
       "totals": "Application usage totals",
