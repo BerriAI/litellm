@@ -364,6 +364,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
@@ -14205,6 +14206,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -14325,7 +14327,7 @@ async def _try_provider_token_count(
     deployment: Mapping[str, object] | None,
     request_model: str,
     tools: list | None = None,
-    system: str | None = None,
+    system: str | list[object] | None = None,  # mutable-ok: Anthropic system blocks
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
@@ -14657,6 +14659,21 @@ def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[
     return group[0] if group else None
 
 
+def _messages_count_bridges(deployment: _TokenCountDeployment, request_model: str) -> bool:
+    from litellm.llms.anthropic.pass_through.messages.handler import messages_request_bridges
+
+    params: Final = deployment.get("litellm_params", {})
+    try:
+        model, provider, _, _ = litellm.get_llm_provider(
+            model=_non_empty_str(params.get("model")) or request_model,
+            custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
+            api_base=_non_empty_str(params.get("api_base")),
+        )
+    except litellm.BadRequestError:
+        return False
+    return messages_request_bridges(model, provider, dict(deployment.get("model_info", {})))
+
+
 def _non_empty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
@@ -14768,6 +14785,29 @@ async def token_counter(
     )
 
 
+def _deployment_for_messages_responses_count(
+    deployment: Mapping[str, object] | None,
+    router: Router | None,
+    request_litellm_params: Mapping[str, JsonValue],
+) -> Mapping[str, object] | None:
+    if deployment is None:
+        return None
+
+    from litellm.llms.anthropic.pass_through.responses_adapters.handler import SYSTEM_PLACEMENT_PARAMS
+
+    defaults: Final = router.default_litellm_params if router is not None else {}
+    overrides: Final = {
+        key: request_litellm_params[key] if key in request_litellm_params else defaults.get(key)
+        for key in SYSTEM_PLACEMENT_PARAMS
+        if key in request_litellm_params or defaults.get(key) is not None
+    }
+    if not overrides:
+        return deployment
+
+    params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+    return {**deployment, "litellm_params": {**params, **overrides}}
+
+
 async def count_request_tokens(
     request: TokenCountRequest,
     call_endpoint: bool = False,
@@ -14818,6 +14858,11 @@ async def count_request_tokens(
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
         deployment or _model_group_deployment(llm_router, request.model) or {}
     )
+    bridged_system: Final = (
+        system_without_claude_code_billing_header(system)
+        if messages_format == "anthropic" and _messages_count_bridges(deployment_view, request.model)
+        else system
+    )
     settings: Final = await asyncify(resolve_token_count_settings)(
         configured=deployment_view.get("model_info", {}),
         default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
@@ -14860,10 +14905,14 @@ async def count_request_tokens(
                 custom_llm_provider,
                 messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
                 contents=None if prompt_as_message else contents,
-                deployment=deployment,
+                deployment=(
+                    _deployment_for_messages_responses_count(deployment, llm_router, request_litellm_params)
+                    if messages_format == "anthropic" and custom_llm_provider == litellm.LlmProviders.OPENAI.value
+                    else deployment
+                ),
                 request_model=request.model,
                 tools=tools,
-                system=system,
+                system=system if isinstance(provider_counter, OpenAITokenCounter) else bridged_system,
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=_count_context_management(context_management, request.model, request_litellm_params),
@@ -14900,7 +14949,7 @@ async def count_request_tokens(
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    system_message: Final = _system_message(system)
+    system_message: Final = _system_message(bridged_system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
@@ -14915,7 +14964,13 @@ async def count_request_tokens(
     framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
     exact: Final = (
-        await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, counted_tools)
+        await _kimi_k3_count(
+            request,
+            messages_format,
+            model_to_use,
+            kimi_k3_messages,
+            counted_tools,
+        )
         if kimi_k3_messages is not None and custom_tokenizer is None
         else None
     )

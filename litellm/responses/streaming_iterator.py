@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -640,6 +641,7 @@ class BaseResponsesAPIStreamingIterator:
         target.hidden_params = {
             "additional_headers": {**headers},
             "headers": {**raw_headers},
+            **{key: source[key] for key in (AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,) if key in source},
             **existing,
         }
 
@@ -1121,6 +1123,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             await self._await_pending_logging()
             raise
 
+    async def aclose(self) -> None:
+        await self.response.aclose()
+
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
@@ -1203,6 +1208,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def __iter__(self):
         return self
+
+    def close(self) -> None:
+        self.response.close()
 
     def __next__(self):
         try:
