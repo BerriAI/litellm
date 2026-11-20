@@ -57,7 +57,7 @@ _INTEGRATIONS: Final[Mapping[str, str]] = MappingProxyType(
     {harness.name: harness.integration for harness in _HARNESSES}
 )
 _PI_SYSTEM_PROMPT: Final = "operating inside pi, a coding agent harness"
-_LEADING_SETUP_BLOCK: Final = re.compile(r"\s*<([A-Za-z][\w-]*)>.*?</\1>", re.DOTALL)
+_LEADING_SETUP_BLOCKS: Final = re.compile(r"(?:\s*<([A-Za-z][\w-]*)>.*?</\1>)*", re.DOTALL)
 _TASK_CHARS: Final = 2000
 
 
@@ -228,19 +228,7 @@ def _texts(content: object) -> tuple[str, ...]:
 
 def _without_setup_blocks(text: str) -> str:
     """The text after every leading ``<tag>...</tag>`` block, which is how agents send their setup."""
-    end: Final = max(
-        (match.end() for match in _leading_setup_blocks(text)),
-        default=0,
-    )
-    return text[end:].strip()
-
-
-def _leading_setup_blocks(text: str) -> tuple[re.Match[str], ...]:
-    first: Final = _LEADING_SETUP_BLOCK.match(text)
-    if first is None:
-        return ()
-    scanner: Final = _LEADING_SETUP_BLOCK.scanner(text, first.end())
-    return (first, *iter(scanner.match, None))
+    return _LEADING_SETUP_BLOCKS.sub("", text, count=1).strip()
 
 
 def _conversation(messages: object) -> tuple[_Item, ...]:
