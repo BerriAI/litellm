@@ -1914,6 +1914,7 @@ def test_n_above_one_with_image_modalities_answers_a_400_naming_n(
         )
 
     assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == custom_llm_provider
     assert "n=2" in excinfo.value.message
     assert "drop_params" in excinfo.value.message
 

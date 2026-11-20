@@ -80,6 +80,10 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def get_config(cls):
         return super().get_config()
 
+    @property
+    def custom_llm_provider(self) -> str | None:
+        return "gemini"
+
     def is_model_gemini_audio_model(self, model: str) -> bool:
         return "tts" in model
 

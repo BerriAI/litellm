@@ -352,6 +352,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def get_config(cls):
         return super().get_config()
 
+    @property
+    def custom_llm_provider(self) -> str | None:
+        return "vertex_ai"
+
     def get_json_schema_from_pydantic_object(self, response_format: type["BaseModel"] | dict | None) -> dict | None:
         """
         Override to use Pydantic's model_json_schema() instead of OpenAI's
