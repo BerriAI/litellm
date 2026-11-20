@@ -857,14 +857,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
         isOpen={isGlobalExportModalOpen}
         onClose={() => setIsGlobalExportModalOpen(false)}
         entityType="user"
-        onExport={(exportType, format) =>
+        onExport={(exportType, format, includeMetadata) =>
           dailyActivityRequest
-            ? ENTITY_API.user.exportRows(dailyActivityRequest, exportType, format)
+            ? ENTITY_API.user.exportRows(dailyActivityRequest, exportType, format, includeMetadata)
             : Promise.reject(new Error("Missing access token or date range"))
         }
         dateRange={dateValue}
         selectedFilters={[]}
         customTitle={t("usage.pageView.exportTitle")}
+        canIncludeMetadata={isAdmin}
       />
     </div>
   );

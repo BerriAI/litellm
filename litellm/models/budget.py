@@ -7,9 +7,9 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
-from pydantic import AfterValidator, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, field_validator, model_validator
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -21,9 +21,19 @@ if TYPE_CHECKING:
 class BudgetLimit(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
-    budget_duration: Literal["1mo", "12mo"]
+    budget_duration: str = Field(description="Positive duration such as '1h', '7d', '1mo' or '12mo'.")
     max_budget: float = Field(ge=0, allow_inf_nan=False)
     reset_at: datetime | None = None
+
+    @field_validator("budget_duration")
+    @classmethod
+    def persistable_budget_duration(cls, value: str) -> str:
+        from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+
+        error: Final = budget_duration_error(value)
+        if error is not None:
+            raise ValueError(error)
+        return value
 
 
 def unique_budget_limits(limits: tuple[BudgetLimit, ...]) -> tuple[BudgetLimit, ...]:
@@ -33,6 +43,15 @@ def unique_budget_limits(limits: tuple[BudgetLimit, ...]) -> tuple[BudgetLimit, 
 
 
 BudgetLimits: TypeAlias = Annotated[tuple[BudgetLimit, ...], AfterValidator(unique_budget_limits)]
+
+
+def carry_budget_limit_resets(
+    limits: tuple[BudgetLimit, ...], previous: tuple[BudgetLimit, ...]
+) -> tuple[BudgetLimit, ...]:
+    resets: Final = {limit.budget_duration: limit.reset_at for limit in previous}
+    return tuple(
+        limit.model_copy(update={"reset_at": resets.get(limit.budget_duration, limit.reset_at)}) for limit in limits
+    )
 
 
 def initialize_budget_limits(

@@ -39,8 +39,8 @@ from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
-    TagRepository,
 )
+from litellm.repositories.tag_repository import TagRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )

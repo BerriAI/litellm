@@ -24,6 +24,10 @@ import fastapi.routing
 import httpx
 import pytest
 import yaml
+import redis
+import redis.asyncio
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
@@ -8570,6 +8574,51 @@ async def test_update_general_settings_user_api_key_cache_max_size_resizes_the_r
     assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
 
 
+_CACHES_SPLIT_FROM_THE_AUTH_CACHE: Final = (
+    "hook_cache",
+    "mcp_state_cache",
+    "jwks_cache",
+    "ui_settings_cache",
+    "sso_flow_cache",
+    "budget_windows_absent_cache",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", _CACHES_SPLIT_FROM_THE_AUTH_CACHE)
+async def test_a_cache_split_from_the_auth_cache_still_follows_user_api_key_cache_max_size(name, monkeypatch):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = DualCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server_module, name, cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 300})
+
+    for index in range(250):
+        cache.set_cache(key=f"entry-{index}", value=index, local_only=True)
+    assert cache.get_cache(key="entry-0", local_only=True) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", _CACHES_SPLIT_FROM_THE_AUTH_CACHE)
+async def test_a_cache_split_from_the_auth_cache_still_follows_user_api_key_cache_ttl(name, monkeypatch, tmp_path):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\ngeneral_settings:\n  user_api_key_cache_ttl: 7\n")
+    cache = DualCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server_module, name, cache)
+
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    assert (cache.default_in_memory_ttl, cache.default_redis_ttl) == (7.0, 7.0)
+
+
 @pytest.mark.asyncio
 async def test_update_general_settings_clearing_user_api_key_cache_max_size_restores_the_default(monkeypatch):
     """Blanking the field in the dashboard deletes the key, so the cache must fall
@@ -13519,6 +13568,31 @@ def test_init_cache_redis_backend_reuses_cache_backend_over_environment():
     assert usage_cache is redis_backend
     assert usage_cache.init_kwargs["host"] == "cache-params-host"
     assert spend_redis is redis_backend
+
+
+def test_init_cache_accepts_default_redis_ttl_for_a_redis_response_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    server: Final = FakeServer()
+
+    class Pool(redis.asyncio.BlockingConnectionPool):
+        def __init__(self, **kwargs: object) -> None:  # kwargs-ok: forwarded to the redis pool
+            super().__init__(connection_class=FakeConnection, server=server, **kwargs)
+
+    monkeypatch.setattr(redis, "Redis", FakeRedis)
+    monkeypatch.setattr(redis.asyncio, "BlockingConnectionPool", Pool)
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "default_redis_ttl", None)
+    with (
+        _patched_coordination_redis_module_state(
+            spend_cache=DualCache(), config_cache=types.SimpleNamespace(redis_cache=None)
+        ),
+        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
+    ):
+        proxy_server_module.ProxyConfig()._init_cache(
+            cache_params={"type": "redis", "host": "redis.invalid", "port": "6379", "default_redis_ttl": 600}
+        )
+
+    assert litellm.cache is not None
+    assert litellm.cache.cache.default_ttl == 600
 
 
 class _EnvBuiltClusterCache(RedisClusterCache):

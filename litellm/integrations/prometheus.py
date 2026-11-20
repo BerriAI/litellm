@@ -65,8 +65,8 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.table_repositories import EndUserRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router_api import deployment_metadata
@@ -437,8 +437,8 @@ def _own_charge() -> OwnCharge:
     batches: Final = active_request_redis_batches()
     if batches is None or not spend_counter_store.has_redis:
         return "unknown"
-    settlements: Final = batches.post_call_settlements
-    return "counted" if settlements and all(settlement.settled for settlement in settlements) else "pending"
+    native: Final = batches.existing_native()
+    return "counted" if native is not None and native.tracked_writes_settled else "pending"
 
 
 def _committed_spend_before_request(

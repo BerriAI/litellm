@@ -11,6 +11,14 @@ description: >-
   The restored `rust-bridge-dist` directory holds the editable litellm wheel, the
   litellm-proxy gateway wheel, and `litellm/rust_bridge/_native.abi3.so`.
 
+inputs:
+  stale-cost-map:
+    description: >-
+      'true' to fall back to a bridge built from the same Rust inputs whose embedded
+      cost map is older, for a pull request that changes only the cost map
+    required: false
+    default: "false"
+
 outputs:
   key:
     description: "Cache key for the bridge built from this checkout"
@@ -18,6 +26,9 @@ outputs:
   cache-hit:
     description: "'true' when the bridge for this exact key was restored"
     value: ${{ steps.restore.outputs.cache-hit }}
+  restored:
+    description: "'true' when a bridge was restored, by exact key or by the stale cost map fallback"
+    value: ${{ steps.restore.outputs.cache-matched-key != '' }}
 
 runs:
   using: composite
@@ -26,8 +37,14 @@ runs:
       id: key
       shell: bash
       env:
-        RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm/rust/Cargo.lock', 'litellm/rust/Cargo.toml', 'litellm/rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml', 'litellm/packaging/litellm-proxy/pyproject.toml') }}
-      run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
+        RUST_INPUTS: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm/rust/Cargo.lock', 'litellm/rust/Cargo.toml', 'litellm/rust/crates/**', 'pyproject.toml', 'litellm/packaging/litellm-proxy/pyproject.toml') }}
+        COST_MAP: ${{ hashFiles('model_prices_and_context_window.json') }}
+        STALE_COST_MAP: ${{ inputs.stale-cost-map }}
+      run: |
+        echo "key=${RUST_INPUTS}-${COST_MAP}" >> "$GITHUB_OUTPUT"
+        if [ "${STALE_COST_MAP}" = true ]; then
+          echo "fallback=${RUST_INPUTS}-" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Restore the Rust bridge
       id: restore
@@ -35,3 +52,4 @@ runs:
       with:
         path: rust-bridge-dist
         key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.fallback }}

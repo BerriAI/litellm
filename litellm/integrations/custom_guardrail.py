@@ -401,6 +401,8 @@ class CustomGuardrail(CustomLogger):
     records_own_guardrail_information: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
+    scan_tool_descriptions_as_text: bool | None = None
+    scan_tool_calls_as_text: bool | None = None
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
@@ -1339,6 +1341,12 @@ class CustomGuardrail(CustomLogger):
             response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
 
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return False
+
+    def supports_scan_tool_calls_as_text(self) -> bool:
+        return False
+
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.
 
@@ -1347,6 +1355,12 @@ class CustomGuardrail(CustomLogger):
         ``scan_only_tool_results`` is rejected at initialization instead of
         silently scanning nothing on every request.
         """
+        return True
+
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return False
+
+    def scans_each_text_separately(self) -> bool:
         return True
 
     def structured_messages_cover_full_request(self) -> bool:
