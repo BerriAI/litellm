@@ -188,7 +188,7 @@ SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"standard_onl
 
 
 def _unsupported_service_tier(service_tier: str) -> UnsupportedParamsError:
-    known_tiers: Final = sorted(SENT_SERVICE_TIERS | PROVIDER_DEFAULT_SERVICE_TIERS)
+    known_tiers: Final = sorted(SENT_SERVICE_TIERS | PROVIDER_DEFAULT_SERVICE_TIERS | frozenset(SERVICE_TIER_ALIASES))
     return UnsupportedParamsError(
         message=(
             f"Invalid `service_tier`: {service_tier!r}. "
