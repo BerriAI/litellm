@@ -1076,7 +1076,7 @@ class _MigrateDeployHarness:
 
         import litellm_proxy_extras.utils as utils_module
 
-        self.deploy_calls = []
+        self.deploy_calls: list[Sequence[str]] = []
         self.deploy_environments = []
         self.deploy_prisma_environments: list[dict[str, str]] = []
         self.resolved = []
@@ -1114,11 +1114,11 @@ class _MigrateDeployHarness:
             return self._outcomes.pop(0)
         raise AssertionError("prisma migrate deploy called more times than scripted")
 
-    def _fake_run(self, cmd, **kwargs):
+    def _fake_run(self, cmd: Sequence[str], *, env: Mapping[str, str], **kwargs: object):
         if cmd[1:] == ["migrate", "deploy"]:
             self.deploy_calls.append(cmd)
-            self.deploy_environments.append(kwargs["env"].get("DATABASE_URL", ""))
-            self.deploy_prisma_environments.append(dict(kwargs["env"]))
+            self.deploy_environments.append(env.get("DATABASE_URL", ""))
+            self.deploy_prisma_environments.append(dict(env))
             outcome = self._next_outcome()
             if outcome == "ok":
                 return _FakeCompleted()
@@ -2391,9 +2391,7 @@ class TestV2MigrationsWithoutPsycopg:
     DATABASE_URL: Final = "postgresql://user:secret@pool:5432/litellm?schema=tenant"
     DIRECT_URL: Final = "postgresql://user:secret@writer:5432/litellm"
 
-    def _harness(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcomes: list[str]
-    ) -> "_MigrateDeployHarness":
+    def _harness(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcomes: list[str]) -> "_MigrateDeployHarness":
         prisma_env: Final = {
             "DATABASE_URL": self.DATABASE_URL,
             "DIRECT_URL": self.DIRECT_URL,
