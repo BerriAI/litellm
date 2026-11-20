@@ -1,8 +1,6 @@
 "use client";
 
 import { useTranslation } from "react-i18next";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import {
   type CustomerHierarchyFields,
   type CustomerHierarchyEntity,
@@ -81,21 +79,7 @@ export default function CustomerHierarchyBudgetFields({
             }
       }
     >
-      {kind === "team" && (
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id={`${idPrefix}-budget-enabled`}
-              checked={fields.budgetEnabled}
-              onCheckedChange={(checked) => update("budgetEnabled", checked)}
-            />
-            <Label htmlFor={`${idPrefix}-budget-enabled`}>{t("customerPortal.hierarchy.budgetEnabled")}</Label>
-          </div>
-        </div>
-      )}
-      {(kind === "member" || fields.budgetEnabled) && (
-        <CustomerBudgetCompactFields fields={fields} onChange={updateCompact} disabled={false} id={idPrefix} />
-      )}
+      <CustomerBudgetCompactFields fields={fields} onChange={updateCompact} disabled={false} id={idPrefix} />
     </CustomerBudgetEditor>
   );
 }

@@ -113,9 +113,9 @@ describe("CustomerHierarchySettings", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sets organization rate limits without requiring a dollar budget", async () => {
-    const unlimited = { ...organization, budget: null };
-    renderSettings({ kind: "organization", record: unlimited });
+  it.each(["organization", "team"] as const)("sets %s rate limits directly without a dollar budget", async (kind) => {
+    const record = { ...organization, customer_team_id: "team-1", parent_org_id: "org-1", budget: null };
+    renderSettings({ kind, record });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "60" } });
     expect(await saveChanges()).toMatchObject({

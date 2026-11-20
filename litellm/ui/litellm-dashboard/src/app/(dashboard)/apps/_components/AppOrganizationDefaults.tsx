@@ -47,9 +47,10 @@ export default function AppOrganizationDefaults() {
     setDrafts((current) => ({
       ...current,
       [resource.resource_id]: {
-        appId: resource.app_id ?? null,
-        savedProfile: app?.default_tier_budget_id ?? "",
-        ...current[resource.resource_id],
+        ...(current[resource.resource_id] ?? {
+          appId: resource.app_id ?? null,
+          savedProfile: app?.default_tier_budget_id ?? "",
+        }),
         profile,
         error: undefined,
       },

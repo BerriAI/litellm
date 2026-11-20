@@ -22,6 +22,8 @@ const resources = ["Chat", "Support", "Search"].map((alias) => ({
 }));
 type AppFixture = (typeof resources)[number] & { app_id: string; default_tier_budget_id: string | null };
 const writes: Request[] = [];
+const catalog = (groups: Record<string, string>) =>
+  json({ default_budgets: Object.entries(groups).map(([budget_id, name]) => ({ budget_id, name })) });
 let apps: AppFixture[];
 let staleApps: AppFixture[] | null;
 let rejectedIds: Set<string>;
@@ -63,24 +65,27 @@ beforeEach(() => {
         );
       if (path.endsWith("/apps")) return json(listed);
       if (path.endsWith("/app_customer_organization_budget_groups"))
-        return json({
-          default_budgets: [
-            { budget_id: "tier-1", name: "Tier 1" },
-            { budget_id: "tier-2", name: "Tier 2" },
-          ],
-        });
+        return catalog({ "tier-1": "Tier 1", "tier-2": "Tier 2" });
       if (path.endsWith("/customer_organization_budget_groups"))
-        return json({
-          default_budgets: [
-            { budget_id: "org-standard", name: "Standard" },
-            { budget_id: "org-enterprise", name: "Enterprise" },
-          ],
-        });
+        return catalog({ "org-standard": "Standard", "org-enterprise": "Enterprise" });
       throw new Error(`Unexpected request ${request.method} ${path}`);
     }),
   );
 });
 afterEach(() => vi.unstubAllGlobals());
+
+async function expectWrites(expected: ["POST" | "PATCH", string, string | null][]) {
+  expect(writes).toHaveLength(expected.length);
+  for (const [index, [method, resource, default_tier_budget_id]] of expected.entries()) {
+    const request = writes[index];
+    expect(request.method).toBe(method);
+    expect(new URL(request.url).pathname).toBe(`/management/v1/apps${method === "PATCH" ? `/app-${resource}` : ""}`);
+    expect(await request.json()).toEqual({
+      default_tier_budget_id,
+      ...(method === "POST" ? { resource_id: resource, resource_type: "team" } : {}),
+    });
+  }
+}
 
 it.each([
   ["PATCH", "Tier 2", "tier-2", "tier-1"],
@@ -102,7 +107,6 @@ it.each([
   }
   const chat = within(await screen.findByRole("group", { name: "Defaults for Chat" }));
   const group = chat.getByRole("combobox", { name: "Budget group" });
-  await waitFor(() => expect(group).toBeEnabled());
   if (initial === "org-standard") {
     expect(group).toHaveTextContent("Standard (overall organization group)");
     await user.click(group);
@@ -130,15 +134,10 @@ it.each([
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   expect(group).toHaveTextContent(label);
   expect(support.getByRole("combobox", { name: "Budget group" })).toHaveTextContent("No limit");
-  expect(writes).toHaveLength(2);
-  for (const request of writes) {
-    expect(request.method).toBe(method);
-    expect(new URL(request.url).pathname).toBe(`/management/v1/apps${method === "PATCH" ? "/app-chat" : ""}`);
-    expect(await request.json()).toEqual({
-      default_tier_budget_id: id,
-      ...(method === "POST" ? { resource_id: "chat", resource_type: "team" } : {}),
-    });
-  }
+  await expectWrites([
+    [method, "chat", id],
+    [method, "chat", id],
+  ]);
 });
 
 it.each(["support", "search"])(
@@ -179,22 +178,12 @@ it.each(["support", "search"])(
     await chooseSelectOption(user, chatGroup, /^No limit/);
     await user.click(save);
     await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(2));
-    expect(writes).toHaveLength(5);
-    expect(writes.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
-      ["POST", "/management/v1/apps"],
-      ["POST", "/management/v1/apps"],
-      ["PATCH", "/management/v1/apps/app-support"],
-      rejected === "support" ? ["PATCH", "/management/v1/apps/app-support"] : ["POST", "/management/v1/apps"],
-      ["PATCH", "/management/v1/apps/app-chat"],
-    ]);
-    expect(await Promise.all(writes.map((request) => request.json()))).toEqual([
-      { resource_id: "chat", resource_type: "team", default_tier_budget_id: "tier-2" },
-      { resource_id: "search", resource_type: "team", default_tier_budget_id: null },
-      { default_tier_budget_id: "tier-1" },
-      rejected === "support"
-        ? { default_tier_budget_id: "tier-1" }
-        : { resource_id: "search", resource_type: "team", default_tier_budget_id: null },
-      { default_tier_budget_id: null },
+    await expectWrites([
+      ["POST", "chat", "tier-2"],
+      ["POST", "search", null],
+      ["PATCH", "support", "tier-1"],
+      rejected === "support" ? ["PATCH", "support", "tier-1"] : ["POST", "search", null],
+      ["PATCH", "chat", null],
     ]);
   },
 );

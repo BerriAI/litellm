@@ -151,13 +151,7 @@ describe("Gateway app definition", () => {
   );
 
   it("changes app and member-default rates without persisting unchanged displayed spend caps", async () => {
-    const budget = {
-      max_budget: 150,
-      budget_duration: "1mo",
-      rpm_limit: 20,
-      budget_limits: [{ max_budget: 1200, budget_duration: "12mo" }],
-    };
-    const user = await openAppSettings({ budget, default_customer_member_budget: budget });
+    const user = await openAppSettings({ budget: overallPreset, default_customer_member_budget: overallPreset });
     const overall = within(await screen.findByRole("region", { name: "Overall app budget" }));
     const member = within(screen.getByRole("region", { name: "Default per-member budget" }));
     expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
@@ -207,17 +201,15 @@ describe("Gateway app definition", () => {
   });
 
   it("copies the newly selected preset into Custom and preserves its draft through No limit", async () => {
-    const selected: typeof overallPreset = {
-      ...overallPreset,
-      budget_id: "overall-scale",
-      name: "App Scale",
+    const copiedPolicy = {
       max_budget: 250,
       rpm_limit: 25,
       allowed_models: ["model-b"],
       budget_limits: [{ max_budget: 3000, budget_duration: "12mo" }],
       model_tpm_limit: { "model-b": 200 },
-      cap_policy: "pause_allow_increase",
+      cap_policy: "pause_allow_increase" as const,
     };
+    const selected = { ...overallPreset, ...copiedPolicy, budget_id: "overall-scale", name: "App Scale" };
     overallPresets = [overallPreset, selected];
     const user = await openAppSettings({
       budget_id: overallPreset.budget_id,
@@ -241,15 +233,11 @@ describe("Gateway app definition", () => {
     expect(overall.getByRole("spinbutton", { name: "Requests per minute" })).toHaveValue(0);
     const expected = {
       budget: {
-        max_budget: 250,
+        ...copiedPolicy,
         budget_duration: "1mo",
         soft_budget: null,
         rpm_limit: 0,
-        allowed_models: ["model-b"],
-        budget_limits: [{ max_budget: 3000, budget_duration: "12mo" }],
-        model_tpm_limit: { "model-b": 200 },
         model_rpm_limit: null,
-        cap_policy: "pause_allow_increase",
       },
       default_customer_member_budget: null,
       auto_create_customers: true,

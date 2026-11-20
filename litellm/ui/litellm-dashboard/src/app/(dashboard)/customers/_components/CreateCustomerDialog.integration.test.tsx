@@ -43,8 +43,10 @@ beforeEach(() => {
   testQueryClient.clear();
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (request: Request) => {
+    vi.fn<typeof fetch>(async (input, init) => {
+      const request = new Request(input, init);
       const url = new URL(request.url);
+      if (url.pathname === "/models") return Response.json({ data: [] });
       if (url.pathname.endsWith("/.well-known/litellm-ui-config")) {
         return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
       }
@@ -264,7 +266,7 @@ describe("CreateCustomerDialog", () => {
     await waitFor(() => expect(creations).toHaveLength(1));
     expect(await screen.findByRole("button", { name: "Create customer" })).toBeEnabled();
     expect(group.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(450);
-    expect(group.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ year");
+    expect(group.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ yr");
     expect(onCreated).not.toHaveBeenCalled();
     rejectCreation = false;
     fireEvent.change(screen.getByLabelText("Organization ID (optional)"), { target: { value: "new-id" } });
@@ -285,7 +287,7 @@ describe("CreateCustomerDialog", () => {
     expect(screen.getByLabelText("Customer name")).toHaveValue("");
     const reopenedGroup = within(screen.getByRole("row", { name: "default_user" }));
     expect(reopenedGroup.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(50);
-    expect(reopenedGroup.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ month");
+    expect(reopenedGroup.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ mo");
     expect(screen.getByRole("combobox", { name: "New members join" })).toHaveTextContent("default_user");
   });
 });

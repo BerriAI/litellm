@@ -65,37 +65,29 @@ describe("app budget forms", () => {
     });
   });
 
-  it.each(["", "-1", "Infinity", "bad"])("rejects an invalid stored window amount %s", (maxBudget) => {
-    const fields = budgetEditorFields(preset);
-    expect(
-      budgetEditorValue(
-        {
-          ...fields,
-          budgetWindows: fields.budgetWindows.map((window) => ({ ...window, maxBudget })),
-        },
-        preset,
-      ),
-    ).toEqual({ ok: false, error: "customerPortal.hierarchy.invalidNumber" });
-  });
-
-  it.each(["-1", "NaN", "Infinity", "1.2.3"])("rejects invalid main spend %s", (maxBudget) => {
-    expect(budgetEditorValue({ ...budgetEditorFields({}), maxBudget })).toEqual({
+  it.each([
+    ...["", "-1", "Infinity", "bad"].map((amount) => ["window", amount] as const),
+    ...["-1", "NaN", "Infinity", "1.2.3"].map((amount) => ["main", amount] as const),
+  ])("rejects invalid %s spend %s", (location, maxBudget) => {
+    const invalid =
+      location === "main"
+        ? { ...budgetEditorFields({}), maxBudget }
+        : { ...fields, budgetWindows: fields.budgetWindows.map((window) => ({ ...window, maxBudget })) };
+    expect(budgetEditorValue(invalid, location === "main" ? undefined : preset)).toEqual({
       ok: false,
       error: "customerPortal.hierarchy.invalidNumber",
     });
   });
 
   it.each(["6days", "6mo"])("rejects unsupported primary and additional periods %s", (budgetDuration) => {
-    expect(budgetEditorValue({ ...fields, budgetDuration })).toEqual({
-      ok: false,
-      error: "customerPortal.budgetEditor.invalidPeriod",
-    });
+    const invalidPeriod = { ok: false, error: "customerPortal.budgetEditor.invalidPeriod" };
+    expect(budgetEditorValue({ ...fields, budgetDuration })).toEqual(invalidPeriod);
     expect(
       budgetEditorValue({
         ...fields,
         budgetWindows: [{ ...monthly, budget: { ...monthly.budget, budget_duration: budgetDuration } }],
       }),
-    ).toEqual({ ok: false, error: "customerPortal.budgetEditor.invalidPeriod" });
+    ).toEqual(invalidPeriod);
   });
 });
 

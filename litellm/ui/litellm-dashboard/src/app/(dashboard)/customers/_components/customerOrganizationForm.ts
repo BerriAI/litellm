@@ -91,7 +91,7 @@ export type CustomerOrganizationFormError =
 
 export function validateCustomerBudgetGroups(
   fields: Pick<CustomerOrganizationFields, "groups" | "defaultGroupId">,
-  existingGroups: readonly components["schemas"]["BudgetTemplate"][] = [],
+  existingGroups: Readonly<components["schemas"]["BudgetGroups"]["default_budgets"]> = [],
   requireDefault = true,
 ) {
   const existingGroupIds = existingGroups.map((group) => group.budget_id);
