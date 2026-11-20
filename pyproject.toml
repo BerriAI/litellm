@@ -155,8 +155,8 @@ semantic-router = [
 ]
 mlflow = ["mlflow>=3.17.2,<4.0"]
 grpc = [
-    # First release whose bundled roots.pem drops the compromised eMudhra roots, ahead of the 30-day cutoff
-    "grpcio==1.84.1",
+    # 1.84.1 dropped the compromised eMudhra roots from the bundled roots.pem; 1.85 builds against OpenSSL 4, which the FIPS image needs
+    "grpcio==1.85.1",
 ]
 stt-vertex-chirp = [
     # Google Cloud Speech-to-Text v2 streaming (gRPC) for Chirp models on
@@ -191,7 +191,7 @@ proxy-runtime = [
     "google-cloud-speech>=2.40.0,<3.0",
     "google-genai>=1.37.0,<2.0",
     "anthropic[vertex]>=0.84.0,<1.0",
-    "grpcio==1.84.1",
+    "grpcio==1.85.1",
     "prometheus-client>=0.20.0,<1.0",
     "langfuse>=4.7,<5.0",
     "opentelemetry-api==1.45.2",

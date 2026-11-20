@@ -88,7 +88,6 @@ def test_bundled_crypto_without_waiver_fails_even_when_inventoried(tmp_path: Pat
 @pytest.mark.parametrize(
     ("relative", "label"),
     [
-        ("site-packages/grpc/_cython/cygrpc.cpython-313-x86_64-linux-gnu.so", "BoringSSL"),
         ("site-packages/granian/_granian.cpython-313-aarch64-linux-gnu.so", "BoringSSL"),
         ("site-packages/litellm/rust_bridge/_native.abi3.so", "BoringSSL"),
         ("site-packages/psycopg_binary.libs/libcrypto-2d1629ee.so.3", "BoringSSL,crypto-library"),
@@ -160,6 +159,17 @@ def test_cryptography_wheel_with_its_own_openssl_fails(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert result.stdout == f"VIOLATION {wheel} [bundled-OpenSSL] bundled crypto with no waiver\n" + FAIL_ONE
+
+
+def test_grpcio_wheel_with_its_own_boringssl_fails(tmp_path: Path) -> None:
+    wheel: Final = _elf(
+        tmp_path / "root" / "site-packages/grpc/_cython/cygrpc.cpython-313-x86_64-linux-gnu.so", b"BoringSSL"
+    )
+
+    result, _ = _scan(tmp_path, [tmp_path / "root"], inventory=[str(wheel)])
+
+    assert result.returncode == 1
+    assert result.stdout == f"VIOLATION {wheel} [BoringSSL] bundled crypto with no waiver\n" + FAIL_ONE
 
 
 @pytest.mark.parametrize("emit", [False, True], ids=["scan", "emit"])
