@@ -425,7 +425,7 @@ def test_dynamic_key_extraction_from_litellm_params_metadata():
 
 
 def test_top_level_disabled_callbacks_reach_standard_params_but_client_metadata_copies_do_not():
-    carried: Final = initialize_standard_callback_dynamic_params({"litellm_disabled_callbacks": ["langfuse", 7]})
+    carried: Final = initialize_standard_callback_dynamic_params({"litellm_disabled_callbacks": ["LangFuse", 7]})
     assert carried.get("litellm_disabled_callbacks") == ["langfuse"]
 
     client_slots: Final = {
