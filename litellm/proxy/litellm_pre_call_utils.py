@@ -4848,7 +4848,7 @@ def add_provider_specific_headers_to_request(
     data: dict,
     headers: Mapping[str, str],
 ) -> bool:
-    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header, is_anthropic_oauth_key
     from litellm.llms.chatgpt.common_utils import select_chatgpt_client_credential_headers
 
     anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
@@ -4893,7 +4893,9 @@ def add_provider_specific_headers_to_request(
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
+    return any(
+        anthropic_oauth_token_from_header(value) is not None for value in anthropic_oauth_credential_headers.values()
+    )
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

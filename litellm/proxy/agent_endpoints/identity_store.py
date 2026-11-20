@@ -1,6 +1,5 @@
 import json
 from collections.abc import Mapping
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
@@ -26,8 +25,6 @@ _AGENT_IDENTITIES_TARGET: Final = "agent_identities"
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_VerifiedSubject
     from prisma.types import (
-        LiteLLM_AgentIdentityUpdateManyMutationInput,
-        LiteLLM_AgentIdentityWhereInput,
         LiteLLM_AgentIdentityWhereUniqueInput,
         LiteLLM_AgentsTableInclude,
         LiteLLM_AgentsTableWhereUniqueInput,
@@ -197,17 +194,7 @@ class AgentIdentityStore:
         try:
             if context.binding_revision is None:
                 return AgentIdentityFailure(message="Agent authentication requires a binding revision")
-            where: Final[LiteLLM_AgentIdentityWhereInput] = {
-                "agent_id": context.agent_id,
-                "revision": context.binding_revision,
-                "active": True,
-                "agent": {"is": {"enabled": True, "identity_managed": True}},
-            }
-            data: Final[LiteLLM_AgentIdentityUpdateManyMutationInput] = {
-                "last_authenticated_at": datetime.now(timezone.utc)
-            }
-            count: Final = await self.identities.table.update_many(where=where, data=data)
-            if count != 1:
+            if not await self.identities.record_authentication(context.agent_id, context.binding_revision):
                 return AgentIdentityFailure(message="Agent identity changed during authentication; retry")
             return None
         except Exception:

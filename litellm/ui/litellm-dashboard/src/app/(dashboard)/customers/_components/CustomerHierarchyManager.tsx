@@ -17,6 +17,7 @@ import type { Member } from "./customerHierarchyForms";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
+import { CustomerDetailHeader, CustomerDetailLayout } from "./CustomerDetailLayout";
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerEntityBudgetDialog from "./CustomerEntityBudgetDialog";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
@@ -69,47 +70,45 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
   };
   const budgetSettingsHref = `${customerHierarchyHref("manage", budgetScope)}&tab=settings`;
   return (
-    <header>
-      <nav
-        aria-label={t("customerPortal.analytics.breadcrumb")}
-        className="mb-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
-      >
-        <a href={customersHref} className="hover:text-foreground">
-          {t("customerPortal.analytics.allCustomers")}
-        </a>
-        {(team || selected.member) && (
-          <>
-            <ChevronRight aria-hidden="true" className="size-3" />
-            <button type="button" onClick={hierarchy.openOrganization} className="hover:text-foreground">
-              {selected.organization.alias || selected.organization.customer_org_id}
-            </button>
-          </>
-        )}
-        {selected.member && team && (
-          <>
-            <ChevronRight aria-hidden="true" className="size-3" />
-            <button
-              type="button"
-              onClick={() => hierarchy.openTeam(team.customer_team_id)}
-              className="hover:text-foreground"
-            >
-              {team.alias || team.customer_team_id}
-            </button>
-          </>
-        )}
-      </nav>
-      <div className="flex flex-wrap items-start justify-between gap-6">
-        <div className="min-w-0 flex-1 basis-72">
-          <h1 className="break-words text-2xl font-semibold tracking-tight">{label}</h1>
-          {label !== customerEntityId(entity) && (
-            <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{customerEntityId(entity)}</p>
+    <CustomerDetailHeader
+      title={label}
+      breadcrumbs={
+        <>
+          <a href={customersHref} className="hover:text-foreground">
+            {t("customerPortal.analytics.allCustomers")}
+          </a>
+          {(team || selected.member) && (
+            <>
+              <ChevronRight aria-hidden="true" className="size-3" />
+              <button type="button" onClick={hierarchy.openOrganization} className="hover:text-foreground">
+                {selected.organization.alias || selected.organization.customer_org_id}
+              </button>
+            </>
           )}
-        </div>
+          {selected.member && team && (
+            <>
+              <ChevronRight aria-hidden="true" className="size-3" />
+              <button
+                type="button"
+                onClick={() => hierarchy.openTeam(team.customer_team_id)}
+                className="hover:text-foreground"
+              >
+                {team.alias || team.customer_team_id}
+              </button>
+            </>
+          )}
+        </>
+      }
+      actions={
         <div className="w-full sm:w-72">
           <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} scope={budgetScope} />
         </div>
-      </div>
-    </header>
+      }
+    >
+      {label !== customerEntityId(entity) && (
+        <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{customerEntityId(entity)}</p>
+      )}
+    </CustomerDetailHeader>
   );
 }
 
@@ -422,6 +421,7 @@ export default function CustomerHierarchyManager() {
     );
 
   const entity = selected.entity;
+  const showOrganizationApps = entity.kind === "organization" && (tab === "teams" || tab === "members");
   const currentScope = {
     org: scope.org,
     team: selected.team?.customer_team_id ?? null,
@@ -435,12 +435,10 @@ export default function CustomerHierarchyManager() {
   };
 
   return (
-    <main
-      className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6"
-      aria-label={t("customerPortal.hierarchy.title")}
-    >
+    <CustomerDetailLayout label={t("customerPortal.hierarchy.title")}>
       <HierarchyHeader hierarchy={hierarchy} selected={selected} />
-      {entity.kind === "organization" && tab !== "budget_groups" && (
+      <CustomerHierarchyNavigation scope={currentScope} active={tab} />
+      {showOrganizationApps && (
         <CustomerOrganizationApps
           key={scope.org}
           organizationId={scope.org}
@@ -454,7 +452,6 @@ export default function CustomerHierarchyManager() {
           organizationId={selected.organization.customer_org_id}
         />
       )}
-      <CustomerHierarchyNavigation scope={currentScope} active={tab} />
       <section>
         {tab === "budget_groups" ? (
           <CustomerBudgetGroups
@@ -476,6 +473,6 @@ export default function CustomerHierarchyManager() {
           <HierarchyChildTable hierarchy={hierarchy} selected={selected} scope={scope} />
         )}
       </section>
-    </main>
+    </CustomerDetailLayout>
   );
 }
