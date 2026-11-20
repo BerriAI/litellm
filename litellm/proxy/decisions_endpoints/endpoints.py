@@ -7,6 +7,7 @@ from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
+from litellm.llms.base_llm.decisions.transformation import without_raw_prompt_cache_breakpoints
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
@@ -113,13 +114,21 @@ async def _invalid_request(
     )
 
 
-_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "images", "assets", "audio", "videos"})
+_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset(
+    {"safety_identifier", "prompt_cache_key", "prompt_cache_options", "images", "assets", "audio", "videos"}
+)
 
 
 def _fields_checked_before_routing(data: Mapping[str, object], route_type: _RouteType) -> Mapping[str, object]:
     if route_type == "aextraction":
         return data
-    return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
+    return MappingProxyType(
+        {
+            key: without_raw_prompt_cache_breakpoints(value) if key == "input" else value
+            for key, value in data.items()
+            if key not in _FIELDS_CHECKED_AFTER_ROUTING
+        }
+    )
 
 
 _DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info"})
@@ -228,7 +237,7 @@ async def systemone(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
-    Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+    Judge a `state` against one or more named `questions` and get one calibrated answer per question name.
 
     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,

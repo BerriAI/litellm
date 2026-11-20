@@ -30,7 +30,7 @@ from litellm.utils import convert_to_model_response_object
 from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -77,7 +77,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
             session_headers: Final = cast(  # cast-ok: both spreads are str-valued header dicts
                 "dict[str, str]", {**get_copilot_default_headers(user_session.token), **headers}
             )
-            pin_session_authorization(session_headers, user_session.token)
+            pin_session_authorization(session_headers, user_session.token, user_session.integration_id)
             return session_headers
         try:
             # Get GitHub Copilot API key via OAuth
@@ -100,7 +100,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
 
             return merged_headers
 
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",
@@ -202,7 +202,9 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
         from litellm.llms.openai.openai import OpenAIConfig
 
         return OpenAIConfig().get_error_class(error_message=error_message, status_code=status_code, headers=headers)

@@ -1,24 +1,29 @@
-import asyncio, importlib, os, uuid
+import asyncio, base64, importlib, os, uuid
 import json
 import logging
 import re
 import threading
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
+from itertools import chain, pairwise
+from pathlib import Path
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
 import respx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
 from litellm._logging import verbose_logger
+from litellm.cost_calculator import batch_cost_calculator
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token, parse_prompt_tokens_details
+from litellm.llms.anthropic.messages.native import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
@@ -30,9 +35,11 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     normalize_gemini_speech_config,
     reject_unknown_gemini_tts_voice_keys,
 )
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
+from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, StreamingChoices, Usage
+from litellm.utils import CustomStreamWrapper
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
@@ -324,7 +331,9 @@ def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(sp
 
 def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
     mapped: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        non_default_params={
+            "audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}
+        },
         optional_params={},
         model="gemini-2.5-flash-preview-tts",
         drop_params=False,
@@ -1515,6 +1524,7 @@ def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
     v = VertexGeminiConfig()
     usage_metadata = {
         "promptTokenCount": 210,
+        "cachedContentTokenCount": 54,
         "candidatesTokenCount": 50,
         "totalTokenCount": 260,
         "promptTokensDetails": [
@@ -1536,14 +1546,127 @@ def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v.calculate_usage(completion_response={"usageMetadata": usage_metadata})
 
-    # prompt details are total - cached per modality
-    assert result.prompt_tokens_details.text_tokens == 16  # 20 - 4
-    assert result.prompt_tokens_details.image_tokens == 140  # (90 + 100) - (40 + 10)
+    assert result.prompt_tokens_details.text_tokens == 20
+    assert result.prompt_tokens_details.image_tokens == 190
+    assert result.prompt_tokens_details.cached_tokens == 54
+    assert result.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(text_tokens=4, image_tokens=50)
 
     # candidates details accumulate duplicate modalities
     assert result.completion_tokens_details.text_tokens == 20  # 15 + 5
     assert result.completion_tokens_details.image_tokens == 30
     assert result.completion_tokens == 50
+
+
+def _gemini_usage_with_cached_audio(cached_audio_tokens: int) -> Usage:
+    cache_tokens_details: Final = (
+        (
+            {"modality": "TEXT", "tokenCount": 5},
+            {"modality": "AUDIO", "tokenCount": cached_audio_tokens},
+        )
+        if cached_audio_tokens > 0
+        else ({"modality": "TEXT", "tokenCount": 5},)
+    )
+    completion_response: Final = {
+        "usageMetadata": {
+            "promptTokenCount": 40,
+            "cachedContentTokenCount": 5 + cached_audio_tokens,
+            "promptTokensDetails": (
+                {"modality": "TEXT", "tokenCount": 20},
+                {"modality": "AUDIO", "tokenCount": 20},
+            ),
+            "cacheTokensDetails": cache_tokens_details,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 47,
+        }
+    }
+    return VertexGeminiConfig.calculate_usage(completion_response=completion_response)
+
+
+def test_gemini_raw_usage_metadata_prices_cached_audio_at_its_batch_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_token_batches": 1e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "input_cost_per_audio_token_batches": 3e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_token_cost_batches": 4e-7,
+        "cache_read_input_audio_token_cost": 5e-7,
+        "cache_read_input_audio_token_cost_batches": 2e-7,
+    }
+    usage: Final = _gemini_usage_with_cached_audio(5)
+    expected_prompt_cost: Final = (
+        15 * model_info["input_cost_per_token_batches"]
+        + 15 * model_info["input_cost_per_audio_token_batches"]
+        + 5 * model_info["cache_read_input_token_cost_batches"]
+        + 5 * model_info["cache_read_input_audio_token_cost_batches"]
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-audio-batch-test-model",
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_gemini_raw_usage_metadata_prices_cached_audio_at_its_standard_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_audio_token_cost": 5e-7,
+    }
+    usage: Final = _gemini_usage_with_cached_audio(5)
+    expected_prompt_cost: Final = (
+        15 * model_info["input_cost_per_token"]
+        + 15 * model_info["input_cost_per_audio_token"]
+        + 5 * model_info["cache_read_input_token_cost"]
+        + 5 * model_info["cache_read_input_audio_token_cost"]
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-audio-standard-test-model",
+        usage=usage,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_gemini_usage_totals_are_subtracted_once_and_audio_cache_rate_matches_audio_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_audio_token_cost": 6e-6,
+    }
+    cached_usage: Final = _gemini_usage_with_cached_audio(5)
+    uncached_usage: Final = _gemini_usage_with_cached_audio(0)
+    cached_details: Final = parse_prompt_tokens_details(cached_usage)
+    cached_prompt_cost, _ = generic_cost_per_token(
+        model="gemini-audio-standard-test-model",
+        usage=cached_usage,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+    uncached_prompt_cost, _ = generic_cost_per_token(
+        model="gemini-audio-standard-test-model",
+        usage=uncached_usage,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert cached_usage.prompt_tokens_details.text_tokens == 20
+    assert cached_usage.prompt_tokens_details.audio_tokens == 20
+    assert cached_usage.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(
+        text_tokens=5, audio_tokens=5
+    )
+    assert cached_details["text_tokens"] == 15
+    assert cached_details["audio_tokens"] == 15
+    assert cached_prompt_cost == pytest.approx(uncached_prompt_cost)
 
 
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
@@ -1575,6 +1698,78 @@ def test_vertex_ai_map_thinking_param_without_budget_tokens_for_gemini_3():
     assert result["thinkingConfig"] == {"includeThoughts": True}
 
 
+def _budget_drop_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "thinking.budget_tokens" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("budget", ("high", 1024.5, {"tokens": 1024}))
+def test_gemini_non_integer_thinking_budget_drop_warns_once(budget: object, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget}},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_drop_warnings(caplog)
+    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert len(warnings) == 1
+    assert f"thinking.budget_tokens={budget!r}" in warnings[0]
+    assert "gemini-2.5-flash" in warnings[0]
+
+
+def test_gemini_integer_thinking_budget_is_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    assert result["thinkingConfig"]["thinkingBudget"] == 2048
+    assert _budget_drop_warnings(caplog) == ()
+
+
+def test_gemini_3_thinking_budget_drop_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_drop_warnings(caplog)
+    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert len(warnings) == 1
+    assert "thinking.budget_tokens=2048" in warnings[0]
+    assert "gemini-3-pro-preview" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "thinking",
+    ({"type": "enabled"}, {"type": "enabled", "budget_tokens": 0}, {"type": "disabled", "budget_tokens": 2048}),
+)
+def test_gemini_3_thinking_without_a_dropped_budget_does_not_warn(
+    thinking: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": thinking},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    assert _budget_drop_warnings(caplog) == ()
+
+
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     optional_params = {}
@@ -1591,6 +1786,293 @@ def test_vertex_ai_map_tools():
     print(new_tools)
 
     assert tools == new_tools
+
+
+def test_vertex_ai_map_tools_declares_a_namespace_by_its_members() -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "github",
+        "tools": [
+            {"type": "function", "name": "create_issue", "parameters": {"type": "object", "properties": {}}},
+            {"type": "function", "function": {"name": "close_issue"}},
+        ],
+    }
+
+    tools = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+
+    assert [declaration["name"] for declaration in tools[0]["function_declarations"]] == [
+        "create_issue",
+        "close_issue",
+    ]
+
+
+def test_vertex_ai_map_tools_declares_a_namespace_member_like_the_same_chat_tool() -> None:
+    parameters = {
+        "type": "object",
+        "properties": {"repo": {"$ref": "#/$defs/Repo"}, "label": {"type": ["string", "null"]}},
+        "$defs": {"Repo": {"type": "string"}},
+    }
+    function = {"name": "create_issue", "description": "Open an issue", "parameters": parameters}
+    namespace = {"type": "namespace", "name": "github", "tools": [{"type": "function", **function}]}
+
+    from_namespace = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+    from_chat_tool = VertexGeminiConfig().map_function(
+        value=[{"type": "function", "function": function}], optional_params={}
+    )
+
+    assert from_namespace == from_chat_tool
+
+
+_GET_WEATHER = {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+
+
+_WEATHER_NAMESPACE = {"type": "namespace", "name": "weather", "tools": [_GET_WEATHER]}
+_TOP_LEVEL_GET_WEATHER = {"type": "function", "function": {k: v for k, v in _GET_WEATHER.items() if k != "type"}}
+
+
+@pytest.mark.parametrize(
+    ("tools", "declared"),
+    [
+        (
+            [{"type": "namespace", "name": "forecast", "tools": [_GET_WEATHER]}, _WEATHER_NAMESPACE],
+            ["forecast__get_weather", "weather__get_weather"],
+        ),
+        ([_TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE], ["get_weather", "weather__get_weather"]),
+        ([_WEATHER_NAMESPACE, _TOP_LEVEL_GET_WEATHER], ["weather__get_weather", "get_weather"]),
+    ],
+    ids=["namespaces_share_a_member", "top_level_first", "namespace_first"],
+)
+def test_vertex_ai_map_tools_declares_qualified_member_names_when_another_tool_declares_a_member_name(
+    tools: list[dict], declared: list[str]
+) -> None:
+    mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
+
+    assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == declared
+
+
+def test_vertex_ai_map_tools_declares_a_member_a_namespace_lists_twice_once_from_its_first_entry() -> None:
+    first = {**_GET_WEATHER, "description": "Current weather"}
+    repeat = {**_GET_WEATHER, "description": "Forecast"}
+    namespace = {"type": "namespace", "name": "weather", "tools": [first, repeat]}
+
+    mapped = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+
+    declarations = mapped[0]["function_declarations"]
+    assert [(declaration["name"], declaration["description"]) for declaration in declarations] == [
+        ("get_weather", "Current weather")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tools", "declared"),
+    [
+        (
+            [
+                _WEATHER_NAMESPACE,
+                _TOP_LEVEL_GET_WEATHER,
+                {"type": "function", "function": {"name": "weather__get_weather", "description": "Top level"}},
+            ],
+            [("get_weather", None), ("weather__get_weather", "Top level")],
+        ),
+        (
+            [
+                {"type": "namespace", "name": "mcp__ops", "tools": [{"type": "function", "name": "exec"}]},
+                {"type": "namespace", "name": "mcp", "tools": [{"type": "function", "name": "ops__exec"}]},
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "ops__exec"}},
+            ],
+            [("mcp__ops__exec", None), ("exec", None), ("ops__exec", None)],
+        ),
+        (
+            [_TOP_LEVEL_GET_WEATHER, _TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE],
+            [("get_weather", None), ("get_weather", None), ("weather__get_weather", None)],
+        ),
+    ],
+    ids=[
+        "top_level_function_has_the_qualified_name",
+        "namespaces_build_one_qualified_name",
+        "client_repeats_a_function",
+    ],
+)
+def test_vertex_ai_map_tools_never_repeats_a_generated_name(
+    tools: list[dict], declared: list[tuple[str, str | None]]
+) -> None:
+    mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
+
+    declarations = mapped[0]["function_declarations"]
+    assert [(declaration["name"], declaration.get("description")) for declaration in declarations] == declared
+
+
+def test_vertex_ai_map_openai_params_qualifies_members_by_the_namespace_top_level_name() -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "safe",
+        "function": {"name": "lookup"},
+        "tools": [{"type": "function", "name": "lookup"}],
+    }
+
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [namespace],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for tool in mapped["tools"] for declaration in tool["function_declarations"]]
+    assert declared == ["safe__lookup"]
+    assert mapped["tool_choice"]["functionCallingConfig"]["allowed_function_names"] == ["safe__lookup"]
+
+
+def test_vertex_ai_map_openai_params_declares_qualified_member_names_when_functions_repeat_a_member() -> None:
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [{"type": "namespace", "name": "mcp__weather", "tools": [{"type": "function", "name": "lookup"}]}],
+            "functions": [{"name": "lookup", "parameters": {"type": "object", "properties": {}}}],
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for tool in mapped["tools"] for declaration in tool["function_declarations"]]
+    assert declared == ["mcp__weather__lookup", "lookup"]
+
+
+def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent() -> None:
+    function = {k: v for k, v in _GET_WEATHER.items() if k != "type"}
+
+    mapped = VertexGeminiConfig().map_function(
+        value=[{"type": "function", "function": function}, {"type": "function", "function": function}],
+        optional_params={},
+    )
+
+    assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == ["get_weather", "get_weather"]
+
+
+@pytest.mark.parametrize(
+    ("forced_name", "other_tools", "allowed_function_names"),
+    [
+        ("github", [], ["create_issue", "close_issue"]),
+        ("close_issue", [], ["close_issue"]),
+        ("github", [{"type": "function", "function": {"name": "github"}}], ["github"]),
+        (
+            "github",
+            [{"type": "function", "function": {"name": "close_issue"}}],
+            ["github__create_issue", "github__close_issue"],
+        ),
+        (
+            "close_issue",
+            [{"type": "namespace", "name": "gitlab", "tools": [{"type": "function", "name": "close_issue"}]}],
+            ["github__close_issue", "gitlab__close_issue"],
+        ),
+        (
+            "github",
+            [
+                {"type": "function", "function": {"name": "close_issue"}},
+                {"type": "function", "function": {"name": "github__close_issue"}},
+            ],
+            ["github__create_issue"],
+        ),
+        (
+            "close_issue",
+            [
+                {"type": "namespace", "name": "gitlab", "tools": [{"type": "function", "name": "close_issue"}]},
+                {"type": "function", "function": {"name": "github__close_issue"}},
+            ],
+            ["gitlab__close_issue"],
+        ),
+        (
+            "mcp",
+            [
+                {"type": "namespace", "name": "mcp__ops", "tools": [{"type": "function", "name": "exec"}]},
+                {
+                    "type": "namespace",
+                    "name": "mcp",
+                    "tools": [{"type": "function", "name": "ops__exec"}, {"type": "function", "name": "status"}],
+                },
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "ops__exec"}},
+            ],
+            ["mcp__status"],
+        ),
+    ],
+    ids=[
+        "names_the_namespace",
+        "names_a_member",
+        "names_a_function_sharing_the_namespace_name",
+        "names_a_namespace_whose_member_a_function_repeats",
+        "names_a_member_two_namespaces_share",
+        "names_a_namespace_whose_generated_name_a_function_holds",
+        "names_a_member_whose_generated_name_a_function_holds",
+        "names_a_namespace_whose_generated_name_another_namespace_holds",
+    ],
+)
+def test_vertex_ai_tool_choice_forces_only_functions_gemini_is_sent(
+    forced_name: str, other_tools: list[dict[str, object]], allowed_function_names: list[str]
+) -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "github",
+        "tools": [{"type": "function", "name": "create_issue"}, {"type": "function", "name": "close_issue"}],
+    }
+
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [namespace, *other_tools],
+            "tool_choice": {"type": "function", "function": {"name": forced_name}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for declaration in mapped["tools"][0]["function_declarations"]]
+    assert mapped["tool_choice"]["functionCallingConfig"]["allowed_function_names"] == allowed_function_names
+    assert set(allowed_function_names) <= set(declared)
+
+
+@pytest.mark.parametrize(
+    ("forced_name", "tools"),
+    [
+        (
+            "weather",
+            [
+                {"type": "namespace", "name": "weather", "tools": [{"type": "function", "name": "lookup"}]},
+                {"type": "function", "function": {"name": "lookup"}},
+                {"type": "function", "function": {"name": "weather__lookup"}},
+            ],
+        ),
+        (
+            "ops__exec",
+            [
+                {"type": "namespace", "name": "ops", "tools": [{"type": "function", "name": "exec"}]},
+                {"type": "namespace", "name": "ops__exec", "tools": [{"type": "function", "name": "status"}]},
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "status"}},
+                {"type": "function", "function": {"name": "ops__exec__status"}},
+            ],
+        ),
+    ],
+    ids=["its_members_lose_to_functions", "another_namespace_generates_its_name"],
+)
+def test_vertex_ai_tool_choice_naming_a_namespace_gemini_gets_no_member_of(
+    forced_name: str, tools: list[dict[str, object]]
+) -> None:
+    params = {"tools": tools, "tool_choice": {"type": "function", "function": {"name": forced_name}}}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"tool_choice '{forced_name}'"):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params=params, optional_params={}, model="gemini-3.8-flash", drop_params=False
+        )
+    dropped = VertexGeminiConfig().map_openai_params(
+        non_default_params=params, optional_params={}, model="gemini-3.8-flash", drop_params=True
+    )
+
+    assert "tool_choice" not in dropped
+    assert dropped["tools"][0]["function_declarations"]
 
 
 def test_vertex_ai_map_tool_with_anyof():
@@ -2012,6 +2494,61 @@ async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
+def _gemini_tts_audio_event(audio_base64: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000", "data": audio_base64}}],
+                },
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
+    }
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_tts_stream_carries_audio_in_delta_and_rebuilds_full_clip(respx_mock: respx.MockRouter) -> None:
+    first_audio: Final = base64.b64encode(b"\x01\x02\x03").decode()
+    second_audio: Final = base64.b64encode(b"\x04\x05").decode()
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.8-flash-tts:streamGenerateContent?alt=sse"
+    ).mock(
+        return_value=_gemini_sse(
+            _gemini_tts_audio_event(first_audio),
+            _gemini_tts_audio_event(second_audio),
+            {
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP", "index": 0}
+                ],
+                "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 40, "totalTokenCount": 49},
+            },
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="gemini/gemini-3.8-flash-tts",
+            messages=[{"role": "user", "content": "Say hello"}],
+            modalities=["audio"],
+            audio={"voice": "Kore", "format": "pcm16"},
+            stream=True,
+            api_key="test-api-key",
+        )
+    )
+    complete_response: Final = litellm.stream_chunk_builder(chunks)
+
+    assert [chunk.choices[0].delta.audio for chunk in chunks if chunk.choices[0].delta.audio is not None] == [
+        {"data": first_audio},
+        {"data": second_audio},
+    ]
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    assert base64.b64decode(complete_response.choices[0].message.audio.data) == b"\x01\x02\x03\x04\x05"
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_gemini_thinking(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
@@ -2364,6 +2901,199 @@ def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
     assert request_params["tools"] == [
         {"function_declarations": [{"name": "lookup", "parameters": {"type": "object"}}]}
     ]
+
+
+_LOOKUP_PROPERTIES: Final = {"a": {"type": "string"}, "b": {"type": "string"}}
+_LOOKUP_BY_A: Final = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+_LOOKUP_BY_B: Final = {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]}
+_WEATHER_PARAMETERS: Final = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+    "additionalProperties": False,
+}
+_WEATHER_VERTEX_PARAMETERS: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {
+            "type": "object",
+            "properties": _LOOKUP_PROPERTIES,
+            "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+            "additionalProperties": False,
+        },
+        {
+            "type": ["object", "null"],
+            "properties": _LOOKUP_PROPERTIES,
+            "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+        },
+        {"anyOf": [{**_LOOKUP_BY_A, "additionalProperties": False}, _LOOKUP_BY_B]},
+        {
+            "type": "object",
+            "properties": {"limit": {"type": "integer"}},
+            "anyOf": [
+                {"properties": {"query": {"type": "string"}}, "required": ["query"]},
+                {"properties": {"url": {"type": "string"}}, "required": ["url"]},
+            ],
+        },
+        {"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"oneOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}},
+        {
+            "$ref": "#/$defs/Lookup",
+            "$defs": {"Lookup": {"$ref": "#/$defs/Union"}, "Union": {"anyOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}},
+        },
+        {"allOf": [{"type": "object", "properties": _LOOKUP_PROPERTIES}, {"required": ["b"]}]},
+    ],
+    ids=[
+        "object-with-required-branches",
+        "nullable-object-with-required-branches",
+        "root-object-branches",
+        "object-with-property-branches",
+        "root-ref-to-union",
+        "chained-root-ref-to-union",
+        "root-all-of",
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_sends_a_union_root_tool_schema_unchanged_as_parameters_json_schema(
+    respx_mock: respx.MockRouter, parameters: Mapping[str, object]
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "Ready"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+    )
+    completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Look up the record named Atlas"}],
+        tools=[
+            {"type": "function", "function": {"name": "lookup", "parameters": deepcopy(parameters)}},
+            {"type": "function", "function": {"name": "weather", "parameters": deepcopy(_WEATHER_PARAMETERS)}},
+        ],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls.last.request.content)
+
+    assert request_body["tools"] == [
+        {
+            "function_declarations": [
+                {"name": "lookup", "parametersJsonSchema": parameters},
+                {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS},
+            ]
+        }
+    ]
+
+
+def test_vertex_sends_a_union_root_tool_schema_built_with_tuples_as_parameters_json_schema() -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {"anyOf": ({**_LOOKUP_BY_A, "required": ("a",)}, _LOOKUP_BY_B)},
+                    },
+                }
+            ]
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert request_params["tools"] == [
+        {"function_declarations": [{"name": "lookup", "parametersJsonSchema": {"anyOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}]}
+    ]
+
+
+def test_vertex_sends_a_union_root_legacy_function_schema_unchanged_as_parameters_json_schema() -> None:
+    parameters: Final = {"anyOf": [{**_LOOKUP_BY_A, "additionalProperties": False}, _LOOKUP_BY_B]}
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "functions": [
+                {"name": "lookup", "description": "Look up a record", "parameters": deepcopy(parameters)},
+                {"name": "weather", "parameters": deepcopy(_WEATHER_PARAMETERS)},
+            ]
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert request_params["tools"] == [
+        {
+            "function_declarations": [
+                {"name": "lookup", "description": "Look up a record", "parametersJsonSchema": parameters},
+                {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS},
+            ]
+        }
+    ]
+
+
+_ROOT_ONE_OF: Final = {"oneOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}
+
+
+@pytest.mark.parametrize(
+    ("lookup_parameters", "tool_choice", "expected_field"),
+    [
+        (_ROOT_ONE_OF, "required", "parameters"),
+        (_ROOT_ONE_OF, {"type": "function", "function": {"name": "lookup"}}, "parameters"),
+        (
+            {"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"anyOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}},
+            "required",
+            "parameters",
+        ),
+        (
+            {"type": "object", "properties": _LOOKUP_PROPERTIES, "anyOf": [{"required": ["a"]}, {"required": ["b"]}]},
+            "required",
+            "parametersJsonSchema",
+        ),
+        (_ROOT_ONE_OF, {"type": "function", "function": {"name": "weather"}}, "parametersJsonSchema"),
+        (_ROOT_ONE_OF, "auto", "parametersJsonSchema"),
+        (
+            {"allOf": [{"type": "object", "properties": _LOOKUP_PROPERTIES}, {"required": ["b"]}]},
+            "required",
+            "parametersJsonSchema",
+        ),
+    ],
+    ids=[
+        "required",
+        "named-union-tool",
+        "required-root-ref-to-union",
+        "required-root-properties-beside-union",
+        "named-other-tool",
+        "auto",
+        "required-root-all-of",
+    ],
+)
+def test_vertex_keeps_a_union_root_tool_on_parameters_when_the_call_can_be_forced_to_it(
+    lookup_parameters: Mapping[str, object], tool_choice: str | dict[str, object], expected_field: str
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tool_choice": tool_choice,
+            "tools": [
+                {"type": "function", "function": {"name": "lookup", "parameters": deepcopy(lookup_parameters)}},
+                {"type": "function", "function": {"name": "weather", "parameters": deepcopy(_WEATHER_PARAMETERS)}},
+            ],
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+    lookup, weather = request_params["tools"][0]["function_declarations"]
+
+    assert {field for field in ("parameters", "parametersJsonSchema") if field in lookup} == {expected_field}
+    assert weather == {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS}
 
 
 @pytest.mark.parametrize(
@@ -3278,9 +4008,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        async def dispatch_attempt_failure_handlers(
-            self, exception: Exception, traceback_exception: str
-        ) -> None:
+        async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
             return None
 
         def attempt_scoped_copy(self) -> "DummyLogging":
@@ -3395,6 +4123,37 @@ def test_vertex_ai_annotation_conversion():
     assert time_annotation["url_citation"]["end_index"] == 85
     assert "google.com" in time_annotation["url_citation"]["url"]
     assert "Current time" in time_annotation["url_citation"]["title"]
+
+
+@pytest.mark.parametrize(
+    "indices, expected_indices",
+    [([2, 0], [2, 0]), ([1, 99, -1, 2, 0], [2, 0]), ([0], [0]), ([], []), ([1, 99], [])],
+    ids=["multiple-sources", "non-web-first", "single-source", "empty", "no-web"],
+)
+def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expected_indices: list[int]) -> None:
+    chunks: Final = [
+        {"web": {"uri": "https://example.com/first", "title": "First"}},
+        {"retrievedContext": {"uri": "gs://documents/source"}},
+        {"web": {"uri": "https://example.com/second", "title": "Second"}},
+    ]
+    metadata: Final = {
+        "groundingChunks": chunks,
+        "groundingSupports": [{"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}],
+    }
+    annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
+    expected: Final = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 4,
+                "end_index": 11,
+                "url": chunks[index]["web"]["uri"],
+                "title": chunks[index]["web"]["title"],
+            },
+        }
+        for index in expected_indices
+    ]
+    assert json.dumps(annotations) == json.dumps(expected)
 
 
 def test_vertex_ai_annotation_empty_grounding_metadata():
@@ -4149,6 +4908,438 @@ def test_get_optional_params_drops_sampling_params_for_a_flagged_gemini_model_un
     assert "temperature" not in optional_params
     assert "top_p" not in optional_params
     assert optional_params["max_output_tokens"] == 10
+
+
+@pytest.mark.parametrize("reasoning_effort", ["minimal", "none"])
+@pytest.mark.parametrize(
+    ("model_key", "model", "row", "expected_level"),
+    [
+        (
+            "vertex_ai/gemini-zeta-9-image",
+            "gemini-zeta-9-image",
+            {"supports_minimal_reasoning_effort": True},
+            "minimal",
+        ),
+        ("gemini/gemini-zeta-9-image", "gemini-zeta-9-image", {"supports_minimal_reasoning_effort": True}, "minimal"),
+        ("vertex_ai/gemini-zeta-9-image", "gemini-zeta-9-image", {}, "low"),
+        (
+            "vertex_ai/gemini-zeta-9-flash",
+            "vertex_ai/gemini-zeta-9-flash",
+            {"supports_minimal_reasoning_effort": False},
+            "low",
+        ),
+        ("vertex_ai/gemini-zeta-9-flash", "vertex_ai/gemini-zeta-9-flash", {}, "minimal"),
+    ],
+    ids=["vertex_flag_on_non_flash", "studio_flag_on_non_flash", "no_flag_non_flash", "opt_out_flash", "no_flag_flash"],
+)
+def test_minimal_thinking_level_follows_the_model_map_flag_before_the_flash_name_rule(
+    model_key: str,
+    model: str,
+    row: Mapping[str, bool],
+    expected_level: str,
+    reasoning_effort: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, model_key, {"litellm_provider": model_key.split("/")[0], **row})
+
+    result: Final = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(reasoning_effort, model)
+
+    assert result["thinkingLevel"] == expected_level
+
+
+def test_explicit_minimal_opt_out_on_the_bare_row_beats_a_true_flag_on_another_route_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gemini-zeta-9-image",
+        {"litellm_provider": "vertex_ai", "supports_minimal_reasoning_effort": False},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gemini/gemini-zeta-9-image",
+        {"litellm_provider": "gemini", "supports_minimal_reasoning_effort": True},
+    )
+
+    monkeypatch.setattr(litellm, "vertex_language_models", ["gemini-zeta-9-image"])
+
+    result: Final = VertexGeminiConfig._map_reasoning_effort_to_thinking_level("minimal", "gemini-zeta-9-image")
+
+    assert result["thinkingLevel"] == "low"
+
+
+@pytest.mark.parametrize(
+    ("opted_out_route", "declaring_route"),
+    [("gemini", "vertex_ai"), ("vertex_ai", "gemini")],
+    ids=["studio_opt_out", "vertex_opt_out"],
+)
+def test_minimal_opt_out_on_either_route_beats_a_true_flag_on_the_other(
+    opted_out_route: str, declaring_route: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"{opted_out_route}/gemini-zeta-9-image",
+        {"litellm_provider": opted_out_route, "supports_minimal_reasoning_effort": False},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"{declaring_route}/gemini-zeta-9-image",
+        {"litellm_provider": declaring_route, "supports_minimal_reasoning_effort": True},
+    )
+    monkeypatch.setattr(litellm, "vertex_language_models", ["gemini-zeta-9-image"])
+
+    result: Final = VertexGeminiConfig._map_reasoning_effort_to_thinking_level("minimal", "gemini-zeta-9-image")
+
+    assert result["thinkingLevel"] == "low"
+
+
+def test_minimal_thinking_check_stays_quiet_for_an_unmapped_non_flash_model(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "suppress_debug_info", False)
+
+    result: Final = VertexGeminiConfig._map_reasoning_effort_to_thinking_level("minimal", "gemini-zeta-unmapped-image")
+
+    assert result["thinkingLevel"] == "low"
+    assert "Provider List" not in capsys.readouterr().out
+
+
+_LOGPROBS_PARAMS: Final = {"logprobs": True, "top_logprobs": 3}
+_GEMINI_LOGPROBS_FIELDS: Final = {"responseLogprobs": True, "logprobs": 3}
+
+
+def _mapped_logprobs(config_cls: Literal["vertex", "studio"], model: str, drop_params: bool) -> Mapping[str, object]:
+    return _gemini_config(config_cls).map_openai_params(
+        non_default_params=dict(_LOGPROBS_PARAMS), optional_params={}, model=model, drop_params=drop_params
+    )
+
+
+@pytest.mark.parametrize("model", ["gemini-zeta-9", "vertex_ai/gemini-zeta-9"])
+def test_flagged_logprobs_are_dropped_only_under_drop_params(model: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+
+    assert _mapped_logprobs("vertex", model, drop_params=True) == {}
+    assert _mapped_logprobs("vertex", model, drop_params=False) == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",), ("logprobs", "top_logprobs")])
+@pytest.mark.parametrize("model", ["gemini-zeta-9", "zeta-9"], ids=["gemini_name_branch", "vertex_model_list_branch"])
+def test_allowed_openai_params_keep_flagged_logprobs_mapped_under_drop_params(
+    model: str, allowed: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "vertex_language_models", ["zeta-9"])
+    monkeypatch.setitem(litellm.model_cost, f"vertex_ai/{model}", {"supports_logprobs": False})
+
+    optional_params: Final = get_optional_params(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        drop_params=True,
+        allowed_openai_params=list(allowed),
+        **_LOGPROBS_PARAMS,
+    )
+    body: Final = _gemini_request_body("vertex_ai", dict(optional_params), {"drop_params": True})
+
+    assert body["generationConfig"] == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",), ("logprobs", "top_logprobs")])
+def test_allowed_openai_params_keep_ai_studio_flagged_logprobs_like_an_unflagged_model(
+    allowed: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.utils import get_optional_params
+
+    def generation_config(model: str) -> object:
+        optional_params: Final = get_optional_params(
+            model=model,
+            custom_llm_provider="gemini",
+            drop_params=True,
+            allowed_openai_params=list(allowed),
+            **_LOGPROBS_PARAMS,
+        )
+        return _gemini_request_body("gemini", dict(optional_params), {"drop_params": True}).get("generationConfig")
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini/gemini-zeta-9", {"supports_logprobs": False})
+    monkeypatch.setitem(litellm.model_cost, "gemini/gemini-zeta-10", {})
+
+    assert generation_config("gemini-zeta-9") == generation_config("gemini-zeta-10")
+
+
+def test_global_drop_params_drops_flagged_logprobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+
+    assert _mapped_logprobs("vertex", "gemini-zeta-9", drop_params=False) == {}
+
+
+@pytest.mark.parametrize("unflagged_row", [{}, {"supports_logprobs": True}], ids=["flag_absent", "flag_true"])
+def test_drop_params_keeps_logprobs_on_a_model_the_map_does_not_flag(
+    unflagged_row: Mapping[str, bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-10", unflagged_row)
+
+    assert _mapped_logprobs("vertex", "gemini-zeta-9", drop_params=True) == {}
+    assert _mapped_logprobs("vertex", "gemini-zeta-10", drop_params=True) == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.parametrize(
+    ("flagged_route", "flagged_config", "other_config"),
+    [("vertex_ai", "vertex", "studio"), ("gemini", "studio", "vertex")],
+    ids=["vertex_row", "studio_row"],
+)
+def test_logprobs_flag_applies_only_to_the_route_whose_row_carries_it(
+    flagged_route: str,
+    flagged_config: Literal["vertex", "studio"],
+    other_config: Literal["vertex", "studio"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, f"{flagged_route}/gemini-zeta-9", {"supports_logprobs": False})
+
+    assert _mapped_logprobs(flagged_config, "gemini-zeta-9", drop_params=True) == {}
+    assert _mapped_logprobs(other_config, "gemini-zeta-9", drop_params=True) == _GEMINI_LOGPROBS_FIELDS
+
+
+# Google answered these with a 400 about logprobs, and the same call without logprobs with a 200, on 2026-11-18.
+# The live proof is in the PR that added this list.
+_ROWS_GOOGLE_REFUSES_LOGPROBS_ON: Final = (
+    "gemini/gemini-2.5-flash-image",
+    "gemini/gemini-3-flash-preview",
+    "gemini/gemini-3-pro-image",
+    "gemini/gemini-3-pro-image-preview",
+    "gemini/gemini-3.1-flash-image",
+    "gemini/gemini-3.1-flash-image-preview",
+    "gemini/gemini-3.1-flash-lite",
+    "gemini/gemini-3.1-flash-lite-image",
+    "gemini/gemini-3.1-flash-lite-preview",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini/gemini-3.1-pro-preview-customtools",
+    "gemini/gemini-3.5-flash",
+    "gemini/gemini-3.5-flash-lite",
+    "gemini/gemini-3.6-flash",
+    "gemini/gemini-3.7-flash",
+    "gemini/gemini-3.8-flash",
+    "gemini/gemini-flash-latest",
+    "gemini/gemini-flash-lite-latest",
+    "gemini/gemini-nano-banana-2.1",
+    "gemini/gemini-pro-latest",
+    "gemini/gemini-robotics-er-2-preview",
+    "gemini/nano-banana-pro-preview",
+    "vertex_ai/gemini-2.5-flash-image",
+    "vertex_ai/gemini-3-flash-preview",
+    "vertex_ai/gemini-3-pro-image",
+    "vertex_ai/gemini-3.1-flash-image",
+    "vertex_ai/gemini-3.1-flash-lite",
+    "vertex_ai/gemini-3.1-flash-lite-image",
+    "vertex_ai/gemini-3.1-pro-preview",
+    "vertex_ai/gemini-3.1-pro-preview-customtools",
+    "vertex_ai/gemini-3.5-flash",
+    "vertex_ai/gemini-3.5-flash-lite",
+    "vertex_ai/gemini-3.6-flash",
+    "vertex_ai/gemini-3.7-flash",
+    "vertex_ai/gemini-3.8-flash",
+    "vertex_ai/gemini-4-argon",
+    "vertex_ai/gemini-4-carbon",
+    "vertex_ai/gemini-4-hydrogen",
+    "vertex_ai/gemini-4-neon",
+    "vertex_ai/gemini-nano-banana-2.1",
+    "vertex_ai/gemini-robotics-er-2-preview",
+)
+# The same live run got a 200 with logprobs on these. The gemini-4 family is refused on Vertex and accepted on AI Studio.
+_ROWS_GOOGLE_ACCEPTS_LOGPROBS_ON: Final = (
+    "gemini/gemini-4-argon",
+    "gemini/gemini-4-carbon",
+    "gemini/gemini-4-hydrogen",
+    "gemini/gemini-4-neon",
+    "vertex_ai/gemini-2.5-flash",
+    "vertex_ai/gemini-2.5-flash-lite",
+    "vertex_ai/gemini-2.5-pro",
+)
+_REPO_ROOT: Final = Path(__file__).parents[5]
+_MODEL_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+
+
+def _mapped_logprob_fields(row: str, drop_params: bool) -> Mapping[str, object]:
+    route, _, model = row.partition("/")
+    mapped: Final = _mapped_logprobs("vertex" if route == "vertex_ai" else "studio", model, drop_params)
+    return {field: mapped[field] for field in _GEMINI_LOGPROBS_FIELDS if field in mapped}
+
+
+def _rows_refusing_logprobs(path: Path) -> frozenset[str]:
+    rows: Final = _MODEL_MAP_ADAPTER.validate_json(path.read_bytes())
+    return frozenset(name for name, row in rows.items() if row.get("supports_logprobs") is False)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("row", _ROWS_GOOGLE_REFUSES_LOGPROBS_ON)
+def test_drop_params_removes_logprobs_only_from_rows_google_refuses_them_on(
+    row: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _mapped_logprob_fields(row, drop_params=True) == {}
+    assert _mapped_logprob_fields(row, drop_params=False) == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("row", _ROWS_GOOGLE_ACCEPTS_LOGPROBS_ON)
+def test_drop_params_keeps_logprobs_on_rows_google_accepts_them_on(row: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _mapped_logprob_fields(row, drop_params=True) == _GEMINI_LOGPROBS_FIELDS
+
+
+def test_model_map_and_its_bundled_backup_flag_the_same_logprobs_rows() -> None:
+    published: Final = _rows_refusing_logprobs(_REPO_ROOT / "model_prices_and_context_window.json")
+    bundled: Final = _rows_refusing_logprobs(_REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json")
+
+    assert published == bundled
+
+
+_LEVELS_MODEL: Final = "gemini-zeta-9-flash"
+_DECLARED_LEVELS: Final = ("none", "minimal", "high")
+
+
+def _declare_levels(monkeypatch: pytest.MonkeyPatch, route: str, levels: Sequence[str] = _DECLARED_LEVELS) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, f"{route}/{_LEVELS_MODEL}", {"reasoning_effort_levels": list(levels)})
+
+
+def _mapped_thinking(
+    config_cls: Literal["vertex", "studio"],
+    reasoning_effort: str | Mapping[str, str],
+    *,
+    drop_params: bool,
+    model: str = _LEVELS_MODEL,
+    allowed_openai_params: Sequence[str] = (),
+) -> object:
+    return _gemini_config(config_cls).map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort},
+        optional_params={},
+        model=model,
+        drop_params=drop_params,
+        allowed_openai_params=allowed_openai_params,
+    )["thinkingConfig"]
+
+
+@pytest.mark.parametrize("reasoning_effort", ["low", "medium"])
+@pytest.mark.parametrize(
+    "model",
+    [_LEVELS_MODEL, f"gemini/{_LEVELS_MODEL}", f"models/{_LEVELS_MODEL}"],
+    ids=["bare", "route_prefixed", "resource_path"],
+)
+@pytest.mark.parametrize("allowed", [(), ("logprobs",)], ids=["no_allow_list", "other_param_allowed"])
+def test_undeclared_thinking_level_is_removed_under_drop_params(
+    reasoning_effort: str,
+    model: str,
+    allowed: Sequence[str],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _declare_levels(monkeypatch, "gemini")
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        thinking: Final = _mapped_thinking(
+            "studio", reasoning_effort, drop_params=True, model=model, allowed_openai_params=allowed
+        )
+
+    assert thinking == {"includeThoughts": True}
+    assert any(
+        "reasoning_effort" in record.getMessage() and "drop_params=True" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_global_drop_params_removes_an_undeclared_thinking_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    _declare_levels(monkeypatch, "gemini")
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    assert _mapped_thinking("studio", "low", drop_params=False) == {"includeThoughts": True}
+
+
+@pytest.mark.parametrize(
+    ("reasoning_effort", "thoughts_default", "expected_thoughts"),
+    [("low", False, False), ({"effort": "low", "summary": "auto"}, False, True)],
+    ids=["default_off", "summary_requested"],
+)
+def test_removing_a_thinking_level_keeps_the_mapped_include_thoughts(
+    reasoning_effort: str | Mapping[str, str],
+    thoughts_default: bool,
+    expected_thoughts: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _declare_levels(monkeypatch, "gemini")
+    monkeypatch.setattr(litellm, "gemini_include_thoughts_default", thoughts_default)
+
+    assert _mapped_thinking("studio", reasoning_effort, drop_params=True) == {"includeThoughts": expected_thoughts}
+
+
+def test_vertex_keeps_a_thinking_level_its_own_row_does_not_declare(monkeypatch: pytest.MonkeyPatch) -> None:
+    _declare_levels(monkeypatch, "vertex_ai")
+
+    assert _mapped_thinking("vertex", "low", drop_params=True) == {"thinkingLevel": "low", "includeThoughts": True}
+    assert _mapped_thinking("studio", "low", drop_params=True) == {"thinkingLevel": "low", "includeThoughts": True}
+
+
+def test_undeclared_thinking_level_is_sent_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    _declare_levels(monkeypatch, "gemini")
+
+    assert _mapped_thinking("studio", "low", drop_params=False) == {"thinkingLevel": "low", "includeThoughts": True}
+
+
+def test_allow_listed_reasoning_effort_keeps_an_undeclared_thinking_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    _declare_levels(monkeypatch, "gemini")
+
+    assert _mapped_thinking("studio", "low", drop_params=True, allowed_openai_params=("reasoning_effort",)) == {
+        "thinkingLevel": "low",
+        "includeThoughts": True,
+    }
+
+
+@pytest.mark.parametrize("level", ["minimal", "high"])
+def test_declared_thinking_level_is_kept_under_drop_params(level: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    _declare_levels(monkeypatch, "gemini")
+
+    assert _mapped_thinking("studio", level, drop_params=True) == {"thinkingLevel": level, "includeThoughts": True}
+
+
+@pytest.mark.parametrize("reasoning_effort", ["none", "disable"])
+def test_turning_thinking_off_survives_because_its_mapped_level_is_declared(
+    reasoning_effort: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _declare_levels(monkeypatch, "gemini", ("minimal", "high"))
+
+    assert _mapped_thinking("studio", reasoning_effort, drop_params=True) == {
+        "thinkingLevel": "minimal",
+        "includeThoughts": False,
+    }
+
+
+def test_studio_levels_leave_the_vertex_route_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    _declare_levels(monkeypatch, "gemini")
+
+    assert _mapped_thinking("studio", "low", drop_params=True) == {"includeThoughts": True}
+    assert _mapped_thinking("vertex", "low", drop_params=True) == {"thinkingLevel": "low", "includeThoughts": True}
+
+
+def test_declared_levels_leave_the_thinking_param_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    _declare_levels(monkeypatch, "gemini", ("high",))
+    monkeypatch.setattr(litellm, "enable_gemini_default_thinking_level_low", True)
+
+    mapped: Final = _gemini_config("studio").map_openai_params(
+        non_default_params={"thinking": {"type": "enabled"}},
+        optional_params={},
+        model=_LEVELS_MODEL,
+        drop_params=True,
+    )
+
+    assert mapped["thinkingConfig"] == {"includeThoughts": True, "thinkingLevel": "minimal"}
 
 
 def test_media_resolution_from_detail_parameter():
@@ -5628,7 +6819,6 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
         ModelResponseIterator,
     )
 
-    # Arrange - 模拟一个包含 usageMetadata 的 blocked response
     blocked_chunk = {
         "promptFeedback": {
             "blockReason": "PROHIBITED_CONTENT",
@@ -5648,18 +6838,14 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
 
     streaming_obj = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
-    # Act
     result = streaming_obj.chunk_parser(blocked_chunk)
 
-    # Assert - 验证 content_filter 响应和 usage 都被正确处理
     assert result is not None, "Result should not be None"
     assert len(result.choices) == 1, "Should have exactly one choice"
     assert result.choices[0].finish_reason == "content_filter", (
         f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
     )
     assert result.choices[0].delta.content is None, "content should be None"
-
-    # 验证 usage 信息被正确提取
     assert hasattr(result, "usage"), "result should have usage attribute"
     assert result.usage is not None, "usage should not be None"
     assert result.usage.prompt_tokens == 8175, f"prompt_tokens should be 8175, got {result.usage.prompt_tokens}"
@@ -6150,7 +7336,7 @@ def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
 
 
 def test_vertex_ai_usage_metadata_with_document_tokens_cached():
-    """Test that cached DOCUMENT tokens are correctly subtracted from prompt text tokens."""
+    """Test cached DOCUMENT token details and unchanged prompt cost."""
     v = VertexGeminiConfig()
 
     usage_metadata_dict = {
@@ -6174,10 +7360,24 @@ def test_vertex_ai_usage_metadata_with_document_tokens_cached():
     completion_response = {"usageMetadata": usage_metadata_dict}
     result = v.calculate_usage(completion_response=completion_response)
 
-    # DOCUMENT cached tokens map to cached_text_tokens, so:
-    # text_tokens = (8 TEXT + 774 DOCUMENT) - 400 cached = 382
-    assert result.prompt_tokens_details.text_tokens == 382, "text_tokens should be (8 + 774) - 400 cached = 382"
+    assert result.prompt_tokens_details.text_tokens == 782
     assert result.prompt_tokens_details.cached_tokens == 400
+    assert result.prompt_tokens_details.cached_tokens_details.text_tokens == 400
+
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 5e-7,
+    }
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-document-cache-test-model",
+        usage=result,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(
+        382 * model_info["input_cost_per_token"] + 400 * model_info["cache_read_input_token_cost"]
+    )
 
 
 def test_async_streaming_uses_custom_client():
@@ -7090,6 +8290,36 @@ def test_invalid_reasoning_effort_surfaces_as_400_through_completion(custom_llm_
     assert not isinstance(exc_info.value, litellm.APIConnectionError)
 
 
+@pytest.mark.parametrize("model", ["gemini-4-hydrogen", "gemini/gemini-4-hydrogen", "vertex_ai/gemini-4-hydrogen"])
+def test_xhigh_reasoning_effort_maps_to_the_xhigh_thinking_level_for_a_model_that_supports_it(
+    model: str, local_model_cost_map: None
+) -> None:
+    result: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert result["thinkingConfig"] == {"thinkingLevel": "xhigh", "includeThoughts": True}
+
+
+@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-3.8-flash", "gemini-3-pro-preview"])
+def test_xhigh_reasoning_effort_is_a_400_for_a_gemini_model_that_does_not_support_it(
+    model: str, local_model_cost_map: None
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "xhigh" in str(exc_info.value)
+
+
 @pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-3-pro-preview"])
 def test_supported_reasoning_efforts_still_map(model):
     """Guards the fix against over-rejecting: every advertised value must still produce a config."""
@@ -7412,8 +8642,372 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
     assert resp.choices[0].provider_specific_fields["native_finish_reason"] == "NO_IMAGE"
 
 
+@pytest.mark.parametrize(
+    ("google_signal", "expected_provider_specific_fields"),
+    [
+        ({"candidates": [{"finishReason": "RECITATION", "index": 0}]}, {"native_finish_reason": "RECITATION"}),
+        ({"candidates": [{"finishReason": "SAFETY", "index": 0}]}, {"native_finish_reason": "SAFETY"}),
+        ({"candidates": [{"finishReason": "IMAGE_SAFETY", "index": 0}]}, {"native_finish_reason": "IMAGE_SAFETY"}),
+        (
+            {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT", "blockReasonMessage": "blocked"}},
+            {"block_reason": "PROHIBITED_CONTENT"},
+        ),
+    ],
+)
+def test_non_streamed_content_filter_choice_keeps_google_reason(
+    google_signal: dict[str, object], expected_provider_specific_fields: dict[str, str]
+):
+    completion_response: Final = {
+        **google_signal,
+        "usageMetadata": {"promptTokenCount": 23, "candidatesTokenCount": 4, "totalTokenCount": 27},
+    }
+
+    resp: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert len(resp.choices) == 1
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert resp.choices[0].message.content is None
+    assert resp.choices[0].provider_specific_fields == expected_provider_specific_fields
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (23, 4, 27)
+
+
+@pytest.mark.parametrize(
+    "google_signal",
+    [
+        {"candidates": [{"finishReason": "IMAGE_SAFETY", "index": 0}]},
+        {"candidates": [{"finishReason": "SAFETY", "index": 0}]},
+        {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}},
+    ],
+)
+def test_non_streamed_content_filter_reply_counts_thinking_tokens(google_signal: dict[str, object]):
+    completion_response: Final = {
+        **google_signal,
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "thoughtsTokenCount": 156,
+            "totalTokenCount": 165,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+        },
+    }
+
+    resp: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-3-pro-image",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (9, 156, 165)
+    assert resp.usage.completion_tokens_details.reasoning_tokens == 156
+    assert resp.usage.prompt_tokens_details.text_tokens == 9
+
+
+@dataclass(frozen=True, slots=True)
+class _GoogleReasonOutcome:
+    document: Mapping[str, object]
+    frames: tuple[Mapping[str, object], ...]
+    text: str
+    finish_reason: str
+    reason_fields: Mapping[str, str]
+    note: str | None = None
+
+
+_GOOGLE_REASON_USAGE: Final = {"promptTokenCount": 11, "candidatesTokenCount": 5, "totalTokenCount": 16}
+
+
+def _google_text_frame(text: str) -> Mapping[str, object]:
+    return {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "index": 0}]}
+
+
+def _google_finished(candidate: Mapping[str, object]) -> Mapping[str, object]:
+    return {"candidates": [{**candidate, "index": 0}], "usageMetadata": _GOOGLE_REASON_USAGE}
+
+
+def _with_note(fields: Mapping[str, str], key: str, note: str | None) -> Mapping[str, str]:
+    return {**fields, **({key: note} if note is not None else {})}
+
+
+def _flagged_outcome(reason: str, note: str | None = None) -> _GoogleReasonOutcome:
+    candidate: Final = _with_note({"finishReason": reason}, "finishMessage", note)
+    return _GoogleReasonOutcome(
+        document=_google_finished(candidate),
+        frames=(_google_text_frame("Waves fold "), _google_finished(candidate)),
+        text="Waves fold ",
+        finish_reason="content_filter",
+        reason_fields={"native_finish_reason": reason},
+        note=note,
+    )
+
+
+def _blocked_outcome(reason: str, note: str | None = None) -> _GoogleReasonOutcome:
+    blocked: Final = {
+        "promptFeedback": _with_note({"blockReason": reason}, "blockReasonMessage", note),
+        "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
+    }
+    return _GoogleReasonOutcome(
+        document=blocked,
+        frames=(blocked,),
+        text="",
+        finish_reason="content_filter",
+        reason_fields={"block_reason": reason},
+        note=note,
+    )
+
+
+def _finished_after_text_outcome(native: str, finish_reason: str, note: str | None = None) -> _GoogleReasonOutcome:
+    finish: Final = _with_note({"finishReason": native}, "finishMessage", note)
+    return _GoogleReasonOutcome(
+        document=_google_finished(
+            {"content": {"role": "model", "parts": [{"text": "Waves fold silver light."}]}, **finish}
+        ),
+        frames=(
+            _google_text_frame("Waves fold "),
+            _google_text_frame("silver light."),
+            _google_finished(finish),
+        ),
+        text="Waves fold silver light.",
+        finish_reason=finish_reason,
+        reason_fields={"native_finish_reason": native},
+        note=note,
+    )
+
+
+_GOOGLE_NOTE_OUTCOMES: Final = (
+    pytest.param(_flagged_outcome("SAFETY", "Candidate was blocked for safety."), id="flagged_with_note"),
+    pytest.param(_blocked_outcome("PROHIBITED_CONTENT", "Prompt was blocked."), id="blocked_with_note"),
+    pytest.param(
+        _finished_after_text_outcome(
+            "MALFORMED_FUNCTION_CALL", "stop", "Malformed function call: print(default_api.lookup(city='Paris'"
+        ),
+        id="malformed_function_call_with_note",
+    ),
+)
+_GOOGLE_REASON_OUTCOMES: Final = (
+    *_GOOGLE_NOTE_OUTCOMES,
+    pytest.param(_flagged_outcome("RECITATION"), id="flagged_without_note"),
+    pytest.param(_blocked_outcome("SAFETY"), id="blocked_without_note"),
+    pytest.param(_finished_after_text_outcome("STOP", "stop"), id="stop"),
+    pytest.param(_finished_after_text_outcome("MALFORMED_FUNCTION_CALL", "stop"), id="malformed_function_call"),
+)
+
+
+def _google_reason_handler(outcome: _GoogleReasonOutcome) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if ":streamGenerateContent" not in request.url.path:
+            return httpx.Response(200, json=dict(outcome.document))
+        return httpx.Response(
+            200,
+            content="".join(f"data: {json.dumps(frame)}\r\n\r\n" for frame in outcome.frames).encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    return handler
+
+
+async def _google_reason_stream(outcome: _GoogleReasonOutcome, is_async: bool) -> tuple[ModelResponseStream, ...]:
+    transport: Final = httpx.MockTransport(_google_reason_handler(outcome))
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "messages": [{"role": "user", "content": "Describe the sea."}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "api_key": "fake-gemini-key",
+    }
+    if is_async:
+        stream: Final = await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+        return tuple([chunk async for chunk in stream])
+    return tuple(litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport))))
+
+
+def _stream_choices(chunks: Sequence[ModelResponseStream]) -> tuple[StreamingChoices, ...]:
+    return tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+
+
+def _finish_choices(chunks: Sequence[ModelResponseStream]) -> tuple[StreamingChoices, ...]:
+    return tuple(choice for choice in _stream_choices(chunks) if choice.finish_reason)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("outcome", _GOOGLE_REASON_OUTCOMES)
+async def test_streamed_finish_chunk_and_rebuilt_choice_carry_google_reason(
+    outcome: _GoogleReasonOutcome, is_async: bool
+) -> None:
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    finish_choices: Final = _finish_choices(chunks)
+    assert len(finish_choices) == 1, chunks
+    assert getattr(finish_choices[0], "provider_specific_fields", None) == outcome.reason_fields
+    rebuilt: Final = litellm.stream_chunk_builder(list(chunks))
+    assert rebuilt is not None
+    assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == outcome.reason_fields
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("outcome", _GOOGLE_REASON_OUTCOMES)
+async def test_streamed_google_outcome_keeps_text_finish_reason_and_usage(
+    outcome: _GoogleReasonOutcome, is_async: bool
+) -> None:
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    assert "".join(choice.delta.content or "" for choice in _stream_choices(chunks)) == outcome.text
+    assert [choice.finish_reason for choice in _finish_choices(chunks)] == [outcome.finish_reason]
+    usage: Final = next(chunk.usage for chunk in reversed(chunks) if getattr(chunk, "usage", None))
+    usage_metadata: Final = outcome.frames[-1]["usageMetadata"]
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        usage_metadata["promptTokenCount"],
+        usage_metadata.get("candidatesTokenCount", 0),
+        usage_metadata["totalTokenCount"],
+    )
+
+
+def _google_reason_completion(outcome: _GoogleReasonOutcome) -> ModelResponse:
+    return litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Describe the sea."}],
+        api_key="fake-gemini-key",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_google_reason_handler(outcome)))),
+    )
+
+
+@pytest.mark.parametrize("outcome", _GOOGLE_REASON_OUTCOMES)
+def test_non_streamed_choice_carries_only_googles_reason_code(outcome: _GoogleReasonOutcome) -> None:
+    response: Final = _google_reason_completion(outcome)
+
+    assert response.choices[0].finish_reason == outcome.finish_reason
+    assert response.choices[0].provider_specific_fields == outcome.reason_fields
+
+
+@pytest.mark.parametrize("outcome", _GOOGLE_NOTE_OUTCOMES)
+def test_non_streamed_response_never_contains_googles_free_text_note(outcome: _GoogleReasonOutcome) -> None:
+    assert outcome.note is not None
+
+    assert outcome.note not in _google_reason_completion(outcome).model_dump_json()
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("outcome", _GOOGLE_NOTE_OUTCOMES)
+async def test_streamed_chunks_and_rebuilt_response_never_contain_googles_free_text_note(
+    outcome: _GoogleReasonOutcome, is_async: bool
+) -> None:
+    assert outcome.note is not None
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    assert [chunk for chunk in chunks if outcome.note in chunk.model_dump_json()] == []
+    rebuilt: Final = litellm.stream_chunk_builder(list(chunks))
+    assert rebuilt is not None
+    assert outcome.note not in rebuilt.model_dump_json()
+
+
+_SAFETY_FINISH: Final = {"finishReason": "SAFETY", "finishMessage": "Candidate was blocked for safety."}
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "trailing_frame",
+    [
+        pytest.param({"usageMetadata": _GOOGLE_REASON_USAGE}, id="usage_only"),
+        pytest.param(
+            {**_google_text_frame(""), "usageMetadata": _GOOGLE_REASON_USAGE}, id="candidate_without_finish_reason"
+        ),
+    ],
+)
+async def test_streamed_named_finish_keeps_its_reason_when_a_frame_follows_it(
+    trailing_frame: Mapping[str, object], is_async: bool
+) -> None:
+    outcome: Final = _GoogleReasonOutcome(
+        document=_google_finished(_SAFETY_FINISH),
+        frames=(_google_text_frame("Waves fold "), _google_finished(_SAFETY_FINISH), trailing_frame),
+        text="Waves fold ",
+        finish_reason="content_filter",
+        reason_fields={"native_finish_reason": "SAFETY"},
+    )
+
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    finish_choices: Final = _finish_choices(chunks)
+    assert [choice.finish_reason for choice in finish_choices] == ["content_filter"]
+    assert getattr(finish_choices[0], "provider_specific_fields", None) == outcome.reason_fields
+    rebuilt: Final = litellm.stream_chunk_builder(list(chunks))
+    assert rebuilt is not None
+    assert rebuilt.choices[0].finish_reason == "content_filter"
+    assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == outcome.reason_fields
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "last_part",
+    [
+        pytest.param({"text": "silver light."}, id="text"),
+        pytest.param({"text": "", "thoughtSignature": "c2lnbmF0dXJl"}, id="thought_signature"),
+    ],
+)
+async def test_streamed_last_event_with_a_delta_keeps_googles_reason_off_the_chunk_before_the_finish(
+    last_part: Mapping[str, str], is_async: bool
+) -> None:
+    last_event: Final = {"content": {"role": "model", "parts": [last_part]}, "finishReason": "STOP"}
+    outcome: Final = _GoogleReasonOutcome(
+        document=_google_finished(last_event),
+        frames=(_google_text_frame("Waves fold "), _google_finished(last_event)),
+        text=f"Waves fold {last_part['text']}",
+        finish_reason="stop",
+        reason_fields={"native_finish_reason": "STOP"},
+    )
+
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    unfinished_fields: Final = [
+        fields
+        for choice in _stream_choices(chunks)
+        if not choice.finish_reason and (fields := getattr(choice, "provider_specific_fields", None))
+    ]
+    assert unfinished_fields == []
+    finish_choices: Final = _finish_choices(chunks)
+    assert [getattr(choice, "provider_specific_fields", None) for choice in finish_choices] == [outcome.reason_fields]
+    rebuilt: Final = litellm.stream_chunk_builder(list(chunks))
+    assert rebuilt is not None
+    assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == outcome.reason_fields
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_streamed_unspecified_finish_code_never_reaches_a_chunk_or_the_rebuilt_choice(is_async: bool) -> None:
+    unspecified: Final = {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "silver "}]},
+                "finishReason": "FINISH_REASON_UNSPECIFIED",
+                "index": 0,
+            }
+        ]
+    }
+    stopped: Final = {"content": {"role": "model", "parts": [{"text": "light."}]}, "finishReason": "STOP"}
+    outcome: Final = _GoogleReasonOutcome(
+        document=_google_finished(stopped),
+        frames=(_google_text_frame("Waves fold "), unspecified, _google_finished(stopped)),
+        text="Waves fold silver light.",
+        finish_reason="stop",
+        reason_fields={"native_finish_reason": "STOP"},
+    )
+
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    assert [
+        fields for choice in _stream_choices(chunks) if (fields := getattr(choice, "provider_specific_fields", None))
+    ] == [outcome.reason_fields]
+    rebuilt: Final = litellm.stream_chunk_builder(list(chunks))
+    assert rebuilt is not None
+    assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == outcome.reason_fields
+
+
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 
@@ -7486,7 +9080,7 @@ def test_gemini_candidate_with_finish_reason_no_content_responses_api():
 
 
 def test_gemini_candidate_other_finish_reasons_no_content():
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
     from litellm.responses.litellm_completion_transformation.transformation import (
@@ -7643,7 +9237,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -8158,11 +9752,12 @@ def test_gemini_image_generation_ignores_non_dict_image_config():
 def test_gemini_image_generation_openai_size_maps_to_google_table(
     size: str, expected_aspect_ratio: str, expected_image_size: str
 ):
+    """Flash table as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
     from litellm.llms.gemini.common_utils import (
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -8186,7 +9781,7 @@ def test_gemini_image_generation_openai_size_snaps_to_nearest_option(
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -9157,7 +10752,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-api-key")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -9263,7 +10858,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -9960,7 +11555,7 @@ def test_vertex_ai_streaming_response_id():
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.iter_lines = MagicMock(return_value=stream_response())
+        mock_response.iter_text = MagicMock(return_value=stream_response())
         return mock_response
 
     logging_obj = MagicMock()
@@ -10185,6 +11780,106 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
         drop_params=False,
     )
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+def _top_level_format_audio(audio_format: str) -> Mapping[str, object]:
+    return {"voice": "Kore", "format": audio_format}
+
+
+def _format_beside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore"}, "format": audio_format}
+
+
+def _format_inside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore", "format": audio_format}}
+
+
+_FORMAT_PLACEMENTS: Final = (
+    _top_level_format_audio,
+    _format_beside_speech_config_audio,
+    _format_inside_speech_config_audio,
+)
+
+
+@pytest.mark.parametrize("audio_format", ("mp3", "opus", "flac", "PCM16"))
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("model", ("gemini/gemini-3.8-flash-tts", "vertex_ai/gemini-3.8-flash-tts"))
+def test_chat_audio_unsupported_format_is_a_400_naming_the_model_and_format(
+    model: str, audio: Callable[[str], Mapping[str, object]], audio_format: str
+) -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError) as raised:
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "Say hello"}],
+            modalities=["audio"],
+            audio=audio(audio_format),
+            api_key="test-key",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+        )
+
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash-tts does not take the audio format '{audio_format}'" in str(raised.value)
+
+
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("request_drop_params, global_drop_params", ((True, False), (False, True)))
+def test_chat_audio_unsupported_format_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    request_drop_params: bool,
+    global_drop_params: bool,
+    audio: Callable[[str], Mapping[str, object]],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    optional_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"modalities": ["audio"], "audio": audio("mp3")},
+        optional_params={},
+        model="gemini-3.8-flash-tts",
+        drop_params=request_drop_params,
+    )
+
+    assert optional_params == {
+        "responseModalities": ["AUDIO"],
+        "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+    }
+
+
+def test_chat_audio_unsupported_format_error_caps_the_echoed_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": "x" * 300}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format '{'x' * 100}'" in str(raised.value)
+    assert "x" * 101 not in str(raised.value)
+
+
+@pytest.mark.parametrize("audio_format", [5, {"codec": "mp3"}, ["x"] * 300])
+def test_chat_audio_non_string_format_error_names_the_value_as_sent(audio_format: object) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": audio_format}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format {repr(audio_format)[:100]}. Set format" in str(raised.value)
+
+
+def test_map_audio_params_rejects_an_unsupported_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="audio format 'mp3'"):
+        VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "mp3"})
+
+
+def test_map_audio_params_maps_a_pcm16_voice() -> None:
+    assert VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "pcm16"}) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
+    }
 
 
 _CACHED_PROMPT_USAGE_METADATA = {
@@ -10523,3 +12218,175 @@ async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_n
     sent: Final = await _sent_thinking_config("gemini-3.8-flash", {"reasoning_effort": "high"})
 
     assert sent["includeThoughts"] is expected
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+_GEMINI_ROUTES: Final = (
+    pytest.param(VertexGeminiConfig, "vertex_ai", id="vertex_ai"),
+    pytest.param(GoogleAIStudioGeminiConfig, "gemini", id="gemini"),
+)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_a_hosted_mcp_tool_answers_400_on_gemini_without_drop_params(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config_class().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="gemini-3.8-flash",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash on {route} " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+    assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(
+    monkeypatch, caplog, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = config_class().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="gemini-3.8-flash",
+            drop_params=True,
+        )
+    assert "deepwiki" not in json.dumps(mapped)
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert any(
+        "`deepwiki`" in record.getMessage() and f" on {route} (" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "tools" not in mapped
+    assert "tool_choice" not in mapped
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every_hosted_mcp_tool(
+    monkeypatch, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={
+            "tools": [_HOSTED_MCP_TOOL],
+            "functions": [_WEATHER_FUNCTION_TOOL["function"]],
+            "tool_choice": "none",
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "deepwiki" not in json.dumps(mapped)
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+
+class _BodyInChunks(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks: Final = chunks
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield from self._chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _split_at(body: bytes, cuts: tuple[int, ...]) -> tuple[bytes, ...]:
+    return tuple(body[start:end] for start, end in pairwise((0, *sorted(cuts), len(body))))
+
+
+async def _gemini_stream(is_async: bool, chunks: tuple[bytes, ...]) -> list[ModelResponseStream]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_BodyInChunks(chunks), headers={"content-type": "text/event-stream"})
+
+    kwargs: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "api_key": "fake-gemini-key",
+    }
+    if is_async:
+        stream: Final = await litellm.acompletion(
+            **kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(handler))
+        )
+        return [chunk async for chunk in stream]
+    return list(
+        litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))))
+    )
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+async def test_gemini_stream_keeps_text_and_usage_when_a_part_contains_a_unicode_line_separator(is_async: bool) -> None:
+    events: Final = (
+        {"candidates": [{"content": {"role": "model", "parts": [{"text": "line one\u2028line two"}]}}]},
+        {
+            "candidates": [{"content": {"role": "model", "parts": [{"text": " and three"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8, "totalTokenCount": 18},
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(event, ensure_ascii=False)}\r\n\r\n" for event in events).encode()
+    cut_inside_separator_and_crlf: Final = (body.index(b"\xe2\x80\xa8") + 1, body.index(b"\r") + 1)
+
+    received: Final = await _gemini_stream(is_async, _split_at(body, cut_inside_separator_and_crlf))
+
+    usage: Final = next(chunk.usage for chunk in reversed(received) if getattr(chunk, "usage", None))
+    text: Final = "".join(c.choices[0].delta.content or "" for c in received if c.choices)
+    assert text == "line one\u2028line two and three"
+    assert (usage.prompt_tokens, usage.completion_tokens) == (10, 8)
+
+
+@pytest.mark.parametrize("chunk_indices", [[0, 1], [2, 1, 0]])
+def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) -> None:
+    metadata: Final = {
+        "groundingChunks": [
+            {"web": {"uri": "https://example.com/a", "title": "A"}},
+            {"web": {"uri": "https://example.com/b", "title": "B"}},
+            {"retrievedContext": {"uri": "gs://document"}},
+        ],
+        "groundingSupports": [
+            {"segment": {"startIndex": 0, "endIndex": 5}, "groundingChunkIndices": chunk_indices},
+            {"segment": {"startIndex": 6, "endIndex": 11}, "groundingChunkIndices": [1]},
+        ],
+    }
+
+    annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "First claim")
+
+    expected_sources: Final = [(index, 0, 5) for index in chunk_indices if index in (0, 1)] + [(1, 6, 11)]
+    assert annotations == [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": start,
+                "end_index": end,
+                "url": metadata["groundingChunks"][index]["web"]["uri"],
+                "title": metadata["groundingChunks"][index]["web"]["title"],
+            },
+        }
+        for index, start, end in expected_sources
+    ]

@@ -10,9 +10,11 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
@@ -38,6 +40,8 @@ if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
 else:
     AWSPreparedRequest = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class BedrockImageEditPreparedRequest(LiteLLMBaseModel):
@@ -211,7 +215,10 @@ class BedrockImageEdit(BaseAWSLLM):
             BedrockImageEditPreparedRequest: The prepared request object
         """
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
-            optional_params, model, bearer_token=bedrock_bearer_token(api_key)
+            optional_params,
+            model,
+            bearer_token=bedrock_bearer_token(api_key),
+            litellm_params=as_str_mapping(getattr(logging_obj, "litellm_params", None)),
         )
 
         # Use the existing ARN-aware provider detection method
@@ -317,7 +324,7 @@ class BedrockImageEdit(BaseAWSLLM):
                 additional_args={"complete_input_dict": data},
             )
         verbose_logger.debug("raw model_response: %s", response.text)
-        response_dict: Final = response.json()
+        response_dict: Final = _DECODED_JSON.validate_python(response.json())
         if response_dict is None:
             raise ValueError("Error in response object format, got None")
 

@@ -18,11 +18,20 @@ from litellm.types.mcp import (
     validate_mcp_protocol_transport,
 )
 
+MAX_TOOLS_LIST_CACHE_TTL_SECONDS: Final = 365 * 24 * 60 * 60
+_TOOLS_LIST_CACHE_TTL_SECONDS: Final = TypeAdapter[int](
+    Annotated[int, Field(ge=0, le=MAX_TOOLS_LIST_CACHE_TTL_SECONDS)]
+)
+
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
     if "protocol_version" in value:
         TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
+    if "skip_tool_output_validation" in value:
+        TypeAdapter[bool](bool).validate_python(value["skip_tool_output_validation"], strict=True)
+    if "tools_list_cache_ttl_seconds" in value:
+        _TOOLS_LIST_CACHE_TTL_SECONDS.validate_python(value["tools_list_cache_ttl_seconds"], strict=True)
     return value
 
 
@@ -117,7 +126,7 @@ class MCPServer(LiteLLMBaseModel):
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
     # scope=="global" values are interpolated into static_headers using ${NAME}.
     # scope=="user" values must be supplied per-user.
-    env_vars: list[dict[str, Any]] | None = None
+    env_vars: list[dict[str, object]] | None = None
     # OAuth-specific fields
     authorization_server_metadata: Mapping[str, object] | None = Field(default=None, exclude=True)
     client_id: str | None = None
@@ -204,9 +213,11 @@ class MCPServer(LiteLLMBaseModel):
     access_groups: list[str] | None = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
-    # Legacy opt-in to upstream-delegated authentication for ``oauth2``
-    # servers. LiteLLM admission still applies; use ``oauth_delegate`` for the
-    # supported client-forwarded OAuth flow.
+    # Deprecated opt-in to upstream-delegated authentication for ``oauth2``
+    # servers. A bare ``Authorization`` that is not a LiteLLM credential is the
+    # upstream token and is forwarded; see
+    # ``MCPRequestHandler._admit_legacy_delegate_bearer``. New servers should use
+    # ``true_passthrough`` or ``oauth_delegate``.
     #
     # Honored only for ``auth_type == oauth2``; ignored for any other
     # ``auth_type``. OAuth pass-through for non-oauth2 servers
@@ -240,7 +251,7 @@ class MCPServer(LiteLLMBaseModel):
     # token_validation: key-value pairs that must match fields in the OAuth token
     # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
     # Tokens that fail validation are rejected before storage.
-    token_validation: dict[str, Any] | None = None
+    token_validation: dict[str, object] | None = None
     oauth_identity_binding: MCPOAuthIdentityBinding | None = None
     # Optional TTL override (seconds) for the Redis per-user token cache, capped
     # at the token's expires_in minus the expiry buffer so a cached entry never
@@ -294,6 +305,15 @@ class MCPServer(LiteLLMBaseModel):
         breaking regression introduced with the M2M feature.
         """
         return self.oauth2_flow == "client_credentials"
+
+    @property
+    def skip_tool_output_validation(self) -> bool:
+        return (self.mcp_info or {}).get("skip_tool_output_validation") is True
+
+    @property
+    def tools_list_cache_ttl_seconds(self) -> int | None:
+        configured: Final[object] = (self.mcp_info or {}).get("tools_list_cache_ttl_seconds")
+        return configured if isinstance(configured, int) else None
 
     @model_validator(mode="after")
     def resolve_protocol_version(self) -> Self:
@@ -374,6 +394,12 @@ class MCPServer(LiteLLMBaseModel):
         discovered ``authorization_url`` / ``token_url`` enriches only the gateway's own OAuth front
         door and is never a precondition for opening a session."""
         return self.is_true_passthrough or self.is_oauth_delegate
+
+    @property
+    def reauthorizes_in_client(self) -> bool:
+        """True when a caller can fix an upstream 401 by authenticating again: the client-forwarded
+        token modes and gateway-vaulted per-user OAuth."""
+        return self.is_client_forwarded_token or (self.is_gateway_managed_oauth2 and self.needs_user_oauth_token)
 
     @property
     def is_dcr_bridge(self) -> bool:

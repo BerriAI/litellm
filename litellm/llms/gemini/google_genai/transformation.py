@@ -3,7 +3,7 @@ Transformation for Calling Google models in their native format.
 """
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
 
@@ -34,6 +34,14 @@ else:
     ToolConfigDict = Any
 
 from ..common_utils import get_api_key_from_env
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
@@ -382,7 +390,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         from litellm.types.google_genai.main import GenerateContentResponse
 
         try:
-            response = raw_response.json()
+            decoded: Final = _json_body(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming generate content response: {e}",
@@ -391,7 +399,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             )
 
         logging_obj.model_call_details["httpx_response"] = raw_response
-        response = self.convert_citation_sources_to_citations(response)
+        response: Final = self.convert_citation_sources_to_citations(
+            cast(dict[str, object], decoded)  # cast-ok: the body passes through unvalidated, as before it was typed
+        )
 
         return GenerateContentResponse(**response)
 

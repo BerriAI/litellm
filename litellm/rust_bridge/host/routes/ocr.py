@@ -7,12 +7,13 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.failures import UpstreamFailure
 from litellm.rust_bridge.public_call import optional_str
 
-__all__ = ("UpstreamFailure", "map_failure", "response")
+__all__ = ("UpstreamFailure", "drops_unsupported_params", "map_failure", "response")
 
 _RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
 
