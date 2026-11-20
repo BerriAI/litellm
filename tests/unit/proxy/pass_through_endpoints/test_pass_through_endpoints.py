@@ -6905,6 +6905,16 @@ async def test_custom_pass_through_forwards_only_the_id_among_litellm_fields(
     assert upstream_body == {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}}
 
 
+async def test_custom_pass_through_drops_id_from_a_body_that_is_not_json_rpc() -> None:
+    body: Final = {"model": "claude-haiku-5-5", "id": "req-1", "max_tokens": 20, "messages": []}
+
+    upstream_body: Final = await _relay_through_pass_through(
+        body, "http://upstream.test/v1/messages", guardrails_config=None, custom_endpoint=True
+    )
+
+    assert upstream_body == {"model": "claude-haiku-5-5", "max_tokens": 20, "messages": []}
+
+
 class _ResponseBlockingGuardrail(CustomGuardrail):
     async def async_post_call_success_hook(
         self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, response: object

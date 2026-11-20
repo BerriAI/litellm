@@ -225,7 +225,7 @@ _RELAY_HEADERS: Final = TypeAdapter(dict[str, str])
 _RELAY_METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
-_KEPT_IN_CONFIGURED_PASS_THROUGH_BODY: Final = frozenset(("id",))
+_KEPT_IN_CONFIGURED_JSON_RPC_BODY: Final = frozenset(("id",))
 ANTHROPIC_CLIENT_OAUTH_STATE_KEY: Final = "litellm_anthropic_client_oauth"
 
 
@@ -793,8 +793,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             {k: _parsed_body[k] for k in types_utils.all_litellm_params if k in _parsed_body}
         )
         kept_in_upstream_body: Final = (
-            _KEPT_IN_CONFIGURED_PASS_THROUGH_BODY
-            if request_dispatched_to_pass_through_endpoint(request)
+            _KEPT_IN_CONFIGURED_JSON_RPC_BODY
+            if request_dispatched_to_pass_through_endpoint(request) and "jsonrpc" in _parsed_body
             else frozenset[str]()
         )
         for key in litellm_keys_in_body.keys() - kept_in_upstream_body:
