@@ -152,7 +152,6 @@ from litellm.router_rust.steps.precall import (
     refuses_decisions_media,
     request_carries_image,
     request_carries_json_input,
-    request_json_input,
     serves_route_capability,
 )
 from litellm.router_rust.steps.prerouting import PreRouter, PreRoutingStrategies, picks_async
@@ -3484,12 +3483,14 @@ class RustCore(
         self, step: Mapping[str, object], request: Mapping[str, object]
     ) -> list[str]:  # mutable-ok: the step's answer
         """The candidates that refuse the audio, videos or JSON input a Decisions call carries."""
+        from litellm.decisions.call import routed_decision_input
+
         group: Final = str(step.get("model_group"))
         defaults: Final = {k: v for k, v in self._resolved.default_litellm_params.items() if v is not None}
         sent: Final = {**defaults, **request}
         audio: Final = bool(request.get("audio"))
         videos: Final = bool(request.get("videos"))
-        json_input: Final = request_json_input(request.get("input"))
+        decision_input: Final = routed_decision_input(request.get("input"))
         return [
             str(id)
             for id in _as_list(step.get("candidates"))
@@ -3499,7 +3500,7 @@ class RustCore(
                 sent,
                 audio=audio,
                 videos=videos,
-                json_input=json_input,
+                decision_input=decision_input,
             )
         ]
 

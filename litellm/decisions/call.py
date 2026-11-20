@@ -43,7 +43,11 @@ from litellm.llms.base_llm.decisions.transformation import (
     without_raw_prompt_cache_breakpoints,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
+from litellm.llms.openai.decisions.transformation import (
+    ir_to_openai_response,
+    openai_input_to_ir,
+    openai_request_to_ir,
+)
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsAsset,
@@ -61,7 +65,6 @@ from litellm.types.decisions import (
     DecisionsIRResponse,
     DecisionsIRState,
     DecisionsJSON,
-    DecisionsJsonInput,
     DecisionsRequestBody,
     DecisionsResponse,
     DecisionsVideo,
@@ -89,6 +92,7 @@ DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequest
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
+_OPENAI_INPUT_ADAPTER: Final[TypeAdapter[OpenAIDecisionInput]] = TypeAdapter(OpenAIDecisionInput)
 _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
 )
@@ -421,21 +425,32 @@ def deployment_refuses_media(
     *,
     audio: bool,
     videos: bool,
-    json_input: DecisionsJsonInput,
+    decision_input: DecisionsIRState | DecisionsIRMessages | None,
 ) -> bool:
+    json_input: Final = decision_input is not None and has_json_input(decision_input)
     drops_params: Final = _drops_params(call_kwargs)
-    if drops_params and json_input != "only":
+    if drops_params and not json_input:
         return False
     provider_config: Final = get_decisions_provider_config(model, custom_llm_provider)
-    if drops_params:
-        return not provider_config.supports_json_input
+    if drops_params and decision_input is not None:
+        headers: Final = decisions_outbound_headers(call_kwargs.get("extra_headers"), custom_llm_provider, call_kwargs)
+        return _leaves_no_input(_supported_input(decision_input, provider_config, headers))
     canonical_model: Final = provider_config.canonical_model(model)
     deployment: Final = _DeploymentCapabilities.model_validate(model_info)
     return (
         (audio and not _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment))
         or (videos and not _takes_videos(provider_config, canonical_model, custom_llm_provider, deployment))
-        or (json_input != "none" and not provider_config.supports_json_input)
+        or (json_input and not provider_config.supports_json_input)
     )
+
+
+def routed_decision_input(request_input: object) -> DecisionsIRState | DecisionsIRMessages | None:
+    try:
+        return openai_input_to_ir(
+            _OPENAI_INPUT_ADAPTER.validate_python(without_raw_prompt_cache_breakpoints(request_input))
+        )
+    except ValidationError:
+        return None
 
 
 def _resolved_support(
@@ -567,23 +582,29 @@ def _supported_messages(
     return DecisionsIRMessages(messages=tuple(filter(_is_user_message, decision_input.messages)))
 
 
+def _supported_input(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+    provider_config: BaseDecisionsConfig,
+    headers: Mapping[str, str],
+) -> DecisionsIRState | DecisionsIRMessages:
+    supported_messages: Final = _supported_messages(decision_input, provider_config)
+    supported_input: Final = (
+        supported_messages if provider_config.supports_json_input else without_json_input(supported_messages)
+    )
+    if provider_config.supports_images_in(supported_input, headers):
+        return supported_input
+    return with_images_where(supported_input, _no_image)
+
+
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
     headers: Mapping[str, str],
     support: _ResolvedSupport,
 ) -> DecisionsIRRequest:
-    supported_messages: Final = _supported_messages(ir_request.input, provider_config)
-    supported_input: Final = (
-        supported_messages if provider_config.supports_json_input else without_json_input(supported_messages)
-    )
     return replace(
         ir_request,
-        input=(
-            supported_input
-            if provider_config.supports_images_in(supported_input, headers)
-            else with_images_where(supported_input, _no_image)
-        ),
+        input=_supported_input(ir_request.input, provider_config, headers),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
         prompt_cache_key=ir_request.prompt_cache_key if provider_config.supports_prompt_cache else None,
         prompt_cache_options=ir_request.prompt_cache_options if provider_config.supports_prompt_cache else None,

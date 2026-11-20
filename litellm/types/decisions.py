@@ -9,7 +9,6 @@ from typing_extensions import ReadOnly, Required, TypedDict
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 DecisionsJSON: TypeAlias = str | Mapping[str, object] | Sequence[object]
-DecisionsJsonInput: TypeAlias = Literal["none", "with_other_input", "only"]
 NoulCriteria: TypeAlias = Mapping[Literal["true", "false"], DecisionsJSON | None]
 MAX_DECISION_QUESTIONS: Final = 128
 MAX_ASSET_REFERENCE_BYTES: Final = 1024
