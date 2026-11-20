@@ -1,6 +1,13 @@
-//! Pricing over one row: lowered once into `litellm-cost` prices, then priced or quoted per call
+//! Pricing over one row: lowered once into `litellm-cost` prices, then priced or quoted per call. `query` holds the
+//! whole-call entry points over the live table
 
-use std::collections::BTreeMap;
+mod query;
+
+pub(crate) use query::{
+    NativeBilledRates, NativeRateCard, NativeReceipt, adjust, adjustment_config, bound, price,
+    rates,
+};
+
 use std::time::Duration;
 
 use crate::model_cost::row_fields;
@@ -9,11 +16,13 @@ use litellm_cost::call::CallContext;
 use litellm_cost::money::UnitPrice;
 use litellm_cost::price::{
     Adjustments, CacheReadMode, CacheTtl, Channel, InputUnit, Meter, OutputUnit, Residency,
-    ServiceTier, TokenKind,
+    TokenKind,
 };
 use litellm_cost::priced::Outcome;
+use litellm_cost::query::TokenUsage;
 use litellm_cost::quote::Quote;
-use litellm_cost::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage};
+use litellm_cost::usage::Usage;
+use litellm_host_python::from_py_argument;
 use litellm_model_catalog::wire::{EntryWire, Fields};
 use litellm_model_catalog::{BilledPrices, billed_prices};
 use pyo3::exceptions::PyValueError;
@@ -145,115 +154,14 @@ impl NativePrices {
 
 #[pymethods]
 impl NativeTokenUsage {
-    /// Quantities main's parsing already settled. `prompt_tokens` only picks the band. The `input_*` counts are what
-    /// the cache did not serve, the `cached_*` counts are cache reads, and `explicit_cache_read` says those reads hit
-    /// a cache the caller created. `cache_write_tokens` is every write not reported as 1h or 12h. The `output_*`
-    /// counts leave reasoning out
+    /// The billed quantities main's parsing already settled, as the pricing core's `TokenUsage` document reads them
     #[new]
-    #[pyo3(signature = (
-        *,
-        prompt_tokens,
-        input_text_tokens,
-        input_audio_tokens,
-        input_image_tokens,
-        input_video_tokens,
-        cached_text_tokens,
-        cached_audio_tokens,
-        cached_image_tokens,
-        explicit_cache_read,
-        cache_write_tokens,
-        cache_write_1h_tokens,
-        cache_write_12h_tokens,
-        input_characters,
-        input_images,
-        input_audio_seconds,
-        input_video_seconds,
-        queries,
-        output_text_tokens,
-        output_audio_tokens,
-        output_image_tokens,
-        output_video_tokens,
-        reasoning_tokens,
-    ))]
-    #[allow(clippy::too_many_arguments)] // one keyword per billed quantity, read by name in Python
-    fn new(
-        prompt_tokens: u64,
-        input_text_tokens: u64,
-        input_audio_tokens: u64,
-        input_image_tokens: u64,
-        input_video_tokens: u64,
-        cached_text_tokens: u64,
-        cached_audio_tokens: u64,
-        cached_image_tokens: u64,
-        explicit_cache_read: bool,
-        cache_write_tokens: u64,
-        cache_write_1h_tokens: u64,
-        cache_write_12h_tokens: u64,
-        input_characters: u64,
-        input_images: u64,
-        input_audio_seconds: f64,
-        input_video_seconds: f64,
-        queries: u64,
-        output_text_tokens: u64,
-        output_audio_tokens: u64,
-        output_image_tokens: u64,
-        output_video_tokens: u64,
-        reasoning_tokens: u64,
-    ) -> PyResult<Self> {
-        let mode = if explicit_cache_read {
-            CacheReadMode::Explicit
-        } else {
-            CacheReadMode::Implicit
-        };
-        Ok(Self(Usage {
-            prompt_tokens,
-            tokens: Tokens {
-                input: BTreeMap::from([
-                    (TokenKind::Text, input_text_tokens),
-                    (TokenKind::Audio, input_audio_tokens),
-                    (TokenKind::Image, input_image_tokens),
-                    (TokenKind::Video, input_video_tokens),
-                ]),
-                cache_read: BTreeMap::from([
-                    ((TokenKind::Text, mode), cached_text_tokens),
-                    ((TokenKind::Audio, mode), cached_audio_tokens),
-                    ((TokenKind::Image, mode), cached_image_tokens),
-                ]),
-                cache_write: BTreeMap::from([
-                    ((TokenKind::Text, CacheTtl::Default), cache_write_tokens),
-                    ((TokenKind::Text, CacheTtl::OneHour), cache_write_1h_tokens),
-                    (
-                        (TokenKind::Text, CacheTtl::TwelveHours),
-                        cache_write_12h_tokens,
-                    ),
-                ]),
-                output: BTreeMap::from([
-                    (TokenKind::Text, output_text_tokens),
-                    (TokenKind::Audio, output_audio_tokens),
-                    (TokenKind::Image, output_image_tokens),
-                    (TokenKind::Video, output_video_tokens),
-                ]),
-                reasoning: reasoning_tokens,
-                citation: 0,
-            },
-            characters: Characters {
-                prompt: input_characters,
-                completion: 0,
-            },
-            durations: BTreeMap::from([
-                (DurationMeter::InputAudio, seconds(input_audio_seconds)?),
-                (DurationMeter::InputVideo, seconds(input_video_seconds)?),
-            ]),
-            images: Images {
-                input: input_images,
-                ..Images::default()
-            },
-            search: Search {
-                queries,
-                ..Search::default()
-            },
-            text_messages: 0,
-        }))
+    fn new(quantities: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let usage: TokenUsage = from_py_argument(quantities)?;
+        for length in [usage.input_audio_seconds, usage.input_video_seconds] {
+            seconds(length)?;
+        }
+        Ok(Self(usage.billed()))
     }
 }
 
@@ -270,7 +178,7 @@ impl NativeCallContext {
     ) -> Self {
         let residency = data_residency.map(str::to_lowercase);
         Self(CallContext {
-            tier: service_tier_named(service_tier),
+            tier: litellm_cost::candidates::service_tier_named(service_tier),
             channel: Channel::Online,
             residency: match residency.as_deref() {
                 Some("eu") => Some(Residency::Eu),
@@ -285,16 +193,6 @@ impl NativeCallContext {
             at,
             overlay: None,
         })
-    }
-}
-
-fn service_tier_named(name: Option<&str>) -> ServiceTier {
-    match name.map(str::to_lowercase).as_deref() {
-        Some("flex") => ServiceTier::Flex,
-        Some("balanced") => ServiceTier::Balanced,
-        Some("priority" | "fast") => ServiceTier::Priority,
-        Some("ultrafast") => ServiceTier::Ultrafast,
-        _ => ServiceTier::Standard,
     }
 }
 
@@ -327,27 +225,4 @@ fn own(quote: &Quote<'_>, kind: TokenKind) -> Option<f64> {
         .rate(&cache_read(kind, CacheReadMode::Implicit))
         .filter(|rate| rate.fallback_from.is_none())
         .map(|rate| UnitPrice::get(rate.unit_price))
-}
-
-#[cfg(test)]
-mod tests {
-    use rstest::rstest;
-
-    use super::*;
-
-    #[rstest]
-    #[case::none(None, ServiceTier::Standard)]
-    #[case::flex(Some("flex"), ServiceTier::Flex)]
-    #[case::upper(Some("PRIORITY"), ServiceTier::Priority)]
-    #[case::fast_is_priority(Some("fast"), ServiceTier::Priority)]
-    #[case::ultrafast(Some("ultrafast"), ServiceTier::Ultrafast)]
-    #[case::balanced(Some("balanced"), ServiceTier::Balanced)]
-    #[case::auto_is_standard(Some("auto"), ServiceTier::Standard)]
-    #[case::unknown_is_standard(Some("scale"), ServiceTier::Standard)]
-    fn a_service_tier_name_picks_the_tier_main_priced_it_at(
-        #[case] name: Option<&str>,
-        #[case] expected: ServiceTier,
-    ) {
-        assert_eq!(service_tier_named(name), expected);
-    }
 }

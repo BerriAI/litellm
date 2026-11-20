@@ -6,6 +6,13 @@ use litellm_fnmatch::fnmatchcase;
 
 const GLOB: [char; 3] = ['*', '?', '['];
 
+/// `cost_discount_config` and `cost_margin_config`, which adjust a priced call
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CostConfig {
+    pub discounts: Discounts,
+    pub margins: Margins,
+}
+
 /// `cost_discount_config`: a fraction per `<provider>` or `<provider>/<model pattern>` key
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Discounts(Vec<(String, f64)>);

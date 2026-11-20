@@ -13,7 +13,7 @@
 - `install` touches no state until `CostMap::read` succeeds. `NativeRejected` means nothing changed
 - `register` keeps a registration only after its pass finished, so an exception in a host call keeps nothing
 - `rows=None` writes each entry into whichever table is published at that moment and never reports a swap
-- `cost_snapshot` is the pricing view of the published table, a `CostSnapshot` in `snapshot.rs` over the same name index. `host::generation` reads the table and its generation in one call, and the snapshot is rebuilt only when that moves. Model-catalog's `CostLookup` only reads it through `CatalogView`, so every Python-shaped concern (generation, swap, row cache) lives here
+- `cost_snapshot` is the pricing view of the published table, a `CostSnapshot` in `snapshot.rs` over the same name index. `host::generation` reads the table, its generation and the Python-held state pricing reads (the discount and margin configs and the `fallback_generalizations` rules) in one call, and the snapshot is rebuilt only when the generation or the configs' values move. Model-catalog's `CostLookup` only reads it through `CatalogView`, so every Python-shaped concern (generation, swap, row cache) lives here
   - `CostSnapshot::lookup` hands one pricing call a `CallView`, which reads each row from Python once, so the call sees one version of every row it reads
   - Lowerings are kept by row key and billed provider together with the fields they were lowered from, and reused only while the row reads exactly those fields. A row replaced or edited in place is lowered again on the next call, with no `changed_in_place()` needed
   - `invalidate` drops the current snapshot along with the name index, so the next call reads the rules and names again
