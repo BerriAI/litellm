@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setDisplayCurrency } from "@/i18n/formats";
 import { averageResponseTimeMs, formatResponseTime, valueFormatter, valueFormatterSpend } from "./value_formatters";
 
 describe("averageResponseTimeMs", () => {
@@ -91,5 +92,20 @@ describe("valueFormatterSpend", () => {
 
   it("should treat exactly 1,000 as the thousands boundary", () => {
     expect(valueFormatterSpend(1_000)).toBe("$1k");
+  });
+});
+
+describe("valueFormatterSpend in the display currency", () => {
+  afterEach(() => setDisplayCurrency(undefined));
+
+  it("puts the configured currency's symbol on every size of number", () => {
+    setDisplayCurrency("EUR");
+    expect([0, 12.5, 1_500, 2_500_000, 3_000_000_000].map(valueFormatterSpend)).toEqual([
+      "€0",
+      "€12.5",
+      "€1.5k",
+      "€2.5M",
+      "€3B",
+    ]);
   });
 });

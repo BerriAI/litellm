@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Switch } from "@/components/ui/switch";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
-import { copyToClipboard, formatPerSecondCost } from "@/utils/dataUtils";
+import { copyToClipboard, formatPerMillionCost, formatPerSecondCost } from "@/utils/dataUtils";
 import i18n from "@/i18n/i18n";
 
 export const MODEL_ID_COLUMN_ID = "model_info_id";
@@ -251,10 +251,16 @@ function CostsCell({ model }: { model: ModelData }) {
       trigger={
         <div className="flex flex-col gap-0.5 whitespace-nowrap">
           {showInput && (
-            <CostRow label={t("modelsAndEndpoints.modelsTableColumns.costs.input")} value={`$${inputCost}`} />
+            <CostRow
+              label={t("modelsAndEndpoints.modelsTableColumns.costs.input")}
+              value={formatPerMillionCost(inputCost)}
+            />
           )}
           {showOutput && (
-            <CostRow label={t("modelsAndEndpoints.modelsTableColumns.costs.output")} value={`$${outputCost}`} />
+            <CostRow
+              label={t("modelsAndEndpoints.modelsTableColumns.costs.output")}
+              value={formatPerMillionCost(outputCost)}
+            />
           )}
           {hasPerSecond && (
             <CostRow

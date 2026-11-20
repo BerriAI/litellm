@@ -1,5 +1,6 @@
 "use client";
 
+import { currencySymbol } from "@/i18n/formats";
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, Info, MoreHorizontal } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -58,7 +59,7 @@ const getModelCapabilities = (model: ModelHubData) =>
     .filter(([key, value]) => key.startsWith("supports_") && value === true)
     .map(([key]) => key);
 
-const formatCost = (cost: number) => `$${(cost * 1_000_000).toFixed(2)}`;
+const formatCost = (cost: number) => `${currencySymbol()}${(cost * 1_000_000).toFixed(2)}`;
 
 const formatTokens = (tokens: number) => {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;

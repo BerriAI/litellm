@@ -5,10 +5,12 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   copyToClipboard,
   formatNumberWithCommas,
+  formatPerMillionCost,
   formatPerSecondCost,
   getSpendString,
   updateExistingKeys,
 } from "./dataUtils";
+import { setDisplayCurrency } from "@/i18n/formats";
 
 // Import the mocked module
 import { toast } from "@/lib/toast";
@@ -117,6 +119,16 @@ describe("dataUtils", () => {
       expect(getSpendString(-2500, 0)).toBe("$-2,500");
     });
 
+    it("uses the display currency's symbol, including in the below-threshold text", () => {
+      setDisplayCurrency("EUR");
+      try {
+        expect(getSpendString(1234.5, 2)).toBe("€1,234.50");
+        expect(getSpendString(0.0000004, 6)).toBe("< €0.000001");
+      } finally {
+        setDisplayCurrency(undefined);
+      }
+    });
+
     it("should return threshold string for very small values", () => {
       expect(getSpendString(0.0000004, 6)).toBe("< $0.000001");
       expect(getSpendString(-0.0000004, 6)).toBe("< $0.000001");
@@ -149,6 +161,13 @@ describe("dataUtils", () => {
       it("still reports spend that rounds to zero as below the threshold", () => {
         expect(getSpendString(0.0000004, 6)).toBe("< $0.000001");
       });
+    });
+  });
+
+  describe("formatPerMillionCost", () => {
+    it("should keep the two decimals and the ungrouped digits the cost string has", () => {
+      expect(formatPerMillionCost("2.50")).toBe("$2.50");
+      expect(formatPerMillionCost("1234.57")).toBe("$1234.57");
     });
   });
 

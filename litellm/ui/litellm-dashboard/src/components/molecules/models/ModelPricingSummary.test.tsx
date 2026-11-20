@@ -1,6 +1,7 @@
 import React from "react";
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { setDisplayCurrency } from "@/i18n/formats";
 import { ModelPricingSummary } from "./ModelPricingSummary";
 
 const tokenPriced = { input_cost: "1.50", output_cost: "2.00" };
@@ -45,6 +46,23 @@ describe("ModelPricingSummary", () => {
     expect(screen.getByText("Input: $0.60/1M tokens")).toBeInTheDocument();
     expect(screen.getByText("Output: $0.015/s")).toBeInTheDocument();
     expect(screen.queryByText("Output: $0.00/1M tokens")).not.toBeInTheDocument();
+  });
+
+  describe("with a display currency set by the proxy", () => {
+    afterEach(() => setDisplayCurrency(undefined));
+
+    it("shows token and per-second rates in that currency, with the same amounts", () => {
+      setDisplayCurrency("EUR");
+      render(
+        <ModelPricingSummary
+          model={{ ...tokenPriced, output_cost_per_second_tiers: [{ resolution: "4k", cost: 0.3 }] }}
+        />,
+      );
+      expect(screen.getByText("Input: €1.50/1M tokens")).toBeInTheDocument();
+      expect(screen.getByText("Output: €2.00/1M tokens")).toBeInTheDocument();
+      expect(screen.getByText("Output (4k): €0.30/s")).toBeInTheDocument();
+      expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
+    });
   });
 
   it("renders a dash when the model has no pricing at all", () => {

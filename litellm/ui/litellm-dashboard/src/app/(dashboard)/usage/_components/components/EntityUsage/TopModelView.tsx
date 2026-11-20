@@ -1,3 +1,4 @@
+import { currencySymbol } from "@/i18n/formats";
 import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
@@ -114,7 +115,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
             index="key"
             categories={["spend"]}
             colors={[BAR_COLOR]}
-            valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+            valueFormatter={(value) => `${currencySymbol()}${formatNumberWithCommas(value, 2)}`}
             layout="vertical"
             yAxisWidth={200}
             tickGap={5}

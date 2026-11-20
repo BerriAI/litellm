@@ -1,5 +1,6 @@
 "use client";
 
+import { currencySymbol } from "@/i18n/formats";
 import * as React from "react";
 import type { TooltipContentProps, TooltipValueType } from "recharts";
 
@@ -65,7 +66,8 @@ const rawMetricValue = (row: unknown, dataKey: string): number | undefined => {
 
 const formatMetricValue = (rawValue: number | undefined, isSpend: boolean): string => {
   if (rawValue === undefined) return i18n.t("shared.charts.chartTooltip.notAvailable");
-  if (isSpend) return `$${rawValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (isSpend)
+    return `${currencySymbol()}${rawValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   return rawValue.toLocaleString();
 };
 
