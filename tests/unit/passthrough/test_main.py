@@ -7,9 +7,13 @@ import respx
 
 import litellm
 
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.passthrough.transformation import OpenAIPassthroughConfig
 from litellm.llms.vllm.passthrough.transformation import VLLMPassthroughConfig
 from litellm.passthrough.main import allm_passthrough_route
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -226,3 +230,40 @@ async def test_allm_passthrough_route_hosted_vllm_on_the_vllm_api_base_sends_its
     )
     assert response.status_code == 200
     assert route.calls[0].request.headers["authorization"] == expected_authorization
+
+
+class _LoggedPayloads(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: Final[list[object]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payloads.append(kwargs.get("standard_logging_object"))
+
+
+@pytest.mark.asyncio
+async def test_a_relay_through_an_explicit_provider_config_reaches_success_callbacks_with_a_logging_payload(
+    respx_mock: respx.MockRouter,
+) -> None:
+    search_answer: Final = {"output": "LiteLLM's docs are at docs.litellm.ai", "encrypted_output": "gAAAA"}
+    respx_mock.post("https://api.openai.com/v1/alpha/search").mock(return_value=httpx.Response(200, json=search_answer))
+    recorder: Final = _LoggedPayloads()
+
+    response: Final = await allm_passthrough_route(
+        method="POST",
+        endpoint="alpha/search",
+        model="openai/gpt-6.2-sol",
+        api_key="sk-openai-test",
+        json={"model": "gpt-6.2-sol", "commands": {"search_query": [{"q": "LiteLLM documentation"}]}},
+        provider_config=OpenAIPassthroughConfig(),
+        client=AsyncHTTPHandler(),
+        callbacks=[recorder],
+    )
+    await drain_logging_tasks()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert response.status_code == 200
+    [payload] = recorder.payloads
+    assert isinstance(payload, dict)
+    assert (payload["model"], payload["custom_llm_provider"], payload["status"]) == ("gpt-6.2-sol", "openai", "success")
+    assert payload["response"] == {"response": search_answer}

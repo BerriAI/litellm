@@ -332,7 +332,7 @@ if TYPE_CHECKING:
     from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
     from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.llm_cost_calc.utils import BilledTokenRates
-    from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
+    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
     from litellm.proxy.hooks.autorouter_baseline_cache import BaselineCacheContext, CapturedBaselineObservation
     from litellm.proxy.hooks.search_free_tier import SearchAllowanceAllocation
     from litellm.types.llms.base import HiddenParams
@@ -1136,6 +1136,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.stream = stream
         self.passthrough_model_parameters: Mapping[str, object] | None = None
         self.passthrough_stream: bool | None = None
+        self.passthrough_provider_config: BasePassthroughConfig | None = None
         self.applied_timeout: float | Timeout | None = None
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
@@ -3692,9 +3693,12 @@ class Logging(LiteLLMLoggingBaseClass):
 
             passthrough_provider: Final = self._model_call_details_view.get("custom_llm_provider", "")
             if isinstance(passthrough_provider, str):
-                provider_config: Final = ProviderConfigManager.get_provider_passthrough_config(
-                    provider=passthrough_provider,
-                    model=self.model,
+                provider_config: Final = (
+                    self.passthrough_provider_config
+                    or ProviderConfigManager.get_provider_passthrough_config(
+                        provider=passthrough_provider,
+                        model=self.model,
+                    )
                 )
                 if provider_config is not None:
                     logging_result = provider_config.logging_non_streaming_response(

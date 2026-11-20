@@ -602,6 +602,7 @@ def llm_passthrough_route(
     litellm_logging_obj.stream = is_streaming_request
     litellm_logging_obj.model_call_details["stream"] = is_streaming_request
     litellm_logging_obj.passthrough_stream = is_streaming_request
+    litellm_logging_obj.passthrough_provider_config = provider_config
     logged_request: Final = provider_config.logged_request(endpoint=endpoint, request_data=_streaming_request_data)
     if logged_request is not None:
         litellm_logging_obj.passthrough_model_parameters = logged_request.model_parameters

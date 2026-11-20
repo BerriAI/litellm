@@ -72,7 +72,7 @@ def relayed_json_object(httpx_response: Response) -> Mapping[str, object] | None
         return None
 
 
-def relayed_body(httpx_response: Response) -> str | dict:
+def relayed_body(httpx_response: Response) -> str | dict[str, object]:
     try:
         body: Final = _DECODED_JSON.validate_python(httpx_response.json())
     except ValueError:

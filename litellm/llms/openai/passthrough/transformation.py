@@ -1,13 +1,14 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, relayed_body
 from litellm.llms.openai.common_utils import get_openai_credentials
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, StandardPassThroughResponseObject
 
 if TYPE_CHECKING:
-    from httpx import URL
+    from httpx import URL, Response
 
+    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.llms.openai import AllMessageValues
 
 
@@ -58,3 +59,14 @@ class OpenAIPassthroughConfig(BasePassthroughConfig):
         api_base: str | None = None,
     ) -> dict[str, str]:  # mutable-ok: base class contract returns dict for httpx
         return {**headers, "Authorization": f"Bearer {api_key}"} if api_key else dict(headers)
+
+    def logging_non_streaming_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        httpx_response: "Response",
+        request_data: Mapping[str, object],
+        logging_obj: "Logging",
+        endpoint: str,
+    ) -> StandardPassThroughResponseObject:
+        return StandardPassThroughResponseObject(response=relayed_body(httpx_response))
