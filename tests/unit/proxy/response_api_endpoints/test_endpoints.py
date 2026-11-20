@@ -1838,6 +1838,7 @@ async def _list_items_through_proxy(
     drop_params: bool = False,
     deployment_params: Mapping[str, object] = EMPTY_MAPPING,
     body: Mapping[str, object] | None = None,
+    router_defaults: Mapping[str, object] = EMPTY_MAPPING,
 ) -> tuple[httpx.Response, tuple[httpx.Request, ...]]:
     import litellm.proxy.proxy_server as ps
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1857,6 +1858,7 @@ async def _list_items_through_proxy(
             }
         ],
         num_retries=0,
+        default_litellm_params=dict(router_defaults),
     )
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -1943,24 +1945,28 @@ async def test_listing_input_items_through_the_proxy_forwards_the_client_list_pa
         ),
     ],
 )
-@pytest.mark.parametrize("deployment_extra_query", [{"limit": 1, "order": "asc"}, "limit=1"])
-async def test_a_deployments_own_params_named_like_list_params_never_reach_the_input_items_listing(
+@pytest.mark.parametrize("configured_extra_query", [{"limit": 1, "order": "asc"}, "limit=1"])
+@pytest.mark.parametrize("set_as_router_default", [False, True])
+async def test_configured_params_named_like_list_params_never_reach_the_input_items_listing(
     monkeypatch: pytest.MonkeyPatch,
     query: tuple[tuple[str, str], ...],
     forwarded: list[tuple[str, str]],
-    deployment_extra_query: object,
+    configured_extra_query: object,
+    set_as_router_default: bool,
 ):
+    configured: Final = {
+        "order": 1,
+        "include": ["reasoning.encrypted_content"],
+        "limit": 50,
+        "after": "item_from_config",
+        "before": "item_from_config",
+        "extra_query": configured_extra_query,
+    }
     result, upstream_requests = await _list_items_through_proxy(
         monkeypatch,
         query,
-        deployment_params={
-            "order": 1,
-            "include": ["reasoning.encrypted_content"],
-            "limit": 50,
-            "after": "item_from_deployment",
-            "before": "item_from_deployment",
-            "extra_query": deployment_extra_query,
-        },
+        deployment_params=EMPTY_MAPPING if set_as_router_default else configured,
+        router_defaults=configured if set_as_router_default else EMPTY_MAPPING,
     )
 
     assert result.status_code == 200, result.text
