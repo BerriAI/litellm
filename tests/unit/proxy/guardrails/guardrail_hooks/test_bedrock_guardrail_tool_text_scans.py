@@ -1,7 +1,7 @@
 """Opt-in Bedrock scans of tool-call arguments and tool descriptions as text."""
 
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from itertools import chain
 from typing import Final, Literal
 
@@ -354,7 +354,7 @@ def test_during_call_mode_supports_neither_tool_text_scan() -> None:
     assert guardrail.supports_scan_tool_descriptions_as_text() is False
 
 
-async def _tool_call_only_stream():
+async def _tool_call_only_stream() -> AsyncIterator[ModelResponseStream]:
     for index, delta in enumerate(
         (
             {
@@ -470,7 +470,7 @@ async def test_generated_legacy_function_call_is_scanned_as_output_only_when_opt
     assert bedrock.scanned("OUTPUT") == expected
 
 
-async def _legacy_function_call_stream():
+async def _legacy_function_call_stream() -> AsyncIterator[ModelResponseStream]:
     for index, delta in enumerate(
         (
             {"role": "assistant", "function_call": {"name": "send_payment", "arguments": ""}},
