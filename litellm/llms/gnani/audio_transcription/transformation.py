@@ -13,7 +13,7 @@ import litellm
 from litellm.constants import GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS, OPENAI_TRANSCRIPTION_PARAMS
 from litellm.exceptions import AuthenticationError, BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -148,11 +148,11 @@ def _with_keywords_as_terms(fields: Mapping[str, object], model: str, drops_unsu
     }
 
 
-def _without_dropped(fields: Mapping[str, object], dropped: object) -> Mapping[str, object]:
-    try:
-        names: Final = frozenset(_STRING_LIST.validate_python(dropped or ()))
-    except ValidationError:
-        return fields
+def _dropped_names(dropped: object) -> frozenset[str]:
+    return frozenset(name for name in as_object_list(dropped) or () if isinstance(name, str))
+
+
+def _without_names(fields: Mapping[str, object], names: frozenset[str]) -> Mapping[str, object]:
     return {key: value for key, value in fields.items() if key not in names}
 
 
@@ -257,11 +257,12 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 message="Gnani transcription requires a non-empty audio file", model=model, llm_provider="gnani"
             )
         drops_unsupported: Final = litellm_params.get("drop_params") is True or litellm.drop_params is True
-        requested: Final = {**(as_str_mapping(optional_params.get("extra_body")) or {}), **optional_params}
-        fields: Final = _with_keywords_as_terms(
-            _with_prompt_as_previous_text(_without_dropped(requested, optional_params.get("additional_drop_params"))),
-            model,
-            drops_unsupported,
+        dropped: Final = _dropped_names(optional_params.get("additional_drop_params"))
+        requested: Final = _without_names(
+            {**(as_str_mapping(optional_params.get("extra_body")) or {}), **optional_params}, dropped
+        )
+        fields: Final = _without_names(
+            _with_keywords_as_terms(_with_prompt_as_previous_text(requested), model, drops_unsupported), dropped
         )
         supported: Final = _V25_FIELDS if _is_v25(model) else _V3_FIELDS
         incompatible: Final = (_V25_FIELDS | _V3_FIELDS) - supported
