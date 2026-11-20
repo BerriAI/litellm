@@ -1470,3 +1470,36 @@ if __name__ == "__main__":
     test_prometheus_label_value_sanitization_none()
     test_prometheus_label_value_sanitization_non_string_types()
     print("\n✅ All prometheus label tests passed!")
+
+
+@pytest.mark.parametrize("excluded", [False, True])
+def test_routed_attempt_counter_keeps_phase_kind_and_result_together(
+    monkeypatch: pytest.MonkeyPatch, excluded: bool
+) -> None:
+    from prometheus_client import REGISTRY
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    metric: Final = "litellm_deployment_attempts_total"
+    monkeypatch.setattr(litellm, "prometheus_exclude_metrics", [metric] if excluded else [])
+    _clear_prometheus_registry()
+    try:
+        logger: Final = PrometheusLogger()
+        logger.record_deployment_attempt("error", phase="primary", attempt_kind="initial")
+        logger.record_deployment_attempt("error", phase="fallback", attempt_kind="initial")
+        logger.record_deployment_attempt("success", phase="fallback", attempt_kind="retry")
+        expected: Final = None if excluded else 1.0
+        assert (
+            REGISTRY.get_sample_value(metric, {"phase": "primary", "attempt_kind": "initial", "result": "error"})
+            == expected
+        )
+        assert (
+            REGISTRY.get_sample_value(metric, {"phase": "fallback", "attempt_kind": "initial", "result": "error"})
+            == expected
+        )
+        assert (
+            REGISTRY.get_sample_value(metric, {"phase": "fallback", "attempt_kind": "retry", "result": "success"})
+            == expected
+        )
+    finally:
+        _clear_prometheus_registry()
