@@ -667,6 +667,7 @@ async def new_user(
             can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
         data_json.pop("password", None)
+        data_json.pop("expires", None)
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
@@ -674,6 +675,7 @@ async def new_user(
 
         response: Final = await generate_key_helper_fn(
             request_type="user",
+            expires=None,
             **data_json,
             llm_router=None,
             actor=actor,

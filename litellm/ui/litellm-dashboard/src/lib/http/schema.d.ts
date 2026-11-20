@@ -9341,6 +9341,7 @@ export interface paths {
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values
          *     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
+         *     - expires: Optional[datetime] - Absolute expiration timestamp, read as UTC when it carries no timezone. An explicitly supplied duration takes precedence
          *     - permissions: Optional[dict] - Key-specific permissions
          *     - send_invite_email: Optional[bool] - Send invite email to user_id
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
@@ -36027,6 +36028,11 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /**
+             * Expires
+             * @description Absolute expiration time for the key. A value without a timezone is interpreted as UTC.
+             */
+            expires?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
@@ -46233,6 +46239,11 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /**
+             * Expires
+             * @description Absolute expiration time for the key. A value without a timezone is interpreted as UTC.
+             */
+            expires?: string | null;
             /** Grace Period */
             grace_period?: string | null;
             /** Guardrails */
@@ -53494,6 +53505,11 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /**
+             * Expires
+             * @description Absolute expiration time for the key. A value without a timezone is interpreted as UTC.
+             */
+            expires?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
