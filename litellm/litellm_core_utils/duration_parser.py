@@ -38,7 +38,7 @@ def _extract_from_regex(duration: str) -> tuple[int, str]:
     return value, unit
 
 
-def get_last_day_of_month(year, month):
+def get_last_day_of_month(year: int, month: int) -> int:
     # Handle December case
     if month == 12:
         return 31
