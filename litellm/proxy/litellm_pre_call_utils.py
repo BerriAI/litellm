@@ -2293,7 +2293,6 @@ class LiteLLMProxyRequestSetup:
             user_api_key_customer_member_alias=(customer.customer_member_alias if customer else None),
             user_api_key_customer_budget_scopes=customer_budget_scopes_metadata(customer),
             user_api_key_customer_hierarchy=(customer.model_dump(mode="json") if customer else None),
-            user_api_key_customer_auth_db_unavailable=user_api_key_dict.customer_auth_db_unavailable,
             **(
                 {
                     "user_api_key_app_id": customer.app_id,

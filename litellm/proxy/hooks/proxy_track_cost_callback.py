@@ -737,8 +737,7 @@ class _ProxyDBLogger(CustomLogger):
         )
         accounting_rows: Final = tuple((cost, dict(row)) for cost, row in spend_rows)
         charged: Final = [
-            user_api_key_dict.customer_auth_db_unavailable
-            or await self._spend_writer().update_database(
+            await self._spend_writer().update_database(
                 token=token,
                 response_cost=row_cost,
                 user_id=user_api_key_dict.user_id,
@@ -842,10 +841,7 @@ class _ProxyDBLogger(CustomLogger):
                 project_id=user_api_key_dict.project_id,
                 committed_spend_scope=_committed_spend_scope(user_api_key_dict),
                 **_customer_counter_options(customer_counters),
-                **_ledger_counter_options(
-                    row_kwargs.get(ACCOUNTING_LEDGER_KWARG),
-                    skip_database=user_api_key_dict.customer_auth_db_unavailable,
-                ),
+                **_ledger_counter_options(row_kwargs.get(ACCOUNTING_LEDGER_KWARG)),
             )
         except Exception:  # noqa: BLE001  # one row's counter failure must not keep the other rows' counters from landing
             verbose_proxy_logger.exception("Failed to raise spend counters for a failure spend row")
@@ -1310,8 +1306,8 @@ class _LedgerCounterOptions(TypedDict):
     windows_from_ledger: ReadOnly[NotRequired[bool]]
 
 
-def _ledger_counter_options(ledger: object, *, skip_database: bool = False) -> _LedgerCounterOptions:
-    return {"windows_from_ledger": True} if ledger is True or skip_database else {}
+def _ledger_counter_options(ledger: object) -> _LedgerCounterOptions:
+    return {"windows_from_ledger": True} if ledger is True else {}
 
 
 class _ChargeSpend(Protocol):
@@ -1515,9 +1511,7 @@ async def _update_database_and_spend_counters_in_batch(
         )
         if accounting is not None:
             accounting.write_started = True
-        metadata: Final = _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs))
-        outage: Final = metadata.get("user_api_key_customer_auth_db_unavailable") is True
-        charged: Final = outage or await writer.update_database(
+        charged: Final = await writer.update_database(
             token=user_api_key,
             response_cost=response_cost,
             user_id=user_id,
@@ -1552,7 +1546,7 @@ async def _update_database_and_spend_counters_in_batch(
 
     try:
         await settle_customer_spend(
-            metadata,
+            _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs)),
             response_cost,
             spend_counter_store,
         )
@@ -1581,9 +1575,7 @@ async def _update_database_and_spend_counters_in_batch(
                     end_user_id=end_user_id,
                 )
             ),
-            **_ledger_counter_options(
-                _BATCH_CALLBACK_FIELDS.validate_python(kwargs).get(ACCOUNTING_LEDGER_KWARG), skip_database=outage
-            ),
+            **_ledger_counter_options(_BATCH_CALLBACK_FIELDS.validate_python(kwargs).get(ACCOUNTING_LEDGER_KWARG)),
             **_customer_counter_options(customer_counters),
         )
     except Exception:

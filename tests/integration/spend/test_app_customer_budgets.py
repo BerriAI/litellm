@@ -319,6 +319,13 @@ def test_known_app_customer_uses_shared_cache_when_its_database_read_fails(
             assert relay.dropped.is_set(), "The second proxy did not encounter the database fault"
             org_only: Final = _chat(secondary, key, model, customer, include_member=False)
             assert org_only.status_code == 200, org_only.text
+            served_id: Final = string_value(JSON_OBJECT.validate_json(served.content)["id"])
+            org_only_id: Final = string_value(JSON_OBJECT.validate_json(org_only.content)["id"])
+            assert not read_rows(
+                'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id IN (%s, %s)',
+                (served_id, org_only_id),
+                database_url=database,
+            )
             refused: Final = _chat(secondary, key, model, customer, asserted_app="other-app")
             assert refused.status_code == 403, refused.text
             unknown: Final = _chat(secondary, key, model, customer, member=customer.other_member, asserted_app=app_id)
@@ -327,18 +334,7 @@ def test_known_app_customer_uses_shared_cache_when_its_database_read_fails(
             relay.disarm()
         recovered: Final = _chat(secondary, key, model, customer, asserted_app=app_id)
         assert recovered.status_code == 200, recovered.text
-        served_id: Final = string_value(JSON_OBJECT.validate_json(served.content)["id"])
         recovered_id: Final = string_value(JSON_OBJECT.validate_json(recovered.content)["id"])
-        rows: Final = eventually(
-            lambda: read_rows(
-                'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id IN (%s, %s)',
-                (served_id, recovered_id),
-                database_url=database,
-            ),
-            lambda results: {"request_id": recovered_id} in results,
-            seconds=70,
-        )
-        assert rows == [{"request_id": recovered_id}]
         assert not read_rows(
             'SELECT 1 FROM "LiteLLM_AppCustomerMemberTable" WHERE app_id = %s AND customer_member_id = %s',
             (app_id, customer.other_member),
@@ -352,6 +348,26 @@ def test_known_app_customer_uses_shared_cache_when_its_database_read_fails(
             assert stale.status_code == 503, stale.text
         finally:
             relay.disarm()
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_id, spend FROM "LiteLLM_SpendLogs" WHERE request_id IN (%s, %s, %s)',
+                (served_id, org_only_id, recovered_id),
+                database_url=database,
+            ),
+            lambda results: len(results) == 3,
+            seconds=70,
+        )
+        assert {string_value(row["request_id"]): _spend(row) for row in rows} == pytest.approx(
+            {served_id: _COST, org_only_id: _COST, recovered_id: _COST}
+        )
+        app_spend: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend FROM "LiteLLM_AppTable" WHERE app_id = %s', (app_id,), database_url=database
+            ),
+            lambda totals: len(totals) == 1 and _spend(totals[0]) == pytest.approx(4 * _COST),
+            seconds=70,
+        )
+        assert _spend(app_spend[0]) == pytest.approx(4 * _COST)
 
 
 def _spend(row: Mapping[str, JsonValue]) -> float:
