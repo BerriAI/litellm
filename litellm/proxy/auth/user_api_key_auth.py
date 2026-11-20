@@ -3312,7 +3312,7 @@ async def _authorize_authenticated_request_checks(
             managed_inference_request(
                 route,
                 request_data,
-                general_settings,
+                settings,
                 user_model,
                 request.path_params.get("model") or request.path_params.get("model_name"),
                 request.query_params.get("model"),
