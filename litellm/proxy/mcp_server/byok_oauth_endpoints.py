@@ -182,6 +182,10 @@ def _auth_code_window_key(user_id: str, issued_at: float) -> str:
     return f"{_AUTH_CODE_USER_WINDOW_PREFIX}{user_id}:{_auth_code_window(issued_at)}"
 
 
+async def _add_to_window_count(shared: "RedisCache", key: str, delta: int) -> float:
+    return await shared.async_increment(key, delta, ttl=_AUTH_CODE_TTL_SECONDS)
+
+
 @with_service_target(_AUTH_CODES_TARGET)
 async def _reserve_auth_code_slot(
     user_id: str, issued_at: float
@@ -193,9 +197,7 @@ async def _reserve_auth_code_slot(
     if shared is None:
         return "ok" if len(_byok_auth_codes) < _AUTH_CODES_MAX_SIZE else "store_full"
     try:
-        issued: Final = await shared.async_increment(
-            _auth_code_window_key(user_id, issued_at), 1, ttl=_AUTH_CODE_TTL_SECONDS
-        )
+        issued: Final = await _add_to_window_count(shared, _auth_code_window_key(user_id, issued_at), 1)
     except Exception as e:  # noqa: BLE001  # any shared-store fault refuses the new code
         verbose_proxy_logger.warning("byok authorize: pending-code counter unavailable: %s", e)
         return "unavailable"
@@ -215,8 +217,8 @@ async def _release_auth_code_slot(user_id: str, issued_at: float) -> None:
         return
     key: Final = _auth_code_window_key(user_id, issued_at)
     try:
-        if await shared.async_increment(key, -1, ttl=_AUTH_CODE_TTL_SECONDS) < 0:
-            await shared.async_increment(key, 1, ttl=_AUTH_CODE_TTL_SECONDS)
+        if await _add_to_window_count(shared, key, -1) < 0:
+            await _add_to_window_count(shared, key, 1)
     except Exception as e:  # noqa: BLE001  # the window expires with its TTL, so a missed release only delays one slot
         verbose_proxy_logger.warning("byok: pending-code slot not released: %s", e)
 
