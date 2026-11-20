@@ -111,12 +111,23 @@ def test_drops_unencodable_format_when_drop_params_is_set():
     assert "output_format" not in params
 
 
-@pytest.mark.parametrize(("param", "value"), [("speed", 2.0), ("instructions", "whisper it")])
+@pytest.mark.parametrize(("param", "value"), [("speed", 2.0), ("speed", 0.5), ("instructions", "whisper it")])
 def test_rejects_openai_only_params_gradium_cannot_honor(param: str, value: object):
     config: Final = GradiumTextToSpeechConfig()
 
-    with pytest.raises(litellm.UnsupportedParamsError, match=f"does not support {param}="):
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"does not support {param}=") as excinfo:
         config.map_openai_params(model="default", optional_params={param: value}, voice="alloy")
+
+    assert "response_format values" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("speed", [1.0, 1])
+def test_accepts_the_default_speed_without_sending_it(speed: float):
+    config: Final = GradiumTextToSpeechConfig()
+
+    _, params = config.map_openai_params(model="default", optional_params={"speed": speed}, voice="alloy")
+
+    assert params == {}
 
 
 def test_drops_unsupported_params_when_the_deployment_sets_drop_params():
@@ -150,7 +161,7 @@ def test_maps_upstream_failures_to_a_gradium_exception():
 def test_requires_an_api_key():
     config: Final = GradiumTextToSpeechConfig()
 
-    with pytest.raises(ValueError, match="Gradium API key is required"):
+    with pytest.raises(litellm.AuthenticationError, match="Gradium API key is required"):
         config.validate_environment(headers={}, model="default", api_key=None)
 
 
@@ -182,7 +193,7 @@ def test_builds_the_rest_tts_url_without_doubling_the_api_segment(api_base: str)
 def test_requires_an_api_base():
     config: Final = GradiumTextToSpeechConfig()
 
-    with pytest.raises(ValueError, match="Gradium API base is required"):
+    with pytest.raises(litellm.APIConnectionError, match="Gradium API base is required"):
         config.get_complete_url(model="default", api_base=None, litellm_params={})
 
 
@@ -191,9 +202,9 @@ def test_ignores_gradium_environment_variables(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("GRADIUM_API_BASE", "https://eu.api.gradium.ai")
     config: Final = GradiumTextToSpeechConfig()
 
-    with pytest.raises(ValueError, match="Gradium API key is required"):
+    with pytest.raises(litellm.AuthenticationError, match="Gradium API key is required"):
         config.validate_environment(headers={}, model="default", api_key=None)
-    with pytest.raises(ValueError, match="Gradium API base is required"):
+    with pytest.raises(litellm.APIConnectionError, match="Gradium API base is required"):
         config.get_complete_url(model="default", api_base=None, litellm_params={})
 
 
@@ -269,6 +280,64 @@ def test_speech_forwards_a_non_default_model_name(gradium_env: None):
         litellm.speech(model="gradium/next-model", input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY)
 
         assert _sent_body(route)["model_name"] == "next-model"
+
+
+def test_speech_forwards_gradium_request_fields_the_caller_sets(gradium_env: None):
+    with respx.mock:
+        route: Final = respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
+
+        litellm.speech(
+            model="gradium/default",
+            input="Bonjour",
+            voice="alloy",
+            api_base=_API_BASE,
+            api_key=_API_KEY,
+            json_config={"padding_bonus": -1.5},
+            drop_params=True,
+            metadata={"team": "voice"},
+            user="caller-1",
+        )
+
+        assert _sent_body(route) == {
+            "text": "Bonjour",
+            "voice_id": "YTpq7expH9539ERJ",
+            "output_format": "wav",
+            "only_audio": True,
+            "json_config": {"padding_bonus": -1.5},
+        }
+
+
+def test_speech_forwards_json_config_sent_in_extra_body(gradium_env: None):
+    with respx.mock:
+        route: Final = respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
+
+        litellm.speech(
+            model="gradium/default",
+            input="Bonjour",
+            voice="alloy",
+            api_base=_API_BASE,
+            api_key=_API_KEY,
+            extra_body={"json_config": '{"padding_bonus": 2.0}', "only_audio": False},
+        )
+
+        assert _sent_body(route)["json_config"] == '{"padding_bonus": 2.0}'
+        assert _sent_body(route)["only_audio"] is True
+
+
+@pytest.mark.parametrize(
+    ("credentials", "error"),
+    [
+        ({"api_base": _API_BASE}, litellm.AuthenticationError),
+        ({"api_key": _API_KEY}, litellm.APIConnectionError),
+    ],
+)
+def test_speech_reports_missing_credentials_without_a_server_traceback(
+    gradium_env: None, credentials: dict[str, str], error: type[Exception]
+):
+    with pytest.raises(error, match="Set `api_") as excinfo:
+        litellm.speech(model="gradium/default", input="Bonjour", voice="alloy", **credentials)
+
+    assert "Traceback" not in str(excinfo.value)
 
 
 @pytest.mark.asyncio
