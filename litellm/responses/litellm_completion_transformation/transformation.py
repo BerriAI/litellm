@@ -192,6 +192,7 @@ from .mcp_calls import (
     holds_mcp_call_items,
     mcp_calls_by_call_id,
     replayed_mcp_call_message,
+    without_mcp_server_tool_calls,
 )
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
@@ -3851,10 +3852,13 @@ class LiteLLMCompletionResponsesConfig:
         # Surface provider-specific fields (generic passthrough from any provider)
         response_hidden_params: Final = get_hidden_params(responses_api_response)
         provider_fields: Final = (
-            response_hidden_params.get("provider_specific_fields") if response_hidden_params is not None else None
+            as_str_mapping(response_hidden_params.get("provider_specific_fields"))
+            if response_hidden_params is not None
+            else None
         )
-        if provider_fields:
-            setattr(responses_api_response, "provider_specific_fields", provider_fields)
+        surfaced_provider_fields: Final = without_mcp_server_tool_calls(provider_fields) if provider_fields else None
+        if surfaced_provider_fields:
+            setattr(responses_api_response, "provider_specific_fields", surfaced_provider_fields)
 
         return responses_api_response
 

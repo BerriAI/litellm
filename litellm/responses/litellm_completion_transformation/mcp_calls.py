@@ -74,6 +74,20 @@ def is_anthropic_mcp_call_id(call_id: str) -> bool:
     return call_id.startswith(ANTHROPIC_MCP_TOOL_USE_ID_PREFIX)
 
 
+def _is_mcp_server_tool_call(call: object) -> bool:
+    return is_anthropic_mcp_call_id(str(message_field(call, "id") or ""))
+
+
+def without_mcp_server_tool_calls(provider_fields: Mapping[str, object]) -> Mapping[str, object]:
+    if "server_tool_calls" not in provider_fields:
+        return provider_fields
+    other_fields: Final = {key: value for key, value in provider_fields.items() if key != "server_tool_calls"}
+    server_tool_calls: Final = [
+        call for call in parts_of(provider_fields["server_tool_calls"]) if not _is_mcp_server_tool_call(call)
+    ]
+    return {**other_fields, "server_tool_calls": server_tool_calls} if server_tool_calls else other_fields
+
+
 def anthropic_mcp_call_id(item_id: str) -> str:
     return item_id.removeprefix(_MCP_CALL_ITEM_ID_PREFIX).removesuffix(_DEFERRED_RESULT_ITEM_ID_SUFFIX)
 
