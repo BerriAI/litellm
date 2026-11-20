@@ -29,7 +29,7 @@ use crate::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
-            transformation::BaseMessagesConfig,
+            transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
     bedrock::{
@@ -65,32 +65,34 @@ pub struct BedrockClaudePlatformMessagesConfig;
 pub const BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG: BedrockClaudePlatformMessagesConfig =
     BedrockClaudePlatformMessagesConfig;
 
-impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
-    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
-        }
-    }
-
-    /// Python's `filter_claude_platform_request_body`: `context_management` by default, or the
-    /// list a deployment names in `claude_platform_unsupported_params`.
-    fn without_rejected_params(
+impl MessagesEndpoint for BedrockClaudePlatformMessagesConfig {
+    fn get_complete_url(
         &self,
-        request: MessagesRequest,
+        api_base: Option<&str>,
+        _model: &str,
         params: &LitellmParams,
-    ) -> Result<MessagesRequest, Error> {
-        if let Some(type_name) = params.claude_platform.ignored_override_type() {
-            litellm_tracing::warn!(
-                "bedrock/claude_platform: ignoring claude_platform_unsupported_params of type {type_name}; expected a list of param names. Using the default unsupported-param set."
-            );
-        }
-        let unsupported: Vec<&str> = match params.claude_platform.unsupported_params() {
-            Some(names) => names.iter().map(String::as_str).collect(),
-            None => DEFAULT_UNSUPPORTED.to_vec(),
+        _stream: bool,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        let base = resolve_non_empty(
+            api_base
+                .filter(|base| !base.is_empty())
+                .or(params.api_base.as_deref()),
+            env,
+            BASE_ENVS,
+        );
+        let base = match base {
+            Some(base) => base,
+            None => format!(
+                "https://{SERVICE}.{}.api.aws",
+                configured_region(params, env)?
+            ),
         };
-        without_params(request, &unsupported)
+        Ok(messages_url(&base))
     }
+}
 
+impl MessagesAuth for BedrockClaudePlatformMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         static NAMES: LazyLock<Box<[&'static str]>> = LazyLock::new(|| {
             [API_KEY_ENV, BEARER_ENV]
@@ -147,42 +149,40 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             },
         })
     }
+}
 
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        params: &LitellmParams,
-        _stream: bool,
-        env: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        let base = resolve_non_empty(
-            api_base
-                .filter(|base| !base.is_empty())
-                .or(params.api_base.as_deref()),
-            env,
-            BASE_ENVS,
-        );
-        let base = match base {
-            Some(base) => base,
-            None => format!(
-                "https://{SERVICE}.{}.api.aws",
-                configured_region(params, env)?
-            ),
-        };
-        Ok(messages_url(&base))
-    }
-
+impl MessagesDialect for BedrockClaudePlatformMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, options)
+    }
+
+    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
+        }
+    }
+
+    /// Python's `filter_claude_platform_request_body`: `context_management` by default, or the
+    /// list a deployment names in `claude_platform_unsupported_params`.
+    fn without_rejected_params(
+        &self,
+        request: MessagesRequest,
+        params: &LitellmParams,
+    ) -> Result<MessagesRequest, Error> {
+        if let Some(type_name) = params.claude_platform.ignored_override_type() {
+            litellm_tracing::warn!(
+                "bedrock/claude_platform: ignoring claude_platform_unsupported_params of type {type_name}; expected a list of param names. Using the default unsupported-param set."
+            );
+        }
+        let unsupported: Vec<&str> = match params.claude_platform.unsupported_params() {
+            Some(names) => names.iter().map(String::as_str).collect(),
+            None => DEFAULT_UNSUPPORTED.to_vec(),
+        };
+        without_params(request, &unsupported)
     }
 
     /// Python's transform sends the model without its route and warns when it drops a
@@ -203,6 +203,10 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         )
     }
 
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        DEFAULT_HEADERS
+    }
+
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_safeguards_beta(headers, request, BetaProvider::Anthropic)
     }
@@ -214,7 +218,9 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             false => format!("{ROUTE}{model}"),
         }
     }
+}
 
+impl MessagesReply for BedrockClaudePlatformMessagesConfig {
     fn retry_after_http_error(
         &self,
         status: u16,

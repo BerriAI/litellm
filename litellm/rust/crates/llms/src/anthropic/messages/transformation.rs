@@ -44,7 +44,8 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         messages::transformation::{
-            BaseMessagesConfig, FederatedEnvironment, Headers, ValidatedEnvironment,
+            FederatedEnvironment, Headers, MessagesAuth, MessagesDialect, MessagesEndpoint,
+            MessagesReply, ValidatedEnvironment,
         },
     },
 };
@@ -53,13 +54,35 @@ pub struct AnthropicMessagesConfig;
 
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
-impl BaseMessagesConfig for AnthropicMessagesConfig {
-    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
-        ToolCustomField::Rewrite {
-            hoist_defer_loading: is_claude_model(model),
-        }
+impl MessagesEndpoint for AnthropicMessagesConfig {
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        _model: &str,
+        _litellm_params: &LitellmParams,
+        _stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        Ok(complete_anthropic_url(api_base, env_lookup))
     }
 
+    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
+        if !is_foundry_url(url) {
+            return headers;
+        }
+        let betas = existing_betas(&headers);
+        if betas.is_empty() {
+            return headers;
+        }
+        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
+        if kept.is_empty() {
+            return without_headers(headers, &[BETA_HEADER]);
+        }
+        with_header(headers, BETA_HEADER, kept.to_string())
+    }
+}
+
+impl MessagesAuth for AnthropicMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         &[
             ANTHROPIC_API_KEY_ENV,
@@ -97,37 +120,9 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     ) -> Result<FederatedEnvironment, Error> {
         Ok(anthropic_environment(headers, api_key, env_lookup))
     }
+}
 
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        _litellm_params: &LitellmParams,
-        _stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(complete_anthropic_url(api_base, env_lookup))
-    }
-
-    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
-        if !is_foundry_url(url) {
-            return headers;
-        }
-        let betas = existing_betas(&headers);
-        if betas.is_empty() {
-            return headers;
-        }
-        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
-        if kept.is_empty() {
-            return without_headers(headers, &[BETA_HEADER]);
-        }
-        with_header(headers, BETA_HEADER, kept.to_string())
-    }
-
+impl MessagesDialect for AnthropicMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
@@ -136,12 +131,22 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         shape_anthropic_messages_request(request, options)
     }
 
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ToolCustomField::Rewrite {
+            hoist_defer_loading: is_claude_model(model),
+        }
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
         transform_messages_request(request, &context.keeping_display_updates())
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        DEFAULT_HEADERS
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
@@ -167,7 +172,9 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         );
         Ok((stripped, headers))
     }
+}
 
+impl MessagesReply for AnthropicMessagesConfig {
     fn retry_after_http_error(
         &self,
         status: u16,

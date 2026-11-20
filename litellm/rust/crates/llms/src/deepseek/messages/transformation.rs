@@ -25,7 +25,7 @@ use crate::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
-            transformation::BaseMessagesConfig,
+            transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
 };
@@ -45,13 +45,20 @@ pub struct DeepSeekMessagesConfig;
 
 pub const DEEPSEEK_MESSAGES_CONFIG: DeepSeekMessagesConfig = DeepSeekMessagesConfig;
 
-impl BaseMessagesConfig for DeepSeekMessagesConfig {
-    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: false,
-        }
+impl MessagesEndpoint for DeepSeekMessagesConfig {
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        _model: &str,
+        _litellm_params: &LitellmParams,
+        _stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        Ok(complete_deepseek_anthropic_url(api_base, env_lookup))
     }
+}
 
+impl MessagesAuth for DeepSeekMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         &[
             DEEPSEEK_API_KEY_ENV,
@@ -91,28 +98,21 @@ impl BaseMessagesConfig for DeepSeekMessagesConfig {
             },
         })
     }
+}
 
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        _litellm_params: &LitellmParams,
-        _stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(complete_deepseek_anthropic_url(api_base, env_lookup))
-    }
-
+impl MessagesDialect for DeepSeekMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, options)
+    }
+
+    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
+        }
     }
 
     fn transform_anthropic_messages_request(
@@ -145,10 +145,16 @@ impl BaseMessagesConfig for DeepSeekMessagesConfig {
         })
     }
 
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        DEFAULT_HEADERS
+    }
+
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
     }
+}
 
+impl MessagesReply for DeepSeekMessagesConfig {
     fn retry_after_http_error(
         &self,
         status: u16,

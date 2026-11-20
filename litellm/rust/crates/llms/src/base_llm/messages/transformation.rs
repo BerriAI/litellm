@@ -11,7 +11,7 @@ use super::{
     tools::ToolCustomField,
 };
 
-pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
+pub use crate::base_llm::auth::{Headers, LoggedIn, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
 
 pub enum FederatedEnvironment {
@@ -23,27 +23,38 @@ pub enum FederatedEnvironment {
     },
 }
 
-pub trait BaseMessagesConfig: Sync {
-    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
-        ToolCustomField::Keep
-    }
-    /// The request without the params the deployment says its endpoint rejects, dropped before
-    /// the transform so no beta is chosen for them.
-    fn without_rejected_params(
+/// Where a Messages provider is addressed: the endpoint a call selects, the URL it goes to and
+/// the header edits that URL needs.
+pub trait MessagesEndpoint {
+    /// The connection params with the endpoint chosen from what is known only once the call is
+    /// authenticated: the login's identity and the model map's `supported_regions`. Most
+    /// providers resolve their endpoint from params and env inside `get_complete_url` instead.
+    fn select_endpoint(
         &self,
-        request: MessagesRequest,
-        _params: &LitellmParams,
-    ) -> Result<MessagesRequest, Error> {
-        Ok(request)
+        litellm_params: LitellmParams,
+        _model: &str,
+        _logged_in: LoggedIn,
+        _supported_regions: &[String],
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> LitellmParams {
+        litellm_params
     }
-    fn clamp_requested_effort(
+    fn get_complete_url(
         &self,
-        request: MessagesRequest,
-        _capabilities: &MessagesModelCapabilities,
-    ) -> Result<MessagesRequest, Error> {
-        Ok(request)
+        api_base: Option<&str>,
+        model: &str,
+        litellm_params: &LitellmParams,
+        stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error>;
+    fn headers_for_url(&self, headers: Headers, _url: &str) -> Headers {
+        headers
     }
+}
 
+/// How a Messages provider authenticates: the secrets it reads and the credential it validates
+/// and names for the call.
+pub trait MessagesAuth {
     fn secret_names(&self) -> &'static [&'static str];
     /// Secrets read only on some paths, as Python's lazy `get_secret_str` calls are: resolved
     /// just before `validate_environment`, and only when this call names them. `python_host` is
@@ -90,26 +101,49 @@ pub trait BaseMessagesConfig: Sync {
         )
         .map(FederatedEnvironment::Validated)
     }
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[("content-type", "application/json")]
-    }
+}
 
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        litellm_params: &LitellmParams,
-        stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
-    fn headers_for_url(&self, headers: Headers, _url: &str) -> Headers {
-        headers
-    }
-
+/// How a Messages provider's body and headers differ from the request the caller sent: every edit
+/// from shaping to the JSON on the wire, and what the call logs.
+pub trait MessagesDialect {
     fn shape_request(
         &self,
         request: MessagesRequest,
         _options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
+    }
+    fn clamp_requested_effort(
+        &self,
+        request: MessagesRequest,
+        _capabilities: &MessagesModelCapabilities,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
+    }
+    /// The requested params the call logs as its model parameters.
+    fn logged_params(
+        &self,
+        params: MessagesOptionalParams,
+        _context: &MessagesTransformContext,
+    ) -> Result<MessagesOptionalParams, Error> {
+        Ok(params)
+    }
+    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
+        ToolCustomField::Keep
+    }
+    fn native_output_fallback(
+        &self,
+        _request: &MessagesRequest,
+        _context: &MessagesTransformContext,
+    ) -> Option<MessagesTransformContext> {
+        None
+    }
+    /// The request without the params the deployment says its endpoint rejects, dropped before
+    /// the transform so no beta is chosen for them.
+    fn without_rejected_params(
+        &self,
+        request: MessagesRequest,
+        _params: &LitellmParams,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
     }
@@ -127,6 +161,9 @@ pub trait BaseMessagesConfig: Sync {
         _drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
+    }
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &[("content-type", "application/json")]
     }
     fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
         headers
@@ -147,7 +184,15 @@ pub trait BaseMessagesConfig: Sync {
     fn wire_body(&self, body: Value) -> Value {
         body
     }
+    /// The model Python's handler logs the call under, once `get_llm_provider` has resolved it.
+    fn logged_model(&self, model: &str) -> String {
+        model.to_string()
+    }
+}
 
+/// How a Messages provider's reply is read: the response transform, the stream decoder, the cost it
+/// reports and which failures retry.
+pub trait MessagesReply {
     fn transform_anthropic_messages_response(
         &self,
         _model: &str,
@@ -171,26 +216,6 @@ pub trait BaseMessagesConfig: Sync {
     fn reported_cost(&self, _response: &MessagesResponse) -> Option<serde_json::Number> {
         None
     }
-
-    /// The requested params the call logs as its model parameters.
-    fn logged_params(
-        &self,
-        params: MessagesOptionalParams,
-        _context: &MessagesTransformContext,
-    ) -> Result<MessagesOptionalParams, Error> {
-        Ok(params)
-    }
-    /// The model Python's handler logs the call under, once `get_llm_provider` has resolved it.
-    fn logged_model(&self, model: &str) -> String {
-        model.to_string()
-    }
-    fn native_output_fallback(
-        &self,
-        _request: &MessagesRequest,
-        _context: &MessagesTransformContext,
-    ) -> Option<MessagesTransformContext> {
-        None
-    }
     fn retries_without_native_output(
         &self,
         _status: u16,
@@ -211,6 +236,18 @@ pub trait BaseMessagesConfig: Sync {
     }
 }
 
+/// A Messages provider config: its endpoint, auth, dialect and reply. Every type that implements
+/// the four parts is one.
+pub trait BaseMessagesConfig:
+    MessagesEndpoint + MessagesAuth + MessagesDialect + MessagesReply + Sync
+{
+}
+
+impl<T: MessagesEndpoint + MessagesAuth + MessagesDialect + MessagesReply + Sync> BaseMessagesConfig
+    for T
+{
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,7 +256,20 @@ mod tests {
 
     struct DefaultsConfig;
 
-    impl BaseMessagesConfig for DefaultsConfig {
+    impl MessagesEndpoint for DefaultsConfig {
+        fn get_complete_url(
+            &self,
+            _api_base: Option<&str>,
+            _model: &str,
+            _litellm_params: &LitellmParams,
+            _stream: bool,
+            _env_lookup: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<String, Error> {
+            Ok(String::new())
+        }
+    }
+
+    impl MessagesAuth for DefaultsConfig {
         fn secret_names(&self) -> &'static [&'static str] {
             &[]
         }
@@ -238,18 +288,11 @@ mod tests {
                 auth: AuthScheme::Forwarded,
             })
         }
-
-        fn get_complete_url(
-            &self,
-            _api_base: Option<&str>,
-            _model: &str,
-            _litellm_params: &LitellmParams,
-            _stream: bool,
-            _env_lookup: &dyn Fn(&str) -> Option<String>,
-        ) -> Result<String, Error> {
-            Ok(String::new())
-        }
     }
+
+    impl MessagesDialect for DefaultsConfig {}
+
+    impl MessagesReply for DefaultsConfig {}
 
     #[test]
     fn default_request_headers_are_the_given_headers() {

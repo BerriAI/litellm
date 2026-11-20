@@ -36,7 +36,7 @@ use crate::{
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
-            transformation::BaseMessagesConfig,
+            transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
 };
@@ -51,13 +51,20 @@ pub struct AzureAiMessagesConfig;
 
 pub const AZURE_AI_MESSAGES_CONFIG: AzureAiMessagesConfig = AzureAiMessagesConfig;
 
-impl BaseMessagesConfig for AzureAiMessagesConfig {
-    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
-        }
+impl MessagesEndpoint for AzureAiMessagesConfig {
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        _model: &str,
+        _litellm_params: &LitellmParams,
+        _stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        complete_azure_anthropic_url(api_base, env_lookup)
     }
+}
 
+impl MessagesAuth for AzureAiMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         &[AZURE_OPENAI_API_KEY_ENV, AZURE_API_KEY_ENV]
     }
@@ -151,22 +158,9 @@ impl BaseMessagesConfig for AzureAiMessagesConfig {
         };
         Ok(ValidatedEnvironment { headers, auth })
     }
+}
 
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        _litellm_params: &LitellmParams,
-        _stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        complete_azure_anthropic_url(api_base, env_lookup)
-    }
-
+impl MessagesDialect for AzureAiMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
@@ -175,12 +169,22 @@ impl BaseMessagesConfig for AzureAiMessagesConfig {
         shape_anthropic_messages_request(request, options)
     }
 
+    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
+        }
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
         transform_messages_request(request, &context.keeping_display_updates())
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        DEFAULT_HEADERS
     }
 
     /// Python's `_update_headers_with_anthropic_beta`, then the handler's
@@ -220,7 +224,9 @@ impl BaseMessagesConfig for AzureAiMessagesConfig {
         ));
         Ok((normalized, headers))
     }
+}
 
+impl MessagesReply for AzureAiMessagesConfig {
     fn retry_after_http_error(
         &self,
         status: u16,
