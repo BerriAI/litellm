@@ -20,13 +20,20 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.constants import REALTIME_SESSION_ENDED_ABNORMALLY_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.constants import (
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_REFUSAL_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.redis.stores.connection import RedisStores
+from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore, UsageCounter
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_core import RouterCore
 from litellm.types.videos.utils import encode_video_id_with_provider
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost, patch_direct_endpoints
-from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment
+from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rust_core
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 MakeCore = Callable[..., RouterCore]
@@ -381,6 +388,58 @@ async def test_a_realtime_session_counts_a_deployment_success_only_when_it_ended
     core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=0)
     await core._arealtime(model="g", litellm_logging_obj=_realtime_session_logging(details))
     assert core.health().store.get_cache("d1:successes", local_only=True) == counted
+
+
+async def test_a_realtime_session_refused_for_a_rejected_key_cools_its_deployment_down(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(model_list=[deployment("g", "d1"), deployment("g", "d2")], num_retries=0)
+    rejected_key: Final = litellm.AuthenticationError(
+        message="Incorrect API key provided", llm_provider="openai", model="gpt-realtime-2.1"
+    )
+    await core._arealtime(
+        model="g",
+        litellm_logging_obj=_realtime_session_logging(
+            {REALTIME_SESSION_FAILURE_LOGGED_KEY: True, REALTIME_SESSION_REFUSAL_KEY: rejected_key}
+        ),
+    )
+    for _ in range(20):
+        await core._arealtime(
+            model="g", litellm_logging_obj=_realtime_session_logging({REALTIME_SESSION_SUCCESS_LOGGED_KEY: True})
+        )
+    refused_deployment: Final = host.calls[0].deployment_id
+    assert refused_deployment in {"d1", "d2"}
+    assert refused_deployment not in {call.deployment_id for call in host.calls[1:]}
+
+
+class _RefusingUsage(RouterUsageStore):
+    async def increment(self, counter: UsageCounter, value: float, ttl: int) -> float | None:
+        raise ConnectionError("the usage store is down")
+
+
+class _RefusingUsageHost(EndpointHost):
+    __slots__ = ()
+
+    def router_usage(self, redis: RedisStores) -> RouterUsage:
+        return _RefusingUsage(redis.router_usage())
+
+
+async def test_a_refused_realtime_session_whose_failure_cannot_be_recorded_still_ends_normally(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    refusing_host: Final = _RefusingUsageHost()
+    patch_direct_endpoints(monkeypatch, refusing_host)
+    core: Final = rust_core(refusing_host, model_list=[deployment("g", "d1", rpm=5)], num_retries=0)
+    rejected_key: Final = litellm.AuthenticationError(
+        message="Incorrect API key provided", llm_provider="openai", model="gpt-realtime-2.1"
+    )
+    await core._arealtime(
+        model="g",
+        litellm_logging_obj=_realtime_session_logging(
+            {REALTIME_SESSION_FAILURE_LOGGED_KEY: True, REALTIME_SESSION_REFUSAL_KEY: rejected_key}
+        ),
+    )
+    assert refusing_host.deployments_called() == ["d1"]
 
 
 async def test_generic_endpoint_with_an_unknown_group_raises_without_calling_the_host(

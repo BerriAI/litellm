@@ -17,6 +17,7 @@ from litellm.constants import (
     REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_REFUSAL_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -4968,6 +4969,33 @@ async def test_upstream_refusal_before_any_frame_logs_a_failure_not_a_success():
     assert session.logging.logged_sessions == ()
 
 
+
+@pytest.mark.asyncio
+async def test_a_session_upstream_refused_for_a_rejected_key_logs_an_authentication_failure_the_router_can_read():
+    rejected_key: Final = {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "invalid_api_key",
+            "message": "Incorrect API key provided: sk-proj-****0000.",
+        },
+    }
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(
+            json.dumps(rejected_key).encode(),
+            ConnectionClosed(Close(3000, "invalid_request_error.invalid_api_key"), None),
+        ),
+    )
+
+    await session.run()
+
+    (failure,) = session.logging.logged_failures
+    assert isinstance(failure, litellm.AuthenticationError)
+    assert failure.status_code == 401
+    assert session.logging.model_call_details[REALTIME_SESSION_REFUSAL_KEY] is failure
+    assert session.logging.logged_sessions == ()
+
 class _RefusingRealtimeConfig(_PassthroughRealtimeConfig):
     def __init__(self, refusal: Exception | None) -> None:
         self._refusal: Final = refusal
@@ -5135,7 +5163,9 @@ async def test_upstream_error_before_any_session_logs_a_failure_not_a_success(cl
 
     await session.run()
 
-    assert session.logging.logged_failures == (upstream_close,)
+    (failure,) = session.logging.logged_failures
+    assert isinstance(failure, litellm.BadRequestError)
+    assert "gpt-realtime-translate-typo" in str(failure)
     assert session.logging.logged_sessions == ()
 
 

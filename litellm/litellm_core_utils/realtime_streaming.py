@@ -23,6 +23,7 @@ from litellm.constants import (
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_REFUSAL_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
@@ -522,6 +523,7 @@ class RealTimeStreaming:
         self.messages: list[OpenAIRealtimeEvents] = []
         self._backend_sent_frames: bool = False
         self._backend_sent_non_error_frames: bool = False
+        self._backend_error_before_session: object = None
         self.input_message: dict = {}
         self.input_messages: list[dict[str, str]] = []
         self.session_tools: list[dict] = []
@@ -1924,8 +1926,7 @@ class RealTimeStreaming:
                     continue
             else:
                 event = self._parse_backend_event(raw_response)
-                if event is None or event.get("type") != "error":
-                    self._backend_sent_non_error_frames = True
+                self._note_backend_event(event)
                 if event is None:
                     await self.websocket.send_text(raw_response)
                     continue
@@ -1957,6 +1958,12 @@ class RealTimeStreaming:
                     continue
                 await self.websocket.send_text(json.dumps(self._session_event_for_client(translated)))
 
+    def _note_backend_event(self, event: Mapping[str, object] | None) -> None:
+        if event is None or event.get("type") != "error":
+            self._backend_sent_non_error_frames = True
+        elif not self._backend_sent_non_error_frames and self._backend_error_before_session is None:
+            self._backend_error_before_session = event.get("error")
+
     async def backend_to_client_send_messages(self) -> BackendClose:
         import websockets
 
@@ -1966,7 +1973,7 @@ class RealTimeStreaming:
             verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
             close: Final = backend_close_from(e)
             self._flush_unbilled_transcription_usage()
-            await self._log_session_end(e if self._backend_refused_session(close) else None)
+            await self._log_session_end(self._upstream_refusal(e) if self._backend_refused_session(close) else None)
             return close
         except asyncio.CancelledError:
             self._flush_unbilled_transcription_usage()
@@ -1985,6 +1992,19 @@ class RealTimeStreaming:
             and not self._holds_session_updates_until_first_content()
         )
 
+    def _upstream_refusal(self, close: Exception) -> Exception:
+        from litellm.responses.streaming_iterator import map_stream_error_to_exception
+
+        if self._backend_error_before_session is None:
+            return close
+        provider: Final = self.logging_obj.model_call_details.get("custom_llm_provider")
+        return map_stream_error_to_exception(
+            self._backend_error_before_session,
+            model=self.model,
+            custom_llm_provider=provider if isinstance(provider, str) else "",
+            logging_obj=self.logging_obj,
+        )
+
     async def _log_session_end(self, transport_refusal: Exception | None) -> None:
         provider_refusal: Final = None if self.provider_config is None else self.provider_config.session_refusal()
         refusal: Final = provider_refusal or transport_refusal
@@ -2000,6 +2020,7 @@ class RealTimeStreaming:
             self.logging_obj.dispatch_failure_handlers(error, traceback.format_exc(), prefer_async_handlers=True)
         )
         self.logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
+        self.logging_obj.model_call_details[REALTIME_SESSION_REFUSAL_KEY] = error
 
     @staticmethod
     def detect_beta_header(websocket: ScopedWebSocket) -> bool:

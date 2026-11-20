@@ -206,7 +206,7 @@ class StreamAttempt:
             },
         }
 
-    def _failure_logged(self, error: BaseException) -> dict[str, object]:  # mutable-ok: litellm's logging kwargs
+    def failure_logged(self, error: BaseException) -> dict[str, object]:  # mutable-ok: litellm's logging kwargs
         return {**logged_call(self.op, self.kwargs), **self.logged(), "exception": provider_error(error)}
 
     def _callbacks(self, *, sync: bool) -> Mapping[str, bool]:
@@ -241,7 +241,7 @@ class StreamAttempt:
         failure log marks the same object before this runs."""
         if self._claim() and "async_failure" not in self.failure_logged_before:
             self.failure_recording = _record_in_background(
-                self.core.report_stream_failure(self._failure_logged(error), self._callbacks(sync=False))
+                self.core.report_stream_failure(self.failure_logged(error), self._callbacks(sync=False))
             )
 
     async def failure_recorded(self) -> None:
@@ -254,7 +254,7 @@ class StreamAttempt:
         """The stream failed before its attempt returned it. ``_dispatch_stream_failure`` logs that in
         a task of its own, so the record reads the error as the router left it by then, with its
         routing note when no real suspension came first. The attempt checked the logging object."""
-        _record_in_background(self.core.report_stream_failure(self._failure_logged(error), self._callbacks(sync=False)))
+        _record_in_background(self.core.report_stream_failure(self.failure_logged(error), self._callbacks(sync=False)))
 
     def report_success_sync(self) -> None:
         """A sync stream ended: a sync call's success callback counts the success alone."""
@@ -264,7 +264,7 @@ class StreamAttempt:
     def report_failure_sync(self, error: BaseException) -> None:
         """A sync stream failed after it opened: counted and cooled down, with no request counted."""
         if self._claim() and "sync_failure" not in self.failure_logged_before:
-            logged: Final = self._failure_logged(error)
+            logged: Final = self.failure_logged(error)
             _record_now(lambda: self.core.report_stream_failure_sync(logged, self._callbacks(sync=True)))
 
 
