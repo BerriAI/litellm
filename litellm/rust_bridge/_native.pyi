@@ -1913,7 +1913,7 @@ class RustModelAccessGroupRepository:
 class RustBudgetRepository:
     def __new__(cls, database: NativeDatabase) -> RustBudgetRepository: ...
     def find_end_user_default_budget(self, budget_id: str) -> Future[str | None]: ...
-    def find_team_member_default_budget(self, budget_id: str) -> Future[str | None]: ...
+    def find_team_member_default_budget(self, budget_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
 
 @final
 class RustEndUserRepository:
@@ -1974,6 +1974,14 @@ class RustTeamRepository:
 class RustTeamMembershipRepository:
     def __new__(cls, database: NativeDatabase) -> RustTeamMembershipRepository: ...
     def find_with_budget(self, user_id: str, team_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+    def add_member(
+        self,
+        user_id: str,
+        team_id: str,
+        *,
+        budget_id: str | None = None,
+        own_budget: tuple[Sequence[str], str | None, float | None, str, str] | None = None,
+    ) -> Future[tuple[Literal["added", "already_member", "team_missing", "user_missing"], str | None, str | None]]: ...
 
 @final
 class RustOrganizationRepository:
