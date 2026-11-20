@@ -42256,6 +42256,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.ministral-3-3b-instruct": {
@@ -42278,6 +42279,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.ministral-3-8b-instruct": {
@@ -42300,6 +42302,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.mistral-7b-instruct-v0:2": {
@@ -42357,6 +42360,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.mistral-small-2402-v1:0": {
