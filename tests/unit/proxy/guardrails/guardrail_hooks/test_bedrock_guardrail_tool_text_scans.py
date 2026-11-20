@@ -2,7 +2,8 @@
 
 import json
 from collections.abc import Mapping
-from typing import Final
+from itertools import chain
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -92,9 +93,8 @@ class _Bedrock:
         return httpx.Response(200, json=self.answer)
 
     def scanned(self, source: str) -> str:
-        return "\n".join(
-            item["text"]["text"] for body in self.requests if body["source"] == source for item in body["content"]
-        )
+        bodies: Final = (body for body in self.requests if body["source"] == source)
+        return "\n".join(item["text"]["text"] for item in chain.from_iterable(body["content"] for body in bodies))
 
 
 def _guardrail(scan_tool_calls: bool, bedrock: _Bedrock) -> BedrockGuardrail:
@@ -110,7 +110,7 @@ def _guardrail(scan_tool_calls: bool, bedrock: _Bedrock) -> BedrockGuardrail:
     return guardrail
 
 
-def _copy(request: dict) -> dict:
+def _copy(request: dict[str, object]) -> dict[str, object]:
     import copy
 
     return copy.deepcopy(request)
@@ -118,7 +118,10 @@ def _copy(request: dict) -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("handler", "request_body"), REQUESTS)
-async def test_history_tool_call_arguments_are_scanned_as_input_when_opted_in(handler, request_body):
+async def test_history_tool_call_arguments_are_scanned_as_input_when_opted_in(
+    handler: OpenAIChatCompletionsHandler | AnthropicMessagesHandler | OpenAIResponsesHandler,
+    request_body: dict[str, object],
+) -> None:
     bedrock: Final = _Bedrock()
     guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock)
     await handler().process_input_messages(data=_copy(request_body), guardrail_to_apply=guardrail)
@@ -130,7 +133,10 @@ async def test_history_tool_call_arguments_are_scanned_as_input_when_opted_in(ha
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("handler", "request_body"), REQUESTS)
-async def test_history_tool_call_arguments_are_not_scanned_by_default(handler, request_body):
+async def test_history_tool_call_arguments_are_not_scanned_by_default(
+    handler: OpenAIChatCompletionsHandler | AnthropicMessagesHandler | OpenAIResponsesHandler,
+    request_body: dict[str, object],
+) -> None:
     bedrock: Final = _Bedrock()
     guardrail: Final = _guardrail(scan_tool_calls=False, bedrock=bedrock)
     await handler().process_input_messages(data=_copy(request_body), guardrail_to_apply=guardrail)
@@ -140,7 +146,10 @@ async def test_history_tool_call_arguments_are_not_scanned_by_default(handler, r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("handler", "request_body"), REQUESTS)
-async def test_blocked_history_tool_call_blocks_the_request(handler, request_body):
+async def test_blocked_history_tool_call_blocks_the_request(
+    handler: OpenAIChatCompletionsHandler | AnthropicMessagesHandler | OpenAIResponsesHandler,
+    request_body: dict[str, object],
+) -> None:
     guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=_Bedrock(blocked=SECRET))
 
     with pytest.raises(HTTPException) as blocked:
@@ -151,7 +160,9 @@ async def test_blocked_history_tool_call_blocks_the_request(handler, request_bod
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("input_type", ["request", "response"])
-async def test_masked_tool_call_scan_blocks_instead_of_forwarding_the_arguments(input_type):
+async def test_masked_tool_call_scan_blocks_instead_of_forwarding_the_arguments(
+    input_type: Literal["request", "response"],
+) -> None:
     guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=_Bedrock(answer=MASK))
 
     with pytest.raises(HTTPException) as blocked:
@@ -177,7 +188,7 @@ async def test_masked_tool_call_scan_blocks_instead_of_forwarding_the_arguments(
         '{"note": {"card": "4111 1111 1111 1111"}, "note": "ok"}',
     ],
 )
-async def test_value_shadowed_by_a_repeated_key_is_scanned(arguments):
+async def test_value_shadowed_by_a_repeated_key_is_scanned(arguments: str) -> None:
     bedrock: Final = _Bedrock()
     guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock)
 
@@ -219,7 +230,7 @@ def _tool_call_only_response() -> ModelResponse:
 
 
 @pytest.mark.asyncio
-async def test_generated_tool_call_arguments_are_scanned_as_output_when_opted_in():
+async def test_generated_tool_call_arguments_are_scanned_as_output_when_opted_in() -> None:
     bedrock: Final = _Bedrock()
     guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock)
     await OpenAIChatCompletionsHandler().process_output_response(
@@ -233,7 +244,7 @@ async def test_generated_tool_call_arguments_are_scanned_as_output_when_opted_in
 
 
 @pytest.mark.asyncio
-async def test_generated_tool_call_arguments_are_not_scanned_by_default():
+async def test_generated_tool_call_arguments_are_not_scanned_by_default() -> None:
     bedrock: Final = _Bedrock()
     guardrail: Final = _guardrail(scan_tool_calls=False, bedrock=bedrock)
     await OpenAIChatCompletionsHandler().process_output_response(
@@ -244,7 +255,7 @@ async def test_generated_tool_call_arguments_are_not_scanned_by_default():
 
 
 @pytest.mark.asyncio
-async def test_scan_only_tool_results_keeps_tool_calls_out_of_the_scan():
+async def test_scan_only_tool_results_keeps_tool_calls_out_of_the_scan() -> None:
     bedrock: Final = _Bedrock()
     guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock)
     guardrail.scan_only_tool_results = True
@@ -256,7 +267,7 @@ async def test_scan_only_tool_results_keeps_tool_calls_out_of_the_scan():
 
 
 @pytest.mark.asyncio
-async def test_tool_descriptions_are_scanned_as_input_when_opted_in():
+async def test_tool_descriptions_are_scanned_as_input_when_opted_in() -> None:
     bedrock: Final = _Bedrock()
     guardrail: Final = _guardrail(scan_tool_calls=False, bedrock=bedrock)
     guardrail.scan_tool_descriptions_as_text = True
@@ -276,7 +287,7 @@ async def test_tool_descriptions_are_scanned_as_input_when_opted_in():
     assert bedrock.scanned("INPUT") == poisoned
 
 
-def test_latest_role_only_mode_supports_neither_tool_text_scan():
+def test_latest_role_only_mode_supports_neither_tool_text_scan() -> None:
     guardrail: Final = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
@@ -304,25 +315,25 @@ async def _scanned_history_tool_call(arguments: object) -> str:
 
 
 @pytest.mark.asyncio
-async def test_json_escaped_tool_call_arguments_are_scanned_decoded():
+async def test_json_escaped_tool_call_arguments_are_scanned_decoded() -> None:
     escaped: Final = "".join(f"\\u{ord(char):04x}" for char in SECRET)
 
     assert SECRET in await _scanned_history_tool_call(f'{{"note": "{escaped}"}}')
 
 
 @pytest.mark.asyncio
-async def test_non_ascii_tool_call_arguments_are_scanned_unescaped():
+async def test_non_ascii_tool_call_arguments_are_scanned_unescaped() -> None:
     assert "número de tarjeta" in await _scanned_history_tool_call({"note": "número de tarjeta"})
 
 
 @pytest.mark.asyncio
-async def test_tool_call_text_that_json_still_escapes_is_scanned_raw():
+async def test_tool_call_text_that_json_still_escapes_is_scanned_raw() -> None:
     assert 'say "4111"\n1111' in await _scanned_history_tool_call('{"note": "say \\"4111\\"\\n1111"}')
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("depth", [200, 100_000])
-async def test_tool_call_arguments_nested_too_deep_to_scan_are_blocked(depth):
+async def test_tool_call_arguments_nested_too_deep_to_scan_are_blocked(depth: int) -> None:
     with pytest.raises(HTTPException) as blocked:
         await _scanned_history_tool_call("[" * depth + f'"{SECRET}"' + "]" * depth)
 
@@ -330,11 +341,11 @@ async def test_tool_call_arguments_nested_too_deep_to_scan_are_blocked(depth):
 
 
 @pytest.mark.asyncio
-async def test_tool_call_arguments_that_are_not_json_are_scanned_as_written():
+async def test_tool_call_arguments_that_are_not_json_are_scanned_as_written() -> None:
     assert SECRET in await _scanned_history_tool_call(f'{{"note": "{SECRET}')
 
 
-def test_during_call_mode_supports_neither_tool_text_scan():
+def test_during_call_mode_supports_neither_tool_text_scan() -> None:
     guardrail: Final = BedrockGuardrail(
         guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT", event_hook=["pre_call", "during_call"]
     )
@@ -382,19 +393,19 @@ async def _scanned_chat_completions_stream(scan_tool_calls: bool) -> str:
 
 
 @pytest.mark.asyncio
-async def test_streamed_chat_completions_tool_call_arguments_are_scanned_as_output_when_opted_in():
+async def test_streamed_chat_completions_tool_call_arguments_are_scanned_as_output_when_opted_in() -> None:
     scanned: Final = await _scanned_chat_completions_stream(scan_tool_calls=True)
     assert SECRET in scanned
     assert "send_payment" in scanned
 
 
 @pytest.mark.asyncio
-async def test_streamed_chat_completions_tool_call_arguments_are_not_scanned_by_default():
+async def test_streamed_chat_completions_tool_call_arguments_are_not_scanned_by_default() -> None:
     assert SECRET not in await _scanned_chat_completions_stream(scan_tool_calls=False)
 
 
 @pytest.mark.asyncio
-async def test_custom_tool_call_input_is_scanned():
+async def test_custom_tool_call_input_is_scanned() -> None:
     bedrock: Final = _Bedrock()
     guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock)
     await guardrail.apply_guardrail(
@@ -415,7 +426,9 @@ LEGACY_FUNCTION_CALL: Final = {"name": "send_payment", "arguments": ARGUMENTS}
 @pytest.mark.parametrize(
     ("scan_tool_calls", "expected"), [(True, f'send_payment\n{{"note": "{SECRET}"}}'), (False, "")]
 )
-async def test_legacy_function_call_in_history_is_scanned_as_input_only_when_opted_in(scan_tool_calls, expected):
+async def test_legacy_function_call_in_history_is_scanned_as_input_only_when_opted_in(
+    scan_tool_calls: bool, expected: str
+) -> None:
     bedrock: Final = _Bedrock()
     request: Final = {
         "model": "gpt-4o",
@@ -433,7 +446,9 @@ async def test_legacy_function_call_in_history_is_scanned_as_input_only_when_opt
 @pytest.mark.parametrize(
     ("scan_tool_calls", "expected"), [(True, f'send_payment\n{{"note": "{SECRET}"}}'), (False, "")]
 )
-async def test_generated_legacy_function_call_is_scanned_as_output_only_when_opted_in(scan_tool_calls, expected):
+async def test_generated_legacy_function_call_is_scanned_as_output_only_when_opted_in(
+    scan_tool_calls: bool, expected: str
+) -> None:
     bedrock: Final = _Bedrock()
     response: Final = ModelResponse(
         model="gpt-4o",
@@ -471,7 +486,7 @@ async def _legacy_function_call_stream():
 
 
 @pytest.mark.asyncio
-async def test_streamed_legacy_function_call_is_scanned_as_output():
+async def test_streamed_legacy_function_call_is_scanned_as_output() -> None:
     bedrock: Final = _Bedrock()
     async for _ in _guardrail(scan_tool_calls=True, bedrock=bedrock).async_post_call_streaming_iterator_hook(
         user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
