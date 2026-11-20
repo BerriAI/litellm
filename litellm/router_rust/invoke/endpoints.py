@@ -869,7 +869,10 @@ def _deployment_params(
     plan: Plan, deployment: Mapping[str, object]
 ) -> dict[str, object]:  # mutable-ok: the attempt's own copy of the deployment params
     params: Final = as_dict(deployment.get("litellm_params"))
-    return as_dict(store_search_params(params)) if plan.host_op in _VECTOR_STORE_SEARCH_OPS else params
+    data = as_dict(store_search_params(params)) if plan.host_op in _VECTOR_STORE_SEARCH_OPS else params
+    if isinstance(data.get("cache"), bool):
+        data.pop("cache", None)
+    return data
 
 
 def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], request: Mapping[str, object]) -> None:
@@ -878,6 +881,163 @@ def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], reque
     from litellm.decisions.call import validate_router_connection
 
     validate_router_connection(str(data.get("model")), _generic_provider(data), request)
+
+
+def _normalize_cache_bool(val: object) -> bool | None:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        normalized = val.strip().lower()
+        if normalized in ("false", "0", "no", "off"):
+            return False
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+    return None
+
+
+def _normalize_cache_ttl(val: object) -> int | float | None:
+    if isinstance(val, (int, float)):
+        return val
+    if isinstance(val, str):
+        try:
+            return float(val) if "." in val else int(val)
+        except ValueError:
+            return None
+    return None
+
+
+def deployment_has_explicit_cache_policy(deployment: Mapping[str, object]) -> bool:
+    """Whether a deployment declares an explicit cache enablement, restriction, or TTL."""
+    model_info: Final = as_dict(deployment.get("model_info"))
+    litellm_params: Final = as_dict(deployment.get("litellm_params"))
+    return (
+        model_info.get("response_cache") is not None
+        or litellm_params.get("response_cache") is not None
+        or model_info.get("cache") is not None
+        or litellm_params.get("cache") is not None
+        or model_info.get("cache_ttl") is not None
+        or litellm_params.get("cache_ttl") is not None
+    )
+
+
+def _resolve_deployment_cache_policy(
+    deployment: Mapping[str, object],
+    global_caching: bool,
+    kwargs: dict[str, object],
+    default_litellm_params: Mapping[str, object] | None = None,
+) -> bool:
+    """Apply model-level response-cache policy (response_cache, cache_ttl) to kwargs.
+
+    Returns the resolved caching boolean (model override > global default).
+    If response_cache is explicitly False, forces caching=False, kwargs["caching"]=False,
+    and sets cache={"no-cache": True, "no-store": True} so client requests cannot bypass it.
+    """
+    model_info: Final = as_dict(deployment.get("model_info"))
+    litellm_params: Final = as_dict(deployment.get("litellm_params"))
+
+    if kwargs.get("cache") is False:
+        kwargs["caching"] = False
+
+    # Seed kwargs["cache"] by merging default_litellm_params, deployment-level cache
+    # (namespace, etc.), and request cache options so namespaces are preserved when adding TTL
+    merged_cache: dict[str, object] = {}
+    if default_litellm_params:
+        default_cache: Final = as_dict(default_litellm_params.get("cache"))
+        if default_cache:
+            merged_cache.update(default_cache)
+
+    deployment_cache_params: Final = as_dict(litellm_params.get("cache"))
+    if deployment_cache_params:
+        merged_cache.update(deployment_cache_params)
+
+    deployment_cache_info: Final = as_dict(model_info.get("cache"))
+    if deployment_cache_info:
+        merged_cache.update(deployment_cache_info)
+
+    existing_request_cache: Final = as_dict(kwargs.get("cache"))
+    if existing_request_cache:
+        merged_cache.update(existing_request_cache)
+
+    if (
+        merged_cache
+        or isinstance(litellm_params.get("cache"), bool)
+        or isinstance(model_info.get("cache"), bool)
+        or isinstance(kwargs.get("cache"), bool)
+    ):
+        kwargs["cache"] = merged_cache
+
+    raw_response_cache: object = model_info.get("response_cache")
+    if raw_response_cache is None:
+        raw_response_cache = litellm_params.get("response_cache")
+
+    deployment_fine_grained: Final[dict[str, object]] = {
+        **deployment_cache_params,
+        **deployment_cache_info,
+    }
+
+    if raw_response_cache is None:
+        info_cache: object = model_info.get("cache")
+        params_cache: object = litellm_params.get("cache")
+        if isinstance(info_cache, bool):
+            raw_response_cache = info_cache
+        elif isinstance(params_cache, bool):
+            raw_response_cache = params_cache
+        elif "enabled" in deployment_fine_grained:
+            raw_response_cache = deployment_fine_grained["enabled"]
+        elif deployment_fine_grained.get("no-cache") is True and deployment_fine_grained.get("no-store") is True:
+            raw_response_cache = False
+    elif isinstance(raw_response_cache, Mapping):
+        cache_mapping = as_dict(raw_response_cache)
+        deployment_fine_grained.update(cache_mapping)
+        raw_response_cache = cache_mapping.get("enabled")
+
+    response_cache: bool | None = _normalize_cache_bool(raw_response_cache)
+
+    raw_cache_ttl: object = model_info.get("cache_ttl")
+    if raw_cache_ttl is None:
+        raw_cache_ttl = litellm_params.get("cache_ttl")
+    if raw_cache_ttl is None:
+        raw_cache_ttl = deployment_fine_grained.get("ttl")
+    cache_ttl: int | float | None = _normalize_cache_ttl(raw_cache_ttl)
+
+    if cache_ttl is not None and cache_ttl <= 0:
+        response_cache = False
+
+    caching: bool = global_caching
+    if response_cache is False or kwargs.get("caching") is False:
+        caching = False
+    elif response_cache is True:
+        caching = True
+
+    if not caching:
+        kwargs["caching"] = False
+        cache_dict: Final = as_dict(kwargs.get("cache"))
+        cache_dict["no-cache"] = True
+        cache_dict["no-store"] = True
+        kwargs["cache"] = cache_dict
+    else:
+        kwargs["caching"] = True
+
+    # Enforce deployment-level fine-grained restrictions regardless of whether
+    # response_cache was explicitly supplied.
+    fine_grained_cache: Final = as_dict(kwargs.get("cache"))
+    if deployment_fine_grained.get("no-cache") is True:
+        fine_grained_cache["no-cache"] = True
+    if deployment_fine_grained.get("no-store") is True:
+        fine_grained_cache["no-store"] = True
+
+    request_has_ttl = "ttl" in existing_request_cache or "s-maxage" in existing_request_cache
+    if cache_ttl is not None and cache_ttl > 0:
+        if not request_has_ttl:
+            fine_grained_cache["ttl"] = cache_ttl
+
+    if fine_grained_cache or isinstance(kwargs.get("cache"), dict):
+        kwargs["cache"] = fine_grained_cache
+
+    if isinstance(kwargs.get("cache"), bool):
+        kwargs["cache"] = {}
+
+    return caching
 
 
 def attempt_call(
@@ -898,7 +1058,12 @@ def attempt_call(
     data: Final = _deployment_params(plan, deployment)
     model_name: Final = str(data.get("model"))
     _validate_decisions_connection(plan, data, request)
-    caching: Final = shaping.cache_responses
+    caching: Final = _resolve_deployment_cache_policy(
+        deployment,
+        shaping.cache_responses,
+        kwargs,
+        default_litellm_params=shaping.default_litellm_params,
+    )
     if fallback_model_group is not None:
         field: Final = plan.prepare_field or "metadata"
         kwargs[field] = {**as_dict(kwargs.get(field)), "model_group": fallback_model_group}
@@ -949,6 +1114,7 @@ def attempt_call(
                 **data,
                 **named,
                 "voice": data.get("voice") if voice is None else voice,
+                "caching": caching,
                 "client": model_client(core, plan, deployment, kwargs),
                 **kwargs,
             }
@@ -969,7 +1135,7 @@ def attempt_call(
             }
             return AttemptCall(plan.host_op, final, kwargs, str(data.get("model")), group)
         case "generic":
-            return _generic_attempt(core, plan, kwargs, deployment, data, requested, group)
+            return _generic_attempt(core, plan, kwargs, deployment, data, requested, group, caching=caching)
         case "generic_sync":
             update_kwargs_with_deployment(
                 shaping,
@@ -1011,6 +1177,7 @@ def _generic_attempt(
     data: dict[str, object],  # mutable-ok: the attempt's copy of the deployment params
     requested: str,
     group: str,
+    caching: bool | None = None,
 ) -> AttemptCall:
     """`_ageneric_api_call_with_fallbacks_helper` for one deployment."""
     from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
@@ -1045,7 +1212,7 @@ def _generic_attempt(
     provider: Final = _generic_provider(data)
     final: Final = {
         **without_retrieve_stream_defaults(data, kwargs),
-        "caching": core.shaping.cache_responses,
+        "caching": core.shaping.cache_responses if caching is None else caching,
         **kwargs,
         "model": model_name,
         **_session_with_model(kwargs.get("session"), model_name),
@@ -1520,7 +1687,27 @@ class RustEndpoints:
     @staticmethod
     def prepare_host(config: "RouterConfig", host: "PythonHost") -> None:
         """`cache_responses` sets the process cache, unless one is set already (the proxy's)."""
-        if not config.get("cache_responses") or host.global_cache() is not None:
+        if host.global_cache() is not None:
+            return
+
+        has_per_model_cache = False
+        raw_model_list = config.get("model_list")
+        if isinstance(raw_model_list, Sequence):
+            for model_entry in raw_model_list:
+                if isinstance(model_entry, Mapping):
+                    info = as_dict(model_entry.get("model_info"))
+                    params = as_dict(model_entry.get("litellm_params"))
+                    if info.get("response_cache") is True or params.get("response_cache") is True:
+                        has_per_model_cache = True
+                        break
+                    if as_dict(info.get("cache")).get("enabled") is True:
+                        has_per_model_cache = True
+                        break
+                    if as_dict(params.get("cache")).get("enabled") is True:
+                        has_per_model_cache = True
+                        break
+
+        if not (config.get("cache_responses") or has_per_model_cache):
             return
         from litellm.caching.caching import Cache
 
@@ -2224,7 +2411,13 @@ class RustEndpoints:
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
             kwargs["model_id"] = pinned
-        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": self._cache_responses, **kwargs})
+        caching: Final = _resolve_deployment_cache_policy(
+            deployment,
+            self._cache_responses,
+            kwargs,
+            default_litellm_params=self._core.resolved.default_litellm_params,
+        )
+        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": caching, **kwargs})
 
     async def aadapter_completion(
         self,
@@ -2571,10 +2764,12 @@ __all__ = [
     "Plan",
     "RustEndpoints",
     "Shaping",
+    "_resolve_deployment_cache_policy",
     "arm_compaction_state",
     "attempt_call",
     "clean_realtime_session_deployment",
     "compacted_attempt",
+    "deployment_has_explicit_cache_policy",
     "endpoint_names",
     "failover_fields",
     "generic_plan",
