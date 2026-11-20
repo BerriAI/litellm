@@ -18,6 +18,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from openai.types.responses import ResponseOutputMessage
 
+import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -37,6 +40,7 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+from litellm.utils import ModelResponseListIterator
 
 CHAT_COMPLETION_ID = "chatcmpl-77d33d09-effa-4cd2-9c0d-c742d4358256"
 RESPONSE_ID_EVENT_TYPES = frozenset(
@@ -61,9 +65,17 @@ def _chunk(content: str, finish_reason: str | None = None) -> ModelResponseStrea
 
 
 class _FakeStreamWrapper:
-    def __init__(self, chunks):
+    def __init__(self, chunks, records_chunks: bool = True):
         self._chunks = list(chunks)
+        self._records_chunks: Final = records_chunks
+        self.chunks: list[ModelResponseStream] = []
         self.logging_obj = MagicMock()
+
+    def _next_chunk(self) -> ModelResponseStream:
+        chunk: Final = self._chunks.pop(0)
+        if self._records_chunks:
+            self.chunks.append(chunk)
+        return chunk
 
     def __iter__(self):
         return self
@@ -71,7 +83,7 @@ class _FakeStreamWrapper:
     def __next__(self):
         if not self._chunks:
             raise StopIteration
-        return self._chunks.pop(0)
+        return self._next_chunk()
 
     def __aiter__(self):
         return self
@@ -79,7 +91,7 @@ class _FakeStreamWrapper:
     async def __anext__(self):
         if not self._chunks:
             raise StopAsyncIteration
-        return self._chunks.pop(0)
+        return self._next_chunk()
 
 
 def _build_iterator(chunks) -> LiteLLMCompletionStreamingIterator:
@@ -1566,3 +1578,79 @@ def test_bridged_events_answer_dict_reads_of_their_number():
     assert [event["sequence_number"] for event in events] == positions
     assert [event.get("sequence_number") for event in events] == positions
     assert all("sequence_number" in event for event in events)
+
+
+def _anthropic_stream_cut_after_message_start(message_start_usage: Usage) -> CustomStreamWrapper:
+    logging_obj: Final = Logging(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="cut-anthropic-stream",
+        function_id="test",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="claude-haiku-4-5", custom_llm_provider="anthropic"
+    )
+    message_start: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID, created=1748575031, model="claude-haiku-4-5", choices=[], usage=message_start_usage
+    )
+    return CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[message_start, _chunk("It is"), _chunk(" foggy"), _chunk(" and cool", finish_reason="stop")]
+        ),
+        model="claude-haiku-4-5",
+        logging_obj=logging_obj,
+        custom_llm_provider="anthropic",
+        stream_options={"include_usage": True},
+    )
+
+
+def test_a_cut_stream_bills_the_input_and_cache_tokens_the_provider_reported_before_the_cut() -> None:
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=_anthropic_stream_cut_after_message_start(
+            Usage(
+                prompt_tokens=4321,
+                completion_tokens=1,
+                total_tokens=4322,
+                cache_read_input_tokens=4000,
+                cache_creation_input_tokens=300,
+            )
+        ),
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+    )
+    first_delta: Final = next(event for event in iterator if isinstance(event, OutputTextDeltaEvent))
+
+    incomplete: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete is not None
+    usage: Final = incomplete.response.usage
+    assert usage is not None and usage.input_tokens_details is not None
+    assert usage.input_tokens == 4321
+    assert (usage.input_tokens_details.cached_tokens, usage.input_tokens_details.cache_write_tokens) == (4000, 300)
+    assert usage.output_tokens == litellm.token_counter(model="claude-haiku-4-5", text=first_delta.delta)
+
+
+def test_a_cut_stream_bills_the_relayed_text_when_the_wrapper_kept_no_chunks_of_its_own() -> None:
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(  # pyright: ignore[reportArgumentType]  # the fake stands in for CustomStreamWrapper, as in _build_iterator
+            [_chunk("Hello"), _chunk(" world", finish_reason="stop")], records_chunks=False
+        ),
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+    )
+    first_delta: Final = next(event for event in iterator if isinstance(event, OutputTextDeltaEvent))
+
+    incomplete: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete is not None and incomplete.response.usage is not None
+    assert incomplete.response.usage.input_tokens > 0
+    assert incomplete.response.usage.output_tokens == litellm.token_counter(
+        model="claude-haiku-4-5", text=first_delta.delta
+    )
