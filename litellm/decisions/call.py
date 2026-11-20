@@ -246,8 +246,12 @@ def _ir_request(
             assert_never(request)
 
 
+def _caller_drops_params(kwargs: Mapping[str, object]) -> bool:
+    return normalize_drop_params(kwargs.get("drop_params")) is True
+
+
 def _drops_params(kwargs: Mapping[str, object]) -> bool:
-    return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
+    return litellm.drop_params is True or _caller_drops_params(kwargs)
 
 
 def _request_safety_identifier(
@@ -521,7 +525,7 @@ def prepare_call(
         )
 
     caller_ir_request: Final = _without_malformed_images(
-        _ir_request(request, request_safety_identifier, _drops_params(kwargs)), _drops_params(kwargs)
+        _ir_request(request, request_safety_identifier, _caller_drops_params(kwargs)), _drops_params(kwargs)
     )
     if isinstance(caller_ir_request, _MalformedImages):
         raise litellm.BadRequestError(

@@ -574,7 +574,7 @@ async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unch
     ids=("decisions", "systemone"),
 )
 @pytest.mark.parametrize("scope", ("call", "global", "off"))
-async def test_litellm_proxy_calls_ask_the_proxy_to_drop_what_its_deployment_cannot_take(
+async def test_litellm_proxy_calls_pass_on_only_the_callers_own_drop_params(
     api: str,
     request_kwargs: dict[str, object],
     proxy_response: dict[str, object],
@@ -596,7 +596,7 @@ async def test_litellm_proxy_calls_ask_the_proxy_to_drop_what_its_deployment_can
 
     sent: Final = json.loads(route.calls.last.request.content)
     assert sent["safety_identifier"] == "end-user-1"
-    assert sent.get("drop_params") is (True if scope != "off" else None)
+    assert sent.get("drop_params") is (True if scope == "call" else None)
 
 
 @pytest.mark.asyncio
