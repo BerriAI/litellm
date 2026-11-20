@@ -4809,22 +4809,16 @@ async def test_session_closed_after_gemini_barge_in_still_bills_the_interrupted_
         provider_config=GeminiRealtimeConfig(),
         model="gemini-2.5-flash-native-audio",
     )
-    logged_snapshots: Final[list[tuple]] = []
-    original_log_messages: Final = streaming.log_messages
-
-    async def _snapshot_then_log() -> None:
-        logged_snapshots.append(tuple(streaming.messages))
-        await original_log_messages()
-
-    streaming.log_messages = _snapshot_then_log
 
     await streaming.backend_to_client_send_messages()
 
     forwarded: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
     created_id: Final = next(event["response"]["id"] for event in forwarded if event["type"] == "response.created")
     assert [event["type"] for event in forwarded if event["type"] == "response.done"] == [], forwarded
+    logging_obj.dispatch_success_handlers.assert_called_once()
+    logged_messages: Final = logging_obj.dispatch_success_handlers.call_args.args[0]
     logged_done: Final = [
-        message for message in logged_snapshots[0] if isinstance(message, dict) and message.get("type") == "response.done"
+        message for message in logged_messages if isinstance(message, dict) and message.get("type") == "response.done"
     ]
     assert [
         (done["response"]["id"], done["response"]["status"], done["response"]["usage"]["total_tokens"])
