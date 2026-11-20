@@ -4029,3 +4029,43 @@ async def test_a_during_call_hook_reads_bridged_commentary_without_touching_the_
     assert guardrail.seen == ("weather in paris?", "checking parisit rains")
     assert guardrail.watched_during_hook == ("weather in paris?", "it rains")
     assert data["messages"] == original
+
+
+class _RequestFieldGuardrail(CustomGuardrail):
+    """A guardrail whose own pre-call hook drops a request field and adds one, without touching messages."""
+
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="request-fields")
+        self.seen: tuple[object, ...] = ()
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: object,
+        data: dict,  # mutable-ok: overrides the hook, which rewrites the request it receives
+        call_type: str,
+    ) -> object:
+        self.seen = _contents(data)
+        del data["tools"]  # rebind-ok: the hook under test rewrites the request it receives, as vendor hooks do
+        data["guardrail_note"] = "tools removed"  # rebind-ok: same in-place hook contract
+        return None
+
+
+@pytest.mark.asyncio
+async def test_request_field_changes_from_a_pre_call_hook_survive_the_bridged_commentary_view() -> None:
+    guardrail: Final = _RequestFieldGuardrail()
+    data: Final = {**_bridged_turns(), "tools": [{"type": "function", "function": {"name": "get_weather"}}]}
+    original_messages: Final = data["messages"]
+    original: Final = copy.deepcopy(original_messages)
+
+    result: Final = await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="completion"
+    )
+
+    assert result is None
+    assert "tools" not in data
+    assert data["guardrail_note"] == "tools removed"
+    assert guardrail.seen == ("weather in paris?", "checking parisit rains")
+    assert data["messages"] is original_messages
+    assert data["messages"] == original
+    assert _sent_upstream(data).count("checking") == 1
