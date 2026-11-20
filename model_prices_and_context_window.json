@@ -16458,17 +16458,19 @@
         "output_cost_per_token": 2.5e-06,
         "source": "https://api.bineric.com/v1/models",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
-    "bineric/gemini-2.5-pro": {
-        "input_cost_per_token": 1.25e-06,
+    "bineric/gemini-3.1-flash-lite": {
+        "input_cost_per_token": 2.75e-07,
         "litellm_provider": "bineric",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
+        "output_cost_per_token": 1.65e-06,
         "source": "https://api.bineric.com/v1/models",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "bineric/gemini-3.1-pro": {
@@ -16480,15 +16482,51 @@
         "output_cost_per_token": 1.2e-05,
         "source": "https://api.bineric.com/v1/models",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
-    "bineric/gemini-3.5-flash-lite": {
-        "input_cost_per_token": 3e-07,
+    "bineric/gemini-3.5-flash": {
+        "input_cost_per_token": 1.65e-06,
         "litellm_provider": "bineric",
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 9.9e-06,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "bineric/gemini-3.5-flash-lite": {
+        "input_cost_per_token": 3.3e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-06,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "bineric/gemini-4-carbon": {
+        "input_cost_per_token": 4.4e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gemini-4-neon": {
+        "input_cost_per_token": 3.3e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.65e-05,
         "source": "https://api.bineric.com/v1/models",
         "supports_function_calling": true,
         "supports_vision": true
