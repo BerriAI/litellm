@@ -11,12 +11,19 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+    ensure_response_additional_headers,
+)
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.anthropic.messages.adapters.streaming_iterator import (
     AnthropicSSEStream,
     AnthropicStreamWrapper,
 )
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.utils import Delta, StreamingChoices
 
 
@@ -88,6 +95,24 @@ def test_sse_stream_exposes_chunks_messages_and_model():
     assert stream.messages == [{"role": "user", "content": "hi"}]
     chunks: Final = stream.chunks
     assert isinstance(chunks, list) and len(chunks) == 2
+
+
+@pytest.mark.parametrize("provider_request_id", [None, "azure-stream-request-id"])
+def test_sse_stream_preserves_provider_headers_before_iteration(provider_request_id: str | None) -> None:
+    upstream: Final = _AsyncStream([])
+    provider_headers: Final = (
+        {"llm_provider-apim-request-id": provider_request_id} if provider_request_id is not None else {}
+    )
+    set_hidden_params(upstream, {"additional_headers": provider_headers})
+    stream: Final = AnthropicSSEStream(AnthropicStreamWrapper(completion_stream=upstream, model="test-model"))
+
+    add_fallback_headers_to_response(stream, attempted_fallbacks=1)
+    headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=UserAPIKeyAuth(), **ensure_response_additional_headers(stream)
+    )
+
+    assert headers.get("llm_provider-apim-request-id") == provider_request_id
+    assert headers["x-litellm-attempted-fallbacks"] == "1"
 
 
 @pytest.mark.asyncio
