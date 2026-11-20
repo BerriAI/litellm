@@ -101,7 +101,8 @@ if TYPE_CHECKING:
         LiteLLM_EndUserTableInclude,
         LiteLLM_EndUserTableOrderByInput,
     )
-    from prometheus_client import Counter, Gauge
+    from prometheus_client import Counter as PrometheusCounter
+    from prometheus_client import Gauge
     from prometheus_client.metrics import MetricWrapperBase
 
     from litellm.proxy.utils import PrismaClient
@@ -689,7 +690,7 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_proxy_total_requests_metric"),
             )
 
-            self.litellm_proxy_chat_request_outcomes_total: Counter | _LabeledMetric | NoOpMetric = (
+            self.litellm_proxy_chat_request_outcomes_total: PrometheusCounter | _LabeledMetric | NoOpMetric = (
                 self._counter_factory(  # pyright: ignore[reportUnknownMemberType]  # the shared factory is untyped
                     name="litellm_proxy_chat_request_outcomes_total",
                     documentation="Final outcomes of client requests to the Chat Completions proxy endpoints",
