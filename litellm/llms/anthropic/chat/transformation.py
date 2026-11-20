@@ -269,8 +269,13 @@ def _fields_behind(messages: Sequence[object], error: Exception) -> Iterable[tup
             return ()
 
 
-def extra_body_without_guarded_keys(extra_body: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS})
+def admitted_extra_body(extra_body: Mapping[str, object], request: Mapping[str, object]) -> Mapping[str, object]:
+    unguarded: Final = {key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS}
+    match unguarded.get("max_tokens"), request.get("max_tokens"):
+        case (int() as requested_cap, int() as admitted_cap) if requested_cap > admitted_cap:
+            return MappingProxyType({**unguarded, "max_tokens": admitted_cap})
+        case _:
+            return MappingProxyType(unguarded)
 
 
 def _request_extra_body(extra_body: object) -> Mapping[str, object]:
@@ -2798,7 +2803,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             **request_params,
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
-        data: Final = {**request_body, **extra_body_without_guarded_keys(extra_body)}
+        data: Final = {**request_body, **admitted_extra_body(extra_body, request_body)}
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
 
@@ -2811,7 +2816,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, object]:
-        return extra_body_without_guarded_keys(extra_body)
+        return admitted_extra_body(extra_body, request)
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data.

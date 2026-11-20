@@ -2466,6 +2466,7 @@ def test_bedrock_invoke_claude_extra_body_keeps_the_conversation_and_gates_fallb
                 "system": "unchecked",
                 "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
                 "stop_sequences": ["5"],
+                "max_tokens": 4096,
             },
         )
     finally:
@@ -2475,4 +2476,5 @@ def test_bedrock_invoke_claude_extra_body_keeps_the_conversation_and_gates_fallb
     assert request_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
     assert {"model", "system", "tools"}.isdisjoint(request_body)
     assert request_body["stop_sequences"] == ["5"]
+    assert request_body["max_tokens"] == 16
     assert request_body.get("fallbacks") == ([{"model": "claude-opus-5-5"}] if fallbacks_kept else None)

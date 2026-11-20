@@ -181,7 +181,6 @@ def test_anthropic_completion_sends_extra_body_fields_top_level_without_replacin
                 "system": "unchecked",
                 "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
                 "stream": True,
-                "max_tokens": 4096,
             },
         )
     finally:
@@ -191,9 +190,42 @@ def test_anthropic_completion_sends_extra_body_fields_top_level_without_replacin
     assert request_body == {
         "model": "claude-sonnet-5-5",
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
-        "max_tokens": 4096,
+        "max_tokens": 16,
         "fallbacks": [{"model": "claude-opus-5-5"}],
     }, request_body
+
+
+@pytest.mark.parametrize(
+    ("max_tokens", "extra_body_max_tokens", "sent_max_tokens"), [(16, 4096, 16), (16, 5, 5), (None, 5, 5)]
+)
+def test_anthropic_completion_lets_extra_body_lower_max_tokens_but_never_raise_it(
+    max_tokens: int | None, extra_body_max_tokens: int, sent_max_tokens: int, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_max_tokens",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_key="test-key",
+        max_tokens=max_tokens,
+        extra_body={"max_tokens": extra_body_max_tokens},
+    )
+
+    assert json.loads(route.calls.last.request.content)["max_tokens"] == sent_max_tokens
 
 
 def test_anthropic_completion_rejects_a_non_object_extra_body_before_calling_anthropic() -> None:
