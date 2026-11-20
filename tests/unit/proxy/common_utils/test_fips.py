@@ -371,19 +371,19 @@ def test_the_password_login_warning_names_the_url_but_not_the_password(environ: 
 class _Records(logging.Handler):
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
-        self.messages: list[str] = []
+        self.messages: tuple[str, ...] = ()
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
+        self.messages = (*self.messages, record.getMessage())
 
 
 @pytest.fixture
-def proxy_warnings() -> Iterator[list[str]]:
+def proxy_warnings() -> Iterator[_Records]:
     records: Final = _Records()
     level: Final = verbose_proxy_logger.level
     verbose_proxy_logger.setLevel(logging.WARNING)
     verbose_proxy_logger.addHandler(records)
-    yield records.messages
+    yield records
     verbose_proxy_logger.removeHandler(records)
     verbose_proxy_logger.setLevel(level)
 
@@ -391,11 +391,11 @@ def proxy_warnings() -> Iterator[list[str]]:
 @pytest.mark.usefixtures("fips_openssl_on_both_sides")
 @pytest.mark.parametrize("fips_mode, warned", [(True, True), (False, False)], ids=["fips-mode-on", "fips-mode-off"])
 def test_only_fips_mode_warns_about_a_database_password_login(
-    monkeypatch: pytest.MonkeyPatch, proxy_warnings: list[str], fips_mode: bool, warned: bool
+    monkeypatch: pytest.MonkeyPatch, proxy_warnings: _Records, fips_mode: bool, warned: bool
 ) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", _HEX_SALT_KEY)
     monkeypatch.setenv("DATABASE_URL", _PASSWORD_DATABASE_URL)
     monkeypatch.delenv("IAM_TOKEN_DB_AUTH", raising=False)
     monkeypatch.delenv("AZURE_POSTGRESQL_AUTH", raising=False)
     enforce_fips_mode({"fips_mode": fips_mode})
-    assert any("logs in to Postgres with a password" in message for message in proxy_warnings) is warned
+    assert any("logs in to Postgres with a password" in message for message in proxy_warnings.messages) is warned
