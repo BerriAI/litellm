@@ -2073,6 +2073,76 @@ async def test_gemini_image_generation_stream_cut_off_before_final_image_sends_l
     ]
 
 
+@pytest.mark.parametrize("native_finish_reason", ["IMAGE_SAFETY", "IMAGE_RECITATION", "NO_IMAGE"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_blocked_before_final_image_sends_no_thought_image(
+    respx_mock: respx.MockRouter,
+    native_finish_reason: str,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(
+            *(
+                {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+            ),
+            {
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": ""}]},
+                        "finishReason": native_finish_reason,
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": GEMINI_TRUNCATED_USAGE,
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in response]
+
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["content_filter"]
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == []
+
+
+@pytest.mark.parametrize("native_finish_reason", ["IMAGE_RECITATION", "NO_IMAGE"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_blocked_before_final_image_returns_no_thought_image(
+    respx_mock: respx.MockRouter,
+    native_finish_reason: str,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS},
+                        "finishReason": native_finish_reason,
+                    }
+                ],
+                "usageMetadata": GEMINI_TRUNCATED_USAGE,
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        api_key="test-api-key",
+    )
+
+    assert response.choices[0].finish_reason == "content_filter"
+    assert not getattr(response.choices[0].message, "images", None)
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_gemini_thinking(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
