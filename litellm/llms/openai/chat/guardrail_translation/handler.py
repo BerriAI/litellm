@@ -165,7 +165,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             *tool_calls_to_check,
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
             *(
-                _legacy_function_calls(messages)
+                _legacy_function_calls(cast("Iterable[object]", messages))  # cast-ok: request messages arrive untyped
                 if guardrail_to_apply.scan_tool_calls_as_text is True and not scan_only_tool_results
                 else ()
             ),
@@ -1564,14 +1564,17 @@ def _choice_server_tool_calls(
     return tuple(call for (index, _), call in calls_by_id.items() if index == choice_index)
 
 
+def _function_call_of(message: object) -> object:
+    if isinstance(message, Mapping):
+        return cast("Mapping[str, object]", message).get("function_call")  # cast-ok: a message mapping has str keys
+    return getattr(message, "function_call", None)
+
+
 def _legacy_function_calls(
     messages: Iterable[object],
 ) -> tuple[dict[str, object], ...]:  # mutable-ok: the dict shape guardrail tool_calls inputs take
     """The deprecated `function_call` of each message, shaped as a tool call. Scanned only, never written back."""
-    calls: Final = (
-        message.get("function_call") if isinstance(message, Mapping) else getattr(message, "function_call", None)
-        for message in messages
-    )
+    calls: Final = (_function_call_of(message) for message in messages)
     return tuple({"type": "function", "function": call} for call in calls if call)
 
 
