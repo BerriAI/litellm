@@ -716,6 +716,55 @@ def test_config_list_exposes_config_reload_interval(client, auth_as, mock_prisma
     assert entry["field_default_value"] == 30
 
 
+@pytest.mark.parametrize(
+    ("sent", "enabled"),
+    ((True, True), (False, False), ("true", True), ("yes", True), (1, True), ("off", False)),
+)
+def test_config_list_exposes_and_saves_wildcard_routes_toggle(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[object]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    sent: object,
+    enabled: bool,
+) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import ConfigList, LitellmUserRoles
+
+    table: Final = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _seed_settings_store(monkeypatch, {})
+    monkeypatch.setattr(ps, "general_settings", ps.proxy_config.settings)
+    entries: Final = TypeAdapter(list[ConfigList])
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        before: Final = client.get("/config/list", params={"config_type": "general_settings"})
+        assert before.status_code == 200, before.text
+        toggle: Final = next(
+            entry for entry in entries.validate_json(before.content) if entry.field_name == "return_wildcard_routes"
+        )
+        assert toggle.field_type == "Boolean"
+        assert toggle.field_value is None
+        assert toggle.editable is True
+
+        saved: Final = client.post(
+            "/config/field/update",
+            json={"field_name": "return_wildcard_routes", "field_value": sent, "config_type": "general_settings"},
+        )
+        assert saved.status_code == 200, saved.text
+        persisted: Final = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+        assert persisted["return_wildcard_routes"] is enabled
+
+        after: Final = client.get("/config/list", params={"config_type": "general_settings"})
+        assert after.status_code == 200, after.text
+        updated: Final = next(
+            entry for entry in entries.validate_json(after.content) if entry.field_name == "return_wildcard_routes"
+        )
+        assert updated.field_value is enabled
+
+
 def test_config_field_update_accepts_config_reload_interval(client, auth_as, mock_prisma, monkeypatch):
     """POST /config/field/update accepts proxy_config_reload_interval_seconds and persists
     it to the DB general_settings row for all pods to pick up."""
@@ -1521,6 +1570,58 @@ def test_get_config_callbacks_accepts_scalar_and_null_yaml_callbacks(client, aut
     assert [(cb["name"], cb["type"], cb.get("read_only", False)) for cb in response.json()["callbacks"]] == [
         ("langfuse", "success", False),
         ("langsmith", "success", True),
+    ]
+
+
+@pytest.mark.parametrize(
+    "config_owned_list, expected_sources",
+    [
+        ("success_callback", ("config", None, None)),
+        ("failure_callback", (None, "config", None)),
+        ("callbacks", (None, None, "config")),
+    ],
+)
+def test_get_config_callbacks_marks_rows_from_lists_the_config_file_sets(
+    client, auth_as, mock_prisma, monkeypatch, config_owned_list, expected_sources
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {
+                "success_callback": ["langfuse"],
+                "failure_callback": ["langfuse"],
+                "callbacks": ["generic_api"],
+            },
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    fake_proxy_config.litellm_settings.owned_by_config = frozenset({config_owned_list}).__contains__
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+
+    assert [(cb["name"], cb["type"], cb.get("source")) for cb in response.json()["callbacks"]] == [
+        ("langfuse", "success", expected_sources[0]),
+        ("langfuse", "failure", expected_sources[1]),
+        ("generic_api", "success_and_failure", expected_sources[2]),
     ]
 
 

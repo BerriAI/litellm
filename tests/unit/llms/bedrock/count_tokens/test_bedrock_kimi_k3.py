@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import logging
@@ -18,6 +19,9 @@ import tiktoken
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
+    HUGGING_FACE_SOURCE,
+    KIMI_K3_RANKS_FILE,
+    KIMI_K3_REVISION,
     KimiK3Encodings,
     KimiK3TokenizerSource,
     kimi_k3_anthropic_tokens,
@@ -409,6 +413,68 @@ def test_anthropic_request_counts_like_the_same_openai_request(pair_encoding: ti
     assert anthropic == openai
 
 
+_FORCED_TOOL_CHOICE: Final = (
+    '<|open|>message role="system" type="tool-choice"<|sep|>The system is invoked with `tool_choice=required`.\n'
+    "You MUST call tools in the next message.<|close|>message<|sep|><|end_of_msg|>"
+)
+_WEATHER_QUESTION: Final = [{"role": "user", "content": "Weather in Paris?"}]
+_ANTHROPIC_WEATHER: Final = {
+    "name": "get_weather",
+    "description": "Get the weather in °C",
+    "input_schema": _WEATHER["function"]["parameters"],
+}
+
+
+# Bedrock billed us.moonshotai.kimi-k3 and kimi-k3.1 206 input tokens for an any or named tool choice and 170 for an
+# auto or unset one on 2026-11-12, and the template above renders this message for tool_choice=required only
+@pytest.mark.parametrize(
+    ("tools", "tool_choice", "added"),
+    [
+        pytest.param([_WEATHER], "required", _FORCED_TOOL_CHOICE, id="required"),
+        pytest.param(
+            [_WEATHER], {"type": "function", "function": {"name": "get_weather"}}, _FORCED_TOOL_CHOICE, id="named"
+        ),
+        pytest.param([_WEATHER], "auto", "", id="auto"),
+        pytest.param([_WEATHER], "none", "", id="none_dropped_by_bedrock"),
+        pytest.param(None, "required", "", id="no_tools"),
+    ],
+)
+def test_tool_choice_adds_the_template_message_bedrock_bills_only_for_a_forced_tool(
+    pair_encoding: tiktoken.Encoding,
+    tools: list[dict[str, object]] | None,
+    tool_choice: str | dict[str, object],
+    added: str,
+):
+    unset: Final = kimi_k3_tokens(pair_encoding, MODEL, _WEATHER_QUESTION, tools)
+
+    assert unset is not None
+    assert kimi_k3_tokens(pair_encoding, MODEL, _WEATHER_QUESTION, tools, tool_choice) == unset + _template_count(
+        pair_encoding, added
+    )
+
+
+@pytest.mark.parametrize(
+    ("anthropic_choice", "openai_choice"),
+    [
+        pytest.param({"type": "any"}, "required", id="any"),
+        pytest.param({"type": "tool", "name": "get_weather"}, "required", id="tool"),
+        pytest.param({"type": "auto"}, None, id="auto"),
+        pytest.param({"type": "none"}, None, id="none"),
+    ],
+)
+def test_anthropic_tool_choice_counts_like_the_openai_tool_choice_it_translates_to(
+    pair_encoding: tiktoken.Encoding, anthropic_choice: dict[str, object], openai_choice: str | None
+):
+    anthropic: Final = kimi_k3_anthropic_tokens(
+        pair_encoding,
+        MODEL,
+        {"messages": _WEATHER_QUESTION, "tools": [_ANTHROPIC_WEATHER], "tool_choice": anthropic_choice},
+    )
+
+    assert anthropic is not None
+    assert anthropic == kimi_k3_tokens(pair_encoding, MODEL, _WEATHER_QUESTION, [_WEATHER], openai_choice)
+
+
 @pytest.mark.parametrize("failure", ["checksum", "missing_file"])
 def test_tokenizer_that_fails_its_checksum_or_cannot_be_read_is_not_loaded(
     byte_source: KimiK3TokenizerSource, tmp_path: Path, caplog: pytest.LogCaptureFixture, failure: str
@@ -522,3 +588,40 @@ async def test_tokenizer_load_still_running_after_the_wait_is_logged(
 
     assert loaded is None
     assert any("Kimi K3 tokenizer still loading" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("offline_mode", "disable_download", "asks_hub"),
+    [("true", None, False), ("false", True, False), ("false", None, True)],
+)
+def test_offline_mode_and_disabled_downloads_never_ask_hugging_face_for_the_tokenizer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_mode: str, disable_download: bool | None, asks_hub: bool
+):
+    import huggingface_hub.constants
+    import huggingface_hub.utils._detect_agent
+
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path / "hub"))
+    monkeypatch.setattr(huggingface_hub.constants, "AGENT_HARNESSES_PATH", str(tmp_path / "agent_harnesses.json"))
+    monkeypatch.setattr(huggingface_hub.utils._detect_agent, "_registry", None)
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", offline_mode)
+    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", disable_download)
+    with respx.mock(assert_all_called=False) as router:
+        hub: Final = router.route(host="huggingface.co").mock(return_value=httpx.Response(503))
+        with contextlib.suppress(Exception):
+            HUGGING_FACE_SOURCE.ranks_path()
+    assert hub.called is asks_hub
+
+
+def test_offline_mode_reads_the_tokenizer_from_the_hugging_face_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    import huggingface_hub.constants
+
+    cached: Final = tmp_path / "models--moonshotai--Kimi-K3" / "snapshots" / KIMI_K3_REVISION / KIMI_K3_RANKS_FILE
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"cached ranks")
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path))
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+    with respx.mock(assert_all_called=False) as router:
+        hub: Final = router.route(host="huggingface.co").mock(return_value=httpx.Response(503))
+        path: Final = HUGGING_FACE_SOURCE.ranks_path()
+    assert Path(path).read_bytes() == b"cached ranks"
+    assert not hub.called

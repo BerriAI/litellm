@@ -2,13 +2,13 @@
 OpenAI Evals API configuration and transformations
 """
 
-from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.evals.transformation import (
     BaseEvalsAPIConfig,
     LiteLLMLoggingObj,
@@ -32,9 +32,11 @@ from litellm.types.llms.openai_evals import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
+_DECODED_JSON: Final = TypeAdapter(object)
 
-def _parsed_response_json(raw_response: httpx.Response) -> Mapping[str, object]:
-    return raw_response.json()
+
+def _parsed_response_json(raw_response: httpx.Response) -> object:
+    return _DECODED_JSON.validate_python(raw_response.json())
 
 
 class OpenAIEvalsConfig(BaseEvalsAPIConfig):
@@ -67,8 +69,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
 
         if eval_id:
             encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
-            return f"{api_base}/v1/evals/{encoded_eval_id}"
-        return f"{api_base}/v1/{endpoint}"
+            return join_api_base(api_base, f"v1/evals/{encoded_eval_id}")
+        return join_api_base(api_base, f"v1/{endpoint}")
 
     def transform_create_eval_request(
         self,
@@ -226,7 +228,9 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict, dict]:
         """Transform cancel eval request for OpenAI"""
-        url: Final = f"{self.get_complete_url(api_base=api_base, endpoint='evals', eval_id=eval_id)}/cancel"
+        url: Final = join_api_base(
+            self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id), "cancel"
+        )
 
         # Empty body for cancel request
         request_body: Final[dict[str, object]] = {}
@@ -260,7 +264,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
             api_base = litellm_params.api_base
 
         encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
-        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs"
+        url: Final = join_api_base(api_base, f"v1/evals/{encoded_eval_id}/runs")
 
         # Build request body
         request_body: Final = {k: v for k, v in create_request.items() if v is not None}
@@ -293,7 +297,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
             api_base = litellm_params.api_base
 
         encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
-        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs"
+        url: Final = join_api_base(api_base, f"v1/evals/{encoded_eval_id}/runs")
 
         # Build query parameters
         query_params: Final[dict[str, object]] = {}
@@ -335,7 +339,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         """Transform get run request for OpenAI"""
         encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
         encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
-        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}"
+        url: Final = join_api_base(api_base, f"v1/evals/{encoded_eval_id}/runs/{encoded_run_id}")
 
         verbose_logger.debug("Get run request - URL: %s", url)
 
@@ -363,7 +367,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         """Transform cancel run request for OpenAI"""
         encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
         encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
-        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}/cancel"
+        url: Final = join_api_base(api_base, f"v1/evals/{encoded_eval_id}/runs/{encoded_run_id}/cancel")
 
         # Empty body for cancel request
         request_body: Final[dict[str, object]] = {}
@@ -394,7 +398,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         """Transform delete run request for OpenAI"""
         encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
         encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
-        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}"
+        url: Final = join_api_base(api_base, f"v1/evals/{encoded_eval_id}/runs/{encoded_run_id}")
 
         # Empty body for delete request
         request_body: Final[dict[str, object]] = {}

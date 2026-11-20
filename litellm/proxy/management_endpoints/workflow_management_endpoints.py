@@ -57,8 +57,8 @@ def _read_scope_caller(user_api_key_dict: UserAPIKeyAuth) -> UserAPIKeyAuth | No
 
 
 def _caller_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
-    """Return the hashed key token that identifies this caller, or None for master key."""
-    return user_api_key_dict.token
+    """Return the hashed key token when it identifies the caller's own scope."""
+    return None if user_api_key_dict.impersonated_by is not None else user_api_key_dict.token
 
 
 # Status transitions driven by event_type
@@ -147,6 +147,34 @@ class _MessageCreateData(TypedDict, total=False):
     session_id: str
 
 
+class _EventTable(Protocol):
+    async def create(self, *, data: _EventCreateData) -> object: ...
+
+
+class _RunTable(Protocol):
+    async def update(self, *, where: Mapping[str, str], data: Mapping[str, str]) -> object: ...
+
+
+class _WorkflowTx(Protocol):
+    @property
+    def litellm_workflowevent(self) -> _EventTable: ...
+
+    @property
+    def litellm_workflowrun(self) -> _RunTable: ...
+
+
+async def _append_event_in_tx(
+    tx: _WorkflowTx, run_id: str, event_data: _EventCreateData, new_status: str | None
+) -> object:
+    event: Final = await tx.litellm_workflowevent.create(data=event_data)
+    if new_status:
+        await tx.litellm_workflowrun.update(
+            where={"run_id": run_id},
+            data={"status": new_status},
+        )
+    return event
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -209,10 +237,13 @@ async def create_workflow_run(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
+    caller: Final = _caller_key(user_api_key_dict)
+    if caller is None:
+        raise HTTPException(status_code=403, detail="Impersonated callers cannot create workflow runs.")
     try:
         create_data: Final[_RunCreateData] = {
             "workflow_type": data.workflow_type,
-            "created_by": _caller_key(user_api_key_dict),
+            "created_by": caller,
         }
         if data.input is not None:
             create_data["input"] = _json(data.input)
@@ -255,8 +286,9 @@ async def list_workflow_runs(
     # Non-admin callers are scoped to their own key.
     if not user_api_key_has_admin_view(user_api_key_dict):
         caller: Final = _caller_key(user_api_key_dict)
-        if caller:
-            where["created_by"] = caller
+        if caller is None:
+            return {"runs": (), "count": 0}
+        where["created_by"] = caller
 
     try:
         runs: Final[Sequence[object]] = await WorkflowRunRepository(prisma_client).table.find_many(
@@ -387,12 +419,7 @@ async def append_workflow_event(
                 event_data["data"] = _json(data.data)
 
             async with prisma_client.db.tx() as tx:
-                event: object = await tx.litellm_workflowevent.create(data=event_data)
-                if new_status:
-                    await tx.litellm_workflowrun.update(
-                        where={"run_id": run_id},
-                        data={"status": new_status},
-                    )
+                event: object = await _append_event_in_tx(tx, run_id, event_data, new_status)
 
             return event
 

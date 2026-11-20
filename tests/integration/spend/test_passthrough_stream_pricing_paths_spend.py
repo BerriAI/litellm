@@ -11,8 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, eventually, gateway_from_environment
-from integration._support.database import read_rows
+from integration._support.client import Gateway, eventually, gateway_from_environment, held
 from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
@@ -51,6 +50,7 @@ _GEMINI_USAGE: Final = {
 _DEPLOYMENT_LOCATIONS: Final = MappingProxyType({"audit-vertex-global": "global", "audit-vertex-us": "us"})
 _GEMINI_ACTIONS: Final = ("generateContent", "streamGenerateContent?alt=sse")
 _CONFIGURED_GATEWAY_PATH: Final = "/google-egress"
+_SPEND_HOLD_SECONDS: Final = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,9 +158,40 @@ def _openai_reply(request: Request) -> Reply:
     return Reply(chunks=(*encoded, b"data: [DONE]\n\n"), content_type="text/event-stream")
 
 
+def _finished_background_response(request: Request) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "id": urlsplit(request.target).path.rsplit("/", 1)[-1],
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "background": True,
+                "model": _OPENAI_MODEL,
+                "output": [
+                    {
+                        "id": f"msg_{uuid.uuid4().hex}",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "scripted", "annotations": []}],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": _PROMPT_TOKENS,
+                    "output_tokens": _COMPLETION_TOKENS,
+                    "total_tokens": _PROMPT_TOKENS + _COMPLETION_TOKENS,
+                },
+            }
+        ).encode()
+    )
+
+
 def _upstream(request: Request) -> Reply:
     if request.target.startswith("/v1/chat/completions"):
         return _openai_reply(request)
+    if request.target.startswith("/v1/responses/"):
+        return _finished_background_response(request)
     if "/publishers/anthropic/models/" in request.target:
         assert f"/v1/projects/{_PROJECT}/locations/" in request.target, request.target
         return _claude_reply(request)
@@ -289,9 +320,9 @@ def gateway_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
         yield _Rig(proxy, upstream)
 
 
-def _spend_row(key: str) -> dict[str, JsonValue]:
+def _spend_row(gateway: Gateway, key: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
-        lambda: read_rows(
+        lambda: gateway.rows(
             'SELECT spend, custom_llm_provider FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
             (sha256(key.encode()).hexdigest(),),
         ),
@@ -301,14 +332,23 @@ def _spend_row(key: str) -> dict[str, JsonValue]:
     return rows[0]
 
 
-def _spend_for_key(key: str) -> float:
-    spend: Final = _spend_row(key)["spend"]
+def _key_spend(gateway: Gateway, key: str) -> float:
+    rows: Final = gateway.rows(
+        'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (sha256(key.encode()).hexdigest(),)
+    )
+    spend: Final = rows[0]["spend"]
+    assert isinstance(spend, float), rows
+    return spend
+
+
+def _spend_for_key(gateway: Gateway, key: str) -> float:
+    spend: Final = _spend_row(gateway, key)["spend"]
     assert isinstance(spend, float), key
     return spend
 
 
-def _provider_for_key(key: str) -> JsonValue:
-    return _spend_row(key)["custom_llm_provider"]
+def _provider_for_key(gateway: Gateway, key: str) -> JsonValue:
+    return _spend_row(gateway, key)["custom_llm_provider"]
 
 
 def _post_and_read(rig: _Rig, path: str, body: Mapping[str, JsonValue], headers: Mapping[str, str]) -> None:
@@ -347,7 +387,7 @@ def test_claude_on_vertex_passthrough_spend_carries_the_regional_uplift_whether_
                 {**body, "stream": action == "streamRawPredict"},
                 {"x-litellm-api-key": f"Bearer {key}", "Authorization": f"Bearer {_CALLER_GOOGLE_TOKEN}"},
             )
-        spend: Final = {cell: _spend_for_key(key) for cell, key in keys.items()}
+        spend: Final = {cell: _spend_for_key(rig.proxy, key) for cell, key in keys.items()}
     standard: Final = _list_price(f"vertex_ai/{_CLAUDE_ROUTE_MODEL}")
     regional: Final = standard * _uplift(f"vertex_ai/{_CLAUDE_ROUTE_MODEL}")
     assert spend == pytest.approx(
@@ -370,7 +410,7 @@ def test_v1beta_generate_content_on_a_vertex_deployment_bills_the_deployment_loc
         keys: Final = {cell: scenario.key() for cell in cells}
         for (deployment, action), key in keys.items():
             _post_and_read(rig, f"/v1beta/models/{deployment}:{action}", body, {"x-goog-api-key": key})
-        spend: Final = {cell: _spend_for_key(key) for cell, key in keys.items()}
+        spend: Final = {cell: _spend_for_key(rig.proxy, key) for cell, key in keys.items()}
     standard: Final = _list_price(f"vertex_ai/{_GEMINI}")
     regional: Final = standard * _uplift(f"vertex_ai/{_GEMINI}")
     assert spend == pytest.approx(
@@ -404,8 +444,8 @@ def test_gemini_passthrough_bills_a_named_custom_priced_deployment_only_for_keys
             for key in (allowed[action], plain[action]):
                 _post_and_read(rig, f"/gemini/v1beta/models/{_GEMINI}:{action}", body, {"x-goog-api-key": key})
         spend: Final = {
-            **{("allowed", action): _spend_for_key(key) for action, key in allowed.items()},
-            **{("plain", action): _spend_for_key(key) for action, key in plain.items()},
+            **{("allowed", action): _spend_for_key(rig.proxy, key) for action, key in allowed.items()},
+            **{("plain", action): _spend_for_key(rig.proxy, key) for action, key in plain.items()},
         }
     custom_price: Final = _PROMPT_TOKENS * _CUSTOM_INPUT_RATE + _COMPLETION_TOKENS * _CUSTOM_OUTPUT_RATE
     list_price: Final = _list_price(f"gemini/{_GEMINI}")
@@ -441,9 +481,29 @@ def test_openai_passthrough_stream_cut_off_after_its_usage_bills_what_the_finish
             assert response.status_code == 200
             with pytest.raises(httpx.RemoteProtocolError):
                 response.read()
-        spend: Final = {"finished": _spend_for_key(finished_key), "cut off": _spend_for_key(cut_key)}
+        spend: Final = {
+            "finished": _spend_for_key(rig.proxy, finished_key),
+            "cut off": _spend_for_key(rig.proxy, cut_key),
+        }
     list_price: Final = _list_price(_OPENAI_MODEL)
     assert spend == pytest.approx({"finished": list_price, "cut off": list_price})
+
+
+def test_an_openai_passthrough_background_response_read_three_times_bills_one_read(rig: _Rig) -> None:
+    response_path: Final = f"/openai_passthrough/v1/responses/resp_{uuid.uuid4().hex}"
+    with rig.proxy.scenario() as scenario:
+        key: Final = scenario.key()
+        statuses: Final = [
+            rig.proxy.client.get(response_path, headers={"Authorization": f"Bearer {key}"}).status_code
+            for _ in range(3)
+        ]
+        assert statuses == [200, 200, 200]
+        held(
+            lambda: _key_spend(rig.proxy, key),
+            lambda spend: spend == pytest.approx(_list_price(_OPENAI_MODEL)),
+            holding=_SPEND_HOLD_SECONDS,
+            seconds=70,
+        )
 
 
 def _caller_headers(route: str, key: str) -> Mapping[str, str]:
@@ -484,7 +544,7 @@ def test_a_body_base_model_reprices_passthrough_spend_only_for_keys_that_allow_c
                 },
                 _caller_headers(route, key),
             )
-        spend: Final = {cell: _spend_for_key(key) for cell, key in keys.items()}
+        spend: Final = {cell: _spend_for_key(rig.proxy, key) for cell, key in keys.items()}
     forwarded: Final = rig.upstream.drain()
     marked_bodies: Final = {
         cell: tuple(request.body for request in forwarded if marker.encode() in request.body)
@@ -521,7 +581,7 @@ def test_a_non_string_body_base_model_bills_the_list_price_instead_of_nothing(ri
                 {"contents": [{"role": "user", "parts": [{"text": uuid.uuid4().hex}]}], "base_model": 123},
                 _caller_headers(route, key),
             )
-        spend: Final = {cell: _spend_for_key(key) for cell, key in keys.items()}
+        spend: Final = {cell: _spend_for_key(rig.proxy, key) for cell, key in keys.items()}
     list_price: Final = {
         "vertex_ai": _list_price(f"vertex_ai/{_GEMINI}"),
         "gemini": _list_price(f"gemini/{_GEMINI}"),
@@ -538,8 +598,8 @@ def test_gemini_passthrough_through_a_gemini_api_base_gateway_logs_and_bills_as_
         keys: Final = {action: scenario.key() for action in _GEMINI_ACTIONS}
         for action, key in keys.items():
             _post_and_read(gateway_rig, f"/gemini/v1beta/models/{_GEMINI}:{action}", body, {"x-goog-api-key": key})
-        providers: Final = {action: _provider_for_key(key) for action, key in keys.items()}
-        spend: Final = {action: _spend_for_key(key) for action, key in keys.items()}
+        providers: Final = {action: _provider_for_key(gateway_rig.proxy, key) for action, key in keys.items()}
+        spend: Final = {action: _spend_for_key(gateway_rig.proxy, key) for action, key in keys.items()}
     forwarded: Final = tuple(
         path
         for path in (urlsplit(request.target).path for request in gateway_rig.upstream.drain())
@@ -570,8 +630,8 @@ def test_a_configured_passthrough_to_a_non_google_gateway_bills_as_vertex_whatev
                 body,
                 {"Authorization": f"Bearer {key}"},
             )
-        providers: Final = {cell: _provider_for_key(key) for cell, key in keys.items()}
-        spend: Final = {cell: _spend_for_key(key) for cell, key in keys.items()}
+        providers: Final = {cell: _provider_for_key(gateway_rig.proxy, key) for cell, key in keys.items()}
+        spend: Final = {cell: _spend_for_key(gateway_rig.proxy, key) for cell, key in keys.items()}
     short_path_spend: Final = {action: spend[("short gateway path", action)] for action in _GEMINI_ACTIONS}
     assert providers == {cell: "vertex_ai" for cell in cells}
     assert {action: spend[("vertex resource", action)] for action in _GEMINI_ACTIONS} == pytest.approx(

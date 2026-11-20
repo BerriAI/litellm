@@ -47,6 +47,12 @@ RESPONSES_SSE = (
     b"event: response.completed\n"
     b'data: {"type":"response.completed","response":{"usage":{"input_tokens":20,"output_tokens":4}}}\n\n'
 )
+RESPONSES_INCOMPLETE_SSE = (
+    b"event: response.output_text.delta\n"
+    b'data: {"type":"response.output_text.delta","delta":"hi"}\n\n'
+    b"event: response.incomplete\n"
+    b'data: {"type":"response.incomplete","response":{"usage":{"input_tokens":9,"output_tokens":6}}}\n\n'
+)
 
 
 class Recorder:
@@ -152,6 +158,7 @@ async def test_gateway_rewrites_headers_and_model() -> None:
         ("/v1/messages", ANTHROPIC_SSE, (11, 7)),
         ("/v1/chat/completions", CHAT_SSE, (5, 3)),
         ("/responses", RESPONSES_SSE, (20, 4)),
+        ("/responses", RESPONSES_INCOMPLETE_SSE, (9, 6)),
     ],
 )
 async def test_gateway_sse_passthrough_and_usage(
@@ -272,6 +279,7 @@ async def test_sdk_chat_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     assert lines[-1] == "data: [DONE]"
     assert json.loads(lines[0][6:])["choices"][0]["delta"]["content"] == "he"
     assert calls[0]["stream_options"] == {"include_usage": True}
+    assert calls[0]["_litellm_stream_usage_injected"] is True
     assert (ep.usage.input_tokens, ep.usage.output_tokens) == (6, 2)
     assert ep.usage.cost == pytest.approx(6 * 0.001 + 2 * 0.002)
 

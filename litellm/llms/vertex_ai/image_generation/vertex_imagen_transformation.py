@@ -11,9 +11,11 @@ from litellm.llms.base_llm.image_generation.transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_base_url,
+    map_vertex_image_size,
     pop_vertex_request_labels,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -72,24 +74,13 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["sampleCount"] = v
                     elif k == "size":
                         # Map OpenAI size format to Imagen aspectRatio
-                        mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
+                        mapped_params["aspectRatio"] = (
+                            map_vertex_image_size(v, model, imagen=True) or {"aspectRatio": "1:1"}
+                        )["aspectRatio"]
                     else:
                         mapped_params[k] = v
 
         return mapped_params
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """
-        Map OpenAI size format to Imagen aspect ratio format
-        """
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -187,13 +178,15 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         prompt: str,
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict:
         """
         Transform the image generation request to Imagen format
 
         Uses predict API with instances and parameters
         """
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         # Default parameters
         default_params: Final = {
             "sampleCount": 1,

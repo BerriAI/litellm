@@ -1,8 +1,13 @@
 import json
 from abc import abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, cast
 
+from typing_extensions import TypedDict
+
 import litellm
+from litellm.constants import STREAM_SSE_DONE_STRING
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute, stored_attribute
 
 if TYPE_CHECKING:
     import httpx
@@ -26,10 +31,18 @@ def _indexed_thinking_block(
     return {**block, "index": index}
 
 
+class _DeltaFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _message_fields_without_thinking_blocks(message: Message) -> Mapping[str, object]:
+    return message.model_dump(exclude={"thinking_blocks"})
+
+
 def _streaming_delta(message: Message) -> Delta:
     thinking_blocks: Final = message.thinking_blocks if hasattr(message, "thinking_blocks") else None
     return Delta(
-        **message.model_dump(exclude={"thinking_blocks"}),
+        **_DeltaFields(**_message_fields_without_thinking_blocks(message)),
         thinking_blocks=(
             None
             if thinking_blocks is None
@@ -64,6 +77,7 @@ def convert_model_response_to_streaming(
                     index=choice.index,
                     delta=_streaming_delta(cast(Choices, choice).message),
                     finish_reason=choice.finish_reason,
+                    logprobs=stored_attribute(choice, "logprobs"),
                 )
             )
         processed_chunk: Final = ModelResponseStream(
@@ -71,8 +85,12 @@ def convert_model_response_to_streaming(
             object="chat.completion.chunk",
             created=model_response.created,
             model=model_response.model,
+            system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
         )
+        service_tier: Final = stored_attribute(model_response, "service_tier")
+        if service_tier is not None:
+            set_extra_attribute(processed_chunk, "service_tier", service_tier)
         # Carry usage onto the streaming chunk so fake-streamed responses
         # (e.g. Vertex AI Gemma :predict) still report token counts.
         usage: Final = getattr(model_response, "usage", None)
@@ -95,7 +113,7 @@ class BaseModelResponseIterator:
         released (and a backend like vLLM aborts generation) when the stream
         is abandoned before its natural end.
 
-        ``streaming_response`` is usually a bare ``aiter_lines()`` generator
+        ``streaming_response`` is usually a bare ``aiter_sse_lines()`` generator
         that holds no reference to the response, so the handler that owns the
         response attaches it here after construction."""
         if self.http_response is not None:
@@ -142,7 +160,8 @@ class BaseModelResponseIterator:
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         # chunk is a str at this point
         stripped_json_chunk: Final = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
-        if "[DONE]" in str_line:
+        stripped_sse_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
+        if stripped_sse_chunk is not None and stripped_sse_chunk.strip() == STREAM_SSE_DONE_STRING:
             return GenericStreamingChunk(
                 text="",
                 is_finished=True,

@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from typing import Final, cast
 
 import pytest
@@ -377,6 +378,32 @@ def test_extract_cacheable_prefix_mixed_string_and_list_content():
     assert isinstance(result[2]["content"], list)
 
 
+def test_prompt_cache_breakpoint_marks_the_same_cacheable_prefix_as_cache_control():
+    def _messages(marker: Mapping[str, Mapping[str, str]]) -> list[AllMessageValues]:
+        return cast(  # cast-ok: the text part type does not declare the prompt_cache_breakpoint key
+            list[AllMessageValues],
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Here is the full text of a complex legal agreement" * 400, **marker}
+                    ],
+                },
+                {"role": "user", "content": "what are the key terms?"},
+            ],
+        )
+
+    marked_key: Final = PromptCachingCache.get_prompt_caching_cache_key(
+        _messages({"prompt_cache_breakpoint": {"mode": "explicit"}}), None
+    )
+
+    assert marked_key is not None
+    assert marked_key == PromptCachingCache.get_prompt_caching_cache_key(
+        _messages({"cache_control": {"type": "ephemeral"}}), None
+    )
+    assert PromptCachingCache.get_prompt_caching_cache_key(_messages({}), None) is None
+
+
 @pytest.mark.asyncio
 async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
     from litellm import Router
@@ -606,6 +633,23 @@ def test_unmarked_tools_change_the_key_marked_tools_do_not_share():
 
     assert key_a is not None
     assert key_a != key_b
+
+
+def test_a_non_dict_tool_entry_still_derives_a_key_instead_of_raising():
+    """
+    A client can send `tools: ["not-a-tool"]`. The provider rejects that with its own 400, so the
+    routing check has to key on what it was given and let the request through, never raise a 500.
+    """
+    messages = cast(
+        list[AllMessageValues],
+        [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}],
+    )
+    tools: Final = cast(list[ChatCompletionToolParam], ["not-a-tool", _marked_tool("read", {"type": "ephemeral"})])
+
+    positions = PromptCachingCache.prefix_positions(messages, tools)
+
+    assert [position.position for position in positions] == [0, 1]
+    assert PromptCachingCache.get_prompt_caching_cache_key(messages, tools) == positions[-1].cache_key
 
 
 def test_empty_and_missing_tools_seed_the_same_key():

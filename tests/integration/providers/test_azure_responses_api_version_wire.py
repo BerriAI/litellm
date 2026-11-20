@@ -1,6 +1,7 @@
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.openai_wire import chat_reply, responses_reply
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -106,3 +107,27 @@ def test_chat_bridged_through_azure_responses_on_a_dated_ga_deployment_reaches_v
         assert "azure answered" in response.text, response.text
         path, query, _ = _only_post(wire)
         assert (path, query) == ("/openai/v1/responses", {"api-version": "preview"})
+
+
+@pytest.mark.parametrize("api_version", [None, "v1", "2025-04-01-preview"])
+def test_responses_on_a_foundry_project_v1_base_sends_no_api_version(gateway: Gateway, api_version: str | None) -> None:
+    with wire_server(_reply) as wire, gateway.scenario() as scenario:
+        project_base: Final = f"{wire.url}/api/projects/integration-project/openai/v1"
+        model: Final = (
+            scenario.model(model=f"azure/{_DEPLOYMENT}", api_base=project_base, api_key="synthetic-azure-key")
+            if api_version is None
+            else scenario.model(
+                model=f"azure/{_DEPLOYMENT}",
+                api_base=project_base,
+                api_key="synthetic-azure-key",
+                api_version=api_version,
+            )
+        )
+        response: Final = gateway.request(
+            "POST", "/v1/responses", {"model": model, "input": "project responses"}, key=scenario.key()
+        )
+
+        assert response.status_code == 200, response.text
+        path, query, body = _only_post(wire)
+        assert (path, query) == ("/api/projects/integration-project/openai/v1/responses", {})
+        assert body["input"] == "project responses", body

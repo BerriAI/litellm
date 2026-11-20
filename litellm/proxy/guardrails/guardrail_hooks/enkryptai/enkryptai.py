@@ -8,7 +8,7 @@
 import os
 from collections.abc import AsyncGenerator, AsyncIterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
 
@@ -126,7 +126,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            response_json: Final = response.json()
+            response_json: Final[EnkryptAIResponse] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
@@ -186,7 +186,6 @@ class EnkryptAIGuardrails(CustomGuardrail):
         details: Final = response.get("details", {})
 
         detected_attacks: Final[list[str]] = []
-        attack_details: Final[dict[str, Any]] = {}
 
         for key, value in summary.items():
             # Check if attack is detected
@@ -195,13 +194,14 @@ class EnkryptAIGuardrails(CustomGuardrail):
             if key == "toxicity":
                 if isinstance(value, list) and len(value) > 0:
                     detected_attacks.append(key)
-                    attack_details[key] = details.get(key, {})
             else:
                 if value == 1:
                     detected_attacks.append(key)
-                    attack_details[key] = details.get(key, {})
 
-        return {"attacks_detected": detected_attacks, "attack_details": attack_details}
+        return {
+            "attacks_detected": detected_attacks,
+            "attack_details": {key: details.get(key, {}) for key in detected_attacks},
+        }
 
     def _determine_guardrail_status(self, response_json: EnkryptAIResponse) -> GuardrailStatus:
         """

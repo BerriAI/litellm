@@ -5,13 +5,13 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
 CLAUDE_PLATFORM_SERVICE_NAME: Final = "aws-external-anthropic"
-CLAUDE_PLATFORM_BEDROCK_ROUTE: Final = "claude_platform/"
 
 CLAUDE_PLATFORM_UNSUPPORTED_PARAMS_OVERRIDE_KEY: Final = "claude_platform_unsupported_params"
 CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS: Final = frozenset(
@@ -70,12 +70,6 @@ def resolve_unsupported_override(
             type(raw).__name__,
         )
     return None
-
-
-def strip_claude_platform_route(model: str) -> str:
-    if model.startswith(CLAUDE_PLATFORM_BEDROCK_ROUTE):
-        return model.replace(CLAUDE_PLATFORM_BEDROCK_ROUTE, "", 1)
-    return model
 
 
 class BedrockClaudePlatformMixin(BaseAWSLLM):
@@ -140,9 +134,7 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         if api_base is None:
             aws_region_name: Final = self._get_required_aws_region_name(optional_params)
             api_base = f"https://{CLAUDE_PLATFORM_SERVICE_NAME}.{aws_region_name}.api.aws"
-        if not api_base.endswith("/v1/messages"):
-            api_base = f"{api_base.rstrip('/')}/v1/messages"
-        return api_base
+        return ensure_api_route(api_base, "v1/messages")
 
     def sign_request(
         self,

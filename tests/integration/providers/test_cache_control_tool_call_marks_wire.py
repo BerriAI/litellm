@@ -354,7 +354,7 @@ _WEB_RESULTS: Final[dict[str, JsonValue]] = {
         ),
         pytest.param(
             {},
-            [ASK_LABEL, tool_use_label(CITIES[0]), tool_use_label(CITIES[1]), "assistant:tool_use:srvtoolu_web"],
+            [SYSTEM_LABEL, ASK_LABEL, tool_use_label(CITIES[0]), tool_use_label(CITIES[1])],
             id="server-tool-without-result",
         ),
     ),
@@ -406,23 +406,21 @@ def _gemini_peer(request: Request) -> Reply:
 
 _GEMINI: Final = "gemini/gemini-3.8-flash"
 _GEMINI_CACHE_WRITE: Final = [
-    ("GET", "/models/gemini-3.8-flash:cachedContents"),
-    ("POST", "/models/gemini-3.8-flash:cachedContents"),
+    ("GET", "/cachedContents"),
+    ("POST", "/cachedContents"),
     ("POST", "/models/gemini-3.8-flash:generateContent"),
 ]
 
 
 @pytest.mark.parametrize(
-    ("calls", "expected"),
+    "calls",
     (
-        pytest.param(
-            marked_calls(), [("POST", "/models/gemini-3.8-flash:generateContent")], id="tool-calls-fill-the-cap"
-        ),
-        pytest.param([tool_call(city) for city in CITIES], _GEMINI_CACHE_WRITE, id="unmarked-tool-calls"),
+        pytest.param(marked_calls(), id="tool-calls-fill-the-cap"),
+        pytest.param([tool_call(city) for city in CITIES], id="unmarked-tool-calls"),
     ),
 )
-def test_gemini_context_cache_follows_the_cap_census(
-    gateway: Gateway, calls: list[JsonValue], expected: list[tuple[str, str]]
+def test_gemini_context_cache_takes_the_system_message_with_the_marked_ask(
+    gateway: Gateway, calls: list[JsonValue]
 ) -> None:
     marker: Final = new_marker()
     long_system: Final[JsonValue] = {"role": "system", "content": "lorem " * (2 * get_prompt_cache_min_tokens(_GEMINI))}
@@ -436,8 +434,18 @@ def test_gemini_context_cache_follows_the_cap_census(
         )
         status, _, text = post_chat(gateway, chat_body(model, messages))
         assert status == 200, text
-        targets: Final = [(request.method, request.target.split("?")[0]) for request in wire.drain()]
-    assert targets == expected
+        received: Final = wire.drain()
+    targets: Final = [(request.method, request.target.split("?")[0]) for request in received]
+    cache_writes: Final = [
+        request.body for request in received if request.method == "POST" and "cachedContents" in request.target
+    ]
+    generate: Final = _JSON_OBJECT.validate_json(received[-1].body)
+    assert (
+        targets,
+        [b"lorem lorem" in body for body in cache_writes],
+        generate.get("cachedContent"),
+        "system_instruction" in generate,
+    ) == (_GEMINI_CACHE_WRITE, [True], "cachedContents/census", False), (cache_writes, generate)
 
 
 def _openai_marks(request: Request) -> list[str]:
@@ -747,11 +755,11 @@ def test_request_level_points_skip_injection_when_client_marks_fill_the_cap(gate
 _OTHER_CALL_RESULT: Final[dict[str, JsonValue]] = {
     "web_search_results": [{"type": "web_search_tool_result", "tool_use_id": "srvtoolu_other", "content": []}]
 }
-_SERVER_MARK_COUNTED: Final = [
+_UNRUN_SERVER_MARK_UNCOUNTED: Final = [
+    SYSTEM_LABEL,
     ASK_LABEL,
     tool_use_label(CITIES[0]),
     tool_use_label(CITIES[1]),
-    "assistant:tool_use:srvtoolu_web",
 ]
 
 
@@ -767,7 +775,7 @@ _SERVER_MARK_COUNTED: Final = [
         pytest.param(_OTHER_CALL_RESULT, id="result-for-another-call"),
     ),
 )
-def test_malformed_provider_specific_fields_count_the_server_tool_call_mark(
+def test_malformed_provider_specific_fields_leave_the_unrun_server_tool_call_mark_uncounted(
     gateway: Gateway, fields: JsonValue
 ) -> None:
     marker: Final = new_marker()
@@ -779,7 +787,7 @@ def test_malformed_provider_specific_fields_count_the_server_tool_call_mark(
         )
         assert status == 200, text
         labels: Final = anthropic_labels(_only_request(wire))
-    assert labels == _SERVER_MARK_COUNTED
+    assert labels == _UNRUN_SERVER_MARK_UNCOUNTED
 
 
 @pytest.mark.parametrize(
