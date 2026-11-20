@@ -58,9 +58,6 @@ def max_parallel_requests_limit(
     key: Final = f"{model_id}_max_parallel_requests_client"
     span: Final = get_parent_otel_span_from_kwargs(dict(kwargs))
     cache: Final = core.routing_cache
-    cached: Final[object] = cache.get_cache(key=key, local_only=True, parent_otel_span=span)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]  # the cache holds untyped values
-    if cached is not None:
-        return cached  # pyright: ignore[reportUnknownVariableType]  # the cache holds untyped values
     params: Final = as_dict(deployment.get("litellm_params"))
     calculated: Final = calculate_max_parallel_requests(
         rpm=params.get("rpm"),  # pyright: ignore[reportArgumentType]  # the configured value, as the Python router reads it
@@ -68,6 +65,13 @@ def max_parallel_requests_limit(
         tpm=params.get("tpm"),  # pyright: ignore[reportArgumentType]  # same
         default_max_parallel_requests=core.endpoints.default_max_parallel_requests,  # pyright: ignore[reportArgumentType]  # the setting as given, as the Python router passes it
     )
+    cached: Final[object] = cache.get_cache(key=key, local_only=True, parent_otel_span=span)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]  # the cache holds untyped values
+    if isinstance(cached, MaxParallelRequestsLimit):
+        if calculated is not None and calculated != cached.max_parallel_requests:
+            cached.update_max_parallel_requests(calculated)
+        return cached
+    if cached is not None:
+        return cached  # pyright: ignore[reportUnknownVariableType]  # the cache holds untyped values
     if calculated:
         cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # the routing cache
             key=key,
