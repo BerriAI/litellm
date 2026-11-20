@@ -12887,6 +12887,41 @@
         "invalidTokenValidationJson": "Invalid JSON in Token Validation Rules"
       }
     },
+    "additionalAuth": {
+      "title": "Additional auth profiles",
+      "description": "The authentication settings above are the default profile. Add profiles to let keys and teams call this server with a different credential. Profile ids cannot change after saving.",
+      "defaultProfileHelp": "Default profile. Callers use it unless a key or team grants another profile.",
+      "add": "Add auth profile",
+      "remove": "Remove auth profile",
+      "id": "Profile ID",
+      "kind": "Profile type",
+      "clientId": "Client ID",
+      "clientSecret": "Client secret",
+      "tokenUrl": "Token URL",
+      "scopes": "Scopes",
+      "scopesPlaceholder": "Space-separated, e.g. read write",
+      "tokenEndpointAuthMethod": "Token endpoint auth method",
+      "tokenEndpointAuthMethodUnset": "Not set",
+      "token": "Token",
+      "secretPlaceholder": "Enter secret",
+      "secretPlaceholderEditing": "Leave blank to keep existing",
+      "kinds": {
+        "clientCredentials": "OAuth client credentials"
+      },
+      "problems": {
+        "idFormat": "Use 1 to 64 letters, digits, hyphens or underscores.",
+        "idReserved": "\"default\" is reserved for the default profile.",
+        "idDuplicate": "Profile IDs must be unique, ignoring case.",
+        "missingField": "Fill in every required field for this profile."
+      },
+      "errors": {
+        "invalidProfile": "Fix auth profile \"{{id}}\" before saving.",
+        "heldBy": "Held by {{holders}}."
+      },
+      "view": {
+        "title": "Additional profiles"
+      }
+    },
     "editToolPreview": {
       "originChanged": "The server origin changed. Enter credentials and replace or remove saved static headers to preview tools."
     },
@@ -13096,7 +13131,7 @@
         "placeholder": "e.g. 60"
       },
       "auth": {
-        "sectionTitle": "Authentication settings",
+        "sectionTitle": "Authentication settings (default profile)",
         "typeLabel": "Authentication",
         "typeRequired": "Please select an auth type",
         "typePlaceholder": "Select auth type",

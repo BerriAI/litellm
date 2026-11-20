@@ -8,6 +8,7 @@ import {
   isClientForwardedTokenMode,
   preservedAdminCredentials,
 } from "@/components/mcp_tools/types";
+import { type AdditionalAuthDraft, additionalAuthEntry, firstInvalidProfileId } from "./additionalAuthProfiles";
 import { TOOL_DISPLAY_NAME_PATTERN, normalizeEnvVars } from "./utils";
 
 export const AUTH_TYPES_REQUIRING_AUTH_VALUE = [
@@ -42,13 +43,15 @@ export interface CreateServerUiState {
   readonly toolNameToDescription: Readonly<Record<string, string>>;
   readonly logoUrl: string | undefined;
   readonly dcrClient: DcrClient | null;
+  readonly additionalAuth?: readonly AdditionalAuthDraft[];
 }
 
 export type BuildCreatePayloadResult =
   | { readonly kind: "ok"; readonly payload: Record<string, unknown> }
   | { readonly kind: "invalid_tool_display_name"; readonly displayName: string }
   | { readonly kind: "invalid_stdio_json" }
-  | { readonly kind: "invalid_token_validation_json" };
+  | { readonly kind: "invalid_token_validation_json" }
+  | { readonly kind: "invalid_additional_auth"; readonly profileId: string };
 
 export type StdioParseResult =
   | { readonly kind: "ok"; readonly fields: Record<string, unknown>; readonly derivedServerName?: string }
@@ -133,6 +136,11 @@ export const buildCreateServerPayload = (
   const badDisplayName = firstInvalidToolDisplayName(ui.toolNameToDisplayName);
   if (badDisplayName !== undefined) {
     return { kind: "invalid_tool_display_name", displayName: badDisplayName };
+  }
+
+  const invalidProfileId = firstInvalidProfileId(ui.additionalAuth ?? []);
+  if (invalidProfileId !== undefined) {
+    return { kind: "invalid_additional_auth", profileId: invalidProfileId };
   }
 
   const {
@@ -229,6 +237,7 @@ export const buildCreateServerPayload = (
       env_vars: normalizeEnvVars(envVarsList),
       ...(tokenValidation !== null && { token_validation: tokenValidation }),
       ...(credentials === undefined ? {} : { credentials }),
+      ...additionalAuthEntry(ui.additionalAuth, { omitWhenEmpty: true }),
     },
   };
 };
