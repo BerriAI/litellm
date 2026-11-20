@@ -141,6 +141,28 @@ class TestRequestTransformation:
     def test_non_streaming_request_carries_no_stream_options(self):
         assert "stream_options" not in self._request({"max_tokens": 16})
 
+    def test_extra_body_cannot_switch_off_the_usage_frame_of_a_stream(self):
+        merged = DeapiChatConfig().transform_extra_body(
+            extra_body={"stream_options": {"include_usage": False, "x": 1}},
+            request=self._request({"stream": True}),
+            model=SELLER_MODEL,
+            litellm_params={},
+        )
+        assert merged["stream_options"] == {"include_usage": True, "x": 1}
+
+    def test_a_stream_requested_through_extra_body_still_asks_for_the_usage_frame(self):
+        merged = DeapiChatConfig().transform_extra_body(
+            extra_body={"stream": True}, request=self._request({}), model=SELLER_MODEL, litellm_params={}
+        )
+        assert merged == {"stream": True, "stream_options": {"include_usage": True}}
+
+    def test_extra_body_of_a_non_streaming_request_passes_through(self):
+        extra_body = {"stream_options": {"include_usage": False}, "seed": 7}
+        merged = DeapiChatConfig().transform_extra_body(
+            extra_body=extra_body, request=self._request({}), model=SELLER_MODEL, litellm_params={}
+        )
+        assert merged == extra_body
+
 
 class TestCompletion:
     def test_posts_to_deapi_with_the_bearer_key_and_the_model_id(self, deapi_key, respx_mock):
@@ -216,6 +238,26 @@ class TestStreaming:
 
         stream = await litellm.acompletion(
             model=MODEL, messages=MESSAGES, stream=True, litellm_call_id=spend_capture.call_id
+        )
+        text = "".join([chunk.choices[0].delta.content or "" async for chunk in stream if chunk.choices])
+        await spend_capture.settle()
+
+        assert _request_body(respx_mock)["stream_options"] == {"include_usage": True}
+        assert text == "Hi there!"
+        assert spend_capture.costs == [REPORTED_COST]
+
+    @pytest.mark.asyncio
+    async def test_extra_body_opting_out_of_usage_is_still_billed_the_reported_cost(
+        self, deapi_key, httpx_transport, spend_capture, respx_mock
+    ):
+        respx_mock.post(DEAPI_CHAT_URL).mock(return_value=_stream())
+
+        stream = await litellm.acompletion(
+            model=MODEL,
+            messages=MESSAGES,
+            stream=True,
+            extra_body={"stream_options": {"include_usage": False}},
+            litellm_call_id=spend_capture.call_id,
         )
         text = "".join([chunk.choices[0].delta.content or "" async for chunk in stream if chunk.choices])
         await spend_capture.settle()

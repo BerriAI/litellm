@@ -86,6 +86,18 @@ class DeapiChatConfig(OpenAIGPTConfig):
             return request
         return {**request, "stream_options": dict(_stream_options_with_usage(request))}
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        if not (extra_body.get("stream") or request.get("stream")):
+            return extra_body
+        source: Final = extra_body if "stream_options" in extra_body else request
+        return {**extra_body, "stream_options": dict(_stream_options_with_usage(source))}
+
     def transform_response(
         self,
         model: str,
