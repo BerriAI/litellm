@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-import litellm.litellm_core_utils.duration_parser as duration_parser
+from litellm.litellm_core_utils import duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     duration_in_seconds_from,
@@ -269,11 +269,41 @@ def test_long_unit_spelling_resets_on_the_schedule_it_is_charged_for(long_spelli
 
 def test_long_month_spelling_without_a_calendar_schedule_keeps_its_nightly_reset() -> None:
     now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
-    with pytest.raises(ValueError, match="1 month or 12 month"):
-        get_next_standardized_reset_time("3mo", now, "UTC")
+    reset_3mo: Final = get_next_standardized_reset_time("3mo", now, "UTC")
+    assert reset_3mo == datetime(2027, 2, 1, tzinfo=timezone.utc)
+    assert get_budget_window_start("3mo", reset_3mo) == datetime(2026, 11, 1, tzinfo=timezone.utc)
     reset: Final = get_next_standardized_reset_time("3months", now, "UTC")
     assert reset == datetime(2026, 11, 14, tzinfo=timezone.utc)
     assert get_budget_window_start("3months", reset) == datetime(2026, 11, 13, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "duration, months_forward",
+    [
+        ("2mo", 2),
+        ("3mo", 3),
+        ("6mo", 6),
+    ],
+)
+def test_multi_month_reset_intervals(duration: str, months_forward: int) -> None:
+    now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
+    reset: Final = get_next_standardized_reset_time(duration, now, "UTC")
+    assert reset.day == 1
+    assert reset.hour == 0
+    assert reset.minute == 0
+    assert get_budget_window_start(duration, reset) == datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+
+def test_multi_month_reset_same_day_before_offset() -> None:
+    first_of_month: Final = datetime(2026, 11, 1, 9, 0, tzinfo=timezone.utc)
+    reset: Final = get_next_standardized_reset_time("6mo", first_of_month, "UTC", reset_time_of_day=time(12, 0))
+    assert reset == datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def test_multi_month_reset_same_day_after_offset() -> None:
+    first_of_month: Final = datetime(2026, 11, 1, 15, 0, tzinfo=timezone.utc)
+    reset: Final = get_next_standardized_reset_time("6mo", first_of_month, "UTC", reset_time_of_day=time(12, 0))
+    assert reset == datetime(2027, 5, 1, 12, 0, tzinfo=timezone.utc)
 
 
 @pytest.mark.parametrize(
