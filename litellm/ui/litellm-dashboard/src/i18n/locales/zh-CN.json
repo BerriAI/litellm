@@ -4067,6 +4067,11 @@
     "usage": {
       "perDay": "每日",
       "savings": {
+        "drivers": {
+          "compression": "压缩",
+          "promptCaching": "提示词缓存",
+          "autoRouter": "自动路由"
+        },
         "runningTotal": "累计节省费用",
         "savedPerInterval": "节省额（{{interval}}）",
         "rangeUtc": "{{range}}（UTC）",
@@ -5164,6 +5169,9 @@
         "ssoSettings": "单点登录设置",
         "securitySettings": "安全设置",
         "uiSettings": "界面设置",
+        "scim": "SCIM",
+        "hashicorpVault": "Hashicorp Vault",
+        "cyberArk": "CyberArk Conjur",
         "loggingSettings": "日志设置",
         "plugins": "插件",
         "webSearchInterception": "网页搜索拦截"
@@ -12832,6 +12840,8 @@
     },
     "scoreChart": {
       "title": "请求结果趋势",
+      "passed": "已通过",
+      "blocked": "已拦截",
       "empty": "此期间暂无图表数据"
     },
     "logViewer": {
@@ -13816,6 +13826,18 @@
       "customServer": "+ 自定义服务器",
       "allCategories": "全部",
       "otherCategory": "其他",
+      "categories": {
+        "developerTools": "开发者工具",
+        "communication": "沟通协作",
+        "databases": "数据库",
+        "productivity": "办公效率",
+        "search": "搜索",
+        "webAndBrowser": "网页与浏览器",
+        "cloud": "云服务",
+        "system": "系统",
+        "finance": "金融",
+        "eCommerce": "电子商务"
+      },
       "searchPlaceholder": "搜索服务器…",
       "errors": {
         "loadFailed": "加载 MCP 服务器失败"
@@ -15210,6 +15232,12 @@
       "inputCard": {
         "copied": "输入已复制"
       },
+      "messageRoles": {
+        "system": "系统",
+        "user": "用户",
+        "assistant": "助手",
+        "tool": "工具"
+      },
       "outputCard": {
         "copied": "输出已复制",
         "noResponse": "暂无响应数据"
@@ -15502,6 +15530,18 @@
     }
   },
   "activityMetrics": {
+    "series": {
+      "spend": "费用",
+      "promptTokens": "提示词 Token",
+      "completionTokens": "补全 Token",
+      "totalTokens": "Token 总数",
+      "apiRequests": "API 请求",
+      "successfulRequests": "成功请求",
+      "failedRequests": "失败请求",
+      "avgResponseTimeMs": "平均响应时间（毫秒）",
+      "cacheReadInputTokens": "缓存读取输入 Token",
+      "cacheCreationInputTokens": "缓存写入输入 Token"
+    },
     "topKeys": {
       "title": "费用最高的虚拟密钥",
       "loading": "正在加载密钥排行...",
@@ -17830,6 +17870,8 @@
       "judgeModel": "评判模型",
       "selectDecisionModel": "请选择决策模型",
       "selectJudgeModel": "选择评判模型",
+      "selectConcreteModel": "请选择具体模型",
+      "selectClassifierJudge": "启用分类器时，请选择评判模型",
       "confidenceThreshold": "置信度阈值",
       "fallbackToJudge": "置信度低于此值时，使用评判模型。严重错误仍可能选择高能力模型。",
       "fallbackToDefault": "置信度低于此值时，使用当前偏好对应的默认模型。严重错误仍可能选择高能力模型。",
@@ -17861,6 +17903,10 @@
       "classifierPromptPlaceholder": "使用 Switchyard 内置提示词"
     },
     "switchyardRouterForm": {
+      "nameRequired": "请输入路由名称",
+      "selfSelection": "路由不能选择自身",
+      "invalidStoredConfig": "已保存的 Switchyard 配置无效。请修正后再保存。",
+      "saveFailed": "无法保存 Switchyard 路由",
       "modelFields": {
         "description": "根据对话中的工具调用历史，在高能力模型与高效模型之间进行路由。",
         "modelsLoadFailed": "无法加载可用模型。"
@@ -20546,6 +20592,8 @@
       "fields": {
         "supplyUserId": "自定义用户 ID",
         "userId": "用户 ID",
+        "userIdRequired": "请输入用户 ID",
+        "userIdContainsNul": "用户 ID 不能包含空字符（NUL）",
         "userIdDescription": "此用户的唯一 ID。不勾选复选框则自动生成。",
         "userEmail": "用户邮箱",
         "userRole": "用户角色",

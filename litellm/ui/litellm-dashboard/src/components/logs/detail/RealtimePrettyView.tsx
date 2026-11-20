@@ -8,6 +8,7 @@ import { copyToClipboard } from "@/utils/dataUtils";
 import { useState } from "react";
 import { ChevronDown, ChevronUp, MessageSquare, Mic, Settings, Volume2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { messageRoleLabel } from "./prettyMessagesUtils";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SectionHeader } from "./SectionHeader";
@@ -388,6 +389,7 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
 }
 
 function OutputMessage({ output }: { output: RealtimeOutputItem }) {
+  const { t } = useTranslation();
   const contents = output.content || [];
   const hasTranscripts = contents.some((c) => c.transcript || c.text);
 
@@ -405,7 +407,7 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
           marginBottom: 3,
         }}
       >
-        {output.role?.toUpperCase() || "ASSISTANT"}
+        {output.role ? messageRoleLabel(output.role, t) : t("logs.detail.messageRoles.assistant")}
       </span>
       {contents.map((c, cIdx) => {
         const text = c.transcript || c.text;

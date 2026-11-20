@@ -1,12 +1,16 @@
 import { z } from "zod";
+import i18n from "@/i18n/i18n";
 
 const threshold = z.number().min(0).max(1);
 const positiveInteger = z.number().int().positive();
 const modelName = z
   .string()
   .trim()
-  .min(1, "Select a model")
-  .refine((name) => !name.startsWith("auto_router/"), "Select a concrete model");
+  .min(1, () => i18n.t("addModel.switchyardConfigFields.selectModel"))
+  .refine(
+    (name) => !name.startsWith("auto_router/"),
+    () => i18n.t("addModel.switchyardConfigFields.selectConcreteModel"),
+  );
 const optionsFields = {
   picker: z.enum(["efficient_first", "capable_first"]).default("efficient_first"),
   confidence_threshold: threshold.nullish(),
@@ -42,7 +46,7 @@ export const switchyardConfigSchema = z
     if (Boolean(value.classifier) !== Boolean(value.models.judge)) {
       ctx.addIssue({
         code: "custom",
-        message: "Select a judge when the classifier is enabled",
+        message: i18n.t("addModel.switchyardConfigFields.selectClassifierJudge"),
         path: ["models", "judge"],
       });
     }
@@ -89,10 +93,11 @@ export function parseToolSemantics(text: string): SwitchyardConfig["options"]["t
 }
 
 export function switchyardSaveError(name: string, config: SwitchyardConfig): string | null {
-  if (!name.trim()) return "Enter a router name";
+  if (!name.trim()) return i18n.t("addModel.switchyardRouterForm.nameRequired");
   const validated = switchyardConfigSchema.safeParse(config);
   if (!validated.success) return validated.error.issues[0].message;
-  if (Object.values(validated.data.models).includes(name.trim())) return "The router cannot select itself";
+  if (Object.values(validated.data.models).includes(name.trim()))
+    return i18n.t("addModel.switchyardRouterForm.selfSelection");
   return null;
 }
 

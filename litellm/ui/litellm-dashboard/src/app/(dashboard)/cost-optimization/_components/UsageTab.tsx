@@ -87,6 +87,11 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   }, [accumulation, perInterval, startTime]);
 
   const intervalLabel = t("costOptimization.usage.perDay");
+  const savingsLabels = {
+    Compression: t("costOptimization.usage.savings.drivers.compression"),
+    "Prompt caching": t("costOptimization.usage.savings.drivers.promptCaching"),
+    "Auto-router": t("costOptimization.usage.savings.drivers.autoRouter"),
+  };
   const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
   const savingsSubtitle = [
     accumulation === "cumulative"
@@ -146,7 +151,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
             <CardTitle>{t("costOptimization.usage.savings.title")}</CardTitle>
             <CardDescription>{savingsSubtitle}</CardDescription>
             <CardAction className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
-              <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
+              <CustomLegend categories={SAVINGS_SERIES} categoryLabels={savingsLabels} colors={SAVINGS_COLORS} />
               <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
                 <TabsList>
                   <TabsTrigger value="cumulative">{t("costOptimization.usage.savings.cumulative")}</TabsTrigger>
@@ -161,6 +166,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                 data={overTime}
                 index="date"
                 categories={SAVINGS_SERIES}
+                categoryLabels={savingsLabels}
                 colors={SAVINGS_COLORS}
                 valueFormatter={usd}
                 showLegend={false}
@@ -174,6 +180,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                 data={overTime}
                 index="date"
                 categories={SAVINGS_SERIES}
+                categoryLabels={savingsLabels}
                 colors={SAVINGS_COLORS}
                 valueFormatter={usd}
                 showLegend={false}
@@ -188,7 +195,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           <CardContent>
             <DonutChart
               className="h-80"
-              data={byDriver}
+              data={byDriver.map((driver) => ({ ...driver, driver: savingsLabels[driver.driver] }))}
               index="driver"
               category="usd"
               colors={byDriver.map((d) => d.color)}
@@ -223,6 +230,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                     data={topToolsChart}
                     index="tool_name"
                     categories={["spend"]}
+                    categoryLabels={{ spend: t("activityMetrics.series.spend") }}
                     colors={toolColors}
                     colorByDatum
                     layout="vertical"

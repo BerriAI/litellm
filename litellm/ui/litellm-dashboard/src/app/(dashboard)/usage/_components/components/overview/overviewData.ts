@@ -122,9 +122,9 @@ export const seriesBy = (
   results: readonly DailyData[],
   dimension: BreakdownDimension | "api_keys",
   metric: UsageMetric,
-  options: number | { top?: number; colorByKey?: ReadonlyMap<string, string> } = 6,
+  options: number | { top?: number; colorByKey?: ReadonlyMap<string, string>; otherLabel?: string } = 6,
 ): Series => {
-  const { top = 6, colorByKey } = typeof options === "number" ? { top: options } : options;
+  const { top = 6, colorByKey, otherLabel } = typeof options === "number" ? { top: options } : options;
   const leaders = rollUpBreakdown(results, dimension)
     .filter((row) => rankValue(row, metric) > 0)
     .sort((a, b) => rankValue(b, metric) - rankValue(a, metric))
@@ -141,7 +141,7 @@ export const seriesBy = (
     return { day, values, other: remainder > 1e-6 ? remainder : 0 };
   });
   const hasOther = days.some(({ other }) => other > 0) || leaders.length === 0;
-  const labels = hasOther ? [...leaders, i18n.t(OTHER_SERIES)] : leaders;
+  const labels = hasOther ? [...leaders, otherLabel ?? i18n.t(OTHER_SERIES)] : leaders;
   const keys = labels.map((_, index) => seriesKey(index));
   const data = days.map(({ day, values, other }) => ({
     date: day.date,

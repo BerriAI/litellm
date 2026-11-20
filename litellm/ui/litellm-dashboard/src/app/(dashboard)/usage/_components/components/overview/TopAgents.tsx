@@ -188,7 +188,11 @@ export default function TopAgents({
       ].slice(0, ROWS),
     [allAgents],
   );
-  const series = useMemo(() => seriesBy(agentDailyData(daily), "models", metric, CHART_SERIES), [daily, metric]);
+  const otherLabel = t("usage.overview.otherSeries");
+  const series = useMemo(
+    () => seriesBy(agentDailyData(daily), "models", metric, { top: CHART_SERIES, otherLabel }),
+    [daily, metric, otherLabel],
+  );
   const totalsByDay = useMemo(() => bucketTotals(series), [series]);
   const colorOf = (label: string) => {
     const index = series.labels.indexOf(label);

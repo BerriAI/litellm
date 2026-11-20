@@ -44,7 +44,11 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
       >
         <div className="px-4 py-3">
           {message ? (
-            <SimpleMessageBlock label="ASSISTANT" content={message.content} toolCalls={message.toolCalls} />
+            <SimpleMessageBlock
+              label={t("logs.detail.messageRoles.assistant")}
+              content={message.content}
+              toolCalls={message.toolCalls}
+            />
           ) : (
             <span className="text-[13px] text-muted-foreground italic">{t("logs.detail.outputCard.noResponse")}</span>
           )}

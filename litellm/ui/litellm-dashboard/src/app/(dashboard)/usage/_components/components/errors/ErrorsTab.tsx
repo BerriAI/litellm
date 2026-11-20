@@ -197,6 +197,7 @@ export default function ErrorsTab({ activity, loading, failed, userScoped = fals
               data={rateRows}
               index="date"
               categories={rateView === "total" ? ["rate"] : series.codes}
+              categoryLabels={rateView === "total" ? { rate: t("usage.errors.rateChart.title") } : undefined}
               colors={
                 rateView === "total"
                   ? ["red"]

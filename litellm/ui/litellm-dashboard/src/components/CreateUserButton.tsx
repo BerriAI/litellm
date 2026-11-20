@@ -215,11 +215,11 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
   const handleCreate = async (formValues: CreateUserFormValues) => {
     if (formValues.supply_user_id && !formValues.user_id?.trim()) {
-      form.setError("user_id", { message: "Enter a User ID" }, { shouldFocus: true });
+      form.setError("user_id", { message: t("users.createUser.fields.userIdRequired") }, { shouldFocus: true });
       return;
     }
     if (formValues.supply_user_id && formValues.user_id?.includes("\u0000")) {
-      form.setError("user_id", { message: "User ID must not contain NUL characters" }, { shouldFocus: true });
+      form.setError("user_id", { message: t("users.createUser.fields.userIdContainsNul") }, { shouldFocus: true });
       return;
     }
     try {

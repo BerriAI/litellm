@@ -4067,6 +4067,11 @@
     "usage": {
       "perDay": "Per day",
       "savings": {
+        "drivers": {
+          "compression": "Compression",
+          "promptCaching": "Prompt caching",
+          "autoRouter": "Auto-router"
+        },
         "runningTotal": "Running total saved",
         "savedPerInterval": "Saved {{interval}}",
         "rangeUtc": "{{range}} (UTC)",
@@ -5164,6 +5169,9 @@
         "ssoSettings": "SSO Settings",
         "securitySettings": "Security Settings",
         "uiSettings": "UI Settings",
+        "scim": "SCIM",
+        "hashicorpVault": "Hashicorp Vault",
+        "cyberArk": "CyberArk Conjur",
         "loggingSettings": "Logging Settings",
         "plugins": "Plugins",
         "webSearchInterception": "Web Search Interception"
@@ -12832,6 +12840,8 @@
     },
     "scoreChart": {
       "title": "Request Outcomes Over Time",
+      "passed": "passed",
+      "blocked": "blocked",
       "empty": "No chart data for this period"
     },
     "logViewer": {
@@ -13816,6 +13826,18 @@
       "customServer": "+ Custom Server",
       "allCategories": "All",
       "otherCategory": "Other",
+      "categories": {
+        "developerTools": "Developer Tools",
+        "communication": "Communication",
+        "databases": "Databases",
+        "productivity": "Productivity",
+        "search": "Search",
+        "webAndBrowser": "Web & Browser",
+        "cloud": "Cloud",
+        "system": "System",
+        "finance": "Finance",
+        "eCommerce": "E-Commerce"
+      },
       "searchPlaceholder": "Search servers...",
       "errors": {
         "loadFailed": "Failed to load MCP servers"
@@ -15210,6 +15232,12 @@
       "inputCard": {
         "copied": "Input copied"
       },
+      "messageRoles": {
+        "system": "SYSTEM",
+        "user": "USER",
+        "assistant": "ASSISTANT",
+        "tool": "TOOL"
+      },
       "outputCard": {
         "copied": "Output copied",
         "noResponse": "No response data available"
@@ -15502,6 +15530,18 @@
     }
   },
   "activityMetrics": {
+    "series": {
+      "spend": "Spend",
+      "promptTokens": "Prompt Tokens",
+      "completionTokens": "Completion Tokens",
+      "totalTokens": "Total Tokens",
+      "apiRequests": "Api Requests",
+      "successfulRequests": "Successful Requests",
+      "failedRequests": "Failed Requests",
+      "avgResponseTimeMs": "Avg Response Time Ms",
+      "cacheReadInputTokens": "Cache Read Input Tokens",
+      "cacheCreationInputTokens": "Cache Creation Input Tokens"
+    },
     "topKeys": {
       "title": "Top Virtual Keys by Spend",
       "loading": "Loading top keys...",
@@ -17844,6 +17884,8 @@
       "judgeModel": "Judge model",
       "selectDecisionModel": "Select a decision model",
       "selectJudgeModel": "Select a judge model",
+      "selectConcreteModel": "Select a concrete model",
+      "selectClassifierJudge": "Select a judge when the classifier is enabled",
       "confidenceThreshold": "Confidence threshold",
       "fallbackToJudge": "Below this confidence, use the judge model. Critical errors can still select the capable model.",
       "fallbackToDefault": "Below this confidence, use the bias’s default model. Critical errors can still select the capable model.",
@@ -17875,6 +17917,10 @@
       "classifierPromptPlaceholder": "Use Switchyard’s built-in prompt"
     },
     "switchyardRouterForm": {
+      "nameRequired": "Enter a router name",
+      "selfSelection": "The router cannot select itself",
+      "invalidStoredConfig": "The stored Switchyard configuration is invalid. Correct it before saving.",
+      "saveFailed": "Unable to save Switchyard router",
       "modelFields": {
         "description": "Route between a capable and an efficient model using the conversation’s tool history.",
         "modelsLoadFailed": "Unable to load available models."
@@ -20560,6 +20606,8 @@
       "fields": {
         "supplyUserId": "Supply custom User ID",
         "userId": "User ID",
+        "userIdRequired": "Enter a User ID",
+        "userIdContainsNul": "User ID must not contain NUL characters",
         "userIdDescription": "A unique ID for this user. Leave the checkbox unchecked to generate one automatically.",
         "userEmail": "User Email",
         "userRole": "User Role",

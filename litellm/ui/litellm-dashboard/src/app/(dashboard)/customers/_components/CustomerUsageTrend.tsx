@@ -15,7 +15,7 @@ import { StackedUsageChart } from "@/components/shared/charts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CustomerHierarchyUsage } from "./customerUsageApi";
 import CustomerCacheCost from "./CustomerCacheCost";
-import { customerTokenBreakdownSeries, customerUsageSeries } from "./customerUsageChartData";
+import { customerTokenBreakdownSeries, customerUsageSeriesWith } from "./customerUsageChartData";
 import { CUSTOMER_USAGE_DIMENSIONS, type CustomerUsageDimension } from "./CustomerUsageRankings";
 import { ModelMark } from "@/app/(dashboard)/usage/_components/components/overview/BreakdownChart";
 import type { CustomerUsageMetric } from "./useCustomerHierarchyUsage";
@@ -59,9 +59,9 @@ export default function CustomerUsageTrend({
   const dailySeries = useMemo(() => {
     if (!data) return { data: [], keys: [], labels: [], colors: [] };
     return tokenBreakdown
-      ? customerTokenBreakdownSeries(data.results)
-      : customerUsageSeries(data, dimension, displayMetric, colorByModel);
-  }, [data, dimension, tokenBreakdown, displayMetric, colorByModel]);
+      ? customerTokenBreakdownSeries(data.results, t)
+      : customerUsageSeriesWith(t)(data, dimension, displayMetric, colorByModel);
+  }, [data, dimension, tokenBreakdown, displayMetric, colorByModel, t]);
   const series = useMemo(() => bucketSeries(dailySeries, bucket), [dailySeries, bucket]);
   const bucketValues = useMemo(() => bucketTotals(series), [series]);
   const empty = totals.requests === 0 && totals.tokens === 0 && totals.spend === 0;

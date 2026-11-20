@@ -45,9 +45,11 @@ export const useBreakdown = (
   top = 6,
   colorByKey?: ReadonlyMap<string, string>,
 ) => {
+  const { t } = useTranslation();
+  const otherLabel = t("usage.overview.otherSeries");
   const series = useMemo(
-    () => seriesBy(results, dimension, metric, { top, colorByKey }),
-    [results, dimension, metric, top, colorByKey],
+    () => seriesBy(results, dimension, metric, { top, colorByKey, otherLabel }),
+    [results, dimension, metric, top, colorByKey, otherLabel],
   );
   const ranking = useMemo(() => leaderboard(results, dimension, metric), [results, dimension, metric]);
   return { series, ranking };
