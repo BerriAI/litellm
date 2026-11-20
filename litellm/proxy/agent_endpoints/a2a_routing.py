@@ -108,7 +108,14 @@ def _bridge_request_data(
         if key in data and key in agent_kwargs
     }
     return _with_headers(
-        {**agent_kwargs, **data, **layered, **pinned, "model": bridge_model_name(litellm_params)},
+        {
+            **agent_kwargs,
+            **data,
+            **layered,
+            **pinned,
+            "model": bridge_model_name(litellm_params),
+            "custom_llm_provider": agent_kwargs.get("custom_llm_provider"),
+        },
         extra_headers,
     )
 

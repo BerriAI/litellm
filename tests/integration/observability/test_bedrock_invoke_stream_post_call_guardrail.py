@@ -12,6 +12,7 @@ Streams of other model families keep going out as received"""
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import threading
@@ -43,6 +44,8 @@ pytestmark: Final = pytest.mark.shares_worker_state
 CLAUDE_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 LLAMA_ID: Final = "meta.llama4-maverick-17b-instruct-v1:0"
 PROFILE_ID: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/relayprofile"
+INPUT_COST_PER_TOKEN: Final = 0.001
+OUTPUT_COST_PER_TOKEN: Final = 0.002
 CLAUDE: Final = "invoke-relay"
 LLAMA: Final = "invoke-relay-llama"
 PROFILE: Final = "invoke-relay-profile"
@@ -334,6 +337,7 @@ def _deployment(name: str, model_id: str, upstream: Wire) -> dict[str, JsonValue
             "aws_secret_access_key": "synthetic-relay-secret",
             "aws_region_name": "us-east-1",
         },
+        "model_info": {"input_cost_per_token": INPUT_COST_PER_TOKEN, "output_cost_per_token": OUTPUT_COST_PER_TOKEN},
     }
 
 
@@ -466,6 +470,24 @@ def _stream_with_call_id(rig: Rig, guardrail: str, marker: str, model: str = CLA
 def _stream(rig: Rig, guardrail: str, marker: str, model: str = CLAUDE) -> tuple[int, str, bytes]:
     status, content_type, body, _ = _stream_with_call_id(rig, guardrail, marker, model)
     return status, content_type, body
+
+
+def _logged_spend(call_id: str) -> float:
+    rows: Final = read_rows(
+        'SELECT spend FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s OR request_id=%s '
+        "OR metadata->>'litellm_call_id'=%s",
+        (call_id, call_id, call_id),
+    )
+    assert len(rows) == 1 and isinstance(rows[0]["spend"], float), rows
+    return rows[0]["spend"]
+
+
+def _key_spend(key: str) -> float:
+    rows: Final = read_rows(
+        'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (hashlib.sha256(key.encode()).hexdigest(),)
+    )
+    assert len(rows) == 1 and isinstance(rows[0]["spend"], float), rows
+    return rows[0]["spend"]
 
 
 def _exception(frames: Sequence[Frame]) -> tuple[str, str] | None:
@@ -807,6 +829,7 @@ def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: 
         with ThreadPoolExecutor(max_workers=count) as pool:
             return list(zip(markers, pool.map(partial(_stream_with_call_id, rig, OUTAGE), markers)))
 
+    spend_before: Final = _key_spend(rig.keys[OUTAGE])
     rig.outage.set()
     try:
         during: Final = burst(8)
@@ -819,8 +842,20 @@ def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: 
     for marker, (status, _, body, _) in after:
         assert status == 200 and _exception(decode(body)) is None, (marker, body)
         assert body == b"".join(rig.scripts[marker].chunks or ()), (marker, decode(body))
-    for marker, (_, _, _, call_id) in (*during, *after):
-        assert _spend_statuses(call_id, 1).count("success") == 1, marker
+    for marker, (_, _, _, call_id) in after:
+        assert _spend_statuses(call_id, 1) == ["success"], marker
+    for marker, (_, _, _, call_id) in during:
+        assert len(_spend_statuses(call_id, 1)) == 1, marker
+    stream_cost: Final = 9 * INPUT_COST_PER_TOKEN + 4 * OUTPUT_COST_PER_TOKEN
+    costs: Final = [_logged_spend(call_id) for _, (_, _, _, call_id) in after]
+    assert costs == [pytest.approx(stream_cost)] * len(after), costs
+    charged: Final = eventually(
+        lambda: _key_spend(rig.keys[OUTAGE]) - spend_before,
+        lambda spend: spend == pytest.approx(len((*during, *after)) * stream_cost),
+        seconds=70,
+        return_last_on_timeout=True,
+    )
+    assert charged == pytest.approx(len((*during, *after)) * stream_cost), charged
 
 
 def test_client_disconnect_stops_the_proxy_reading_the_upstream(rig: Rig) -> None:

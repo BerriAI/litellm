@@ -3,7 +3,8 @@ import math
 from collections.abc import Callable
 from typing import Any, Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
+from pydantic_core import to_jsonable_python
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
@@ -113,3 +114,13 @@ def safe_dumps(
     return json.dumps(
         safe_json_structure(data, max_depth, value_transform, non_finite_as_null=non_finite_as_null), default=str
     )
+
+
+_JSONABLE: Final = TypeAdapter(object)
+
+
+def jsonable_or_str(value: object) -> object:
+    try:
+        return _JSONABLE.validate_python(to_jsonable_python(value, fallback=str))
+    except ValueError:
+        return str(value)

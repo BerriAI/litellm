@@ -23,6 +23,7 @@ from botocore.exceptions import ClientError
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
@@ -345,12 +346,14 @@ _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
             },
         ),
         ("bedrock/invoke/ai21.j2-ultra-v1", {}),
+        ("bedrock/converse/meta.llama3-3-70b-instruct-v1:0", {"fake_stream": True}),
     ],
     ids=[
         "model_without_streaming",
         "request_shape_without_streaming",
         "json_schema_without_native_structured_output",
         "invoke_route_without_streaming",
+        "caller_fake_stream",
     ],
 )
 
@@ -500,21 +503,6 @@ async def test_fake_stream_through_a_router_adapter_is_bounded_by_the_request_ti
         if isinstance(chunk, litellm.ModelResponseStream)
     ]
     assert "".join(contents) == "hi"
-
-
-@pytest.mark.asyncio
-async def test_live_anthropic_messages_stream_through_the_router_fails_at_the_stream_timeout(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer())
-    router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
-        "bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0"
-    )
-
-    with pytest.raises(litellm.Timeout) as excinfo:
-        await _anthropic_messages_text(router)
-    assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
 
 def test_sync_live_stream_through_the_router_fails_at_the_stream_timeout() -> None:
@@ -786,6 +774,7 @@ async def test_failed_stream_on_each_router_surface_reports_the_timeout_it_was_b
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(upstream_answer))
     router: Final = _bedrock_router(
         model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS
@@ -1101,3 +1090,32 @@ def test_converse_profile_override_records_cost_without_changing_response_model(
         CONVERSE_RESPONSE["usage"]["inputTokens"] * prices["input_cost_per_token"]
         + CONVERSE_RESPONSE["usage"]["outputTokens"] * prices["output_cost_per_token"]
     )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/openai/v1/chat/completions",
+        "https://gateway.example.com/openai/v1/responses",
+        "https://gateway.example.com/openai/v1",
+    ],
+)
+def test_converse_fallback_on_a_full_route_url_api_base_calls_converse_on_that_host(
+    api_base: str, respx_mock: respx.MockRouter
+) -> None:
+    gateway: Final = respx_mock.post(url__startswith="https://gateway.example.com/").mock(
+        return_value=httpx.Response(200, json=CONVERSE_RESPONSE)
+    )
+
+    litellm.completion(
+        model="bedrock/us.openai.gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=api_base,
+        api_key="bedrock-api-key",
+        aws_region_name="us-east-1",
+        response_format={"type": "json_object"},
+    )
+
+    assert [call.request.url for call in gateway.calls] == [
+        httpx.URL("https://gateway.example.com/model/us.openai.gpt-6.1-sol/converse")
+    ]

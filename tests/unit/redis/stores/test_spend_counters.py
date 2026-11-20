@@ -10,6 +10,7 @@ from litellm.redis.stores.connection import RedisStores, connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
+    committed_counter,
     end_user_counter,
     is_unavailable,
     key_counter,
@@ -26,7 +27,7 @@ from litellm.redis.stores.spend_counters import (
 )
 from litellm.redis.store_settings import RedisStoreSettings
 from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters, SpendRead
-from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 
 from .spend_counters_double import FakeSpendCounters
 
@@ -46,6 +47,17 @@ _KEYS: Final = (
     (project_counter("proj-1"), "spend:project:proj-1"),
     (model_access_group_counter("gpt-group"), "spend:model_access_group:gpt-group"),
     (shadow_eval_counter("job-7"), "spend:shadow_eval:job-7"),
+    ("spend:customer_org:tenant:lifetime", "spend:customer_org:tenant:lifetime"),
+    (
+        "spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00",
+        "spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00",
+    ),
+    ("spend:customer_member:user@example.com:lifetime", "spend:customer_member:user@example.com:lifetime"),
+    (committed_counter(key_counter("88dc28d0")), "spend:committed:key:88dc28d0"),
+    (committed_counter(team_counter("team-a")), "spend:committed:team:team-a"),
+    (committed_counter(user_counter("user@example.com")), "spend:committed:user:user@example.com"),
+    (committed_counter(org_counter("org-1")), "spend:committed:org:org-1"),
+    (committed_counter(end_user_counter("customer é 1")), "spend:committed:end_user:customer é 1"),
 )
 
 
@@ -81,7 +93,17 @@ def test_a_read_decodes_what_redis_cache_decodes(wire: str, spend: float) -> Non
     assert type(decoded) is type(spend)
 
 
-@pytest.mark.parametrize("key", ["spend_db_floor:spend:key:k", "virtual_key_spend:k:gpt:1d", "spend:unknown:k"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "spend_db_floor:spend:key:k",
+        "virtual_key_spend:k:gpt:1d",
+        "spend:unknown:k",
+        "spend:committed:key:k:window:1d",
+        "spend:committed:tag:prod",
+        "spend:committed:committed:key:k",
+    ],
+)
 def test_the_native_store_refuses_keys_outside_the_spend_counter_keyspace(key: str) -> None:
     with pytest.raises(ValueError, match="a spend counter is a spend:\* key"):
         NativeSpendCounters(None).get_local(key)

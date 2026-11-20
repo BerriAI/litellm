@@ -35,6 +35,7 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentCaller
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 
 @pytest.mark.parametrize(
@@ -2697,8 +2698,8 @@ class TestMCPDelegateAuthToUpstream:
             patch.dict(proxy_server.general_settings, {"enable_jwt_auth": True}),
             patch.object(proxy_server, "premium_user", True),
             patch.object(proxy_server, "user_custom_auth", None),
-            patch.object(proxy_server.jwt_handler, "auth_jwt", auth_jwt),
-            patch.object(proxy_server.jwt_handler, "litellm_jwtauth", LiteLLM_JWTAuth(), create=True),
+            patch.object(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth()),
+            patch("litellm.proxy.auth.jwt.verify", auth_jwt),
             patch.dict(os.environ),
         ):
             os.environ.pop("JWT_ISSUER", None)
@@ -2927,7 +2928,9 @@ class TestMCPDelegateAuthToUpstream:
     @staticmethod
     @contextlib.contextmanager
     def _idp_auth_enabled(
-        mechanism: Literal["oauth2", "oauth2_proxy"], verify: AsyncMock, premium: bool = True
+        mechanism: Literal["oauth2", "oauth2_proxy"],
+        verify: AsyncMock,
+        premium: bool = True,
     ) -> Iterator[None]:
         from litellm.proxy import proxy_server
         from litellm.proxy.auth.oauth2_check import Oauth2Handler
@@ -2987,7 +2990,11 @@ class TestMCPDelegateAuthToUpstream:
         ids=["granted-user", "user-not-granted", "token-inactive", "provider-rejects-token"],
     )
     async def test_delegate_oauth2_introspects_once_and_follows_the_jwt_rules(
-        self, provider_status: int, active: bool, allowed_server_ids: Sequence[str], expected_user_id: str | None
+        self,
+        provider_status: int,
+        active: bool,
+        allowed_server_ids: Sequence[str],
+        expected_user_id: str | None,
     ) -> None:
         """The provider is asked about the token once per request. A token it vouches for admits a granted
         user by name, and one it reports inactive or rejects outright is forwarded anonymously instead of
@@ -9076,7 +9083,12 @@ class TestUserSubjectTeamUnion:
         one cross-team user drain several teams' buckets on a single call, blocking their other
         members for access those teams did not provide. Exactly one source is charged, and it is the
         SAME source billing picks — one owner for both, so they cannot disagree."""
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            PROXY_MaxParallelRequestsHandler_v3,
+            _mcp_scope,
+            run_scoped,
+        )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
         t1 = _make_team("t1", ["srv1"])
         t1.metadata = {"mcp_rpm_limit": {"srv1": 5}}
@@ -9089,10 +9101,14 @@ class TestUserSubjectTeamUnion:
         assert auth.mcp_source_team_rpm_limits == {"t1": {"srv1": 5}}, "t2's shared bucket is untouched"
         assert billed is not None and billed.team_id == "t1", "throttling and billing pick the same source"
 
-        descriptors: list = []
+        server = MCPServer(server_id="srv1", name="srv1", server_name="srv1", transport="http")
         limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-        limiter._add_mcp_per_team_rate_limit_descriptor(auth, "srv1", descriptors)
-        charged = {d["value"]: d["rate_limit"]["requests_per_unit"] for d in descriptors}
+        scoped = await run_scoped(
+            limiter, auth, {}, {"kind": "mcp", **_mcp_scope(auth, server)}, {"kind": "build"}, lookups=False
+        )
+        charged = {
+            d["value"]: d["rate_limit"]["requests_per_unit"] for d in scoped.descriptors if d["key"] == "mcp_per_team"
+        }
         assert charged == {"t1:srv1": 5}, "only the attributing team's bucket is charged"
 
     async def test_direct_user_grant_charges_no_team_bucket(self):
@@ -10142,443 +10158,99 @@ class TestSessionBearerEgressScrub:
         assert per_server == {"github": {"Authorization": "Bearer gh_injected_upstream"}}
 
     @pytest.mark.parametrize(
-        "context",
-        ["per_server", "mcp_auth", "oauth2_authorization", "raw_authorization"],
-    )
-    @pytest.mark.parametrize(
         "caller_value",
-        ["sk-caller-admission-key-123", "Bearer sk-caller-admission-key-123"],
+        [
+            "sk-caller-admission-key-123",
+            "Bearer sk-caller-admission-key-123",
+            "BEARER sk-caller-admission-key-123",
+            "Bearer  sk-caller-admission-key-123",
+            "Basic sk-caller-admission-key-123",
+        ],
     )
-    async def test_scrub_removes_caller_admission_key_from_each_egress_context(
-        self,
-        context: Literal["per_server", "mcp_auth", "oauth2_authorization", "raw_authorization"],
-        caller_value: str,
-    ) -> None:
+    async def test_scrub_drops_caller_key_only_from_implicit_authorization(self, caller_value: str) -> None:
         caller_key: Final = "sk-caller-admission-key-123"
-        upstream_token: Final = "Bearer real-upstream-token"
-        oauth2_headers: Final = {"Authorization": caller_value if context == "oauth2_authorization" else upstream_token}
         raw_headers: Final = {
             "x-litellm-api-key": f"Bearer {caller_key}",
-            "authorization": caller_value if context == "raw_authorization" else upstream_token,
-            "x-upstream-token": upstream_token,
-        }
-        mcp_auth_header: Final = caller_value if context == "mcp_auth" else upstream_token
-        mcp_server_auth_headers: Final = {
-            "echo_srv": {
-                "Authorization": caller_value if context == "per_server" else upstream_token,
-            }
+            "authorization": caller_value,
+            "x-tenant": caller_value,
         }
 
         oauth2, raw, mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
-            oauth2_headers=oauth2_headers,
+            oauth2_headers={"Authorization": caller_value},
             raw_headers=raw_headers,
-            mcp_auth_header=mcp_auth_header,
-            mcp_server_auth_headers=mcp_server_auth_headers,
+            mcp_auth_header=caller_value,
+            mcp_server_auth_headers={"echo_srv": {"Authorization": caller_value}},
             admitted_credential=caller_key,
         )
 
-        assert raw["x-litellm-api-key"] == f"Bearer {caller_key}"
-        assert raw["x-upstream-token"] == upstream_token
-        if context == "raw_authorization":
-            assert "authorization" not in raw
-        else:
-            assert raw["authorization"] == upstream_token
-        if context == "oauth2_authorization":
-            assert oauth2 is None
-        else:
-            assert oauth2 == {"Authorization": upstream_token}
-        if context == "mcp_auth":
-            assert mcp_auth is None
-        else:
-            assert mcp_auth == upstream_token
-        if context == "per_server":
-            assert not per_server
-        else:
-            assert per_server == {"echo_srv": {"Authorization": upstream_token}}
+        assert oauth2 is None
+        assert raw == raw_headers
+        assert mcp_auth == caller_value
+        assert per_server == {"echo_srv": {"Authorization": caller_value}}
 
-    async def test_scrub_keeps_non_ascii_per_server_token(self) -> None:
-        upstream_token: Final = "Bearer t\u00f6ken"
-        _oauth2, _raw, _mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
+    async def test_scrub_keeps_distinct_upstream_authorization(self) -> None:
+        upstream_token: Final = "Bearer real-upstream-token"
+        oauth2, _raw, _mcp_auth, _per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
-            admitted_credential="sk-caller-admission-key-123",
-            oauth2_headers=None,
+            oauth2_headers={"Authorization": upstream_token},
             raw_headers={},
             mcp_auth_header=None,
-            mcp_server_auth_headers={"echo_srv": {"Authorization": upstream_token}},
+            mcp_server_auth_headers=None,
+            admitted_credential="sk-caller-admission-key-123",
         )
 
-        assert per_server == {"echo_srv": {"Authorization": upstream_token}}
-
-    async def test_scrub_keeps_caller_key_when_admission_credential_is_missing(self) -> None:
-        caller_key: Final = "Bearer sk-caller-admission-key-123"
-        oauth2, raw, mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": caller_key},
-            raw_headers={"x-litellm-api-key": caller_key, "authorization": caller_key},
-            mcp_auth_header=caller_key,
-            mcp_server_auth_headers={"echo_srv": {"Authorization": caller_key}},
-            admitted_credential=None,
-        )
-
-        assert oauth2 == {"Authorization": caller_key}
-        assert raw == {"x-litellm-api-key": caller_key, "authorization": caller_key}
-        assert mcp_auth == caller_key
-        assert per_server == {"echo_srv": {"Authorization": caller_key}}
+        assert oauth2 == {"Authorization": upstream_token}
 
     @pytest.mark.parametrize(
-        "admission_value,per_server_value",
-        (
-            ("Bearer sk-caller-admission-key-123", "BEARER sk-caller-admission-key-123"),
-            ("Bearer sk-caller-admission-key-123", "Bearer  sk-caller-admission-key-123"),
-            ("Bearer sk-caller-admission-key-123", "Basic sk-caller-admission-key-123"),
-            ("Basic sk-caller-admission-key-123", "sk-caller-admission-key-123"),
-            ("Bearer sk-caller-admission-key-123", "bearer sk-caller-admission-key-123"),
-        ),
+        ("headers", "custom_key_header_name", "expected"),
+        [
+            (
+                {
+                    "x-litellm-api-key": "Bearer sk-caller",
+                    "authorization": "Bearer upstream",
+                    SpecialHeaders.azure_authorization.value: "provider",
+                },
+                None,
+                "sk-caller",
+            ),
+            (
+                {"authorization": "Bearer sk-caller", SpecialHeaders.azure_authorization.value: "provider"},
+                None,
+                "sk-caller",
+            ),
+            (
+                {"x-custom-api-key": "Bearer sk-caller", "x-litellm-api-key": "Bearer standard"},
+                "x-custom-api-key",
+                "sk-caller",
+            ),
+            ({"x-litellm-api-key": "", "authorization": "sk-caller"}, None, "sk-caller"),
+            ({"authorization": "", "api-key": "sk-caller"}, None, "sk-caller"),
+            (
+                {
+                    SpecialHeaders.azure_authorization.value: "azure-key",
+                    SpecialHeaders.anthropic_authorization.value: "anthropic-key",
+                    SpecialHeaders.google_ai_studio_authorization.value: "google-key",
+                    SpecialHeaders.azure_apim_authorization.value: "apim-key",
+                },
+                None,
+                "azure-key",
+            ),
+            ({SpecialHeaders.anthropic_authorization.value: "anthropic-key"}, None, "anthropic-key"),
+            ({SpecialHeaders.google_ai_studio_authorization.value: "google-key"}, None, "google-key"),
+            ({SpecialHeaders.azure_apim_authorization.value: "apim-key"}, None, "apim-key"),
+        ],
     )
-    async def test_caller_admission_credential_scrubs_bearer_variants_and_basic(
-        self,
-        admission_value: str,
-        per_server_value: str,
+    async def test_caller_admission_credential_matches_admission_header_precedence(
+        self, headers: dict[str, str], custom_key_header_name: str | None, expected: str
     ) -> None:
-        upstream_authorization: Final = "Bearer unrelated-upstream-token"
-        headers: Final = Headers(
-            {
-                "x-litellm-api-key": admission_value,
-                "authorization": upstream_authorization,
-                "x-mcp-auth": per_server_value,
-                "x-mcp-echo_srv-authorization": per_server_value,
-                "x-upstream-token": upstream_authorization,
-            }
-        )
-        user_api_key_auth: Final = UserAPIKeyAuth(api_key="stored-key-hash")
         admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            user_api_key_auth,
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": upstream_authorization},
-            raw_headers=dict(headers),
-            mcp_auth_header=per_server_value,
-            mcp_server_auth_headers={
-                "echo_srv": {"Authorization": per_server_value},
-                "other_srv": {"Authorization": upstream_authorization},
-            },
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            {"Authorization": upstream_authorization},
-            {
-                "x-litellm-api-key": admission_value,
-                "authorization": upstream_authorization,
-                "x-upstream-token": upstream_authorization,
-            },
-            None,
-            {"other_srv": {"Authorization": upstream_authorization}},
-        )
-
-    @pytest.mark.parametrize(
-        ("empty_header", "admission_header"),
-        (("x-litellm-api-key", "authorization"), ("authorization", "api-key")),
-    )
-    async def test_empty_admission_header_falls_back_to_authenticated_key(
-        self, empty_header: str, admission_header: str
-    ) -> None:
-        caller_key: Final = "sk-caller-admission-key-123"
-        headers: Final = Headers({empty_header: "", admission_header: caller_key})
-        credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers, UserAPIKeyAuth(api_key="stored-key-hash"), custom_key_header_name=None
-        )
-        assert credential == caller_key
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": f"Bearer {caller_key}"},
-            raw_headers={**dict(headers), "x-upstream-token": caller_key, "x-tenant": "tenant-control"},
-            mcp_auth_header=caller_key,
-            mcp_server_auth_headers={"echo": {"Authorization": caller_key}},
-            admitted_credential=credential,
-        )
-        assert result == (None, {empty_header: "", "x-tenant": "tenant-control"}, None, {})
-
-    @pytest.mark.parametrize("claims", [None, {"sub": "caller"}])
-    @pytest.mark.parametrize("bearer", ["validated-jwt", "sk-admission-key"])
-    async def test_scrubbing_preserves_only_validated_jwt_admission(
-        self, claims: dict[str, str] | None, bearer: str
-    ) -> None:
-        headers: Final = Headers({"Authorization": f"Bearer {bearer}"})
-        auth: Final = UserAPIKeyAuth(api_key="stored-key-hash", jwt_claims=claims)
-        credential: Final = MCPRequestHandler.caller_admission_credential(headers, auth, custom_key_header_name=None)
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": f"Bearer {bearer}"},
-            raw_headers={**dict(headers), "x-mcp-echo-authorization": f"Bearer {bearer}"},
-            mcp_auth_header=bearer,
-            mcp_server_auth_headers={"echo": {"Authorization": f"Bearer {bearer}"}},
-            admitted_credential=credential,
-            preserve_jwt_subject=bool(claims),
-        )
-        expected: Final = {"Authorization": f"Bearer {bearer}"} if claims and not bearer.startswith("sk-") else None
-        assert result == (None, dict(headers) if expected else {}, None, {})
-
-    async def test_caller_admission_credential_prefers_x_litellm_header(self) -> None:
-        caller_key: Final = "sk-caller-admission-key-123"
-        upstream_authorization: Final = "Bearer unrelated-upstream-token"
-        provider_key: Final = "provider-key-not-admitted"
-        headers: Final = Headers(
-            {
-                "x-litellm-api-key": f"Bearer {caller_key}",
-                "authorization": upstream_authorization,
-                SpecialHeaders.azure_authorization.value: provider_key,
-                "x-mcp-auth": f"Bearer {caller_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
+            Headers(headers),
             UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": upstream_authorization},
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {caller_key}",
-            mcp_server_auth_headers={
-                "echo_srv": {"Authorization": f"Bearer {caller_key}"},
-                "other_srv": {"Authorization": upstream_authorization},
-            },
-            admitted_credential=admitted_credential,
+            custom_key_header_name=custom_key_header_name,
         )
 
-        assert result == (
-            {"Authorization": upstream_authorization},
-            {
-                "x-litellm-api-key": f"Bearer {caller_key}",
-                "authorization": upstream_authorization,
-                "api-key": provider_key,
-            },
-            None,
-            {"other_srv": {"Authorization": upstream_authorization}},
-        )
-
-    async def test_caller_admission_credential_prefers_authorization_before_provider_headers(self) -> None:
-        caller_key: Final = "sk-caller-admission-key-123"
-        provider_key: Final = "provider-key-not-admitted"
-        headers: Final = Headers(
-            {
-                "authorization": f"Bearer {caller_key}",
-                SpecialHeaders.azure_authorization.value: provider_key,
-                "x-mcp-auth": f"Bearer {caller_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": f"Bearer {caller_key}"},
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {caller_key}",
-            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {caller_key}"}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            None,
-            {"api-key": provider_key},
-            None,
-            {},
-        )
-
-    async def test_caller_admission_credential_uses_configured_custom_header(self) -> None:
-        caller_key: Final = "sk-caller-admission-key-123"
-        standard_key: Final = "Bearer standard-key-not-admitted"
-        upstream_authorization: Final = "Bearer unrelated-upstream-token"
-        headers: Final = Headers(
-            {
-                "x-custom-api-key": f"Bearer {caller_key}",
-                "x-litellm-api-key": standard_key,
-                "authorization": upstream_authorization,
-                "x-mcp-auth": f"Bearer {caller_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name="x-custom-api-key",
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": upstream_authorization},
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {caller_key}",
-            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {caller_key}"}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            {"Authorization": upstream_authorization},
-            {
-                "x-litellm-api-key": standard_key,
-                "authorization": upstream_authorization,
-            },
-            None,
-            {},
-        )
-
-    async def test_caller_admission_credential_falls_back_to_standard_headers_when_custom_header_is_absent(
-        self,
-    ) -> None:
-        caller_value: Final = "Bearer sk-caller-admission-key-123"
-        headers: Final = Headers(
-            {
-                "x-litellm-api-key": caller_value,
-                "authorization": caller_value,
-                "x-mcp-auth": caller_value,
-                "x-mcp-echo_srv-authorization": caller_value,
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name="x-custom-api-key",
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": caller_value},
-            raw_headers=dict(headers),
-            mcp_auth_header=caller_value,
-            mcp_server_auth_headers={"echo_srv": {"Authorization": caller_value}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert admitted_credential == "sk-caller-admission-key-123"
-        assert result == (
-            None,
-            {"x-litellm-api-key": caller_value},
-            None,
-            {},
-        )
-
-    async def test_caller_admission_credential_uses_master_key_alias_as_admission_gate(self) -> None:
-        master_key: Final = "sk-" + "1234"
-        headers: Final = Headers(
-            {
-                "x-litellm-api-key": f"Bearer {master_key}",
-                "authorization": f"Bearer {master_key}",
-                "x-mcp-auth": f"Bearer {master_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {master_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="litellm_proxy_master_key"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": f"Bearer {master_key}"},
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {master_key}",
-            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {master_key}"}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            None,
-            {"x-litellm-api-key": f"Bearer {master_key}"},
-            None,
-            {},
-        )
-
-    @pytest.mark.parametrize(
-        "provider_header_name",
-        (
-            SpecialHeaders.azure_authorization.value,
-            SpecialHeaders.anthropic_authorization.value,
-            SpecialHeaders.google_ai_studio_authorization.value,
-            SpecialHeaders.azure_apim_authorization.value,
-        ),
-    )
-    async def test_caller_admission_credential_scrubs_provider_header(
-        self,
-        provider_header_name: str,
-    ) -> None:
-        provider_key: Final = "provider-admission-key"
-        headers: Final = Headers(
-            {
-                provider_header_name: provider_key,
-                "x-mcp-auth": f"Bearer {provider_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {provider_key}",
-                "x-upstream-token": "Bearer unrelated-upstream-token",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers=None,
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {provider_key}",
-            mcp_server_auth_headers={
-                "echo_srv": {"Authorization": f"Bearer {provider_key}"},
-                "other_srv": {"Authorization": "Bearer unrelated-upstream-token"},
-            },
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            None,
-            {"x-upstream-token": "Bearer unrelated-upstream-token"},
-            None,
-            {"other_srv": {"Authorization": "Bearer unrelated-upstream-token"}},
-        )
-
-    async def test_caller_admission_credential_follows_provider_header_precedence(self) -> None:
-        azure_key: Final = "azure-admission-key"
-        headers: Final = Headers(
-            {
-                SpecialHeaders.azure_authorization.value: azure_key,
-                SpecialHeaders.anthropic_authorization.value: "anthropic-not-admitted",
-                SpecialHeaders.google_ai_studio_authorization.value: "google-not-admitted",
-                SpecialHeaders.azure_apim_authorization.value: "apim-not-admitted",
-                "x-mcp-echo_srv-authorization": f"Bearer {azure_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers=None,
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {azure_key}",
-            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {azure_key}"}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            None,
-            {
-                "x-api-key": "anthropic-not-admitted",
-                "x-goog-api-key": "google-not-admitted",
-                "ocp-apim-subscription-key": "apim-not-admitted",
-            },
-            None,
-            {},
-        )
+        assert admitted_credential == expected
 
     async def test_caller_admission_credential_returns_none_without_admitted_api_key(self) -> None:
         caller_value: Final = "Bearer sk-caller-admission-key-123"
@@ -10851,24 +10523,22 @@ class TestUserMCPEntitlement:
 class TestGetUserObjectPermission:
     """Resolution of the ``user_id -> object_permission_id -> grants`` chain."""
 
-    def _prisma_with_user(self, user_row):
+    def _prisma_with_user(self, stores: RustAuthStores, user_row, user_id: str):
         prisma_client = MagicMock()
         from litellm.proxy._types import LiteLLM_UserTable
 
-        row = (
-            LiteLLM_UserTable(user_id="human", object_permission_id=user_row.object_permission_id)
-            if user_row is not None
-            else None
-        )
-        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=row)
+        if user_row is not None:
+            stores.user.rows[user_id] = LiteLLM_UserTable(
+                user_id=user_id, object_permission_id=user_row.object_permission_id
+            ).model_dump()
         return prisma_client
 
-    async def test_resolves_through_the_shared_permission_cache(self):
+    async def test_resolves_through_the_shared_permission_cache(self, rust_auth_stores: RustAuthStores):
         from litellm.caching.dual_cache import DualCache
 
         user_row = MagicMock()
         user_row.object_permission_id = "perm-1"
-        prisma_client = self._prisma_with_user(user_row)
+        prisma_client = self._prisma_with_user(rust_auth_stores, user_row, "human-shared")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-shared")
         expected = MagicMock()
 
@@ -10889,17 +10559,17 @@ class TestGetUserObjectPermission:
             assert mock_get_perm.await_args.kwargs["object_permission_id"] == "perm-1"
 
             # The user_id -> object_permission_id link is cached, so the user row is read once.
-            prisma_client.db.litellm_usertable.find_unique.reset_mock()
+            reads = len(rust_auth_stores.user.sign_ins)
             await MCPRequestHandler._get_user_object_permission(auth)
-            prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+            assert len(rust_auth_stores.user.sign_ins) == reads
 
-    async def test_caches_a_sentinel_for_a_human_with_no_entitlement(self):
+    async def test_caches_a_sentinel_for_a_human_with_no_entitlement(self, rust_auth_stores: RustAuthStores):
         """A human without an entitlement is the common case and must cost no DB read per request."""
         from litellm.caching.dual_cache import DualCache
 
         user_row = MagicMock()
         user_row.object_permission_id = None
-        prisma_client = self._prisma_with_user(user_row)
+        prisma_client = self._prisma_with_user(rust_auth_stores, user_row, "human-no-perm")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-no-perm")
 
         with (
@@ -10914,15 +10584,15 @@ class TestGetUserObjectPermission:
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
             mock_get_perm.assert_not_awaited()
-            prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
+            assert len(rust_auth_stores.user.sign_ins) == 1
 
     @pytest.mark.parametrize("fresh_policy", [False, True])
-    async def test_missing_user_row_places_no_ceiling(self, fresh_policy):
+    async def test_missing_user_row_places_no_ceiling(self, rust_auth_stores: RustAuthStores, fresh_policy):
         """Whether this human is entitled at all is unknown when their row is absent, which is the
         state before the level existed, so it must not deny."""
         from litellm.caching.dual_cache import DualCache
 
-        prisma_client = self._prisma_with_user(None)
+        prisma_client = self._prisma_with_user(rust_auth_stores, None, "ghost")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="ghost")
         auth.requires_fresh_policy = fresh_policy
         prisma_client.writer_db = prisma_client.db
@@ -10937,11 +10607,11 @@ class TestGetUserObjectPermission:
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
-    async def test_unreadable_user_row_places_no_ceiling(self):
+    async def test_unreadable_user_row_places_no_ceiling(self, rust_auth_stores: RustAuthStores):
         from litellm.caching.dual_cache import DualCache
 
         prisma_client = MagicMock()
-        prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=Exception("db down"))
+        rust_auth_stores.user.error = Exception("db down")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-db-down")
 
         with (
@@ -10954,14 +10624,14 @@ class TestGetUserObjectPermission:
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
-    async def test_named_but_unreadable_permission_raises(self):
+    async def test_named_but_unreadable_permission_raises(self, rust_auth_stores: RustAuthStores):
         """A KNOWN entitlement with unknown contents is indeterminate: it must surface so the callers
         can deny rather than serve the wider key scope."""
         from litellm.caching.dual_cache import DualCache
 
         user_row = MagicMock()
         user_row.object_permission_id = "perm-gone"
-        prisma_client = self._prisma_with_user(user_row)
+        prisma_client = self._prisma_with_user(rust_auth_stores, user_row, "human-dangling")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-dangling")
 
         with (
@@ -11298,7 +10968,9 @@ class TestScopedSessionAdmission:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [RuntimeError("unavailable"), ValueError("User doesn't exist in db")])
-async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch, failure):
+async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(
+    monkeypatch, rust_auth_stores: RustAuthStores, failure
+):
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_UserTable
@@ -11308,12 +10980,13 @@ async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(
     cache = DualCache()
     await cache.async_set_cache(key="fresh-human", value=cached)
     database = MagicMock()
-    database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=current)
-    database.db.litellm_usertable.find_unique = AsyncMock(return_value=cached)
+    users = rust_auth_stores.user
+    users.writer = {"fresh-human": current.model_dump()}
+    users.rows = {"fresh-human": cached.model_dump()}
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True) == "current"
-    database.db.litellm_usertable.find_unique.assert_not_awaited()
-    database.writer_db.litellm_usertable.find_unique.side_effect = failure
+    assert all(writer for _, writer in users.sign_ins)
+    users.writer["fresh-human"] = failure
     with pytest.raises(HTTPException) as denied:
         await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True)
     assert denied.value.status_code == 503
@@ -11383,7 +11056,9 @@ async def test_catalog_refresh_preserves_non_database_admission_and_resource_sco
 
 
 @pytest.mark.asyncio
-async def test_catalog_refresh_reads_current_user_org_without_losing_resource_scope(monkeypatch):
+async def test_catalog_refresh_reads_current_user_org_without_losing_resource_scope(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     from types import SimpleNamespace
 
     from litellm.caching.dual_cache import DualCache
@@ -11393,8 +11068,8 @@ async def test_catalog_refresh_reads_current_user_org_without_losing_resource_sc
     current = LiteLLM_UserTable(
         user_id="catalog-user", organization_id="current-org", user_role="internal_user", teams=[]
     )
-    table = SimpleNamespace(find_unique=AsyncMock(return_value=current))
-    database = SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table))
+    rust_auth_stores.user.rows = {"catalog-user": current.model_dump()}
+    database = SimpleNamespace(writer_db=SimpleNamespace())
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     caller = UserAPIKeyAuth(user_id="catalog-user", org_id="previous-org", user_role="proxy_admin")
@@ -11935,12 +11610,12 @@ class TestAccessGroupToolOwnershipAndFaults:
         ):
             assert await MCPRequestHandler.get_allowed_tools_for_server("srv", auth) == ["read"]
 
-    async def test_duplicate_agent_group_ids_do_not_deny(self):
+    async def test_duplicate_agent_group_ids_do_not_deny(self, rust_auth_stores: RustAuthStores):
         auth = _key_auth_reaching("srv", agent_id="agent-1")
         groups = [_access_group("g", ["srv"], {"srv": ["read"]})]
         agent = MagicMock(access_group_ids=["g", "g"])
         with (
-            _entitlement_fault_globals(self._agent_prisma_with_own_tools(["read", "write"])),
+            _entitlement_fault_globals(self._agent_prisma_with_own_tools(rust_auth_stores, ["read", "write"])),
             patch(
                 "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
                 AsyncMock(return_value=agent),
@@ -11988,11 +11663,13 @@ class TestAccessGroupToolOwnershipAndFaults:
         ):
             assert await MCPRequestHandler.get_allowed_tools_for_server("srv", auth) == []
 
-    async def test_agent_group_fault_denies_rather_than_shedding_the_agents_own_allowlist(self):
+    async def test_agent_group_fault_denies_rather_than_shedding_the_agents_own_allowlist(
+        self, rust_auth_stores: RustAuthStores
+    ):
         auth = _key_auth_reaching("srv", agent_id="agent-1")
         agent = MagicMock(access_group_ids=["g"])
         with (
-            _entitlement_fault_globals(self._agent_prisma_with_own_tools(["read"])),
+            _entitlement_fault_globals(self._agent_prisma_with_own_tools(rust_auth_stores, ["read"])),
             patch(
                 "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
                 AsyncMock(return_value=agent),
@@ -12018,21 +11695,18 @@ class TestAccessGroupToolOwnershipAndFaults:
         assert sorted(capped) == ["read"]
 
     @staticmethod
-    def _agent_prisma_with_own_tools(tools: Sequence[str]) -> MagicMock:
-        prisma_client = _agent_prisma(object_permission_id="op-agent")
-        prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-            return_value=LiteLLM_ObjectPermissionTable(
-                object_permission_id="op-agent", mcp_servers=["srv"], mcp_tool_permissions={"srv": tools}
-            )
+    def _agent_prisma_with_own_tools(stores: RustAuthStores, tools: Sequence[str]) -> MagicMock:
+        stores.object_permission.reader["op-agent"] = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-agent", mcp_servers=["srv"], mcp_tool_permissions={"srv": tools}
         )
-        return prisma_client
+        return _agent_prisma(object_permission_id="op-agent")
 
-    async def test_agent_group_ceiling_caps_the_agents_own_tools(self):
+    async def test_agent_group_ceiling_caps_the_agents_own_tools(self, rust_auth_stores: RustAuthStores):
         auth = _key_auth_reaching("srv", agent_id="agent-1")
         groups = [_access_group("g", ["srv"], {"srv": ["read"]})]
         agent = MagicMock(access_group_ids=["g"])
         with (
-            _entitlement_fault_globals(self._agent_prisma_with_own_tools(["read", "write"])),
+            _entitlement_fault_globals(self._agent_prisma_with_own_tools(rust_auth_stores, ["read", "write"])),
             patch(
                 "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
                 AsyncMock(return_value=agent),
@@ -12041,12 +11715,12 @@ class TestAccessGroupToolOwnershipAndFaults:
         ):
             assert await MCPRequestHandler.get_allowed_tools_for_server("srv", auth) == ["read"]
 
-    async def test_agent_group_tools_outside_the_agents_own_grant_are_denied(self):
+    async def test_agent_group_tools_outside_the_agents_own_grant_are_denied(self, rust_auth_stores: RustAuthStores):
         auth = _key_auth_reaching("srv", agent_id="agent-1")
         groups = [_access_group("g", ["srv"], {"srv": ["write"]})]
         agent = MagicMock(access_group_ids=["g"])
         with (
-            _entitlement_fault_globals(self._agent_prisma_with_own_tools(["read"])),
+            _entitlement_fault_globals(self._agent_prisma_with_own_tools(rust_auth_stores, ["read"])),
             patch(
                 "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
                 AsyncMock(return_value=agent),
@@ -12088,9 +11762,6 @@ class _EmptyTables:
     ``reload_admitted_user`` reads, and every other table (keys, MCP servers, config) empty, so the
     real ``_reload_admitted_key`` fails closed, since a session credential has no key row."""
 
-    def __init__(self, live_user: LiteLLM_UserTable) -> None:
-        self.litellm_usertable = SimpleNamespace(find_unique=AsyncMock(return_value=live_user))
-
     def __getattr__(self, table: str) -> SimpleNamespace:
         empty: Final = SimpleNamespace(
             find_unique=AsyncMock(return_value=None),
@@ -12102,19 +11773,23 @@ class _EmptyTables:
         return empty
 
 
-def _session_credential_storage(live_user: LiteLLM_UserTable) -> SimpleNamespace:
-    tables: Final = _EmptyTables(live_user)
+def _session_credential_storage(stores: RustAuthStores, live_user: LiteLLM_UserTable) -> SimpleNamespace:
+    stores.user.rows[live_user.user_id] = live_user.model_dump()
+    tables: Final = _EmptyTables()
     return SimpleNamespace(db=tables, writer_db=tables)
 
 
 @pytest.mark.asyncio
-async def test_catalog_refresh_reloads_session_credential_through_its_user_and_keeps_token_grants(monkeypatch):
+async def test_catalog_refresh_reloads_session_credential_through_its_user_and_keeps_token_grants(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     """A ``/token``-minted or ``lite login`` credential has no key row: the catalog refresh must read the live
     user policy, never the key table, and keep the team, routes and models sealed in the token."""
     from litellm.proxy import proxy_server
 
     database = _session_credential_storage(
-        LiteLLM_UserTable(user_id="session-user", organization_id="live-org", user_role="internal_user", teams=[])
+        rust_auth_stores,
+        LiteLLM_UserTable(user_id="session-user", organization_id="live-org", user_role="internal_user", teams=[]),
     )
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
@@ -12130,7 +11805,7 @@ async def test_catalog_refresh_reloads_session_credential_through_its_user_and_k
     )
     caller.via_virtual_key = True
     refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
-    assert database.writer_db.litellm_usertable.find_unique.await_count >= 1
+    assert rust_auth_stores.user.sign_ins
     database.writer_db.litellm_verificationtoken.find_unique.assert_not_awaited()
     assert (refreshed.object_permission, refreshed.object_permission_id) == (None, None)
     assert (refreshed.user_role, refreshed.org_id) == ("internal_user", "live-org")
@@ -12145,7 +11820,9 @@ async def test_catalog_refresh_reloads_session_credential_through_its_user_and_k
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ["litellm:mcp litellm:llm", "litellm:mcp", None])
-async def test_token_minted_credential_lists_tools_for_every_scope_shape(monkeypatch, scope):
+async def test_token_minted_credential_lists_tools_for_every_scope_shape(
+    monkeypatch, rust_auth_stores: RustAuthStores, scope
+):
     """``tools/list`` with the credential ``/token`` mints (a session token the shared auth marks
     ``via_virtual_key`` at the key-cache boundary) returns the tool list instead of the JSON-RPC
     credential error, for the combined, MCP-only and unscoped ID-JAG shapes."""
@@ -12178,7 +11855,7 @@ async def test_token_minted_credential_lists_tools_for_every_scope_shape(monkeyp
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
     )
-    database = _session_credential_storage(user)
+    database = _session_credential_storage(rust_auth_stores, user)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     tool = Tool(name="eng_server-list_repos", description="list repos", inputSchema={"type": "object"})
@@ -12192,7 +11869,7 @@ async def test_token_minted_credential_lists_tools_for_every_scope_shape(monkeyp
     ):
         result = await GatewayOperations().execute(ListToolsRequest(), prepare_context(user_api_key_auth=credential))
     assert [listed.name for listed in result.tools] == ["eng_server-list_repos"]
-    assert database.writer_db.litellm_usertable.find_unique.await_count >= 1
+    assert rust_auth_stores.user.sign_ins
     database.writer_db.litellm_verificationtoken.find_unique.assert_not_awaited()
     assert credential.team_id == "team-eng" and credential.allowed_routes == list(granted.allowed_routes or ())
 
@@ -12821,7 +12498,8 @@ async def test_personal_key_team_mcp_rpm_limit_charges_granting_team(
     from litellm.proxy.auth import auth_checks
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         PROXY_MaxParallelRequestsHandler_v3,
-        RateLimitDescriptor,
+        _mcp_scope,
+        run_scoped,
     )
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
@@ -12844,9 +12522,11 @@ async def test_personal_key_team_mcp_rpm_limit_charges_granting_team(
     assert limits == {"team-b": {"srv-b": 3}}
 
     stamped: Final = personal_key_owner_teams.model_copy(update={"mcp_source_team_rpm_limits": limits})
-    descriptors: list[RateLimitDescriptor] = []
     limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-    limiter._add_mcp_per_team_rate_limit_descriptor(stamped, server_b.name, descriptors)
+    scoped: Final = await run_scoped(
+        limiter, stamped, {}, {"kind": "mcp", **_mcp_scope(stamped, server_b)}, {"kind": "build"}, lookups=False
+    )
+    descriptors: Final = [d for d in scoped.descriptors if d["key"] == "mcp_per_team"]
     assert len(descriptors) == 1
     assert descriptors[0]["key"] == "mcp_per_team"
     assert descriptors[0]["value"] == f"team-b:{server_b.name}"

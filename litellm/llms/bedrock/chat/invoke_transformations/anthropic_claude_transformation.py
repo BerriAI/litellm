@@ -18,11 +18,12 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
     inline_every_remote_url,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, mapped_max_output_tokens
 from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
     carried_thinking_keys,
+    replays_tool_search,
 )
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
@@ -70,13 +71,14 @@ def _anthropic_config_max_tokens() -> int | None:
     return litellm.AnthropicConfig.max_tokens
 
 
-def _mapped_max_tokens(model: str) -> int | None:
-    row: Final = object_mapping(litellm.model_cost.get(model)) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
-    match row.get("max_output_tokens"):
-        case int() as max_tokens:
-            return max_tokens
+def _bedrock_tool_search_tool(tool: Mapping[str, object]) -> Mapping[str, object]:
+    match tool.get("type"):
+        case "tool_search_tool_regex_20251119":
+            return {**tool, "type": "tool_search_tool_regex"}
+        case "tool_search_tool_bm25_20251119":
+            return {**tool, "type": "tool_search_tool_bm25"}
         case _:
-            return None
+            return tool
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -110,12 +112,20 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     @classmethod
     def get_config(
-        cls, *, model: str | None = None, configured_max_output_tokens: int | None = None
+        cls,
+        *,
+        model: str | None = None,
+        configured_max_output_tokens: int | None = None,
+        custom_llm_provider: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: overrides BaseConfig's dict
         return {
             key: value
             for key, value in super()
-            .get_config(model=model, configured_max_output_tokens=configured_max_output_tokens)
+            .get_config(
+                model=model,
+                configured_max_output_tokens=configured_max_output_tokens,
+                custom_llm_provider=custom_llm_provider,
+            )
             .items()
             if key != "max_tokens"
         }
@@ -254,6 +264,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             optional_params=optional_params,
             headers=headers,
             thinking=_anthropic_request.get("thinking"),
+            history_holds_tool_search=replays_tool_search(
+                OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
+            ),
         )
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
@@ -267,6 +280,25 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 provider="bedrock_invoke",
             )
         )
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        unguarded: Final = AnthropicConfig.transform_extra_body(
+            self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+        )
+        stripped: Final = strip_beta_gated_request_body(
+            {**request, **unguarded},
+            {},
+            drop_params=litellm_params.get("drop_params"),
+            model=model,
+            provider="bedrock_invoke",
+        )
+        return {key: stripped[key] for key in unguarded if key in stripped}
 
     @property
     def uses_async_transform_request(self) -> bool:
@@ -311,7 +343,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     (
                         max_tokens
                         for max_tokens in map(
-                            _mapped_max_tokens, self._default_max_tokens_models(model, litellm_params)
+                            mapped_max_output_tokens, self._default_max_tokens_models(model, litellm_params)
                         )
                         if max_tokens is not None
                     ),
@@ -384,9 +416,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         optional_params: dict,
         headers: dict,
         thinking: AnthropicThinkingParam | None,
+        history_holds_tool_search: bool,
     ) -> list[str]:
         tools: Final = optional_params.get("tools")
-        tool_search_used: Final = self.is_tool_search_used(tools)
+        tool_search_used: Final = self.is_tool_search_used(tools) or history_holds_tool_search
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = self.is_input_examples_used(tools)
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
@@ -472,22 +505,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if not tools or not isinstance(tools, list):
             return optional_params
 
-        normalized_tools: Final = []
-        for tool in tools:
-            tool_type = tool.get("type")
-            if tool_type == "tool_search_tool_bm25_20251119":
-                # Bedrock Invoke does not support the BM25 variant, so skip it.
-                continue
-            if tool_type == "tool_search_tool_regex_20251119":
-                normalized_tool = tool.copy()
-                normalized_tool["type"] = "tool_search_tool_regex"
-                normalized_tool["name"] = normalized_tool.get("name", "tool_search_tool_regex")
-                normalized_tools.append(normalized_tool)
-                continue
-            normalized_tools.append(tool)
-
-        optional_params["tools"] = normalized_tools
-        return optional_params
+        return {**optional_params, "tools": [_bedrock_tool_search_tool(tool) for tool in tools]}
 
     def transform_response(
         self,
