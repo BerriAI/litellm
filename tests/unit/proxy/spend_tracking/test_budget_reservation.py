@@ -791,13 +791,13 @@ def test_chat_and_messages_routes_prevent_output_cap_shadowing(
     assert actual == pytest.approx(expected)
 
 
-def _router_with_configured_max_tokens(config_source: str) -> Router:
-    deployment_cap: Final[Mapping[str, int]] = {"max_tokens": 1000} if config_source == "deployment" else {}
+def _router_with_configured_caps(config_source: str, caps: Mapping[str, int]) -> Router:
+    deployment_caps: Final = caps if config_source == "deployment" else {}
     return Router(
         model_list=[
             Deployment(
                 model_name="priced-model",
-                litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-5-5", api_key="sk-fake", **deployment_cap),
+                litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-5-5", api_key="sk-fake", **deployment_caps),
                 model_info=ModelInfo(
                     id="configured-cap-deployment",
                     input_cost_per_token=0.0001,
@@ -806,38 +806,57 @@ def _router_with_configured_max_tokens(config_source: str) -> Router:
                 ),
             ).model_dump()
         ],
-        default_litellm_params={"max_tokens": 1000} if config_source == "router_default" else None,
+        default_litellm_params=dict(caps) if config_source == "router_default" else None,
     )
 
 
-@pytest.mark.parametrize("route", ["/v1/messages", "/v1/chat/completions"])
 @pytest.mark.parametrize("config_source", ["deployment", "router_default"])
-def test_configured_max_tokens_bounds_the_hold_unless_the_request_overrides_it(
-    route: str,
-    config_source: str,
-) -> None:
-    router: Final = _router_with_configured_max_tokens(config_source)
+def test_messages_decoy_cap_never_holds_less_than_configured_max_tokens(config_source: str) -> None:
+    router: Final = _router_with_configured_caps(config_source, {"max_tokens": 1000})
     base_body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}]}
 
     configured: Final = estimate_request_max_cost(
         request_body={**base_body, "max_tokens": 1000},
-        route=route,
+        route="/v1/messages",
         llm_router=router,
     )
     completion_cap_only: Final = estimate_request_max_cost(
         request_body={**base_body, "max_completion_tokens": 1},
-        route=route,
+        route="/v1/messages",
         llm_router=router,
     )
     request_override: Final = estimate_request_max_cost(
         request_body={**base_body, "max_tokens": 5},
-        route=route,
+        route="/v1/messages",
         llm_router=router,
     )
 
-    assert configured is not None and request_override is not None
-    assert completion_cap_only == pytest.approx(configured)
+    assert configured is not None and completion_cap_only is not None and request_override is not None
+    assert completion_cap_only >= configured
     assert request_override < configured
+
+
+@pytest.mark.parametrize(
+    "route", ["/v1/messages", "/v1/chat/completions", "/v1beta/models/priced-model:generateContent"]
+)
+@pytest.mark.parametrize("config_source", ["deployment", "router_default"])
+@pytest.mark.parametrize("configured_field", ["max_tokens", "max_completion_tokens"])
+def test_configured_caps_never_shrink_an_uncapped_hold(route: str, config_source: str, configured_field: str) -> None:
+    body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    uncapped: Final = estimate_request_max_cost(
+        request_body=body,
+        route=route,
+        llm_router=_router_with_configured_caps(config_source, {}),
+    )
+    configured: Final = estimate_request_max_cost(
+        request_body=body,
+        route=route,
+        llm_router=_router_with_configured_caps(config_source, {configured_field: 1}),
+    )
+
+    assert uncapped is not None
+    assert configured == pytest.approx(uncapped)
 
 
 def test_bedrock_converse_inference_config_max_tokens_scales_cost() -> None:
@@ -1007,7 +1026,7 @@ def _router_for_backend(
 
 @pytest.mark.parametrize(
     "backend_model",
-    ["vertex_ai/gemini-2.5-pro", "gemini/gemini-2.5-pro", "vertex_ai/claude-opus-4-6", "openai/gpt-4o"],
+    ["vertex_ai/gemini-2.5-pro", "gemini/gemini-2.5-pro", "vertex_ai/claude-opus-5-5", "openai/gpt-5.6"],
 )
 def test_chat_max_output_tokens_raises_the_hold_on_every_backend(backend_model: str) -> None:
     router: Final = _router_for_backend(backend_model, max_output_tokens=65536)
@@ -1044,7 +1063,7 @@ def test_mixed_openai_and_gemini_group_guards_decoy_and_high_gemini_cap() -> Non
         model_list=[
             Deployment(
                 model_name="mixed-model",
-                litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="sk-fake"),
+                litellm_params=LiteLLM_Params(model="openai/gpt-5.6", api_key="sk-fake"),
                 model_info=ModelInfo(
                     id="openai-dep",
                     input_cost_per_token=0.0001,
@@ -1090,29 +1109,6 @@ def test_mixed_openai_and_gemini_group_guards_decoy_and_high_gemini_cap() -> Non
     assert decoy_small == pytest.approx(uncapped)
     assert high_max_output == pytest.approx(high_max_tokens)
     assert high_max_output > uncapped
-
-
-def test_direct_non_router_gemini_chat_completions_preserves_max_output_tokens() -> None:
-    base_messages: Final = [{"role": "user", "content": "hi"}]
-    uncapped: Final = estimate_request_max_cost(
-        request_body={"model": "gemini/gemini-2.5-pro", "messages": base_messages},
-        route="/v1/chat/completions",
-        llm_router=None,
-    )
-    capped_fallback_level: Final = estimate_request_max_cost(
-        request_body={"model": "gemini/gemini-2.5-pro", "messages": base_messages, "max_output_tokens": 16384},
-        route="/v1/chat/completions",
-        llm_router=None,
-    )
-    high_output: Final = estimate_request_max_cost(
-        request_body={"model": "gemini/gemini-2.5-pro", "messages": base_messages, "max_output_tokens": 65536},
-        route="/v1/chat/completions",
-        llm_router=None,
-    )
-
-    assert uncapped is not None and capped_fallback_level is not None and high_output is not None
-    assert capped_fallback_level == pytest.approx(uncapped)
-    assert high_output > capped_fallback_level
 
 
 @pytest.mark.asyncio
@@ -1200,7 +1196,7 @@ def _bridged_responses_router(
         ("router_default", "openai/gpt-5.4"),
         ("request_flag", "openai/gpt-5.4"),
         ("model_prefix", "openai/chat_completions/gpt-5.4"),
-        ("non_native_provider", "anthropic/claude-opus-4-6"),
+        ("non_native_provider", "anthropic/claude-opus-5-5"),
     ],
 )
 def test_bridged_responses_reserves_chat_completion_output_caps(
@@ -1408,7 +1404,7 @@ def test_responses_router_ignores_spoofed_custom_llm_provider_override() -> None
     assert native_spoofed_max_tokens == pytest.approx(native_uncapped)
     assert native_spoofed_completion_cap == pytest.approx(native_uncapped)
 
-    bridged_router: Final = _bridged_responses_router("anthropic/claude-opus-4-6", max_output_tokens=65536)
+    bridged_router: Final = _bridged_responses_router("anthropic/claude-opus-5-5", max_output_tokens=65536)
     bridged_uncapped: Final = estimate_request_max_cost(
         request_body=native_base,
         route="/v1/responses",

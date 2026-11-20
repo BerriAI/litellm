@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from itertools import chain, product
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
@@ -1198,8 +1198,6 @@ def _estimate_request_max_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
-    model_infos: Final = _get_model_cost_infos(model=model, llm_router=llm_router)
-    configured_caps: Final = _configured_output_caps(route=route, model=model, llm_router=llm_router)
     estimates: Final = [
         _max_cost_for_cost_info(
             request_body=request_body,
@@ -1207,9 +1205,8 @@ def _estimate_request_max_cost_for_model(
             model=model,
             model_info=model_info,
             input_tokens=input_tokens,
-            configured_caps=caps,
         )
-        for model_info, caps in product(model_infos, configured_caps)
+        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
@@ -1221,8 +1218,6 @@ def _max_cost_for_cost_info(
     model: str,
     model_info: Mapping[str, object],
     input_tokens: int | None = None,
-    *,
-    configured_caps: Mapping[str, object],
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
@@ -1242,7 +1237,6 @@ def _max_cost_for_cost_info(
         request_body=request_body,
         route=route,
         model_info=model_info,
-        configured_caps=configured_caps,
     )
     if estimated_input_tokens is None or output_tokens is None:
         return None
@@ -1475,13 +1469,11 @@ def _estimate_output_tokens(
     request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
-    *,
-    configured_caps: Mapping[str, object],
 ) -> int | None:
     if _is_input_only_route(route=route):
         return 0
 
-    requested: Final = _requested_output_tokens(request_body, route=route, configured_caps=configured_caps)
+    requested: Final = _requested_output_tokens(request_body, route=route)
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the
@@ -1527,37 +1519,6 @@ def _route_output_token_fields(route: str) -> tuple[str, ...]:
     return _PASS_THROUGH_OUTPUT_TOKEN_FIELDS
 
 
-def _router_default_output_token_caps(llm_router: Router) -> Mapping[str, object]:
-    raw_defaults: Final = _get_value(llm_router.settings(), "default_litellm_params")
-    return MappingProxyType(
-        {
-            field: value
-            for field in _TOP_LEVEL_OUTPUT_TOKEN_FIELDS
-            if (value := _get_value(raw_defaults, field)) is not None
-        }
-    )
-
-
-def _configured_output_caps(route: str, model: str, llm_router: Router | None) -> tuple[Mapping[str, object], ...]:
-    if llm_router is None or not get_call_types_for_route(route):
-        return (MappingProxyType({}),)
-    default_caps: Final = _router_default_output_token_caps(llm_router)
-    deployments: Final = llm_router.registry().deployments(model) or ()
-    deployment_params: Final = tuple(_get_value(deployment, "litellm_params") for deployment in deployments) or (None,)
-    distinct_caps: Final = frozenset(
-        tuple(
-            (field, _non_negative_int(default_caps.get(field, _get_value(params, field))))
-            for field in _TOP_LEVEL_OUTPUT_TOKEN_FIELDS
-        )
-        for params in deployment_params
-    )
-    return tuple(MappingProxyType(dict(caps)) for caps in distinct_caps)
-
-
-def _first_present_field(key: str, sources: tuple[Mapping[str, object], ...]) -> object:
-    return next((mapping[key] for mapping in sources if key in mapping), None)
-
-
 def _request_output_token_caps(request_body: Mapping[str, object]) -> Mapping[str, object]:
     inference_config_max_tokens: Final = _get_value(request_body.get("inferenceConfig"), "maxTokens")
     nested_cap: Final = (
@@ -1571,20 +1532,15 @@ def _request_output_token_caps(request_body: Mapping[str, object]) -> Mapping[st
     return MappingProxyType(dict((*top_level_caps, *nested_cap)))
 
 
-def _requested_output_tokens(
-    request_body: Mapping[str, object],
-    route: str,
-    configured_caps: Mapping[str, object],
-) -> int:
-    sources: Final = (_request_output_token_caps(request_body), configured_caps)
+def _requested_output_tokens(request_body: Mapping[str, object], route: str) -> int:
     caps: Final = MappingProxyType(
         {
             field: tokens
-            for field in _OUTPUT_TOKEN_FIELDS
-            if (tokens := _non_negative_int(_first_present_field(field, sources))) is not None
+            for field, value in _request_output_token_caps(request_body).items()
+            if (tokens := _non_negative_int(value)) is not None
         }
     )
-    route_cap_present: Final = any(field in caps for field in _route_output_token_fields(route))
+    route_cap_present: Final = not caps.keys().isdisjoint(_route_output_token_fields(route))
     uncapped_floor: Final = () if route_cap_present else (DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,)
     return max((*caps.values(), *uncapped_floor))
 
