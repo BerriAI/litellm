@@ -1454,16 +1454,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return self._consume_input_transcription_usage_estimate(model)
 
     def unbilled_response_on_session_close(self, model: str) -> OpenAIRealtimeDoneEvent | None:
-        if self._pending_usage_metadata is None:
-            return None
         cancelled_response_id: Final = self._cancelled_response_id
+        if self._pending_usage_metadata is None or cancelled_response_id is None:
+            return None
         self._cancelled_response_id = None
         return self.transform_response_done_event(
             message=BidiGenerateContentServerMessage(),
             current_response_id=cancelled_response_id,
             current_conversation_id=None,
             output_items=None,
-            cancelled=cancelled_response_id is not None,
+            cancelled=True,
         )
 
     def transform_realtime_response(

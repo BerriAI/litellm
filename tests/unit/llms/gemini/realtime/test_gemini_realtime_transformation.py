@@ -2220,6 +2220,13 @@ def test_gemini_session_close_returns_nothing_once_the_turn_already_billed() -> 
     assert config.unbilled_response_on_session_close("gemini-2.5-flash-native-audio") is None
 
 
+def test_gemini_session_close_leaves_usage_buffered_outside_an_interruption_unflushed() -> None:
+    config: Final = GeminiRealtimeConfig()
+    _events_per_frame(config, [{"usageMetadata": _INTERRUPTION_USAGE}])
+
+    assert config.unbilled_response_on_session_close("gemini-2.5-flash-native-audio") is None
+
+
 def test_gemini_interruption_with_no_open_response_emits_nothing() -> None:
     (interrupted,) = _events_per_frame(GeminiRealtimeConfig(), [{"serverContent": {"interrupted": True}}])
 
