@@ -488,6 +488,70 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenLastCalledWith({ ...llmValue, ...expected });
   });
 
+  it("edits and clears the classifier output cap without changing other settings", () => {
+    const initialValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 750, reasoning_effort: "high", max_output_tokens: 128 },
+    };
+    const onChange = vi.fn();
+    function Editor() {
+      const [value, setValue] = React.useState(initialValue);
+      return (
+        <ComplexityRouterConfig
+          {...baseProps}
+          value={value}
+          onChange={(next) => {
+            setValue(next);
+            onChange(next);
+          }}
+        />
+      );
+    }
+    renderWithProviders(<Editor />);
+    openAutoRouterAdvanced("Classification Method");
+    const input = screen.getByLabelText("Classifier max output tokens");
+    expect(input).toHaveValue("128");
+    fireEvent.change(input, { target: { value: "64" } });
+    fireEvent.blur(input);
+    expect(input).toHaveValue("64");
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...initialValue,
+      classifier_llm_config: { ...initialValue.classifier_llm_config, max_output_tokens: 64 },
+    });
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(input).toHaveValue("");
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...initialValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 750, reasoning_effort: "high" },
+    });
+  });
+
+  it.each(["0", "-1", "1.5", "abc", "Infinity", "9007199254740992"])(
+    "does not save invalid classifier output cap %s",
+    (raw) => {
+      const onChange = vi.fn();
+      renderWithProviders(
+        <ComplexityRouterConfig
+          {...baseProps}
+          value={{
+            ...defaultValue,
+            classifier_type: "llm",
+            classifier_llm_config: { model: "gpt-4", timeout_ms: 750, max_output_tokens: 64 },
+          }}
+          onChange={onChange}
+        />,
+      );
+      openAutoRouterAdvanced("Classification Method");
+      const input = screen.getByLabelText("Classifier max output tokens");
+      fireEvent.change(input, { target: { value: raw } });
+      fireEvent.blur(input);
+      expect(input).toHaveValue("64");
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
+
   it("restores the committed context window size after an empty field loses focus", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,

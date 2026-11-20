@@ -1,3 +1,4 @@
+import ClassifierMaxOutputTokensInput from "./ClassifierMaxOutputTokensInput";
 import ClassifierPrimarySettings from "./ClassifierPrimarySettings";
 import { AutoRouterAllowanceNote } from "./AutoRouterAvailability";
 import { transitionClassifierType } from "./classifier_type_transition";
@@ -586,6 +587,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               {t("addModel.classificationMethodConfig.timeout.help")}
             </span>
           </div>
+          <ClassifierMaxOutputTokensInput
+            value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
+            onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
+          />
           <ClassifierCircuitBreakerConfig
             value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
             onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
