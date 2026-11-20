@@ -651,7 +651,7 @@ class AnthropicPassthroughLoggingHandler:
                     if model_name == "unknown":
                         # Anthropic batches: look under requests[0].params.model
                         requests_list: Final = request_body.get("requests", [])
-                        if isinstance(requests_list, list) and len(requests_list) > 0:
+                        if isinstance(requests_list, list) and requests_list:
                             first_req: Final = requests_list[0]
                             if isinstance(first_req, dict):
                                 params: Final = first_req.get("params", {})
