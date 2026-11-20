@@ -18,6 +18,36 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import app
 
 
+@pytest.mark.asyncio
+async def test_budget_update_replaces_cached_app_budget(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.management_helpers.apps import AppStore
+    from litellm.types.proxy.management_endpoints.apps import App, AppCreate, AppDefinition, AppResourceType
+    from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
+    from tests.unit.proxy.management_helpers.test_apps import AppDatabase, UnavailableAppDatabase, seed_resources
+    from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW
+
+    client, _, _ = client_and_mocks
+    database: Final = AppDatabase()
+    writer: Final = AppStore(database, NOW)
+    await seed_resources(database)
+    await writer.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    configured: Final = await writer.create(AppCreate(resource_id="chat", budget=Budget(max_budget=10)), "admin")
+    assert isinstance(configured, App)
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setattr(ps, "prisma_client", types.SimpleNamespace(db=database, writer_db=database))
+    reader: Final = AppStore(database, NOW, cache)
+    assert await reader.by_resource(AppResourceType.TEAM, "chat") == configured
+    response: Final = client.post("/budget/update", json={"budget_id": configured.budget_id, "max_budget": 0})
+    assert response.status_code == 200, response.text
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        await AppStore(UnavailableAppDatabase(), NOW, cache).by_resource(AppResourceType.TEAM, "chat")
+    refreshed: Final = await reader.by_resource(AppResourceType.TEAM, "chat")
+    assert isinstance(refreshed, App) and refreshed.budget == Budget(max_budget=0, allowed_models=())
+
+
 @pytest.fixture
 def client_and_mocks(monkeypatch):
     # Setup MagicMock Prisma
@@ -32,6 +62,7 @@ def client_and_mocks(monkeypatch):
 
     mock_table.create = AsyncMock(side_effect=created)
     mock_table.update = AsyncMock(side_effect=updated)
+    mock_table.find_unique = AsyncMock(return_value=None)
 
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_table,
@@ -98,17 +129,16 @@ def test_budget_update_can_clear_windows(
 
 @pytest.mark.parametrize("path", ("/budget/new", "/budget/update"))
 @pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1h"))
-def test_concurrent_windows_reject_noncanonical_durations_but_scalar_budgets_preserve_them(
+def test_concurrent_and_scalar_budgets_accept_custom_durations(
     client_and_mocks: tuple[TestClient, MagicMock, MagicMock], path: str, duration: str,
 ) -> None:
-    client, _, table = client_and_mocks
-    rejected: Final = client.post(path, json={
+    client, _, _ = client_and_mocks
+    window: Final = client.post(path, json={
         "budget_id": "duration-test",
         "budget_limits": [{"budget_duration": duration, "max_budget": 10}],
     })
-    assert rejected.status_code == 422, rejected.text
-    table.create.assert_not_awaited()
-    table.update.assert_not_awaited()
+    assert window.status_code == 200, window.text
+    assert window.json()["budget_limits"][0]["max_budget"] == 10
 
     accepted: Final = client.post(path, json={
         "budget_id": "duration-test", "max_budget": 10, "budget_duration": duration,

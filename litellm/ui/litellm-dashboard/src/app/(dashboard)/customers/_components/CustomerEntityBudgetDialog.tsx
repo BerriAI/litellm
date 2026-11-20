@@ -7,7 +7,7 @@ import { ErrorState } from "@/components/shared/ErrorState";
 import { CustomerBudgetDialog, CustomerBudgetForm } from "./CustomerBudgetDialog";
 import CustomerHierarchyBudgetFields from "./CustomerHierarchyBudgetFields";
 import { useCustomerHierarchyForm } from "./useCustomerHierarchyForm";
-import { customerHierarchyBudget, type CustomerHierarchyEntity, type Organization } from "./customerHierarchyForms";
+import type { CustomerHierarchyEntity, Organization } from "./customerHierarchyForms";
 
 function BudgetForm({
   entity,
@@ -36,7 +36,6 @@ function BudgetForm({
         onChange={form.update}
         idPrefix="edit-customer-budget"
         compact
-        original={customerHierarchyBudget(entity)}
       />
     </CustomerBudgetForm>
   );
