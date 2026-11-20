@@ -1,7 +1,8 @@
 import copy
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import reduce
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -15,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
     VertexAITokenCounter,
+    build_json_schema,
     build_vertex_schema,
     convert_anyof_null_to_nullable,
     convert_vertex_datetime_to_openai_datetime,
@@ -2291,3 +2293,123 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
         )
 
     assert (None if result is None else result.total_tokens) == vertex_counted_tokens
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expected"),
+    [
+        (
+            {"type": "object", "properties": {"kinds": {"type": "array", "items": {"const": "card"}}}},
+            {"type": "object", "properties": {"kinds": {"type": "array", "items": {"type": "string", "enum": ["card"]}}}},
+        ),
+        (
+            {"type": "object", "properties": {"kind": {"anyOf": [{"const": "card", "type": "string"}, {"type": "null"}]}}},
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"], "nullable": True}]}}},
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"payment": {"$ref": "#/$defs/Card"}},
+                "$defs": {"Card": {"type": "object", "properties": {"kind": {"const": "card"}}, "required": ["kind"]}},
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "payment": {
+                        "type": "object",
+                        "properties": {"kind": {"type": "string", "enum": ["card"]}},
+                        "required": ["kind"],
+                    }
+                },
+            },
+        ),
+    ],
+    ids=["items", "any-of-branch", "ref-to-defs"],
+)
+def test_build_vertex_schema_pins_a_nested_const_as_a_one_value_enum(
+    parameters: dict[str, JsonValue], expected: dict[str, JsonValue]
+) -> None:
+    assert build_vertex_schema(parameters) == expected
+
+
+_PINNED_CARD: Final = {"type": "string", "enum": ["card"]}
+
+
+@pytest.mark.parametrize(
+    "place",
+    [
+        lambda schema: {"type": "object", "properties": {"kind": schema}},
+        lambda schema: {"type": "object", "patternProperties": {"^kind$": schema}},
+        lambda schema: {"type": "object", "additionalProperties": schema},
+        lambda schema: {"$ref": "#/$defs/Kind", "$defs": {"Kind": schema}},
+        lambda schema: {"$ref": "#/definitions/Kind", "definitions": {"Kind": schema}},
+        lambda schema: {"type": "array", "items": schema},
+        lambda schema: {"type": "array", "items": [schema]},
+        lambda schema: {"type": "array", "prefixItems": [schema]},
+        lambda schema: {"type": "array", "contains": schema},
+        lambda schema: {"not": schema},
+        lambda schema: {"anyOf": [schema]},
+        lambda schema: {"oneOf": [schema]},
+        lambda schema: {"allOf": [schema]},
+    ],
+    ids=[
+        "properties",
+        "pattern-properties",
+        "additional-properties",
+        "defs",
+        "definitions",
+        "items",
+        "items-list",
+        "prefix-items",
+        "contains",
+        "not",
+        "any-of",
+        "one-of",
+        "all-of",
+    ],
+)
+def test_build_json_schema_pins_a_const_in_every_subschema_keyword(
+    place: Callable[[JsonValue], dict[str, JsonValue]],
+) -> None:
+    assert build_json_schema(place({"const": "card"})) == place(_PINNED_CARD)
+
+
+@pytest.mark.parametrize(
+    ("other", "expected_other"),
+    [
+        ({"type": "object", "default": {"const": "bank"}}, {"type": "object", "default": {"const": "bank"}}),
+        ({"type": "object", "examples": [{"const": "bank"}]}, {"type": "object", "examples": [{"const": "bank"}]}),
+        ({"type": "object", "properties": {"const": True}}, {"type": "object", "properties": {"const": True}}),
+        ({"const": None}, {"const": None}),
+        ({"const": {"kind": "bank"}}, {"const": {"kind": "bank"}}),
+        ({"const": ["bank"]}, {"const": ["bank"]}),
+        ({"const": "bank", "type": ["string", "null"]}, {"type": ["string", "null"], "enum": ["bank"]}),
+    ],
+    ids=["default", "examples", "property-named-const", "null-const", "object-const", "array-const", "typed-const"],
+)
+def test_build_json_schema_pins_only_scalar_consts_in_subschemas_and_keeps_the_caller_type(
+    other: JsonValue, expected_other: JsonValue
+) -> None:
+    sent: Final = {"anyOf": [{"type": "object", "properties": {"kind": {"const": "card"}, "other": other}}]}
+
+    assert build_json_schema(sent) == {
+        "anyOf": [{"type": "object", "properties": {"kind": _PINNED_CARD, "other": expected_other}}]
+    }
+
+
+def _kind_beside_a_leaf_at_depth(kind: JsonValue, depth: int, leaf: JsonValue) -> dict[str, JsonValue]:
+    nested: Final = reduce(lambda inner, _: {"type": "object", "properties": {"next": inner}}, range(depth - 1), leaf)
+    return {"type": "object", "properties": {"kind": kind, "next": nested}}
+
+
+@pytest.mark.parametrize(
+    ("depth", "expected_leaf"),
+    [(DEFAULT_MAX_RECURSE_DEPTH, _PINNED_CARD), (DEFAULT_MAX_RECURSE_DEPTH + 1, {"const": "card"})],
+    ids=["at-the-cap", "past-the-cap"],
+)
+def test_build_json_schema_pins_consts_down_to_the_recursion_cap_and_sends_deeper_ones_as_given(
+    depth: int, expected_leaf: JsonValue
+) -> None:
+    sent: Final = _kind_beside_a_leaf_at_depth({"const": "card"}, depth, {"const": "card"})
+
+    assert build_json_schema(sent) == _kind_beside_a_leaf_at_depth(_PINNED_CARD, depth, expected_leaf)
