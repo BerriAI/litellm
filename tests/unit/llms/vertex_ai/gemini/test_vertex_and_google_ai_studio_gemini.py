@@ -5463,10 +5463,12 @@ def test_vertex_ai_service_tier_in_map_openai_params():
     assert "service_tier" not in result_auto_upper
 
 
-def test_vertex_ai_unknown_service_tier_answers_400() -> None:
-    with pytest.raises(litellm.UnsupportedParamsError, match="Invalid `service_tier`: 'turbo'") as raised:
-        VertexGeminiConfig().map_openai_params(
-            non_default_params={"service_tier": "turbo"},
+@pytest.mark.parametrize("config", [VertexGeminiConfig(), GoogleAIStudioGeminiConfig()])
+@pytest.mark.parametrize("service_tier", ["turbo", "scale"])
+def test_vertex_ai_unknown_service_tier_answers_400(config: VertexGeminiConfig, service_tier: str) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"Invalid `service_tier`: '{service_tier}'") as raised:
+        config.map_openai_params(
+            non_default_params={"service_tier": service_tier},
             optional_params={},
             model="gemini-2.5-flash",
             drop_params=False,
@@ -5518,12 +5520,11 @@ def _cached_vertex_credentials(monkeypatch: pytest.MonkeyPatch) -> str:
         ("vertex_ai/gemini-2.5-flash", "standard", None, None),
         ("vertex_ai/gemini-2.5-flash", "default", None, None),
         ("vertex_ai/gemini-2.5-flash", "auto", None, None),
-        ("vertex_ai/gemini-2.5-flash", "scale", None, None),
         ("vertex_ai/gemini-2.5-flash", "standard_only", None, None),
         ("vertex_ai_beta/gemini-2.5-flash", "flex", "flex", None),
         ("gemini/gemini-2.5-flash", "PRIORITY", None, "priority"),
         ("gemini/gemini-2.5-flash", "standard", None, "standard"),
-        ("gemini/gemini-2.5-flash", "auto", None, None),
+        ("gemini/gemini-2.5-flash", "auto", None, "priority"),
         ("gemini/gemini-2.5-flash", "default", None, None),
         ("gemini/gemini-2.5-flash", "unspecified", None, None),
         ("gemini/gemini-2.5-flash", "SERVICE_TIER_STANDARD_ONLY", None, "standard"),
@@ -5556,7 +5557,7 @@ def test_service_tier_reaches_vertex_as_headers_and_ai_studio_as_body(
     sent: Final = route.calls.last.request
     assert json.loads(sent.content).get("serviceTier") == body_service_tier
     assert sent.headers.get("X-Vertex-AI-LLM-Shared-Request-Type") == shared_request_type
-    assert sent.headers.get("X-Vertex-AI-LLM-Request-Type") == ("shared" if shared_request_type else None)
+    assert sent.headers.get("X-Vertex-AI-LLM-Request-Type") is None
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -5583,7 +5584,122 @@ def test_caller_tier_header_in_any_case_replaces_the_service_tier_header(
 
     sent: Final = route.calls.last.request
     assert sent.headers.get_list("X-Vertex-AI-LLM-Shared-Request-Type") == ["priority"]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_caller_request_type_header_rides_along_with_the_service_tier_header(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:generateContent.*").mock(
+        return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE)
+    )
+
+    completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier="priority",
+        extra_headers={"X-Vertex-AI-LLM-Request-Type": "shared"},
+        vertex_credentials=_cached_vertex_credentials,
+        vertex_project="test-project",
+        vertex_location="global",
+        client=HTTPHandler(),
+    )
+
+    sent: Final = route.calls.last.request
     assert sent.headers.get_list("X-Vertex-AI-LLM-Request-Type") == ["shared"]
+    assert sent.headers.get_list("X-Vertex-AI-LLM-Shared-Request-Type") == ["priority"]
+
+
+def _vertex_response_with_traffic_type(traffic_type: str) -> dict[str, object]:
+    return {
+        **_GENERATE_CONTENT_RESPONSE,
+        "usageMetadata": {
+            "promptTokenCount": 1,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 2,
+            "trafficType": traffic_type,
+        },
+    }
+
+
+_SERVED_TIER_BY_TRAFFIC_TYPE: Final = pytest.mark.parametrize(
+    ("traffic_type", "served_tier"),
+    [
+        ("ON_DEMAND", "default"),
+        ("ON_DEMAND_PRIORITY", "priority"),
+        ("ON_DEMAND_FLEX", "flex"),
+        ("PROVISIONED_THROUGHPUT", None),
+    ],
+)
+
+
+@pytest.mark.respx(assert_all_called=True)
+@_SERVED_TIER_BY_TRAFFIC_TYPE
+def test_vertex_response_reports_the_served_tier_from_traffic_type(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str, traffic_type: str, served_tier: str | None
+) -> None:
+    respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:generateContent.*").mock(
+        return_value=httpx.Response(200, json=_vertex_response_with_traffic_type(traffic_type))
+    )
+
+    response: Final = completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier="priority",
+        vertex_credentials=_cached_vertex_credentials,
+        vertex_project="test-project",
+        vertex_location="global",
+        client=HTTPHandler(),
+    )
+
+    assert getattr(response, "service_tier", None) == served_tier
+
+
+@pytest.mark.respx(assert_all_called=True)
+@_SERVED_TIER_BY_TRAFFIC_TYPE
+def test_vertex_stream_reports_the_served_tier_from_traffic_type(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str, traffic_type: str, served_tier: str | None
+) -> None:
+    respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:streamGenerateContent.*").mock(
+        return_value=_gemini_sse(_vertex_response_with_traffic_type(traffic_type))
+    )
+
+    chunks: Final = list(
+        completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            service_tier="priority",
+            stream=True,
+            stream_options={"include_usage": True},
+            vertex_credentials=_cached_vertex_credentials,
+            vertex_project="test-project",
+            vertex_location="global",
+            client=HTTPHandler(),
+        )
+    )
+
+    assert getattr(chunks[-1], "service_tier", None) == served_tier
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_ai_studio_service_tier_header_outranks_traffic_type(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json=_vertex_response_with_traffic_type("ON_DEMAND"),
+            headers={"x-gemini-service-tier": "priority"},
+        )
+    )
+
+    response: Final = completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier="auto",
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert getattr(response, "service_tier", None) == "priority"
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():

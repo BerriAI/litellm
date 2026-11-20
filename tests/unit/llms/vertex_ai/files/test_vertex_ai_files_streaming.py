@@ -278,6 +278,51 @@ class TestGetObjectNameLazyParse:
         assert exc_info.value.message.startswith("Batch input file line 1 could not be converted")
 
 
+def _upload_batch_row(row: bytes, litellm_params: dict[str, object]) -> bytes:
+    request: Final[CreateFileRequest] = {"file": ("batch.jsonl", row + b"\n", "application/jsonl"), "purpose": "batch"}
+    return _join_upload_body(
+        VertexAIFilesConfig().transform_create_file_request(
+            model="", create_file_data=request, optional_params={}, litellm_params=litellm_params
+        )
+    )
+
+
+def _chat_batch_row(**body_extra: object) -> bytes:
+    body: Final = {"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "Say hi"}], **body_extra}
+    return json.dumps({"custom_id": "r-0", "method": "POST", "url": "/v1/chat/completions", "body": body}).encode()
+
+
+class TestBatchRowServiceTier:
+    @pytest.mark.parametrize("service_tier", ["priority", "flex", "standard"])
+    def test_a_sent_tier_is_a_400_without_drop_params(self, service_tier: str) -> None:
+        with pytest.raises(VertexAIError, match="do not support `service_tier`") as exc_info:
+            _upload_batch_row(_chat_batch_row(service_tier=service_tier), {})
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.parametrize(
+        "row, litellm_params",
+        [
+            (_chat_batch_row(service_tier="priority", drop_params=True), {}),
+            (_chat_batch_row(service_tier="priority"), {"drop_params": True}),
+        ],
+        ids=["row", "deployment"],
+    )
+    def test_drop_params_on_the_row_or_deployment_uploads_the_row_without_a_tier(
+        self, row: bytes, litellm_params: dict[str, object]
+    ) -> None:
+        uploaded: Final = json.loads(_upload_batch_row(row, litellm_params))
+
+        assert "serviceTier" not in uploaded["request"]
+        assert uploaded["request"]["contents"] == [{"role": "user", "parts": [{"text": "Say hi"}]}]
+
+    @pytest.mark.parametrize("service_tier", ["auto", "default"])
+    def test_a_provider_default_tier_uploads_the_row(self, service_tier: str) -> None:
+        uploaded: Final = json.loads(_upload_batch_row(_chat_batch_row(service_tier=service_tier), {}))
+
+        assert "serviceTier" not in uploaded["request"]
+        assert uploaded["request"]["contents"] == [{"role": "user", "parts": [{"text": "Say hi"}]}]
+
+
 class TestStreamingLaziness:
     def test_upload_stream_transforms_rows_only_as_they_are_pulled(self) -> None:
         cfg: Final = VertexAIFilesConfig()
