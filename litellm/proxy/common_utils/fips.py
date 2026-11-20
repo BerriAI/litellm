@@ -131,29 +131,36 @@ def _token_login(environ: Mapping[str, str]) -> bool:
         return False
 
 
-def database_password_login_warning(environ: Mapping[str, str]) -> str | None:
-    """A warning when DATABASE_URL logs in with a password: to Postgres when neither RDS IAM nor Azure Entra token
-    login is on, or to the in-container PgBouncer, which always takes a password. None otherwise."""
-    pooled: Final = database_url_is_pooled(environ)
-    if not pooled and _token_login(environ):
-        return None
+def _password_login(environ: Mapping[str, str], name: str) -> bool:
+    """Whether the Postgres URL in the env var carries a password."""
     try:
-        password: Final = urlsplit(environ.get("DATABASE_URL", "")).password
+        return bool(urlsplit(environ.get(name, "")).password)
     except ValueError:
-        return None
-    if not password:
-        return None
-    if pooled:
+        return False
+
+
+def database_password_login_warning(environ: Mapping[str, str]) -> str | None:
+    """A warning when DATABASE_URL or DATABASE_URL_READ_REPLICA logs in with a password: to Postgres when neither
+    RDS IAM nor Azure Entra token login is on, or to the in-container PgBouncer, which always takes a password. None
+    otherwise."""
+    if database_url_is_pooled(environ) and _password_login(environ, "DATABASE_URL"):
         return (
             f"{_SETTING} is on but LITELLM_PGBOUNCER_ENABLED logs the workers in to the in-container PgBouncer with a "
             "password, and that login (SCRAM) is computed outside the FIPS module. Turn LITELLM_PGBOUNCER_ENABLED off "
             "and use client-certificate login: cert in pg_hba.conf, sslidentity and sslpassword in DATABASE_URL with "
             "no password, and PGSSLCERT and PGSSLKEY set to the same certificate and key."
         )
+    if _token_login(environ):
+        return None
+    url: Final = next(
+        (name for name in ("DATABASE_URL", "DATABASE_URL_READ_REPLICA") if _password_login(environ, name)), None
+    )
+    if url is None:
+        return None
     return (
-        f"{_SETTING} is on but DATABASE_URL logs in to Postgres with a password. The password login (SCRAM) is "
+        f"{_SETTING} is on but {url} logs in to Postgres with a password. The password login (SCRAM) is "
         "computed outside the FIPS module. Use client-certificate login instead: cert in pg_hba.conf, sslidentity "
-        "and sslpassword in DATABASE_URL with no password, and PGSSLCERT and PGSSLKEY set to the same certificate "
+        f"and sslpassword in {url} with no password, and PGSSLCERT and PGSSLKEY set to the same certificate "
         "and key. RDS IAM (IAM_TOKEN_DB_AUTH) and Azure Entra (AZURE_POSTGRESQL_AUTH) token login also avoid it."
     )
 
