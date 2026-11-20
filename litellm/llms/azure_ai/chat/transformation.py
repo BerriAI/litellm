@@ -40,6 +40,7 @@ from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     CHAT_COMPLETIONS_PATH,
     OPENAI_V1_PATH,
+    AzureFoundryModelInfo,
     api_key_header_for_base,
     foundry_project_root,
     foundry_v1_root,
@@ -484,7 +485,8 @@ class AzureAIStudioConfig(OpenAIConfig):
             and requested_api_version is not None
             and not BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
         ):
-            deployment_chat_path: Final = "/" + "/".join(("openai", "deployments", model, *CHAT_COMPLETIONS_PATH))
+            deployment: Final = AzureFoundryModelInfo.get_base_model(model)
+            deployment_chat_path: Final = "/" + "/".join(("openai", "deployments", deployment, *CHAT_COMPLETIONS_PATH))
             return str(original_url.copy_with(path=deployment_chat_path, params=query_params))
         v1_root: Final = foundry_v1_root(original_url) or (OPENAI_V1_PATH if resource_base else None)
         if v1_root is not None:
