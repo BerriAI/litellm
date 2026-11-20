@@ -25,6 +25,7 @@ from mcp.types import CallToolResult, TextContent
 
 import litellm
 from litellm.caching import DualCache
+from litellm.integrations.custom_guardrail import MCP_SERVER_GUARDRAILS_KEY
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
@@ -2072,6 +2073,30 @@ class TestPanwAirsShouldRunGuardrail:
     )
     def test_should_run_guardrail(self, default_on, event_hook, data, query_event, expected):
         handler = make_handler(default_on=default_on, event_hook=event_hook)
+        assert handler.should_run_guardrail(data, query_event) is expected
+
+    @pytest.mark.parametrize(
+        ("event_hook", "listed", "query_event", "expected"),
+        [
+            ("pre_call", ["test_panw_airs"], GuardrailEventHooks.pre_mcp_call, True),
+            ("during_call", ["test_panw_airs"], GuardrailEventHooks.during_mcp_call, True),
+            ("pre_call", ["other"], GuardrailEventHooks.pre_mcp_call, False),
+            ("pre_call", ["test_panw_airs"], GuardrailEventHooks.during_mcp_call, False),
+            ("post_call", ["test_panw_airs"], GuardrailEventHooks.post_mcp_call, False),
+        ],
+        ids=[
+            "listed_pre_call_mode_runs_for_pre_mcp_call",
+            "listed_during_call_mode_runs_for_during_mcp_call",
+            "another_guardrail_listed",
+            "pre_call_mode_does_not_run_for_during_mcp_call",
+            "post_call_mode_does_not_run_for_post_mcp_call",
+        ],
+    )
+    def test_server_listed_guardrail_maps_its_mode_onto_mcp_events_like_default_on(
+        self, event_hook: str, listed: list[str], query_event: GuardrailEventHooks, expected: bool
+    ) -> None:
+        handler: Final = make_handler(default_on=False, event_hook=event_hook)
+        data: Final = _simple_data(**{MCP_SERVER_GUARDRAILS_KEY: listed})
         assert handler.should_run_guardrail(data, query_event) is expected
 
 
