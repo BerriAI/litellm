@@ -16,10 +16,10 @@ import pytest
 from litellm.llms.gemini.batches.transformation import (
     GeminiBatchesConfig,
     is_gemini_batch_usage_shape,
-    is_native_gemini_batch_output_row,
     usage_from_batch_output,
 )
 from litellm.llms.gemini.common_utils import GeminiError
+from litellm.llms.gemini.files.transformation import is_native_gemini_batch_output_row
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 
 STATUS_MAP = {

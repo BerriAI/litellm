@@ -52,7 +52,7 @@ def _uses_native_vertex_output(
     first_row: Mapping[str, object] | None,
 ) -> bool:
     if custom_llm_provider == "gemini":
-        from litellm.llms.gemini.batches.transformation import is_native_gemini_batch_output_row
+        from litellm.llms.gemini.files.transformation import is_native_gemini_batch_output_row
 
         return first_row is not None and is_native_gemini_batch_output_row(first_row)
     if custom_llm_provider != "vertex_ai":
