@@ -587,16 +587,25 @@ async def may_compare(
     data: dict[str, object],
     call_type: CallTypesLiteral = "anthropic_messages",
 ) -> bool:
+    rejected: Final = await comparison_rejection(ownership, key, data, call_type)
+    if rejected is None:
+        return True
+    assert rejected.status_code == 403
+    error: Final = _JSON_OBJECT.validate_json(rejected.detail)["error"]
+    assert isinstance(error, dict)
+    assert error["type"] == "permission_error"
+    assert "previous_message_id" in str(error["message"])
+    return False
+
+
+async def comparison_rejection(
+    ownership: MessageThreadOwnership, key: UserAPIKeyAuth, data: dict[str, object], call_type: CallTypesLiteral
+) -> HTTPException | None:
     try:
         await ownership.async_pre_call_hook(user_api_key_dict=key, cache=DualCache(), data=data, call_type=call_type)
     except HTTPException as rejected:
-        assert rejected.status_code == 403
-        error: Final = _JSON_OBJECT.validate_json(rejected.detail)["error"]
-        assert isinstance(error, dict)
-        assert error["type"] == "permission_error"
-        assert "previous_message_id" in str(error["message"])
-        return False
-    return True
+        return rejected
+    return None
 
 
 @pytest.mark.asyncio
