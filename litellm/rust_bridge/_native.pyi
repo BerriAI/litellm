@@ -1,5 +1,6 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from typing import (
     ClassVar,
     Final,
@@ -284,6 +285,24 @@ class NativeDeploymentHealth:
     def set_sync(self, states: Mapping[str, object], ttl_seconds: float) -> None: ...
 
 @final
+@final
+class ActiveMember:
+    @property
+    def member(self) -> str: ...
+    @property
+    def priority_class(self) -> str: ...
+
+class NativeActiveTeams:
+    def __new__(
+        cls, client: NativeRedisClient | None, clock: Callable[[], float] | None = None
+    ) -> NativeActiveTeams: ...
+    @property
+    def has_redis(self) -> bool: ...
+    def touch(
+        self, model: str, member: str, priority_class: str, window_seconds: int
+    ) -> Future[list[ActiveMember]]: ...
+    def touch_local(self, model: str, member: str, priority_class: str, window_seconds: int) -> list[ActiveMember]: ...
+
 class NativeSensitiveRoutePins:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSensitiveRoutePins: ...
     def get(self, tenant: str, session_id: str, default_ttl_seconds: float) -> Future[str | None]: ...
@@ -1940,6 +1959,13 @@ class RustProjectRepository:
     def find_with_budget(self, project_id: str) -> Future[str | None]: ...
 
 @final
+class RustSpendLogRepository:
+    def __new__(cls, database: NativeDatabase) -> RustSpendLogRepository: ...
+    def key_window_spend(self, api_key: str, since: datetime) -> Future[float]: ...
+    def team_window_spend(self, team_id: str, since: datetime) -> Future[float]: ...
+    def user_window_spend(self, user_id: str, since: datetime) -> Future[float]: ...
+
+@final
 class RustTagRepository:
     def __new__(cls, database: NativeDatabase) -> RustTagRepository: ...
     def names(self, limit: int) -> Future[list[str]]: ...
@@ -2189,6 +2215,7 @@ def reserve_process_for_forking() -> None: ...
 
 __all__ = [
     "JWT_ID_JAG_TYP",
+    "ActiveMember",
     "AtomicApplied",
     "AtomicOverLimit",
     "AttemptShape",
@@ -2199,6 +2226,7 @@ __all__ = [
     "GuardedReply",
     "HuggingFaceEncoding",
     "LocalSizes",
+    "NativeActiveTeams",
     "NativeAdmission",
     "NativeAuthCache",
     "NativeBudgets",
@@ -2264,6 +2292,7 @@ __all__ = [
     "RustOrganizationRepository",
     "RustPlan",
     "RustProjectRepository",
+    "RustSpendLogRepository",
     "RustTagRepository",
     "RustTeamGrant",
     "RustTeamMembershipRepository",
@@ -2574,6 +2603,7 @@ class _FailedStep(_Step):
         "routing_plugins_left_nothing",
         "routing_plugins_need_async",
         "multiple_teams",
+        "multiple_model_groups",
         "reserved",
         "invalid_router_weights",
         "non_numeric_weight",

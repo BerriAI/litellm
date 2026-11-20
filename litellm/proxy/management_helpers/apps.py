@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Final,
+    Literal,
     TypeVar,
     cast,  # noqa: TID251  # Prisma proxies implement the generated client surface
 )
@@ -157,6 +158,18 @@ class _AssociationOverride:
 class _AssociationBudget:
     permanent: Budget | None
     effective: Budget | None
+
+
+def _budget_selection(
+    data: AppCreate | AppPatch | AppOrganizationPut | AppMemberPut,
+    field: Literal["budget", "default_customer_member_budget", "customer_member_budget"] = "budget",
+) -> MemberPatch:
+    return MemberPatch.model_validate(
+        {
+            "budget" if name == field else "budget_id": value
+            for name, value in data.model_dump(include={field, f"{field}_id"}, exclude_unset=True).items()
+        }
+    )
 
 
 def _association_base(current: AppAssociation | None, data: AppOrganizationPut | AppMemberPut) -> AppAssociation | None:
@@ -405,10 +418,32 @@ class AppStore:
             )
         )
 
-    async def valid_profile(self, budget_id: str | None) -> bool:
+    async def valid_profile(self, budget_id: str | None, scope: BudgetGroupScope | None = None) -> bool:
         if budget_id is None:
             return True
-        return budget_id in await self.shared_profile_ids() and await self.budget(budget_id) is not None
+        groups: Final = (
+            await budget_group_ids(self.customers.config, scope)
+            if scope is not None
+            else await self.shared_profile_ids()
+        )
+        return budget_id in groups and await self.budget(budget_id) is not None
+
+    async def validate_member_profile(self, budget_id: str | None) -> AppFailure | None:
+        if budget_id is None:
+            return None
+        await self.customers.lock_customer_identities()
+        if not await self.valid_profile(budget_id, BudgetGroupScope.APP_MEMBER):
+            return AppFailure(422, "The member budget must be an existing app × customer member budget group.")
+        return None
+
+    async def validate_settings(self, data: AppPatch | AppCreate) -> AppFailure | None:
+        if data.budget_id is not None or data.default_tier_budget_id is not None:
+            await self.customers.lock_customer_identities()
+        if not await self.valid_profile(data.default_tier_budget_id):
+            return AppFailure(422, "The default profile must be an existing customer budget group.")
+        if not await self.valid_profile(data.budget_id, BudgetGroupScope.APP):
+            return AppFailure(422, "The app budget must be an existing overall-app budget group.")
+        return await self.validate_member_profile(data.default_customer_member_budget_id)
 
     async def get(self, app_id: str) -> App | AppFailure:
         row: Final = await self.apps.find_unique(where={"app_id": app_id})
@@ -468,8 +503,9 @@ class AppStore:
         resource: Final = await self.resource(definition.resource_type, data.resource_id)
         if isinstance(resource, AppFailure):
             return resource
-        if not await self.valid_profile(data.default_tier_budget_id):
-            return AppFailure(422, "The default profile must be an existing customer budget group.")
+        failure: Final = await self.validate_settings(data)
+        if failure is not None:
+            return failure
         existing: Final = await self.by_resource(definition.resource_type, data.resource_id)
         if existing is not None:
             return existing
@@ -504,23 +540,41 @@ class AppStore:
         )
         return await self.response(row)
 
-    async def fields(self, data: AppPatch | AppCreate, actor: str, current: App | None = None) -> Mapping[str, object]:
-        budget_id: Final = (
-            await self.customers.update_budget(current.budget_id if current else None, data.budget, actor)
-            if data.budget is not None
-            else None
+    async def linked_budget_id(
+        self,
+        current_id: str | None,
+        data: MemberPatch,
+        actor: str,
+        scope: BudgetGroupScope,
+        inherited_id: str | None = None,
+    ) -> str | None:
+        if data.budget_id is not None:
+            return data.budget_id
+        if "budget" not in data.model_fields_set:
+            return data.budget_id if "budget_id" in data.model_fields_set else current_id
+        return await self.customers.private_budget_patch(
+            current_id,
+            data,
+            actor,
+            source_id=inherited_id,
+            shared_ids=(
+                *await budget_group_ids(self.customers.config, scope),
+                *((inherited_id,) if inherited_id is not None else ()),
+            ),
         )
-        member_id: Final = (
-            await self.customers.update_budget(
-                current.default_customer_member_budget_id if current else None,
-                data.default_customer_member_budget,
-                actor,
-            )
-            if data.default_customer_member_budget is not None
-            else None
+
+    async def fields(self, data: AppPatch | AppCreate, actor: str, current: App | None = None) -> Mapping[str, object]:
+        budget_id: Final = await self.linked_budget_id(
+            current.budget_id if current else None, _budget_selection(data), actor, BudgetGroupScope.APP
+        )
+        member_id: Final = await self.linked_budget_id(
+            current.default_customer_member_budget_id if current else None,
+            _budget_selection(data, "default_customer_member_budget"),
+            actor,
+            BudgetGroupScope.APP_MEMBER,
         )
         return {
-            **({"budget_id": budget_id} if "budget" in data.model_fields_set else {}),
+            **({"budget_id": budget_id} if {"budget", "budget_id"} & data.model_fields_set else {}),
             **(
                 {"default_tier_budget_id": data.default_tier_budget_id}
                 if "default_tier_budget_id" in data.model_fields_set
@@ -528,7 +582,7 @@ class AppStore:
             ),
             **(
                 {"default_customer_member_budget_id": member_id}
-                if "default_customer_member_budget" in data.model_fields_set
+                if {"default_customer_member_budget", "default_customer_member_budget_id"} & data.model_fields_set
                 else {}
             ),
             **({"auto_create_customers": data.auto_create_customers} if data.auto_create_customers is not None else {}),
@@ -554,8 +608,9 @@ class AppStore:
         app: Final = await self.writable(app_id)
         if isinstance(app, AppFailure):
             return app
-        if not await self.valid_profile(data.default_tier_budget_id):
-            return AppFailure(422, "The default profile must be an existing customer budget group.")
+        failure: Final = await self.validate_settings(data)
+        if failure is not None:
+            return failure
         row: Final = await self.apps.update(where={"app_id": app_id}, data=await self.fields(data, actor, app))
         if row is None:
             return AppFailure(404, "App not found.")
@@ -653,6 +708,9 @@ class AppStore:
         app: Final = await self.writable(app_id)
         if isinstance(app, AppFailure):
             return app
+        invalid_member: Final = await self.validate_member_profile(data.customer_member_budget_id)
+        if invalid_member is not None:
+            return invalid_member
         selected: Final = data.budget_id or data.tier_budget_id
         if not await self.valid_profile(selected):
             return AppFailure(
@@ -681,16 +739,12 @@ class AppStore:
             else current_id
         )
         override: Final = await self.association_override(current, data, actor)
-        member: Final = (
-            await self.customers.update_budget(
-                current.customer_member_budget_id if current else None,
-                data.customer_member_budget,
-                actor,
-            )
-            if data.customer_member_budget is not None
-            else current.customer_member_budget_id
-            if current and "customer_member_budget" not in data.model_fields_set
-            else None
+        member: Final = await self.linked_budget_id(
+            current.customer_member_budget_id if current else None,
+            _budget_selection(data, "customer_member_budget"),
+            actor,
+            BudgetGroupScope.APP_MEMBER,
+            app.default_customer_member_budget_id,
         )
         fields: Final = {
             "tier_budget_id": None,
@@ -796,6 +850,9 @@ class AppStore:
         app: Final = await self.writable(app_id)
         if isinstance(app, AppFailure):
             return app
+        invalid_member: Final = await self.validate_member_profile(data.budget_id)
+        if invalid_member is not None:
+            return invalid_member
         customer: Final = await self.customers.members.find_unique(where={"customer_member_id": customer_member_id})
         if customer is None:
             return AppFailure(404, "Customer member not found.")
@@ -812,12 +869,12 @@ class AppStore:
         current: Final = _association_base(original, data)
         organization: Final = await self.organization(app, parent)
         inherited_id: Final = organization.customer_member_budget_id or app.default_customer_member_budget_id
-        base_id: Final = (
-            await self.association_budget(current.budget_id if current else None, inherited_id, data.budget, actor)
-            if "budget" in data.model_fields_set
-            else current.budget_id
-            if current
-            else None
+        base_id: Final = await self.linked_budget_id(
+            current.budget_id if current else None,
+            _budget_selection(data),
+            actor,
+            BudgetGroupScope.APP_MEMBER,
+            inherited_id,
         )
         override: Final = await self.association_override(current, data, actor)
         fields: Final = {"budget_id": base_id, **override.fields()}

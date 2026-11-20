@@ -51,8 +51,18 @@ class AppSettings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     budget: Budget | None = None
+    budget_id: str | None = Field(
+        default=None,
+        description="Linked overall-app budget group. Omit to keep the current assignment, or send null to remove it. "
+        "Send budget instead to create a private custom budget, preserving the preset's untouched limits.",
+    )
     default_tier_budget_id: str | None = None
     default_customer_member_budget: Budget | None = None
+    default_customer_member_budget_id: str | None = Field(
+        default=None,
+        description="Linked app × customer member budget group used as this app's per-member default. "
+        "Omit to preserve it, or send null to remove it. Send default_customer_member_budget instead for custom limits.",
+    )
     auto_create_customers: bool | None = Field(
         default=None,
         description=(
@@ -70,6 +80,14 @@ class AppSettings(BaseModel):
             "uses the gateway-wide customer surcharge."
         ),
     )
+
+    @model_validator(mode="after")
+    def exclusive_budget(self) -> "AppSettings":
+        if self.budget_id is not None and self.budget is not None:
+            raise ValueError("Choose a preset or a custom budget")
+        if self.default_customer_member_budget_id is not None and self.default_customer_member_budget is not None:
+            raise ValueError("Choose a member preset or a custom member budget")
+        return self
 
 
 class AppPatch(AppSettings):
@@ -116,6 +134,11 @@ class AppOrganizationPut(BaseModel):
     budget_override: Budget | None = None
     budget_override_expires_at: AwareDatetime | None = None
     customer_member_budget: Budget | None = None
+    customer_member_budget_id: str | None = Field(
+        default=None,
+        description="Linked app × customer member budget group for members of this customer in this app. "
+        "Omit to preserve it, or send null to inherit the app default. Send customer_member_budget for custom limits.",
+    )
 
     @model_validator(mode="after")
     def exclusive_budget(self) -> "AppOrganizationPut":
@@ -123,12 +146,19 @@ class AppOrganizationPut(BaseModel):
             raise ValueError("Choose one budget preset")
         if (self.budget_id is not None or self.tier_budget_id is not None) and self.budget is not None:
             raise ValueError("Choose a preset or a custom budget")
+        if self.customer_member_budget_id is not None and self.customer_member_budget is not None:
+            raise ValueError("Choose a member preset or a custom member budget")
         return self
 
 
 class AppMemberPut(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    budget_id: str | None = Field(
+        default=None,
+        description="Linked app × customer member budget group. Omit to preserve it, or send null to inherit defaults. "
+        "Send budget instead to fork the preset into private custom limits. Temporary increases remain independent.",
+    )
     budget: Budget | None = Field(
         default=None,
         description="Permanent budget for this app and customer member. Copies inherited policy on first edit. "
@@ -136,6 +166,12 @@ class AppMemberPut(BaseModel):
     )
     budget_override: Budget | None = None
     budget_override_expires_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def exclusive_budget(self) -> "AppMemberPut":
+        if self.budget_id is not None and self.budget is not None:
+            raise ValueError("Choose a preset or a custom budget")
+        return self
 
 
 class AppOrganization(BaseModel):

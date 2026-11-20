@@ -57,7 +57,8 @@ mod _native {
         RustAccessGroupRepository, RustBudgetRepository, RustEndUserRepository,
         RustJwtKeyMappingRepository, RustKeyRepository, RustModelAccessGroupRepository,
         RustObjectPermissionRepository, RustOrganizationRepository, RustProjectRepository,
-        RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
+        RustSpendLogRepository, RustTagRepository, RustTeamMembershipRepository,
+        RustTeamRepository, RustUserRepository,
     };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -86,6 +87,8 @@ mod _native {
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
     use crate::redis::client::NativeRedisClient;
+    #[pymodule_export]
+    use crate::redis::store::active_teams::{NativeActiveTeams, PyActiveMember};
     #[pymodule_export]
     use crate::redis::store::auth_cache::{NativeAuthCache, PyLocalSizes};
     #[pymodule_export]
@@ -217,6 +220,8 @@ mod tests {
                 "NativeRouterUsage",
                 "NativeUsageRead",
                 "NativeSensitiveRoutePins",
+                "NativeActiveTeams",
+                "ActiveMember",
                 "NativeRedisStoreError",
                 "NativeSpendCounters",
                 "PostCallSettlement",
@@ -241,6 +246,7 @@ mod tests {
                 "RustObjectPermissionRepository",
                 "RustProjectRepository",
                 "RustTagRepository",
+                "RustSpendLogRepository",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",

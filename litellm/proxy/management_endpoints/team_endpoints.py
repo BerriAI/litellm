@@ -101,6 +101,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    TEAM_MAX_BUDGET_ALERT_EMAILS_KEY,
     OrganizationNotFoundError,
     _cache_team_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     allowed_route_check_inside_route,
@@ -118,6 +119,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     invalidate_team_member_spend_state,
     jwt_key_mapping_cache_key,
     resolve_effective_team_member_budget,
+    team_max_budget_alert_emails_error,
 )
 from litellm.proxy.auth.auth_utils import (
     enforce_batch_limits_are_admin_only,
@@ -303,6 +305,32 @@ class _TeamIdGroupRow(TypedDict):
 
 def _as_object(value: object) -> object:
     return value
+
+
+_TEAM_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _team_metadata_value(metadata: object, key: str) -> object:
+    try:
+        return _TEAM_METADATA_ADAPTER.validate_python(metadata).get(key)
+    except ValidationError:
+        return None
+
+
+def _reject_invalid_team_budget_alert_emails(
+    metadata: object,
+    stored_metadata: object,
+    max_budget: float | None,
+    stored_max_budget: float | None,
+) -> None:
+    alert_emails: Final = _team_metadata_value(metadata, TEAM_MAX_BUDGET_ALERT_EMAILS_KEY)
+    if alert_emails == _team_metadata_value(stored_metadata, TEAM_MAX_BUDGET_ALERT_EMAILS_KEY) and (
+        max_budget == stored_max_budget
+    ):
+        return
+    error: Final = team_max_budget_alert_emails_error(alert_emails, max_budget)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
 
 
 def _as_list(rows: Sequence[_DbRecordT]) -> list[_DbRecordT]:  # mutable-ok: pydantic list[...] fields reject Sequence
@@ -1914,6 +1942,13 @@ async def new_team(
                 if default_budget is not None:
                     data.max_budget = default_budget
 
+        _reject_invalid_team_budget_alert_emails(
+            metadata=_as_object(getattr(data, "metadata", None)),
+            stored_metadata=None,
+            max_budget=data.max_budget,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # legacy default_team_settings is a bare dict
+            stored_max_budget=None,
+        )
+
         # check org key limits - done here to handle inheriting org id from team
         if data.organization_id is not None and prisma_client is not None:
             try:
@@ -2710,6 +2745,15 @@ async def update_team(
             _existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
             prisma_client,
             license_first=True,
+        )
+
+        _reject_invalid_team_budget_alert_emails(
+            metadata=_as_object(getattr(data, "metadata", None))  # pyright: ignore[reportUnknownArgumentType]  # stored Prisma metadata is a bare dict
+            if "metadata" in data.model_fields_set
+            else _existing_team_metadata,
+            stored_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            max_budget=data.max_budget if "max_budget" in data.model_fields_set else existing_team_row.max_budget,
+            stored_max_budget=existing_team_row.max_budget,
         )
 
         if data.soft_budget is not None:
