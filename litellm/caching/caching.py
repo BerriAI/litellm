@@ -241,8 +241,7 @@ def _is_conversation_item(item: object) -> bool:
     if not isinstance(item, Mapping):
         return False
     block: Final = cast(Mapping[str, object], item)  # cast-ok: isinstance leaves the key and value types unknown
-    item_type: Final = block.get("type")
-    return item_type != "file" and item_type != "text"
+    return block.get("type") not in ("file", "text")
 
 
 def _request_message_count(kwargs: Mapping[str, object]) -> int:
