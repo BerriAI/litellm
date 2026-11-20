@@ -1158,7 +1158,7 @@ def _estimate_request_input_cost_for_model(
             model_info=model_info,
             input_tokens=input_tokens,
         )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        for model_info in _get_model_pricing(model=model, llm_router=llm_router).cost_infos
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
@@ -1198,15 +1198,22 @@ def _estimate_request_max_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
+    pricing: Final = _get_model_pricing(model=model, llm_router=llm_router)
+    caps: Final = _valid_output_token_caps(request_body)
+    honored_fields: Final = _honored_output_token_fields(
+        caps, route=route, serving_infos=pricing.deployment_infos or pricing.cost_infos
+    )
+    requested_output_tokens: Final = _requested_output_tokens(caps, route_fields=honored_fields)
     estimates: Final = [
         _max_cost_for_cost_info(
             request_body=request_body,
             route=route,
             model=model,
             model_info=model_info,
+            requested_output_tokens=requested_output_tokens,
             input_tokens=input_tokens,
         )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        for model_info in pricing.cost_infos
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
@@ -1217,6 +1224,7 @@ def _max_cost_for_cost_info(
     route: str,
     model: str,
     model_info: Mapping[str, object],
+    requested_output_tokens: int,
     input_tokens: int | None = None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
@@ -1234,9 +1242,9 @@ def _max_cost_for_cost_info(
         input_tokens=input_tokens,
     )
     output_tokens: Final = _estimate_output_tokens(
-        request_body=request_body,
         route=route,
         model_info=model_info,
+        requested_output_tokens=requested_output_tokens,
     )
     if estimated_input_tokens is None or output_tokens is None:
         return None
@@ -1324,10 +1332,19 @@ def _get_model_cost_info(
     return dict(litellm.get_model_info(model=model))
 
 
-def _get_model_cost_infos(
+@dataclass(frozen=True, slots=True)
+class _ModelPricing:
+    cost_infos: Sequence[Mapping[str, object]]
+    deployment_infos: Sequence[Mapping[str, object]]
+
+
+_NO_PRICING: Final = _ModelPricing(cost_infos=(), deployment_infos=())
+
+
+def _get_model_pricing(
     model: str,
     llm_router: Router | None,
-) -> Sequence[Mapping[str, object]]:
+) -> _ModelPricing:
     """Cost-info candidates to estimate a request against for one model group.
 
     Reservation runs before routing, so the deployment that will serve the request
@@ -1339,30 +1356,47 @@ def _get_model_cost_infos(
     try:
         base: Final = _get_model_cost_info(model=model, llm_router=llm_router)
         if base is None:
-            return []
-        tiered_tables: Final = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
+            return _NO_PRICING
+        deployment_infos: Final = _get_deployment_model_infos(model=model, llm_router=llm_router)
+        tiered_tables: Final = _get_deployment_tiered_pricing_tables(deployment_infos)
     except Exception:
         verbose_proxy_logger.debug(
             "Unable to load model cost info for budget reservation",
             exc_info=True,
         )
-        return []
-    if not tiered_tables:
-        return [base]
-    return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
+        return _NO_PRICING
+    return _ModelPricing(
+        cost_infos=(base, *({**base, "tiered_pricing": table} for table in tiered_tables)),
+        deployment_infos=deployment_infos,
+    )
 
 
-def _deployment_tiered_pricing_table(
+def _deployment_model_info(
     deployment: DeploymentTypedDict,
     llm_router: Router,
-) -> Sequence[Mapping[str, object]] | None:
+) -> Mapping[str, object] | None:
     model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
     backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
-    deployment_model_info: Final = llm_router.registry().deployment_model_info(model_id, backend_model, cached=True)
-    if deployment_model_info is None:
-        return None
+    return llm_router.registry().deployment_model_info(model_id, backend_model, cached=True)
+
+
+def _get_deployment_model_infos(
+    model: str,
+    llm_router: Router | None,
+) -> Sequence[Mapping[str, object]]:
+    if llm_router is None:
+        return ()
+    deployments: Final = llm_router.registry().deployments(model) or []
+    return tuple(
+        model_info
+        for deployment in deployments
+        if (model_info := _deployment_model_info(deployment, llm_router)) is not None
+    )
+
+
+def _tiered_pricing_table(deployment_model_info: Mapping[str, object]) -> Sequence[Mapping[str, object]] | None:
     tiered_pricing: Final = deployment_model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         return tiered_pricing
@@ -1370,17 +1404,9 @@ def _deployment_tiered_pricing_table(
 
 
 def _get_deployment_tiered_pricing_tables(
-    model: str,
-    llm_router: Router | None,
+    deployment_infos: Sequence[Mapping[str, object]],
 ) -> Sequence[Sequence[Mapping[str, object]]]:
-    if llm_router is None:
-        return []
-    deployments: Final = llm_router.registry().deployments(model) or []
-    return [
-        table
-        for deployment in deployments
-        if (table := _deployment_tiered_pricing_table(deployment, llm_router)) is not None
-    ]
+    return [table for model_info in deployment_infos if (table := _tiered_pricing_table(model_info)) is not None]
 
 
 def _get_request_models(
@@ -1466,14 +1492,12 @@ DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384
 
 
 def _estimate_output_tokens(
-    request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
+    requested_output_tokens: int,
 ) -> int | None:
     if _is_input_only_route(route=route):
         return 0
-
-    requested: Final = _requested_output_tokens(request_body, route=route)
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the
@@ -1489,7 +1513,7 @@ def _estimate_output_tokens(
         if raw_model_ceiling is not None and raw_model_ceiling > 0
         else DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
     )
-    return min(requested, model_ceiling)
+    return min(requested_output_tokens, model_ceiling)
 
 
 _RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.aresponses, CallTypes.responses})
@@ -1499,7 +1523,7 @@ _COMPLETION_CALL_TYPES: Final = frozenset(
 )
 _INFERENCE_CONFIG_MAX_TOKENS: Final = "inferenceConfig.maxTokens"
 _TOP_LEVEL_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens", "maxTokens")
-_OUTPUT_TOKEN_FIELDS: Final = (*_TOP_LEVEL_OUTPUT_TOKEN_FIELDS, _INFERENCE_CONFIG_MAX_TOKENS)
+_COMPLETION_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens")
 _PASS_THROUGH_OUTPUT_TOKEN_FIELDS: Final = (
     "max_completion_tokens",
     "max_tokens",
@@ -1515,7 +1539,7 @@ def _route_output_token_fields(route: str) -> tuple[str, ...]:
     if call_types & _ANTHROPIC_MESSAGES_CALL_TYPES:
         return ("max_tokens",)
     if call_types & _COMPLETION_CALL_TYPES:
-        return ("max_completion_tokens", "max_tokens")
+        return _COMPLETION_OUTPUT_TOKEN_FIELDS
     return _PASS_THROUGH_OUTPUT_TOKEN_FIELDS
 
 
@@ -1532,15 +1556,36 @@ def _request_output_token_caps(request_body: Mapping[str, object]) -> Mapping[st
     return MappingProxyType(dict((*top_level_caps, *nested_cap)))
 
 
-def _requested_output_tokens(request_body: Mapping[str, object], route: str) -> int:
-    caps: Final = MappingProxyType(
+def _valid_output_token_caps(request_body: Mapping[str, object]) -> Mapping[str, int]:
+    return MappingProxyType(
         {
             field: tokens
             for field, value in _request_output_token_caps(request_body).items()
             if (tokens := _non_negative_int(value)) is not None
         }
     )
-    route_cap_present: Final = not caps.keys().isdisjoint(_route_output_token_fields(route))
+
+
+def _honored_output_token_fields(
+    caps: Mapping[str, int],
+    route: str,
+    serving_infos: Sequence[Mapping[str, object]],
+) -> tuple[str, ...]:
+    route_fields: Final = _route_output_token_fields(route)
+    if route_fields != _COMPLETION_OUTPUT_TOKEN_FIELDS or "max_tokens" in caps or "max_completion_tokens" not in caps:
+        return route_fields
+    if all(_supports_max_completion_tokens(model_info) for model_info in serving_infos):
+        return route_fields
+    return ("max_tokens",)
+
+
+def _supports_max_completion_tokens(model_info: Mapping[str, object]) -> bool:
+    supported: Final = model_info.get("supported_openai_params")
+    return isinstance(supported, list) and "max_completion_tokens" in supported
+
+
+def _requested_output_tokens(caps: Mapping[str, int], route_fields: tuple[str, ...]) -> int:
+    route_cap_present: Final = not caps.keys().isdisjoint(route_fields)
     uncapped_floor: Final = () if route_cap_present else (DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,)
     return max((*caps.values(), *uncapped_floor))
 

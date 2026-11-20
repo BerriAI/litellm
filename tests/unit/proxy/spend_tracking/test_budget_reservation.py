@@ -31,6 +31,7 @@ from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
     _get_budget_counters,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -857,6 +858,84 @@ def test_configured_caps_never_shrink_an_uncapped_hold(route: str, config_source
 
     assert uncapped is not None
     assert configured == pytest.approx(uncapped)
+
+
+def _priced_router(backend_models: tuple[str, ...]) -> Router:
+    return Router(
+        model_list=[
+            Deployment(
+                model_name="priced-model",
+                litellm_params=LiteLLM_Params(model=backend_model, api_key="sk-fake"),
+                model_info=ModelInfo(
+                    id=f"deployment-{index}",
+                    input_cost_per_token=0.0001,
+                    output_cost_per_token=0.0002,
+                    max_output_tokens=128000,
+                ),
+            ).model_dump()
+            for index, backend_model in enumerate(backend_models)
+        ]
+    )
+
+
+def _chat_estimates(llm_router: Router | None, model: str) -> tuple[float | None, float | None, float | None]:
+    body: Final = {"model": model, "messages": [{"role": "user", "content": "hi"}]}
+    return tuple(
+        estimate_request_max_cost(request_body={**body, **cap}, route="/v1/chat/completions", llm_router=llm_router)
+        for cap in ({}, {"max_completion_tokens": 1}, {"max_tokens": 1})
+    )
+
+
+@pytest.mark.parametrize(
+    "backend_models",
+    [
+        ("replicate/meta/llama-3-70b-instruct",),
+        ("watsonx/ibm/granite-3-8b-instruct",),
+        ("anthropic/claude-haiku-5-5", "replicate/meta/llama-3-70b-instruct"),
+    ],
+)
+def test_chat_max_completion_tokens_cannot_lower_the_hold_when_a_deployment_drops_it(
+    backend_models: tuple[str, ...],
+) -> None:
+    uncapped, completion_capped, max_tokens_capped = _chat_estimates(_priced_router(backend_models), "priced-model")
+
+    assert uncapped is not None and max_tokens_capped is not None
+    assert max_tokens_capped < uncapped
+    assert completion_capped == pytest.approx(uncapped)
+
+
+@pytest.mark.parametrize(
+    "backend_models",
+    [("openai/gpt-5.6",), ("anthropic/claude-haiku-5-5", "openai/gpt-5.6")],
+)
+def test_chat_max_completion_tokens_lowers_the_hold_when_every_deployment_supports_it(
+    backend_models: tuple[str, ...],
+) -> None:
+    uncapped, completion_capped, max_tokens_capped = _chat_estimates(_priced_router(backend_models), "priced-model")
+
+    assert uncapped is not None and completion_capped is not None
+    assert completion_capped < uncapped
+    assert completion_capped == pytest.approx(max_tokens_capped)
+
+
+@pytest.mark.parametrize(
+    "model, completion_cap_lowers_hold",
+    [("replicate/meta/llama-3-70b-instruct", False), ("gpt-5.6", True)],
+)
+def test_chat_max_completion_tokens_without_router_follows_the_model_supported_params(
+    model: str, completion_cap_lowers_hold: bool
+) -> None:
+    uncapped, completion_capped, _ = _chat_estimates(None, model)
+
+    assert uncapped is not None and completion_capped is not None
+    assert (completion_capped < uncapped) is completion_cap_lowers_hold
+
+
+def test_unpriced_model_reserves_nothing_so_read_time_enforcement_applies() -> None:
+    body: Final = {"model": "unpriced-model-for-reservation", "messages": [{"role": "user", "content": "hi"}]}
+
+    assert estimate_request_max_cost(request_body=body, route="/v1/chat/completions", llm_router=None) is None
+    assert estimate_request_input_cost(request_body=body, route="/v1/chat/completions", llm_router=None) is None
 
 
 def test_bedrock_converse_inference_config_max_tokens_scales_cost() -> None:
