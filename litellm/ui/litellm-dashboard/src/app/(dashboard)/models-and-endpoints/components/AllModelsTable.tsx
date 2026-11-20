@@ -35,7 +35,7 @@ export const PERSONAL_TEAM_VALUE = "personal";
 export const ALL_MODEL_GROUPS_VALUE = "all";
 export const WILDCARD_MODEL_GROUP_VALUE = "wildcard";
 
-const MODEL_TABLE_BODY_HEIGHT = 600;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const ALL_PROXY_MODELS_LABEL: ParseKeys = "modelsAndEndpoints.allModelsTable.allProxyModels";
 
 const FILTER_LABELS: Record<string, ParseKeys> = {
@@ -220,13 +220,12 @@ export function AllModelsTable({
       pagination={pagination}
       onPaginationChange={onPaginationChange}
       rowCount={rowCount}
-      pageSizeOptions={[10, 25, 50]}
+      pageSizeOptions={PAGE_SIZE_OPTIONS}
       filterMode="server"
       columnFilters={columnFilters}
       onColumnFiltersChange={onColumnFiltersChange}
       defaultColumnVisibility={{ [STATUS_COLUMN_ID]: false }}
       enableColumnResizing
-      maxBodyHeight={MODEL_TABLE_BODY_HEIGHT}
       isLoading={isLoading}
       loadingMessage={t("modelsAndEndpoints.allModelsTable.loading")}
       noDataMessage={<EmptyState />}
