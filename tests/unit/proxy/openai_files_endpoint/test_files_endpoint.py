@@ -6,6 +6,8 @@ import tempfile
 import tracemalloc
 from collections import Counter
 from collections.abc import Callable, Iterator
+from types import SimpleNamespace
+from dataclasses import dataclass
 from email.parser import BytesParser
 from typing import IO, Final, List, Optional
 from urllib.parse import quote
@@ -5539,12 +5541,20 @@ def _managed_file_row(
     )
 
 
+def _field_matches(value, expected) -> bool:
+    if isinstance(expected, dict) and "in" in expected:
+        return value in expected["in"]
+    if isinstance(expected, dict) and "hasSome" in expected:
+        return not set(value).isdisjoint(expected["hasSome"])
+    return value == expected
+
+
 def _row_matches_where(row, where) -> bool:
     for field, expected in where.items():
         if field == "OR":
             if not any(_row_matches_where(row, clause) for clause in expected):
                 return False
-        elif getattr(row, field) != expected:
+        elif not _field_matches(getattr(row, field), expected):
             return False
     return True
 
@@ -5565,6 +5575,26 @@ class _ManagedFileTableOverRows:
         deleted_row: Final = await self.find_first(where)
         self.rows = [row for row in self.rows if row is not deleted_row]
         return deleted_row
+
+    async def upsert(self, where: dict[str, str], data: dict[str, dict[str, object]]) -> SimpleNamespace:
+        created: Final = data["create"]
+        row: Final = SimpleNamespace(
+            unified_file_id=where["unified_file_id"],
+            file_object=json.loads(created["file_object"]),
+            model_mappings=json.loads(created["model_mappings"]),
+            flat_model_file_ids=created["flat_model_file_ids"],
+            created_by=created["created_by"],
+            team_id=created["team_id"],
+            storage_backend=None,
+        )
+        self.rows = [row, *(existing for existing in self.rows if existing.unified_file_id != row.unified_file_id)]
+        return row
+
+    async def delete_many(self, where: dict[str, str]) -> int:
+        remaining_rows: Final = [row for row in self.rows if not _row_matches_where(row, where)]
+        deleted_count: Final = len(self.rows) - len(remaining_rows)
+        self.rows = remaining_rows
+        return deleted_count
 
     async def find_many(self, where, take=None, order=None, cursor=None, skip=0):
         owned_rows: Final = self._owned_rows(where)
@@ -5712,15 +5742,20 @@ def test_unscoped_list_files_does_not_leak_another_callers_files(
     assert [file["id"] for file in response.json()["data"]] == ["unified-mine"]
 
 
-def test_scoped_list_files_still_resolves_deployment_credentials(
+def test_scoped_list_files_still_resolves_deployment_credentials_for_an_admin(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
-    """target_model_names keeps routing to the provider on deployment credentials, so
+    """target_model_names keeps routing an admin to the provider on deployment credentials, so
     the unscoped path does not swallow that route."""
+    import litellm.proxy.proxy_server as ps
+
     _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
         mocker, monkeypatch, llm_router, [_managed_file_row("unified-file-1")]
     )
     provider_list.return_value = []
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    )
 
     response = _get_unscoped_list_files("?target_model_names=gpt-3.5-turbo")
 
@@ -6568,6 +6603,182 @@ def test_raw_provider_file_id_still_goes_to_the_hinted_model_when_managed_files_
     assert response.json() == provider_body
     assert provider_file.call_count == 1
     assert provider_file.calls.last.request.headers["authorization"] == "Bearer upstream-proxy-key"
+
+
+_PLAIN_UPLOAD_ID: Final = "file-team-a-payroll"
+
+
+@dataclass(frozen=True, slots=True)
+class _SharedAccount:
+    provider: str
+    files_url: str
+    file_body: dict[str, object]
+    deleted_body: dict[str, object]
+
+
+_OPENAI_ACCOUNT: Final = _SharedAccount(
+    provider="openai",
+    files_url="https://api.openai.com/v1/files",
+    file_body={
+        "id": _PLAIN_UPLOAD_ID,
+        "object": "file",
+        "bytes": 15,
+        "created_at": 1234567890,
+        "filename": "payroll-private.jsonl",
+        "purpose": "user_data",
+        "status": "processed",
+    },
+    deleted_body={"id": _PLAIN_UPLOAD_ID, "object": "file", "deleted": True},
+)
+_ANTHROPIC_ACCOUNT: Final = _SharedAccount(
+    provider="anthropic",
+    files_url="https://api.anthropic.com/v1/files",
+    file_body={
+        "id": _PLAIN_UPLOAD_ID,
+        "type": "file",
+        "filename": "payroll-private.jsonl",
+        "mime_type": "application/jsonl",
+        "size_bytes": 15,
+        "created_at": "2026-01-01T00:00:00Z",
+    },
+    deleted_body={"id": _PLAIN_UPLOAD_ID, "type": "file_deleted"},
+)
+_SHARED_ACCOUNTS: Final = pytest.mark.parametrize(
+    "account", [_OPENAI_ACCOUNT, _ANTHROPIC_ACCOUNT], ids=lambda account: account.provider
+)
+
+
+@pytest.fixture
+def plain_upload_proxy(monkeypatch: pytest.MonkeyPatch, llm_router: Router) -> Iterator[_ManagedFileTableOverRows]:
+    """The real managed files hook over an empty table, with require_managed_files left at its default and
+    every upload, list, read and delete answered by one shared provider account."""
+    import litellm.proxy.proxy_server as ps
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+
+    managed_files: Final = PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=MagicMock())
+    managed_file_table: Final = _ManagedFileTableOverRows([])
+    managed_files.prisma_client.db.litellm_managedfiletable = managed_file_table
+    managed_files.prisma_client.db.query_raw = managed_file_table.query_raw
+    proxy_logging_obj: Final = setup_proxy_logging_object(monkeypatch, llm_router)
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    monkeypatch.setattr(litellm, "callbacks", [managed_files])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr("litellm.require_managed_files", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-shared-account")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-shared-account")
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.files_config",
+        [
+            {"custom_llm_provider": "openai", "api_key": "sk-shared-account"},
+            {"custom_llm_provider": "anthropic", "api_key": "sk-ant-shared-account"},
+        ],
+    )
+    ProxyLogging._callback_capabilities_cache.clear()
+    yield managed_file_table
+    app.dependency_overrides.pop(ps.user_api_key_auth, None)
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _as_team_member(user_id: str, team_id: str) -> dict[str, str]:
+    import litellm.proxy.proxy_server as ps
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key=f"sk-{user_id}", user_role=LitellmUserRoles.INTERNAL_USER, user_id=user_id, team_id=team_id
+    )
+    return {"Authorization": f"Bearer sk-{user_id}"}
+
+
+def _mock_shared_account(upstream: respx.MockRouter, account: _SharedAccount) -> dict[str, respx.Route]:
+    file_url: Final = f"{account.files_url}/{_PLAIN_UPLOAD_ID}"
+    return {
+        "upload": upstream.post(account.files_url).mock(
+            return_value=httpx.Response(status_code=200, json=account.file_body)
+        ),
+        "list": upstream.get(account.files_url).mock(
+            return_value=httpx.Response(
+                status_code=200, json={"object": "list", "data": [account.file_body], "has_more": False}
+            )
+        ),
+        "content": upstream.get(f"{file_url}/content").mock(
+            return_value=httpx.Response(status_code=200, content=b'{"salary": 100}')
+        ),
+        "delete": upstream.delete(file_url).mock(
+            return_value=httpx.Response(status_code=200, json=account.deleted_body)
+        ),
+    }
+
+
+def _upload_payroll_as_team_a(account: _SharedAccount) -> httpx.Response:
+    return client.post(
+        f"/v1/files?provider={account.provider}",
+        files={"file": ("payroll-private.jsonl", b'{"salary": 100}', "application/jsonl")},
+        data={"purpose": "user_data"},
+        headers=_as_team_member("user-a", "team-a"),
+    )
+
+
+def _listed_ids(response: httpx.Response) -> list[str]:
+    assert response.status_code == 200, response.text
+    return [file["id"] for file in response.json()["data"]]
+
+
+@_SHARED_ACCOUNTS
+def test_another_team_cannot_list_read_or_delete_a_plain_upload(
+    plain_upload_proxy: _ManagedFileTableOverRows, account: _SharedAccount
+):
+    with respx.mock(assert_all_called=False) as upstream:
+        shared_account: Final = _mock_shared_account(upstream, account)
+        uploaded: Final = _upload_payroll_as_team_a(account)
+        listed: Final = client.get(
+            f"/v1/files?provider={account.provider}", headers=_as_team_member("user-b", "team-b")
+        )
+        read: Final = client.get(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}/content?provider={account.provider}",
+            headers=_as_team_member("user-b", "team-b"),
+        )
+        deleted: Final = client.delete(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}?provider={account.provider}", headers=_as_team_member("user-b", "team-b")
+        )
+
+    assert uploaded.status_code == 200, uploaded.text
+    assert _listed_ids(listed) == []
+    assert shared_account["list"].call_count == 0
+    assert read.status_code == 403, read.text
+    assert deleted.status_code == 403, deleted.text
+    assert shared_account["content"].call_count == 0
+    assert shared_account["delete"].call_count == 0
+
+
+@_SHARED_ACCOUNTS
+def test_the_uploading_team_lists_reads_and_deletes_its_plain_upload(
+    plain_upload_proxy: _ManagedFileTableOverRows, account: _SharedAccount
+):
+    with respx.mock(assert_all_called=False) as upstream:
+        shared_account: Final = _mock_shared_account(upstream, account)
+        uploaded: Final = _upload_payroll_as_team_a(account)
+        listed: Final = client.get(
+            f"/v1/files?provider={account.provider}", headers=_as_team_member("user-a", "team-a")
+        )
+        read: Final = client.get(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}/content?provider={account.provider}",
+            headers=_as_team_member("user-a", "team-a"),
+        )
+        deleted: Final = client.delete(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}?provider={account.provider}", headers=_as_team_member("user-a", "team-a")
+        )
+        listed_after_delete: Final = client.get(
+            f"/v1/files?provider={account.provider}", headers=_as_team_member("user-a", "team-a")
+        )
+
+    assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json()["id"] == _PLAIN_UPLOAD_ID
+    assert _listed_ids(listed) == [_PLAIN_UPLOAD_ID]
+    assert read.status_code == 200, read.text
+    assert read.content == b'{"salary": 100}'
+    assert deleted.status_code == 200, deleted.text
+    assert shared_account["delete"].call_count == 1
+    assert _listed_ids(listed_after_delete) == []
 
 
 @_retrieve_and_delete_provider_bodies(_unified_managed_file_id())

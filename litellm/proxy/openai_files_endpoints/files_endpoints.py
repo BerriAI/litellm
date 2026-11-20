@@ -101,6 +101,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     handle_model_based_routing,
     is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
+    provider_upload_model_id,
     router_default_drop_params,
     validate_file_list_limit,
     validate_managed_files_requirement,
@@ -132,6 +133,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
+from litellm.types.passthrough_endpoints.managed_id_rewriter import ManagedFileIdWriter
 from litellm.types.proxy.auth.user_api_key_auth import user_api_key_has_admin_view
 from litellm.types.router import Deployment
 from litellm.types.utils import LlmProviders
@@ -432,6 +434,32 @@ async def _deprecated_loadbalanced_create_file(
     return response
 
 
+async def _with_recorded_owner(
+    response: OpenAIFileObject,
+    provider_file_id: str,
+    model_key: str,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> OpenAIFileObject:
+    managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if isinstance(managed_files_obj, ManagedFileIdWriter):
+        await managed_files_obj.store_unified_file_id(
+            file_id=response.id,
+            file_object=response,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            model_mappings={model_key: provider_file_id},
+            user_api_key_dict=user_api_key_dict,
+        )
+    return response
+
+
+async def _forget_recorded_owner(proxy_logging_obj: ProxyLogging, file_id: str) -> None:
+    managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if not has_attributes(managed_files_obj, _CarriesPrismaClient, "prisma_client"):
+        return
+    await ManagedFileRepository(managed_files_obj.prisma_client).table.delete_many(where={"unified_file_id": file_id})
+
+
 async def route_create_file(
     llm_router: Router | None,
     _create_file_request: CreateFileRequest,
@@ -533,14 +561,9 @@ async def route_create_file(
                 custom_llm_provider=credentials["custom_llm_provider"],
             )
 
-        # Encode the file ID with model information
-        if response and hasattr(response, "id") and response.id:
-            original_id: Final = response.id
-            encoded_id: Final = encode_file_id_with_model(file_id=original_id, model=model)
-            response.id = encoded_id
-            verbose_proxy_logger.debug("Encoded file ID: %s -> %s (model: %s)", original_id, encoded_id, model)
-
-        return response
+        original_id: Final = response.id
+        response.id = encode_file_id_with_model(file_id=original_id, model=model)
+        return await _with_recorded_owner(response, original_id, model, proxy_logging_obj, user_api_key_dict)
 
     # Handle managed files (supports loadbalancing via llm_router.acreate_file)
     # Priority: Check for managed files BEFORE deprecated loadbalancing
@@ -568,7 +591,7 @@ async def route_create_file(
                 code=500,
             )
         # Managed files internally calls llm_router.acreate_file() which includes loadbalancing
-        response = await managed_files_obj.acreate_file(
+        return await managed_files_obj.acreate_file(
             llm_router=llm_router,
             create_file_request=_create_file_request,
             target_model_names_list=target_model_names_list,
@@ -576,33 +599,40 @@ async def route_create_file(
             user_api_key_dict=user_api_key_dict,
         )
     # EXISTING: Deprecated loadbalancing approach (for backwards compatibility when not using managed files)
-    elif litellm.enable_loadbalancing_on_batch_endpoints is True and is_router_model and router_model is not None:
-        response = await _deprecated_loadbalanced_create_file(
+    if litellm.enable_loadbalancing_on_batch_endpoints is True and is_router_model and router_model is not None:
+        loadbalanced_file: Final = await _deprecated_loadbalanced_create_file(
             llm_router=llm_router,
             router_model=router_model,
             _create_file_request=_create_file_request,
         )
-    else:
-        await apply_team_provider_credentials(
-            data=cast(dict, _create_file_request),  # cast-ok: TypedDict is a plain dict at runtime; merged in place
-            llm_router=llm_router,
-            user_api_key_dict=user_api_key_dict,
-            custom_llm_provider=custom_llm_provider,
-            keep_request_buckets=True,
+        return await _with_recorded_owner(
+            loadbalanced_file, loadbalanced_file.id, router_model, proxy_logging_obj, user_api_key_dict
         )
-        # get configs for custom_llm_provider
-        llm_provider_config: Final = get_files_provider_config(custom_llm_provider=custom_llm_provider)
-        if llm_provider_config is not None:
-            # add llm_provider_config to data
-            _create_file_request.update(llm_provider_config)
-        _create_file_request.pop("custom_llm_provider", None)
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        provider_upload_request: Final = cast(  # cast-ok: files_settings and router defaults add undeclared keys
-            CreateFileRequest, {**_create_file_request, **router_default_drop_params(llm_router, _create_file_request)}
-        )
-        response = await litellm.acreate_file(**provider_upload_request, custom_llm_provider=custom_llm_provider)
-
-    return response
+    await apply_team_provider_credentials(
+        data=cast(dict, _create_file_request),  # cast-ok: TypedDict is a plain dict at runtime; merged in place
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
+        keep_request_buckets=True,
+    )
+    # get configs for custom_llm_provider
+    llm_provider_config: Final = get_files_provider_config(custom_llm_provider=custom_llm_provider)
+    if llm_provider_config is not None:
+        # add llm_provider_config to data
+        _create_file_request.update(llm_provider_config)
+    _create_file_request.pop("custom_llm_provider", None)
+    # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+    provider_upload_request: Final = cast(  # cast-ok: files_settings and router defaults add undeclared keys
+        CreateFileRequest, {**_create_file_request, **router_default_drop_params(llm_router, _create_file_request)}
+    )
+    provider_file: Final = await litellm.acreate_file(**provider_upload_request, custom_llm_provider=custom_llm_provider)
+    return await _with_recorded_owner(
+        provider_file,
+        provider_file.id,
+        provider_upload_model_id(custom_llm_provider),
+        proxy_logging_obj,
+        user_api_key_dict,
+    )
 
 
 @router.post(
@@ -1648,6 +1678,7 @@ async def delete_file(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 **data,
             )
+            await _forget_recorded_owner(proxy_logging_obj, file_id)
 
             verbose_proxy_logger.debug(
                 f"Deleted file using model: {model_used}"
@@ -1700,6 +1731,7 @@ async def delete_file(
                 file_id=file_id,
                 **data,
             )
+            await _forget_recorded_owner(proxy_logging_obj, file_id)
 
         ### ALERTING ###
         asyncio.create_task(
@@ -1877,7 +1909,7 @@ def _files_on_provider(llm_router: Router | None, custom_llm_provider: str) -> _
     passthrough_model_id: Final = passthrough_file_model_id(custom_llm_provider)
     deployments: Final = tuple(_deployments_on_provider(llm_router, custom_llm_provider))
     model_mapping_keys: Final = _model_mapping_keys(deployments) | frozenset(
-        (passthrough_model_id,) if passthrough_model_id is not None else ()
+        key for key in (provider_upload_model_id(custom_llm_provider), passthrough_model_id) if key is not None
     )
     if llm_router is None:
         return _ListedFiles(FileListModelScope(model_mapping_keys), custom_llm_provider)
@@ -2001,10 +2033,6 @@ async def list_files(
 
         response: Any | None = None
         owned_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        list_owned_files_only: Final = litellm.require_managed_files is True and not user_api_key_has_admin_view(
-            user_api_key_dict
-        )
-
         # Check for model-based credential routing (no file_id encoding check for list)
         should_route, model_used, _, credentials = await handle_model_based_routing(
             file_id="",  # No file_id for list endpoint
@@ -2013,6 +2041,15 @@ async def list_files(
             data=data,
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=False,
+        )
+        lists_a_provider_account: Final = (
+            should_route
+            or bool(target_model_names)
+            or await _requested_custom_llm_provider(request=request, provider=provider) is not None
+        )
+        list_owned_files_only: Final = not user_api_key_has_admin_view(user_api_key_dict) and (
+            litellm.require_managed_files is True
+            or (lists_a_provider_account and isinstance(owned_files_hook, BaseFileEndpoints))
         )
 
         if list_owned_files_only:
