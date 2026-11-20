@@ -3629,11 +3629,24 @@ class AccessGroupNotFoundError(HTTPException):
         )
 
 
+async def _find_team_retrying_a_lost_connection(
+    team_id: str, prisma_client: PrismaClient, *, use_writer: bool
+) -> LiteLLM_TeamTableCachedObj | None:
+    teams: Final = TeamRepository(prisma_client)
+    try:
+        return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+    except NativeDatabaseFailure as error:
+        if error.kind != "unreachable":
+            raise
+        verbose_proxy_logger.warning("Team read lost its database connection, retrying once: %s", error)
+    return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+
+
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None, *, use_writer: bool = False
 ) -> LiteLLM_TeamTableCachedObj | None:
     response: LiteLLM_TeamTableCachedObj | None = await bounded_db_lookup(
-        TeamRepository(prisma_client).find_with_model_aliases(team_id, use_writer=use_writer), name="team"
+        _find_team_retrying_a_lost_connection(team_id, prisma_client, use_writer=use_writer), name="team"
     )
 
     if response is None and team_id_upsert:
