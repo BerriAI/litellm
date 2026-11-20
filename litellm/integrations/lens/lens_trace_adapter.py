@@ -1,18 +1,23 @@
 """What a gateway trace needs so Lens shows an agent's run the way the agent's own trace would.
 
-The gateway only sees model calls. The agent's name comes from the caller's user agent, and a tool step is
-rebuilt from the tool result a model call carries in its prompt, paired by call id with the tool call an
-earlier reply made.
+The gateway only sees model calls. The agent's name comes from the caller's user agent, or from its system prompt
+when the agent sends its provider SDK's user agent. The task is the text the user typed, without the setup blocks
+an agent puts in front of it. A tool step is rebuilt from the tool result a model call carries in its prompt, paired
+by call id with the tool call an earlier reply made. A known agent that sends no session id gets one derived from
+its key, system prompt and task, so its model calls are one run.
 """
 
 import asyncio
+import hashlib
 import json
+import re
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain
+from types import MappingProxyType
 from typing import Final, TypeVar
 
 from opentelemetry.context import Context
@@ -37,6 +42,14 @@ _KNOWN_AGENTS: Final[tuple[tuple[str, str], ...]] = (
     ("claude-code", "claude-code"),
     ("codex", "codex"),
 )
+
+
+_INTEGRATIONS: Final[Mapping[str, str]] = MappingProxyType(
+    {"claude-code": "claude-code", "codex": "openai-codex", "opencode": "opencode", "pi": "pi"}
+)
+_PI_SYSTEM_PROMPT: Final = "operating inside pi, a coding agent harness"
+_LEADING_SETUP_BLOCK: Final = re.compile(r"\s*<([A-Za-z][\w-]*)>.*?</\1>", re.DOTALL)
+_TASK_CHARS: Final = 2000
 
 
 def agent_name(user_agent: str | None) -> str | None:
@@ -78,6 +91,7 @@ class _Block(BaseModel):
     input: object = None
     tool_use_id: str | None = None
     content: object = None
+    text: str | None = None
 
 
 class _Item(BaseModel):
@@ -194,10 +208,76 @@ def tool_exchanges(messages: object) -> tuple[ToolExchange, ...]:
     )
 
 
+def _texts(content: object) -> tuple[str, ...]:
+    if isinstance(content, str):
+        return (content,)
+    return tuple(block.text for block in _blocks(content) if block.text)
+
+
+def _without_setup_blocks(text: str) -> str:
+    """The text after every leading ``<tag>...</tag>`` block, which is how agents send their setup."""
+    end: Final = max(
+        (match.end() for match in _leading_setup_blocks(text)),
+        default=0,
+    )
+    return text[end:].strip()
+
+
+def _leading_setup_blocks(text: str) -> tuple[re.Match[str], ...]:
+    first: Final = _LEADING_SETUP_BLOCK.match(text)
+    if first is None:
+        return ()
+    scanner: Final = _LEADING_SETUP_BLOCK.scanner(text, first.end())
+    return (first, *iter(scanner.match, None))
+
+
+def _conversation(messages: object) -> tuple[_Item, ...]:
+    if not isinstance(messages, list):
+        return ()
+    try:
+        raw: Final = _ITEMS.validate_python(messages)
+    except ValidationError:
+        return ()
+    return tuple(item for item in (_parsed(_Item, entry) for entry in raw) if item is not None)
+
+
+def user_task(messages: object) -> str | None:
+    """What the user typed: the first user text that is more than an agent's setup blocks."""
+    typed: Final = (
+        _without_setup_blocks(text)
+        for item in _conversation(messages)
+        if item.role == "user"
+        for text in _texts(item.content)
+    )
+    return next((task[:_TASK_CHARS] for task in typed if task), None)
+
+
+def _system_prompt(messages: object) -> str:
+    return "\n".join(
+        text
+        for item in _conversation(messages)
+        if item.role in ("system", "developer")
+        for text in _texts(item.content)
+    )
+
+
+def _agent(user_agent: str | None, system_prompt: str) -> str | None:
+    named: Final = agent_name(user_agent)
+    if named in _INTEGRATIONS:
+        return named
+    return "pi" if _PI_SYSTEM_PROMPT in system_prompt else named
+
+
+def _derived_session(key_hash: str | None, system_prompt: str, task: str) -> str:
+    digest: Final = hashlib.sha256("\x00".join((key_hash or "", system_prompt, task)).encode()).hexdigest()
+    return f"derived-{digest[:32]}"
+
+
 class _Metadata(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     user_agent: str | None = None
+    user_api_key_hash: str | None = None
 
 
 class _Payload(BaseModel):
@@ -211,19 +291,46 @@ class _Payload(BaseModel):
 class AgentCall:
     agent: str | None = None
     tool_exchanges: tuple[ToolExchange, ...] = ()
+    integration: str | None = None
+    task: str | None = None
+    derived_session: str | None = None
+
+    def attributes(self, session_id: str | None) -> Mapping[str, str]:
+        """The facts every span of this call carries; ``session_id`` is the caller's own, which wins."""
+        session: Final = None if session_id else self.derived_session
+        return {
+            **({_AGENT_NAME: self.agent} if self.agent else {}),
+            **({_INTEGRATION: self.integration} if self.integration else {}),
+            **({_TASK: self.task} if self.task else {}),
+            **({_SESSION_ATTRIBUTE: session} if session else {}),
+        }
 
 
 def agent_call(standard_logging_payload: object) -> AgentCall:
     payload: Final = _parsed(_Payload, standard_logging_payload)
     if payload is None:
         return AgentCall()
-    return AgentCall(agent=agent_name(payload.metadata.user_agent), tool_exchanges=tool_exchanges(payload.messages))
+    system_prompt: Final = _system_prompt(payload.messages)
+    agent: Final = _agent(payload.metadata.user_agent, system_prompt)
+    integration: Final = _INTEGRATIONS.get(agent) if agent else None
+    task: Final = user_task(payload.messages)
+    return AgentCall(
+        agent=agent,
+        tool_exchanges=tool_exchanges(payload.messages),
+        integration=integration,
+        task=task,
+        derived_session=(
+            _derived_session(payload.metadata.user_api_key_hash, system_prompt, task) if integration and task else None
+        ),
+    )
 
 
 _AGENT_NAME: Final = "gen_ai.agent.name"
+_INTEGRATION: Final = "langsmith.metadata.ls_integration"
+_TASK: Final = "lens.task"
 _SESSION_ATTRIBUTE: Final = "gen_ai.conversation.id"
 _TOOL_STEP_TRACER: Final = "litellm.lens.tool_steps"
-_CALLING_AGENT: Final[ContextVar[str | None]] = ContextVar("lens_calling_agent", default=None)
+_CALL_FACTS: Final[ContextVar[Mapping[str, str]]] = ContextVar("lens_call_facts", default=MappingProxyType({}))
 LENS_TRACE_PATH: Final = "/v1/traces"
 
 
@@ -266,15 +373,17 @@ class _LensTraceLogger(OpenTelemetryV2):
             return None
         made_by: Final = agent_call(call.payload)
         carrier: Final = self._open_llm_calls.get(call.call_id) if call.call_id else None
-        if made_by.agent and carrier is not None and carrier.span is not None:
-            carrier.span.set_attribute(_AGENT_NAME, made_by.agent)
-        token: Final = _CALLING_AGENT.set(made_by.agent)
+        facts: Final = made_by.attributes(call.session_id)
+        if carrier is not None and carrier.span is not None:
+            carrier.span.set_attributes(facts)
+        token: Final = _CALL_FACTS.set(facts)
         try:
             span: Final = super()._close_llm_call(kwargs, start_time, end_time)
         finally:
-            _CALLING_AGENT.reset(token)
-        if span is not None and call.session_id:
-            self._emit_tool_steps(made_by, call.session_id, to_ns(start_time))
+            _CALL_FACTS.reset(token)
+        session_id: Final = call.session_id or made_by.derived_session
+        if span is not None and session_id:
+            self._emit_tool_steps(made_by, session_id, to_ns(start_time))
         return span
 
     def _emit_tool_steps(self, made_by: AgentCall, session_id: str, at_ns: int | None) -> None:
@@ -290,20 +399,18 @@ class _LensTraceLogger(OpenTelemetryV2):
                     "gen_ai.tool.call.id": exchange.call_id,
                     "gen_ai.tool.call.arguments": exchange.arguments,
                     "gen_ai.tool.call.result": exchange.result,
+                    **made_by.attributes(session_id),
                     _SESSION_ATTRIBUTE: session_id,
-                    **({_AGENT_NAME: made_by.agent} if made_by.agent else {}),
                 },
             ).end(end_time=at_ns)
 
 
-class _AgentNameProcessor(SpanProcessor):
-    """Names the calling agent on a model-call span that is only created when the call closes."""
+class _CallFactsProcessor(SpanProcessor):
+    """Puts the calling agent's facts on a model-call span that is only created when the call closes."""
 
     @override
     def on_start(self, span: RecordingSpan, parent_context: Context | None = None) -> None:
-        agent: Final = _CALLING_AGENT.get()
-        if agent:
-            span.set_attribute(_AGENT_NAME, agent)
+        span.set_attributes(_CALL_FACTS.get())
 
 
 @asynccontextmanager
@@ -322,7 +429,7 @@ async def export_traces(connection: LensConnection) -> AsyncGenerator[None, None
         ),
         callback_name=LENS_TRACE_CALLBACK,
     )
-    trace_logger.tracer_provider.add_span_processor(_AgentNameProcessor())
+    trace_logger.tracer_provider.add_span_processor(_CallFactsProcessor())
     manager: Final = litellm.logging_callback_manager
     manager.add_litellm_callback(trace_logger)
     try:
