@@ -173,6 +173,19 @@ def _text_block(text: str) -> dict[str, object]:
             [[_text_block(MASK), FILE_BLOCK], f"x {MASK}"],
             id="grouped",
         ),
+        pytest.param([_text_block("")], ("",), [_text_block("")], id="empty-text"),
+        pytest.param(
+            [f"a {SECRET}", {"type": "text", "text": 5}],
+            (f"a {SECRET}",),
+            [f"a {MASK}", {"type": "text", "text": 5}],
+            id="string-first-with-malformed-text-block",
+        ),
+        pytest.param(
+            [f"a {SECRET}", FILE_BLOCK],
+            (f"a {SECRET}",),
+            [f"a {MASK}", FILE_BLOCK],
+            id="string-first-with-file-block",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -229,6 +242,7 @@ async def test_a_rewrite_with_no_texts_leaves_text_blocks_unchanged() -> None:
         pytest.param([1, 2, 3], id="token-ids"),
         pytest.param([[1, 2], [3]], id="nested-token-ids"),
         pytest.param([FILE_BLOCK], id="file-block-only"),
+        pytest.param([{"type": "text", "text": 5}], id="malformed-text-block-only"),
     ],
 )
 @pytest.mark.asyncio
@@ -240,6 +254,17 @@ async def test_inputs_without_text_blocks_keep_skipping_the_guardrail(embedding_
 
     assert guardrail.seen is None
     assert data["input"] is embedding_input
+
+
+@pytest.mark.asyncio
+async def test_a_plain_string_list_still_takes_the_guardrail_texts_whatever_their_count() -> None:
+    data: Final = {"input": ["a", "b"]}
+
+    await OpenAIEmbeddingsHandler().process_input_messages(
+        data=data, guardrail_to_apply=_FixedTextsGuardrail(["a and b"])
+    )
+
+    assert data["input"] == ["a and b"]
 
 
 @pytest.mark.parametrize(

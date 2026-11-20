@@ -158,7 +158,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
     async def _process_list_input(
         self,
         data: dict,
-        input_data: list[str | int | list[int]],
+        input_data: Sequence[object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
     ) -> dict:
@@ -166,26 +166,20 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         if len(input_data) == 0:
             return data
 
-        guardrailed_input: Final = await (
-            self._guardrailed_text_slots(data, input_data, guardrail_to_apply, litellm_logging_obj)
-            if _has_text_block(input_data)
-            else self._guardrailed_strings(data, input_data, guardrail_to_apply, litellm_logging_obj)
-        )
-        if guardrailed_input is not None:
-            data["input"] = guardrailed_input
-        return data
+        first_item: Final = input_data[0]
+        if not isinstance(first_item, str) and not _has_text_block(input_data):
+            if isinstance(first_item, (int, list)):
+                verbose_proxy_logger.debug("OpenAI Embeddings: Input is token IDs, skipping guardrail processing")
+            else:
+                verbose_proxy_logger.warning(
+                    "OpenAI Embeddings: Unexpected input list item type: %s",
+                    type(first_item),
+                )
+            return data
 
-    async def _guardrailed_text_slots(
-        self,
-        data: dict,
-        input_data: Sequence[object],
-        guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: "LiteLLMLoggingObj | None",
-    ) -> Sequence[object] | None:
-        """Guardrail every string and text block text of an input that carries text blocks, in one call."""
         texts: Final = _slot_texts(input_data)
         inputs: Final = GenericGuardrailAPIInputs(texts=list(texts))
-        if model := data.get("model"):
+        if isinstance(model := data.get("model"), str):
             inputs["model"] = model
 
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
@@ -197,52 +191,16 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
 
         guardrailed_texts: Final = guardrailed_inputs.get("texts")
         if not guardrailed_texts:
-            return None
-        if len(guardrailed_texts) != len(texts):
+            return data
+        only_strings: Final = all(isinstance(item, str) for item in input_data)
+        if not only_strings and len(guardrailed_texts) != len(texts):
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-        return _with_slot_texts(input_data, iter(guardrailed_texts))
-
-    async def _guardrailed_strings(
-        self,
-        data: dict,
-        input_data: list[str | int | list[int]],
-        guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: "LiteLLMLoggingObj | None",
-    ) -> Sequence[object] | None:
-        first_item: Final = input_data[0]
-
-        # Skip non-text inputs (token IDs)
-        if isinstance(first_item, (int, list)):
-            verbose_proxy_logger.debug("OpenAI Embeddings: Input is token IDs, skipping guardrail processing")
-            return None
-
-        if not isinstance(first_item, str):
-            verbose_proxy_logger.warning(
-                "OpenAI Embeddings: Unexpected input list item type: %s",
-                type(first_item),
-            )
-            return None
-
-        # List of strings - apply guardrail
-        inputs: Final = GenericGuardrailAPIInputs(texts=input_data)
-        if model := data.get("model"):
-            inputs["model"] = model
-
-        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=inputs,
-            request_data=data,
-            input_type="request",
-            logging_obj=litellm_logging_obj,
+        data["input"] = guardrailed_texts if only_strings else _with_slot_texts(input_data, iter(guardrailed_texts))
+        verbose_proxy_logger.debug(
+            "OpenAI Embeddings: Applied guardrail to %d inputs",
+            len(guardrailed_texts),
         )
-
-        if guardrailed_texts := guardrailed_inputs.get("texts"):
-            verbose_proxy_logger.debug(
-                "OpenAI Embeddings: Applied guardrail to %d inputs",
-                len(guardrailed_texts),
-            )
-            return guardrailed_texts
-
-        return None
+        return data
 
     async def process_output_response(
         self,
