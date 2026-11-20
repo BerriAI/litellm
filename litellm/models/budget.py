@@ -59,14 +59,23 @@ BudgetLimits: TypeAlias = Annotated[tuple[BudgetLimit, ...], AfterValidator(uniq
 
 
 def initialize_budget_limits(
-    limits: tuple[BudgetLimit, ...], settings: "BudgetResetSettings", now: datetime
+    limits: tuple[BudgetLimit, ...],
+    settings: "BudgetResetSettings",
+    now: datetime,
+    previous: tuple[BudgetLimit, ...] = (),
 ) -> tuple[BudgetLimit, ...]:
     from litellm.proxy.common_utils.timezone_utils import compute_budget_reset_at
 
+    resets: Final = {limit.budget_duration: limit.reset_at for limit in previous if limit.reset_at is not None}
     return tuple(
         limit
         if limit.reset_at is not None
-        else limit.model_copy(update={"reset_at": compute_budget_reset_at(limit.budget_duration, settings, now)})
+        else limit.model_copy(
+            update={
+                "reset_at": resets.get(limit.budget_duration)
+                or compute_budget_reset_at(limit.budget_duration, settings, now)
+            }
+        )
         for limit in limits
     )
 

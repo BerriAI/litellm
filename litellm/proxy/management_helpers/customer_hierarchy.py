@@ -229,6 +229,7 @@ class _StoredWindow(BaseModel):
 
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
+    budget_limits: BudgetLimits | None = None
 
 
 def budget_window_values(
@@ -810,7 +811,14 @@ class CustomerHierarchyStore:
                     **patch,
                     **budget_window_values(budget, patch, current),
                     **(
-                        {"budget_limits": initialize_budget_limits(budget.budget_limits, self.settings, self.now)}
+                        {
+                            "budget_limits": initialize_budget_limits(
+                                budget.budget_limits,
+                                self.settings,
+                                self.now,
+                                previous=(current.budget_limits or ()) if current is not None else (),
+                            )
+                        }
                         if budget.budget_limits is not None
                         else {}
                     ),

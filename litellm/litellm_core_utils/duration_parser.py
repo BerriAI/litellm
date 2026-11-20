@@ -104,6 +104,7 @@ def get_next_standardized_reset_time(
     current_time: datetime,
     timezone_str: str = "UTC",
     reset_time_of_day: time = time(0, 0),
+    reset_at: datetime | None = None,
 ) -> datetime:
     """
     Get the next standardized reset time based on the duration.
@@ -137,6 +138,18 @@ def get_next_standardized_reset_time(
             duration,
         )
         return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+    if reset_at is not None:
+        window_zone: Final = timezone.utc if unit in ("s", "m", "h") else current_time.tzinfo
+        anchor: Final = _setup_timezone(normalize_budget_window_start(reset_at), timezone_str)[0].astimezone(
+            window_zone
+        )
+        moment: Final = current_time.astimezone(window_zone)
+        if anchor > moment:
+            return anchor
+        if value > 0 and unit in ("s", "m", "h", "d", "w") and (value, unit) != (30, "d"):
+            period: Final = timedelta(seconds=duration_in_seconds(duration))
+            return anchor + period * ((moment - anchor) // period + 1)
 
     # Midnight of the current day in the specified timezone
     base_midnight: Final = current_time.replace(hour=0, minute=0, second=0, microsecond=0)

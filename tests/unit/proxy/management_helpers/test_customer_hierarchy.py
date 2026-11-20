@@ -3,7 +3,7 @@ import json
 import sqlite3
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
@@ -18,6 +18,7 @@ from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
 from litellm.proxy._types import BudgetWriteRequest
 from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchy,
+    CustomerHierarchyStore,
     ErrorCode,
     Failure,
     budget_row_values,
@@ -676,6 +677,22 @@ def test_additional_budget_windows_normalize_without_changing_the_scalar(duratio
         "budget_limits": ({"budget_duration": expected, "max_budget": 0, "reset_at": None},),
     }
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("elapsed", (1, 3))
+async def test_editing_a_custom_cap_retains_its_original_reset_anchor(elapsed: int) -> None:
+    database: Final = Database()
+    store: Final = CustomerHierarchyStore(cast("Prisma", database), NOW, premium_user=True)
+    policy: Final = Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=10),))
+    budget_id: Final = await store.create_budget(policy, "admin")
+    original: Final = database.litellm_budgettable.rows[budget_id].model_dump()["budget_limits"]
+    later: Final = CustomerHierarchyStore(cast("Prisma", database), NOW + timedelta(days=elapsed), premium_user=True)
+    patch: Final = Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=20),))
+    await later.update_budget(budget_id, patch, "admin")
+    assert database.litellm_budgettable.rows[budget_id].model_dump()["budget_limits"] == [
+        {**limit, "max_budget": 20} for limit in original
+    ]
 
 def test_window_override_preserves_other_period_and_scalar_fields() -> None:
     template: Final = Budget(

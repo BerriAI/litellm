@@ -11,6 +11,7 @@ from pydantic import (
     SerializerFunctionWrapHandler,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_serializer,
 )
 
@@ -41,11 +42,14 @@ class CustomerRequestIdentity:
 
 
 class AppDurationLimit(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, from_attributes=True)
 
     budget_duration: str
     max_budget: float = Field(ge=0, allow_inf_nan=False)
     reset_at: datetime | None = None
+
+
+_AUTH_WINDOW_LIMITS: Final = TypeAdapter(tuple[AppDurationLimit, ...])
 
 
 def app_budget_limits(
@@ -86,6 +90,11 @@ class CustomerScopeAuth(BaseModel):
     model_tpm_limit: Mapping[str, int] | None = None
     model_rpm_limit: Mapping[str, int] | None = None
     cap_policy: CapPolicy | None = None
+
+    @field_validator("budget_limits", mode="before")
+    @classmethod
+    def preserve_window_identity(cls, value: object) -> tuple[AppDurationLimit, ...]:
+        return _AUTH_WINDOW_LIMITS.validate_python(value)
 
     def accounting_limits(self) -> tuple[BudgetLimit | AppDurationLimit, ...]:
         if self.soft_budget_duration is None or any(
