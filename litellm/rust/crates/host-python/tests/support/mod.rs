@@ -680,6 +680,7 @@ pub fn tailed_streaming_machine() -> impl FnOnce(()) -> HostedMachine<Streaming>
 pub fn draining_streaming_machine(
     drain: bool,
     delay: std::time::Duration,
+    fails: bool,
 ) -> impl FnOnce(()) -> HostedMachine<Streaming> + Send + Sync {
     move |()| {
         hosted_call((), None, move |(), _, _, _observations| async move {
@@ -701,7 +702,11 @@ pub fn draining_streaming_machine(
                 chunks: Box::pin(
                     futures_util::stream::iter([Ok("first")])
                         .chain(second)
-                        .chain(futures_util::stream::iter([Ok("third")])),
+                        .chain(futures_util::stream::iter([if fails {
+                            Err(Error("upstream stream failed".to_owned()))
+                        } else {
+                            Ok("third")
+                        }])),
                 ),
             })
         })

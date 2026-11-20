@@ -34,6 +34,17 @@ In PowerShell, set the same environment variables, with `LITELLM_SCRIPT_URL` end
 
 The same compose file builds from source when you pass `--build`. It uses `litellm/deploy/docker/Dockerfile` with the repository root as the build context. `docker-entrypoint.sh` next to it is the only entrypoint script. Every container starts through it
 
+## FIPS image
+
+`Dockerfile.fips` builds the same image on Chainguard's FIPS base. Building it needs `docker login cgr.dev` and a token for the pinned apk repo, and it fails unless the FIPS provider self-test and the bundled-crypto scan pass:
+
+```bash
+CGR_TOKEN=$(chainctl auth token --audience apk.cgr.dev) \
+docker build --secret id=cgr-token,env=CGR_TOKEN -f litellm/deploy/docker/Dockerfile.fips .
+```
+
+It leaves out the LiteAdmin agent and the litellm-proxy Rust server. A PKCS#12 file passed as `sslidentity` in `DATABASE_URL` must use a PBMAC1 MAC (`openssl pkcs12 -export -pbmac1_pbkdf2 ...`), because the FIPS provider refuses the older PKCS#12 MAC. After a reviewed dependency change, regenerate `fips_elf_inventory.txt` with the command at the top of `scan_bundled_crypto.sh`
+
 ## One image, many components
 
 Every LiteLLM container runs the same image. The first word of the container command (or the `LITELLM_COMPONENT` environment variable when the command carries only flags) picks the process the container runs, and everything after it is handed to that process unchanged:

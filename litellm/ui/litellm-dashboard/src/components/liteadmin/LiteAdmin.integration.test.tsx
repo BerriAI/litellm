@@ -11,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { Fragment, useEffect, type ComponentType } from "react";
 import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMenu";
 import UserDropdown from "@/components/Navbar/UserDropdown/UserDropdown";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { AriaUsageTrigger, LiteAdminFrame, LiteAdminPage, AriaSidebarLink } from "./LiteAdmin";
 import { MAX_INPUT_LENGTH } from "./agent";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -122,7 +123,9 @@ function renderWidget(
           {Menu && <Menu onLogout={() => undefined} />}
           <LiteAdminFrame>
             <Page />
-            <AriaSidebarLink active={page} />
+            <SidebarProvider>
+              <AriaSidebarLink active={page} />
+            </SidebarProvider>
             {page && <LiteAdminPage />}
             {usage && (
               <>
@@ -577,11 +580,11 @@ describe("Aria Agent in the gateway", () => {
     const view = renderWidget();
     await openWidget();
     act(() => send("Prepare a key for approval"));
-    const review = await screen.findByRole("region", { name: "Create a virtual key" });
+    const review = await screen.findByRole("region", { name: "Create a Virtual Key" });
     expect(review).toHaveFocus();
     view.refresh(false, false, false);
     view.refresh(false, false, true);
-    await waitFor(() => expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("region", { name: "Create a Virtual Key" })).toHaveFocus());
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
   });
 
@@ -1021,7 +1024,7 @@ describe("Aria Agent in the gateway", () => {
     await openWidget();
     send("Remove the key from its team");
     const review = await screen.findByRole("region", {
-      name: "Remove a virtual key from its team without deleting the key",
+      name: "Remove a Virtual Key from its team without deleting the key",
     });
     expect(review).toHaveTextContent("team id");
     expect(review).toHaveTextContent("null");
@@ -1046,7 +1049,7 @@ describe("Aria Agent in the gateway", () => {
     const view = renderWidget();
     await openWidget();
     send("Create a key for the team");
-    const review = await screen.findByRole("region", { name: "Create a virtual key" });
+    const review = await screen.findByRole("region", { name: "Create a Virtual Key" });
     expect(screen.getAllByRole("region", { name: "Aria Agent", exact: true })).toHaveLength(1);
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
     expect(within(review).getByText("Widget key")).toBeInTheDocument();
@@ -1057,7 +1060,7 @@ describe("Aria Agent in the gateway", () => {
     fireEvent.click(confirm);
     expect(screen.getByRole("button", { name: "Start over" })).toBeDisabled();
     act(() => fireEvent.click(screen.getByRole("button", { name: "Start over" })));
-    expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveTextContent("Applying");
+    expect(screen.getByRole("region", { name: "Create a Virtual Key" })).toHaveTextContent("Applying");
     expect(screen.queryByRole("button", { name: "Stop request" })).not.toBeInTheDocument();
     view.refresh(false, false, false);
     view.refresh(false, false, true);
@@ -1065,7 +1068,7 @@ describe("Aria Agent in the gateway", () => {
     expect(await screen.findByText("Created the key.")).toBeInTheDocument();
     expect(screen.getByText(NEW_KEY)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy generated key" })).toBeInTheDocument();
-    expect(screen.getAllByRole("region", { name: "Create a virtual key" })).toHaveLength(1);
+    expect(screen.getAllByRole("region", { name: "Create a Virtual Key" })).toHaveLength(1);
     expect(screen.getByLabelText("Aria Agent conversation")).toHaveTextContent(
       /Here is the requested change\.[\s\S]*Completed[\s\S]*Created the key\./,
     );
@@ -1363,7 +1366,7 @@ describe("Aria Agent in the gateway", () => {
     send("Create a key");
     fireEvent.click(await screen.findByRole("button", { name: "Confirm change" }));
     expect(await screen.findByText("Check result")).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveTextContent(
+    expect(screen.getByRole("region", { name: "Create a Virtual Key" })).toHaveTextContent(
       /Check.*before trying again/,
     );
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(1);

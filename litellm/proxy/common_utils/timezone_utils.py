@@ -1,4 +1,4 @@
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Final
 
 from pydantic import ConfigDict
@@ -97,12 +97,13 @@ def _is_persistable_budget_duration(budget_duration: str) -> bool:
     from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 
     try:
-        if duration_in_seconds(budget_duration) <= 0:
+        seconds: Final = duration_in_seconds(budget_duration)
+        if seconds <= 0:
             return False
-        get_budget_reset_time(budget_duration=budget_duration)
+        reset_at: Final = get_budget_reset_time(budget_duration=budget_duration)
+        return reset_at - timedelta(seconds=seconds) < reset_at
     except (ValueError, OverflowError):
         return False
-    return True
 
 
 def budget_duration_error(budget_duration: str | None) -> str | None:

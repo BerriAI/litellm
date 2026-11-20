@@ -42,6 +42,7 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUn
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
+    error_status_code,
     process_response_headers,
     provider_reported_usage_cost,
     set_response_cost_in_hidden_params,
@@ -61,6 +62,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -398,6 +400,7 @@ class BaseResponsesAPIStreamingIterator:
     _started_tool_call: bool = False
     _earlier_rounds_spend: BilledRoundsSpend | None = None
     _replays_stored_stream: bool = False
+    _caches_incomplete_response: bool = False
 
     def __init__(
         self,
@@ -733,6 +736,7 @@ class BaseResponsesAPIStreamingIterator:
             "additional_headers": {**headers},
             "headers": {**raw_headers},
             **_stamped_bill_hidden_params(source),
+            **{key: source[key] for key in (AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,) if key in source},
             **existing,
         }
 
@@ -835,7 +839,15 @@ class BaseResponsesAPIStreamingIterator:
 
         completed_response: Final = self.completed_response
         openai_types: Final = get_openai_response_types()
-        if getattr(completed_response, "type", None) != openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        cacheable_event_types: Final = (
+            (
+                openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            )
+            if self._caches_incomplete_response
+            else (openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,)
+        )
+        if getattr(completed_response, "type", None) not in cacheable_event_types:
             return
 
         from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
@@ -1427,10 +1439,12 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     """
     Mock iterator—fake a stream by slicing the full response text into
-    5 char deltas, then emit a completed event.
+    5 char deltas, then emit a completed or incomplete event.
 
     Models like o1-pro don't support streaming, so we fake it.
     """
+
+    _caches_incomplete_response: bool = True
 
     CHUNK_SIZE = 5
 
@@ -1484,7 +1498,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -1498,7 +1515,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
@@ -1551,7 +1571,10 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -1565,7 +1588,10 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
@@ -2091,7 +2117,12 @@ def build_synthetic_response_events(
         )
 
     events.append(
-        openai_types.ResponseCompletedEvent(
+        openai_types.ResponseIncompleteEvent(
+            type=openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            response=transformed,
+        )
+        if transformed.status == "incomplete"
+        else openai_types.ResponseCompletedEvent(
             type=openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
             response=transformed,
         )
@@ -2228,14 +2259,39 @@ async def _admit_frame_turn(
         return _RefusedTurn(e)
 
 
-def turn_refusal_frame(refusal: RateLimitError) -> str:
+def responses_ws_error_frame(
+    status: int, error_type: str, message: str, provider_specific_fields: Mapping[str, object] | None = None
+) -> str:
     return json.dumps(
-        {"type": "error", "status": 429, "error": {"type": "rate_limit_exceeded", "message": str(refusal)}}
+        {
+            "type": "error",
+            "status": status,
+            "error": {
+                "type": error_type,
+                "message": message,
+                **({"provider_specific_fields": dict(provider_specific_fields)} if provider_specific_fields else {}),
+            },
+        },
+        default=str,
     )
 
 
+def responses_ws_error_type(status: int) -> str:
+    match status:
+        case 429:
+            return "rate_limit_exceeded"
+        case _ if 400 <= status < 500:
+            return "invalid_request_error"
+        case _:
+            return "server_error"
+
+
+def turn_refusal_frame(refusal: RateLimitError) -> str:
+    return responses_ws_error_frame(429, "rate_limit_exceeded", str(refusal))
+
+
 def _turn_admission_error_frame(failure: Exception, status: int) -> str:
-    return json.dumps({"type": "error", "status": status, "error": {"type": "server_error", "message": str(failure)}})
+    return responses_ws_error_frame(status, "server_error", str(failure))
 
 
 def _turn_rejection_frame(rejection: Exception) -> str:
@@ -2277,14 +2333,14 @@ _PII_DELTA_EVENT_TYPES: Final = frozenset(
 
 
 def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], unmask_pii_text: _UnmasksPiiText) -> str:
-    """Put the original PII back into one client-bound event: ``response.completed`` output text, or a delta."""
+    """Put the original PII back into one client-bound event: a completed or incomplete response's text, or a delta."""
     try:
         evt_obj: Final = _load_json_object(response_str)
     except (json.JSONDecodeError, TypeError):
         return response_str
     event_type: Final = evt_obj.get("type")
 
-    if event_type == "response.completed":
+    if event_type in _HISTORY_TERMINAL_EVENT_TYPES:
         modified = False
         response_obj: Final = evt_obj.get("response")
         if not _is_json_object(response_obj):
@@ -2323,12 +2379,12 @@ class GuardedResponsesWsFrame:
     """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
     may rewrite ``input`` and ``instructions``), the guardrail records that bill against this turn only, the
     Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply, and how
-    to carry those guardrail records onto the connection's failure row when the deployment then refuses the turn."""
+    to bill the turn as its own failed request when the deployment then refuses it."""
 
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
     pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
-    bill_refusal: Callable[[Exception], None] | None = None
+    bill_refusal: Callable[[Exception], Awaitable[None]] | None = None
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
@@ -2336,35 +2392,28 @@ ResponsesWsTurnUsageRecorder: TypeAlias = Callable[[Mapping[str, object], int], 
 
 
 class ResponsesWsFrameRejection(ValueError):
-    def __init__(self, message: str, provider_specific_fields: Mapping[str, object] | None = None) -> None:
+    def __init__(
+        self, message: str, provider_specific_fields: Mapping[str, object] | None = None, status_code: int = 400
+    ) -> None:
         super().__init__(message)
         self.provider_specific_fields: Final = provider_specific_fields
+        self.status_code: Final = status_code
 
 
 def _frame_rejection_event(rejection: Exception) -> str:
     provider_fields: Final = (
         rejection.provider_specific_fields if isinstance(rejection, ResponsesWsFrameRejection) else None
     )
-    return json.dumps(
-        {
-            "type": "error",
-            "error": {
-                "type": "invalid_request_error",
-                "message": str(rejection),
-                **({"provider_specific_fields": dict(provider_fields)} if provider_fields else {}),
-            },
-        },
-        default=str,
-    )
+    status: Final = error_status_code(rejection, 400)
+    return responses_ws_error_frame(status, responses_ws_error_type(status), str(rejection), provider_fields)
 
 
 async def _reject_guarded_turn(
     websocket: ResponsesClientWebSocket, guarded: GuardedResponsesWsFrame, rejection: Exception
 ) -> None:
-    """Answers the refused turn and leaves its guardrail records to the connection's close-time failure row, which
-    runs every failure hook once per socket, like the first refusal it records."""
+    """Bills the refused turn as its own failed request, then answers it on the open socket."""
     if guarded.bill_refusal is not None:
-        guarded.bill_refusal(rejection)
+        await guarded.bill_refusal(rejection)
     with contextlib.suppress(Exception):
         await websocket.send_text(_turn_rejection_frame(rejection))
 
@@ -2750,10 +2799,10 @@ class ResponsesWebSocketStreaming:
                 # and the text-bearing "done" events. Per-fragment Presidio
                 # cannot reliably catch PII spanning multiple delta chunks (e.g.
                 # "alice@" + "example.com"), and the done events carry the full
-                # output text that response.completed already delivers in
-                # fully-masked form; forwarding them would leak unmasked PII
-                # before response.completed arrives. The client receives only the
-                # masked response.completed.
+                # output text that the terminal event (response.completed or
+                # response.incomplete) already delivers in fully-masked form;
+                # forwarding them would leak unmasked PII before it arrives. The
+                # client receives only the masked terminal event.
                 if self.output_guardrail_callbacks:
                     try:
                         _evt_payload: Mapping[str, object] = _load_json_object(response_str)
@@ -2966,8 +3015,9 @@ class ResponsesWebSocketStreaming:
 
     async def _mask_response_completed(self, response_str: str) -> str:
         """
-        Apply Presidio output masking (apply_to_output=True) to the
-        ``response.completed`` event before it is forwarded to the client.
+        Apply Presidio output masking (apply_to_output=True) to the terminal
+        ``response.completed`` or ``response.incomplete`` event before it is
+        forwarded to the client.
 
         Walks ``response.output[*].content[*].text`` and masks every text block,
         as well as ``response.output[*].arguments`` on function-call items and
@@ -2984,7 +3034,7 @@ class ResponsesWebSocketStreaming:
         except (json.JSONDecodeError, TypeError):
             return response_str
 
-        if evt_obj.get("type") != "response.completed":
+        if evt_obj.get("type") not in _HISTORY_TERMINAL_EVENT_TYPES:
             return response_str
 
         modified = False
@@ -3219,8 +3269,8 @@ class ManagedResponsesWebSocketHandler:
             verbose_logger.debug("ManagedResponsesWS: failed to serialize chunk: %s", exc)
             return None
 
-    async def _send_error(self, message: str, error_type: str = "server_error") -> None:
-        await self._send_frame(json.dumps({"type": "error", "error": {"type": error_type, "message": message}}))
+    async def _send_error(self, status: int, message: str, error_type: str = "server_error") -> None:
+        await self._send_frame(responses_ws_error_frame(status, error_type, message))
 
     async def _send_frame(self, frame: str) -> None:
         with contextlib.suppress(Exception):
@@ -3324,7 +3374,7 @@ class ManagedResponsesWebSocketHandler:
         try:
             msg_obj: Final = _load_json_object(raw_message)
         except json.JSONDecodeError:
-            await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
+            await self._send_error(400, "Invalid JSON in response.create event", "invalid_request_error")
             return None
         if msg_obj.get("type") != "response.create":
             # Silently ignore non-response.create messages (e.g. warmup pings)
@@ -3680,7 +3730,7 @@ class ManagedResponsesWebSocketHandler:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
-            await self._send_error(str(exc))
+            await self._send_error(error_status_code(exc, 500), str(exc))
             return
 
         self._save_turn_history(terminal_event, prior_history, current_messages)
@@ -3709,5 +3759,5 @@ class ManagedResponsesWebSocketHandler:
 
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: unexpected error: %s", exc)
-            await self._send_error(f"Internal server error: {exc}")
+            await self._send_error(500, f"Internal server error: {exc}")
         return self._failure

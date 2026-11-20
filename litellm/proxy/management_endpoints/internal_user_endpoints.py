@@ -89,10 +89,12 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     validated_customer_key_metadata,
 )
 from litellm.proxy.management_helpers.audit_logs import with_audit_actor
+from litellm.proxy.management_helpers.budget_limits_usage import build_budget_limits_usage
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
+    reject_clearing_app_grants,
     set_object_permission,
 )
 from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
@@ -104,7 +106,9 @@ from litellm.proxy.management_helpers.utils import (
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
 from litellm.redis.stores.spend_counters import (
     user_counter,
+    user_window_counter,
 )
+from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, rebase_budget_limits_update
 from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -127,9 +131,7 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     UserUpdateResult,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
-    SCIM_ENTERPRISE_METADATA_KEY,
-    SCIM_ENTITLEMENTS_METADATA_KEY,
-    SCIM_ROLES_METADATA_KEY,
+    SCIM_DIRECTORY_METADATA_KEYS,
 )
 from litellm.types.utils import BudgetConfig
 
@@ -166,6 +168,9 @@ _ADMIN_KEY_ROW_ADAPTER: Final = TypeAdapter(
     dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
 _ADMIN_USER_ROW_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_ADMIN_BUDGET_LIMITS_ADAPTER: Final[TypeAdapter[Sequence[BudgetLimitEntry] | str | None]] = TypeAdapter(
+    Sequence[BudgetLimitEntry] | str | None
+)
 
 
 def _user_table(
@@ -657,7 +662,9 @@ async def new_user(
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
         data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
-            data_json=data_json, prisma_client=prisma_client
+            data_json=data_json,
+            prisma_client=prisma_client,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
         data_json.pop("password", None)
         teams = data.teams
@@ -948,9 +955,7 @@ async def _get_user_info_teams(
     return team_list, teams_1
 
 
-_SCIM_DIRECTORY_METADATA_KEYS: Final = frozenset(
-    {SCIM_ENTERPRISE_METADATA_KEY, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_ROLES_METADATA_KEY}
-)
+_SCIM_DIRECTORY_METADATA_KEYS: Final = SCIM_DIRECTORY_METADATA_KEYS
 
 
 def _redact_scim_enterprise_metadata(
@@ -965,6 +970,19 @@ def _redact_scim_enterprise_metadata(
     return {k: v for k, v in metadata.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
 
 
+async def _user_budget_limits_usage(
+    user_id: str | None, budget_limits: Sequence[object] | str | None
+) -> Mapping[str, Mapping[str, object]] | None:
+    if user_id is None:
+        return None
+    return await build_budget_limits_usage(
+        budget_limits=budget_limits,
+        counter_key=lambda duration: user_window_counter(user_id, duration),
+        entity_type="User",
+        entity_id=user_id,
+    )
+
+
 def _build_user_info_response(
     user_id: str | None,
     user_info: Any | None,
@@ -972,6 +990,7 @@ def _build_user_info_response(
     team_list: list[TeamListResponseObject],
     teams_1: list[TeamListResponseObject] | None,
     model_max_budget_usage: dict[str, dict[str, object]] | None = None,
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None,
 ) -> UserInfoResponse:
     """Create UserInfoResponse while filtering sensitive fields."""
     if user_info is None and keys is not None:
@@ -987,6 +1006,8 @@ def _build_user_info_response(
         _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
         if model_max_budget_usage is not None:
             _user_info["model_max_budget_usage"] = model_max_budget_usage
+        if budget_limits_usage is not None:
+            _user_info["budget_limits_usage"] = budget_limits_usage
 
     return UserInfoResponse(
         user_id=user_id,
@@ -1092,6 +1113,7 @@ async def user_info(
                 model_max_budget=getattr(user_info, "model_max_budget", None),
                 cache=model_max_budget_limiter.dual_cache,
             ),
+            budget_limits_usage=await _user_budget_limits_usage(user_id, getattr(user_info, "budget_limits", None)),
         )
 
         return (
@@ -1291,6 +1313,9 @@ async def user_info_v2(
                 model_max_budget=user_data.get("model_max_budget"),
                 cache=model_max_budget_limiter.dual_cache,
             ),
+            budget_limits_usage=await _user_budget_limits_usage(
+                user_data.get("user_id", user_id), user_data.get("budget_limits")
+            ),
         )
     except Exception as e:
         if isinstance(e, HTTPException) and e.status_code < 500:
@@ -1314,7 +1339,12 @@ async def _get_admin_user_row(
     if row is None:
         return None
     fields: Final = _ADMIN_USER_ROW_ADAPTER.validate_python(row.model_dump() if isinstance(row, BaseModel) else row)
-    return {name: value for name, value in fields.items() if name != "password"}
+    budget_limits: Final = _ADMIN_BUDGET_LIMITS_ADAPTER.validate_python(fields.get("budget_limits"))
+    usage: Final = await _user_budget_limits_usage(admin_user_id, budget_limits)
+    return {
+        **{name: value for name, value in fields.items() if name != "password"},
+        **({"budget_limits_usage": usage} if usage is not None else {}),
+    }
 
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
@@ -1601,6 +1631,31 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
     await evict_and_broadcast(cache_keys=keys, user_api_key_cache=user_api_key_cache)
 
 
+async def _write_user_update(
+    prisma_client: "PrismaClient",
+    user_id: str,
+    data: Mapping[str, object],
+    original: LiteLLM_UserTable | None,
+) -> Mapping[str, object] | None:
+    if "budget_limits" not in data:
+        return cast(  # cast-ok: the user branch returns a user_id/data dictionary
+            "Mapping[str, object] | None",
+            await prisma_client.update_data(user_id=user_id, data=data, table_name="user"),
+        )
+    async with prisma_client.tx() as transaction:
+        rebased: Final = await rebase_budget_limits_update(
+            cast("BudgetLimitsTransaction", transaction),  # cast-ok: Prisma implements raw transaction queries
+            "LiteLLM_UserTable",
+            user_id,
+            original.budget_limits if original is not None else None,
+            prisma_client.jsonify_object(data),
+        )
+        row: Final = await user_tx_db(transaction).upsert(
+            where={"user_id": user_id}, data={"create": rebased, "update": rebased}
+        )
+    return {"user_id": user_id, "data": row}
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1713,24 +1768,31 @@ async def _update_single_user_helper(
             data_json=non_default_values,
             existing_object_permission_id=getattr(existing_user_row, "object_permission_id", None),
             prisma_client=prisma_client,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
         if object_permission_id is not None:
             non_default_values["object_permission_id"] = object_permission_id
     elif _clears_object_permission(user_request):
+        await reject_clearing_app_grants(
+            existing_object_permission_id=getattr(existing_user_row, "object_permission_id", None),
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            prisma_client=prisma_client,
+        )
         # An explicit `{}` or null means "no object permission", which the merge-based upsert cannot
         # express: merging an empty grant set over the existing row leaves every grant in place. So
         # the link is dropped instead, which is what makes the documented clear actually clear.
         non_default_values["object_permission_id"] = None
 
     # Perform the update
-    response: dict[str, Any] | None = None
+    response: Mapping[str, object] | None = None
 
     if user_request.user_id and len(user_request.user_id) > 0:
         non_default_values["user_id"] = user_request.user_id
-        response = await prisma_client.update_data(
-            user_id=user_request.user_id,
-            data=non_default_values,
-            table_name="user",
+        response = await _write_user_update(
+            prisma_client,
+            user_request.user_id,
+            _ADMIN_USER_ROW_ADAPTER.validate_python(non_default_values),
+            existing_user_row,
         )
     elif user_request.user_email:
         # Handle email-based updates
@@ -1743,10 +1805,11 @@ async def _update_single_user_helper(
         if existing_user_rows and isinstance(existing_user_rows, list) and len(existing_user_rows) > 0:
             for existing_user in existing_user_rows:
                 non_default_values["user_id"] = existing_user.user_id
-                response = await prisma_client.update_data(
-                    user_id=existing_user.user_id,
-                    data=non_default_values,
-                    table_name="user",
+                response = await _write_user_update(
+                    prisma_client,
+                    TypeAdapter(str).validate_python(existing_user.user_id),
+                    _ADMIN_USER_ROW_ADAPTER.validate_python(non_default_values),
+                    existing_user_row,
                 )
                 break  # Update first matching user
         else:
@@ -1788,7 +1851,6 @@ async def _update_single_user_helper(
             await evict_budget_windows_absent_marker(
                 entity_type=Litellm_EntityType.USER,
                 entity_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
-                user_api_key_cache=user_api_key_cache,
             )
 
         await evict_and_broadcast(
@@ -1815,7 +1877,7 @@ async def _update_single_user_helper(
             detail={"error": "Failed to update user"},
         )
     _strip_password_from_response(response)
-    return response
+    return dict(response)
 
 
 def can_user_call_user_update(
@@ -2165,7 +2227,6 @@ async def bulk_user_update(
                         evict_budget_windows_absent_marker(
                             entity_type=Litellm_EntityType.USER,
                             entity_id=user.user_id,
-                            user_api_key_cache=user_api_key_cache,
                         )
                         for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
                         if user.user_id in windows_by_user

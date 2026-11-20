@@ -846,6 +846,98 @@ def test_invalid_app_configuration_fails_closed(override: Mapping[str, object]) 
         )
 
 
+@pytest.mark.parametrize("named", (False, True))
+@pytest.mark.parametrize("blank_stored_key", ("", "   "))
+def test_key_ref_is_accepted_with_blank_stored_key(
+    monkeypatch: pytest.MonkeyPatch, blank_stored_key: str, named: bool
+) -> None:
+    values: Final = {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": _CONFIG.app_id,
+        "github_copilot_app_installation_id": _CONFIG.installation_id,
+        "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+        "github_copilot_app_private_key": blank_stored_key,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="copilot-app", credential_values=values, credential_info={})],
+    )
+    assert app_config({"litellm_credential_name": "copilot-app"} if named else values) == _CONFIG
+
+
+def test_named_credential_with_whitespace_only_key_and_no_key_ref_fails_at_signing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values: Final = {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": _CONFIG.app_id,
+        "github_copilot_app_installation_id": _CONFIG.installation_id,
+        "github_copilot_app_private_key": "   ",
+    }
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="copilot-app", credential_values=values, credential_info={})],
+    )
+    config: Final = app_config({"litellm_credential_name": "copilot-app"})
+    assert config is not None
+    with pytest.raises(AuthenticationError, match="Unable to sign a GitHub App JWT"):
+        manager("", lambda request: httpx.Response(500), Clock()).resolve(config)
+
+
+@pytest.mark.parametrize("blank", ("", "   "))
+def test_blank_app_fields_without_app_auth_type_are_not_app_auth(blank: str) -> None:
+    assert app_config({key: blank for key in APP_FIELDS}) is None
+
+
+@pytest.mark.parametrize("value", (False, 0, "123"))
+def test_non_blank_app_field_without_app_auth_type_fails_closed(value: object) -> None:
+    with pytest.raises(BadRequestError, match="GitHub App authentication requires"):
+        app_config({"github_copilot_app_installation_id": value})
+
+
+@pytest.mark.parametrize("blank_key_ref", ("", "   "))
+def test_uploaded_key_is_accepted_with_blank_key_ref(private_key: str, blank_key_ref: str) -> None:
+    config: Final = app_config(
+        {
+            "github_copilot_auth_type": "github_app",
+            "github_copilot_app_id": _CONFIG.app_id,
+            "github_copilot_app_installation_id": _CONFIG.installation_id,
+            "github_copilot_app_private_key_ref": blank_key_ref,
+            "github_copilot_app_private_key": private_key,
+        },
+        validate_stored_key=True,
+    )
+    assert config is not None
+    assert (config.app_id, config.installation_id) == (_CONFIG.app_id, _CONFIG.installation_id)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"github_copilot_app_private_key": 12345},
+        {"github_copilot_app_private_key": False},
+        {"github_copilot_app_private_key_ref": 12345},
+        {"github_copilot_app_private_key_ref": False},
+        {"github_copilot_app_private_key_ref": 0},
+    ],
+)
+def test_non_string_key_source_fails_closed(private_key: str, override: Mapping[str, object]) -> None:
+    with pytest.raises(BadRequestError, match="GitHub App authentication requires"):
+        app_config(
+            {
+                "github_copilot_auth_type": "github_app",
+                "github_copilot_app_id": _CONFIG.app_id,
+                "github_copilot_app_installation_id": _CONFIG.installation_id,
+                "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+                "github_copilot_app_private_key": private_key,
+                **override,
+            },
+            validate_stored_key=True,
+        )
+
+
 def test_network_failure_does_not_expose_jwt(private_key: str) -> None:
     def fail(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(request.headers["authorization"], request=request)

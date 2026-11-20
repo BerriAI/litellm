@@ -15,6 +15,101 @@ const limits = [
 ] satisfies NonNullable<components["schemas"]["BudgetWriteRequest"]["budget_limits"]>;
 
 describe("budgetFormPayload", () => {
+  const custom = { budget_duration: "7d", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
+
+  it.each([undefined, 25])(
+    "removes a shown custom cap when its amount and period are cleared with scalar %s",
+    (scalar) => {
+      const values = { budget_id: "custom", budget_duration: null, max_budget: null, additional_max_budget: scalar };
+      expect(budgetFormPayload(values, { max_budget: true, budget_duration: true }, [custom])).toEqual(
+        scalar === undefined
+          ? { budget_id: "custom", max_budget: null, budget_duration: null, budget_limits: null }
+          : { budget_id: "custom", budget_limits: null },
+      );
+    },
+  );
+
+  it.each([undefined, 25])("replaces a shown custom period without retaining its old cap with scalar %s", (scalar) => {
+    const values = { budget_id: "custom", budget_duration: "2d", max_budget: 3, additional_max_budget: scalar };
+    expect(budgetFormPayload(values, { budget_duration: true }, [custom])).toEqual(
+      scalar === undefined
+        ? { budget_id: "custom", max_budget: 3, budget_duration: "2d", budget_limits: null }
+        : { budget_id: "custom", budget_limits: [{ budget_duration: "2d", max_budget: 3 }] },
+    );
+  });
+
+  it("removes only the shown custom window when other custom windows are hidden", () => {
+    const hidden = { budget_duration: "48h", max_budget: 8, reset_at: "2027-01-05T00:00:00Z" };
+    const expected = { budget_id: "custom", budget_duration: null, max_budget: null, budget_limits: [hidden] };
+    expect(
+      budgetFormPayload(
+        { budget_id: "custom", budget_duration: null, max_budget: null },
+        { max_budget: true, budget_duration: true },
+        [custom, hidden],
+      ),
+    ).toEqual(expected);
+  });
+
+  it("replaces a shown custom cap when switching to combined calendar limits", () => {
+    const expected = {
+      budget_id: "both",
+      max_budget: null,
+      budget_duration: null,
+      budget_limits: [
+        { budget_duration: "1mo", max_budget: 0 },
+        { budget_duration: "12mo", max_budget: 100 },
+      ],
+    };
+    expect(budgetFormPayload(combined, { budget_duration: true }, [custom])).toEqual(expected);
+  });
+
+  it.each([50, null])("keeps an unshown custom cap when the monthly amount becomes %s", (amount) => {
+    expect(
+      budgetFormPayload({ budget_id: "monthly", budget_duration: "30d", max_budget: amount }, { max_budget: true }, [
+        limits[0],
+        custom,
+      ]),
+    ).toEqual({
+      budget_id: "monthly",
+      budget_limits: amount == null ? [custom] : [{ ...limits[0], max_budget: amount }, custom],
+    });
+  });
+
+  it("keeps custom windows and their reset anchors when editing combined calendar caps", () => {
+    expect(
+      budgetFormPayload({ ...combined, annual_budget: 200 }, { annual_budget: true }, [...limits, custom]),
+    ).toEqual({
+      budget_id: "both",
+      budget_limits: [limits[0], { ...limits[1], max_budget: 200 }, custom],
+    });
+  });
+
+  it.each([undefined, 25])("keeps custom windows when switching calendar periods with scalar %s", (scalar) => {
+    expect(
+      budgetFormPayload(
+        { ...combined, budget_duration: "12mo", additional_max_budget: scalar },
+        { budget_duration: true },
+        [...limits, custom],
+      ),
+    ).toEqual(
+      scalar === undefined
+        ? { budget_id: "both", max_budget: 0, budget_duration: "12mo", budget_limits: [custom] }
+        : { budget_id: "both", budget_limits: [{ ...limits[1], max_budget: 0 }, custom] },
+    );
+  });
+
+  it.each(["7d", "30d"])("updates a custom-only %s cap without changing its reset anchor", (duration) => {
+    const existing = { ...custom, budget_duration: duration };
+    expect(
+      budgetFormPayload({ budget_id: "custom", budget_duration: duration, max_budget: 4 }, { max_budget: true }, [
+        existing,
+      ]),
+    ).toEqual({
+      budget_id: "custom",
+      budget_limits: [{ ...existing, max_budget: 4 }],
+    });
+  });
+
   it.each(["30d", "12mo"])("preserves the scalar representation for %s", (duration) => {
     expect(budgetFormPayload({ budget_id: "single", max_budget: 12.345, budget_duration: duration })).toEqual({
       budget_id: "single",
