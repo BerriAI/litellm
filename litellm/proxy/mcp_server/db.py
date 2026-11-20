@@ -4,11 +4,11 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 from fastapi import HTTPException
 from pydantic import ConfigDict, TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
