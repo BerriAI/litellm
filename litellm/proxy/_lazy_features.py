@@ -48,6 +48,15 @@ def _mount_app(prefix: str, attr_name: str = "app") -> Callable[["FastAPI", obje
     return _register
 
 
+def _include_skill_hub(app: "FastAPI", module: object) -> None:
+    from litellm.proxy.discovery_endpoints.skill_hub_submissions import router
+    from litellm.proxy.discovery_endpoints.skill_scanning import router as scan_router
+
+    _include_router()(app, module)
+    app.include_router(router)
+    app.include_router(scan_router)
+
+
 @dataclass(frozen=True)
 class LazyFeature:
     name: str
@@ -213,6 +222,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/backend-api/codex/",),
     ),
     LazyFeature(
+        name="cursor_cli_passthrough",
+        module_path="litellm.proxy.pass_through_endpoints.cursor_cli_passthrough_endpoints",
+        path_prefixes=("/cursor-cli/",),
+    ),
+    LazyFeature(
         name="llm_passthrough",
         module_path="litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints",
         path_prefixes=(
@@ -234,6 +248,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/mistral/",
             "/nvidia_nim/",
             "/openai/",
+            "/opensearch/",
             "/openai_passthrough/",
             "/tinyfish/",
             "/transcribe",
@@ -282,6 +297,12 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="decisions",
         module_path="litellm.proxy.decisions_endpoints.endpoints",
         path_prefixes=("/v1/decisions", "/decisions", "/v1/systemone", "/systemone", "/v1/extraction", "/extraction"),
+    ),
+    LazyFeature(
+        name="skill_hub",
+        module_path="litellm.proxy.discovery_endpoints.skill_hub_endpoints",
+        path_prefixes=("/skill-hub",),
+        register_fn=_include_skill_hub,
     ),
     LazyFeature(
         name="claude_code_marketplace",
@@ -356,8 +377,8 @@ class LazyFeatureMiddleware:
             fastapi_app.state.lazy_locks = {}
 
     @property
-    def _loaded(self) -> set:
-        return self._fastapi_app.state.lazy_loaded
+    def _loaded(self) -> set[str]:
+        return _lazy_loaded(self._fastapi_app)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.

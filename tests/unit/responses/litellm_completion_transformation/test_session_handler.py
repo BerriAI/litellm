@@ -1,9 +1,9 @@
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,15 +13,23 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
+from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    StoredTurns,
     _normalize_redacted_tool_call_arguments,
 )
-from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
+from litellm.responses.litellm_completion_transformation.transformation import (
+    ChatCompletionSession,
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -461,7 +469,7 @@ class _FakePrismaClient:
         self.db = _FakePrismaDB(results)
 
 
-def _spend_log(request_id: str, session_id: str, prompt: str, answer: str) -> dict:
+def _spend_log(request_id: str, session_id: str, prompt: str, answer: str) -> dict[str, object]:
     return {
         "request_id": request_id,
         "call_type": "aresponses",
@@ -888,6 +896,57 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     assert json.loads(tool_message["content"]) == function_output
 
 
+async def test_message_history_keeps_the_joined_name_of_a_stored_self_named_namespace_member() -> None:
+    request_id: Final = "chatcmpl-self-named-namespace"
+    responses_request_body: Final = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "search",
+                "tools": [{"type": "function", "name": "search", "parameters": {"type": "object", "properties": {}}}],
+            }
+        ],
+        "input": [
+            {"role": "user", "content": "Search for the release notes."},
+            {"type": "function_call", "call_id": "call_1", "name": "search", "namespace": "search", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "release notes found"},
+        ],
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
+        return_value=True,
+    ):
+        proxy_server_request: Final = json.loads(
+            _get_proxy_server_request_for_spend_logs_payload(
+                metadata={},
+                litellm_params={"proxy_server_request": {"body": responses_request_body}},
+                kwargs={},
+            )
+        )
+
+    spend_log: Final = {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "session-self-named-namespace",
+        "proxy_server_request": proxy_server_request,
+        "response": _chat_completion_response(request_id, "Found them."),
+    }
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = [spend_log]
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    assert [call["function"]["name"] for call in result["messages"][1]["tool_calls"]] == ["search__search"]
+
+
 def _turn_spend_log(
     turn_input: str | list[dict[str, str]], answer: str, compaction_blocks: list[dict[str, str]] | None = None
 ) -> dict[str, object]:
@@ -1162,7 +1221,10 @@ async def test_an_item_a_poll_caught_half_written_replays_its_finished_text_once
             "resp_poll_done",
             "aget_responses",
             "completed",
-            [_identified_output_message("msg_answer", "One, two, three"), _identified_output_message("msg_more", "Done")],
+            [
+                _identified_output_message("msg_answer", "One, two, three"),
+                _identified_output_message("msg_more", "Done"),
+            ],
         ),
     )
 
@@ -1435,3 +1497,240 @@ async def test_previous_response_replays_a_thought_signature_kept_out_of_the_id_
     model_parts: Final = list(chain.from_iterable(turn["parts"] for turn in model_turns))
     assert len(model_parts) == 1
     assert (model_parts[0]["thoughtSignature"] == LONG_SIGNATURE) is short_ids
+
+
+_FILLED_REPLAY: Final = [
+    ("user", "What is 2+2?"),
+    ("assistant", "Four."),
+    ("user", EMPTY_TEXT_PLACEHOLDER),
+    ("assistant", "Eight."),
+]
+_DROPPED_REPLAY: Final = [("user", "What is 2+2?"), ("assistant", "Four."), ("assistant", "Eight.")]
+_ROUTE_THAT_FILLS: Final = {"model": "anthropic/claude-opus-5-5", "custom_llm_provider": "anthropic"}
+_ROUTE_THAT_ACCEPTS_A_PREFILL: Final = {"model": "anthropic/claude-sonnet-4-5", "custom_llm_provider": "anthropic"}
+_ARN_ROUTE_THAT_FILLS: Final = {
+    "model": "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
+    "custom_llm_provider": "bedrock",
+    "metadata": json.dumps({"model_map_information": {"model_map_key": "us.anthropic.claude-opus-5-5"}}),
+}
+
+
+def _stored_turns(*spend_logs: dict[str, object]) -> StoredTurns:
+    return StoredTurns(
+        spend_logs=cast(tuple[SpendLogsPayload, ...], spend_logs),  # cast-ok: rows hold only the fields the replay reads
+        proxy_server_requests=tuple(as_str_mapping(spend_log["proxy_server_request"]) for spend_log in spend_logs),
+    )
+
+
+def _replayed_turns(session: ChatCompletionSession) -> list[tuple[object, object]]:
+    messages: Final[Sequence[object]] = session.get("messages", [])
+    return [(message_field(message, "role"), message_field(message, "content")) for message in messages]
+
+
+@pytest.mark.parametrize(
+    ("stored_route", "expected"),
+    (
+        (_ROUTE_THAT_FILLS, _FILLED_REPLAY),
+        (_ARN_ROUTE_THAT_FILLS, _FILLED_REPLAY),
+        (_ROUTE_THAT_ACCEPTS_A_PREFILL, _DROPPED_REPLAY),
+    ),
+    ids=("stored_model_refuses_a_prefill", "stored_arn_priced_as_a_model_that_refuses_it", "stored_model_accepts_it"),
+)
+@pytest.mark.asyncio
+async def test_a_stored_follow_up_whose_lone_user_item_had_no_content_replays_what_its_own_model_saw(
+    stored_route: Mapping[str, str], expected: list[tuple[object, object]]
+) -> None:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-empty-turn", "What is 2+2?", "Four.")
+    follow_up: Final = {
+        **_spend_log("chatcmpl-follow-up", "session-empty-turn", "", "Eight."),
+        **stored_route,
+        "proxy_server_request": {"input": [{"role": "user", "content": None}], "model": "claude-bridge"},
+    }
+
+    result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        "chatcmpl-follow-up",
+        stored_turns=_stored_turns(first_turn, follow_up),
+        empty_user_turn_text=EMPTY_TEXT_PLACEHOLDER,
+    )
+
+    assert _replayed_turns(result) == expected
+
+
+async def _replay_of_a_blank_follow_up(
+    stored_route: Mapping[str, str],
+    blank_input: str | list[dict[str, object]],
+    empty_user_turn_text: str = EMPTY_TEXT_PLACEHOLDER,
+) -> list[tuple[object, object]]:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-blank-turn", "What is 2+2?", "Four.")
+    follow_up: Final = {
+        **_spend_log("chatcmpl-follow-up", "session-blank-turn", "", "Eight."),
+        **stored_route,
+        "proxy_server_request": {"input": blank_input, "model": "claude-bridge"},
+    }
+    result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        "chatcmpl-follow-up",
+        stored_turns=_stored_turns(first_turn, follow_up),
+        empty_user_turn_text=empty_user_turn_text,
+    )
+    return _replayed_turns(result)
+
+
+@pytest.mark.parametrize(
+    "blank_input",
+    (
+        "",
+        "   ",
+        [{"role": "user", "content": "   "}],
+        [{"role": "user", "content": [{"type": "input_text", "text": " \n"}]}],
+    ),
+    ids=("empty_input_string", "whitespace_input_string", "whitespace_string_item", "whitespace_text_block_item"),
+)
+@pytest.mark.parametrize(
+    "stored_route",
+    (_ROUTE_THAT_FILLS, _ARN_ROUTE_THAT_FILLS),
+    ids=("stored_model_refuses_a_prefill", "stored_arn_priced_as_a_model_that_refuses_it"),
+)
+@pytest.mark.asyncio
+async def test_a_stored_blank_user_turn_replays_the_placeholder_its_model_saw(
+    stored_route: Mapping[str, str], blank_input: str | list[dict[str, object]]
+) -> None:
+    assert await _replay_of_a_blank_follow_up(stored_route, blank_input) == _FILLED_REPLAY
+
+
+@pytest.mark.asyncio
+async def test_a_stored_blank_user_turn_replays_as_sent_when_its_model_accepts_a_prefill() -> None:
+    replay: Final = await _replay_of_a_blank_follow_up(_ROUTE_THAT_ACCEPTS_A_PREFILL, [{"role": "user", "content": "   "}])
+
+    assert replay == [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "   "), ("assistant", "Eight.")]
+
+
+@pytest.mark.parametrize(
+    ("follow_up_route", "replayed_blank"),
+    (
+        ({"model": "gemini-3.5-flash", "custom_llm_provider": "gemini"}, "   "),
+        (_ROUTE_THAT_FILLS, EMPTY_TEXT_PLACEHOLDER),
+        (_ROUTE_THAT_ACCEPTS_A_PREFILL, EMPTY_TEXT_PLACEHOLDER),
+        (
+            {"model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "custom_llm_provider": "bedrock"},
+            EMPTY_TEXT_PLACEHOLDER,
+        ),
+    ),
+    ids=(
+        "follow_up_route_takes_blank_text",
+        "follow_up_route_fills_blank_turns",
+        "anthropic_follow_up_accepts_a_prefill",
+        "converse_follow_up_accepts_a_prefill",
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_stored_blank_user_turn_is_filled_only_when_the_follow_up_route_refuses_blank_text(
+    follow_up_route: Mapping[str, str], replayed_blank: str
+) -> None:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-blank-turn", "What is 2+2?", "Four.")
+    follow_up: Final = {
+        **_spend_log("chatcmpl-follow-up", "session-blank-turn", "", "Eight."),
+        **_ROUTE_THAT_FILLS,
+        "proxy_server_request": {"input": [{"role": "user", "content": "   "}], "model": "claude-bridge"},
+    }
+
+    request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        previous_response_id="chatcmpl-follow-up",
+        litellm_completion_request={**follow_up_route, "messages": [{"role": "user", "content": "Double it."}]},
+        instructions=None,
+        stored_turns=_stored_turns(first_turn, follow_up),
+        request_input="Double it.",
+    )
+
+    assert _replayed_turns(ChatCompletionSession(messages=request["messages"], litellm_session_id=None)) == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", replayed_blank),
+        ("assistant", "Eight."),
+        ("user", "Double it."),
+    ]
+
+
+_STORED_REFERENCES: Final = [{"type": "tool_reference", "tool_name": "get_weather"}]
+
+
+@pytest.mark.parametrize(
+    ("follow_up_route", "replayed_output"),
+    (
+        ({"model": "claude-opus-5-5", "custom_llm_provider": "anthropic"}, _STORED_REFERENCES),
+        ({"model": "gpt-5.6", "custom_llm_provider": "openai"}, json.dumps(_STORED_REFERENCES)),
+        ({"model": "gemini-3.1-pro-preview", "custom_llm_provider": "vertex_ai"}, json.dumps(_STORED_REFERENCES)),
+        ({"model": "my-batch-alias"}, json.dumps(_STORED_REFERENCES)),
+    ),
+    ids=(
+        "anthropic_follow_up_replays_references",
+        "openai_follow_up_replays_json",
+        "vertex_follow_up_replays_json",
+        "unresolved_alias_follow_up_replays_json",
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_stored_tool_reference_output_replays_in_the_shape_the_follow_up_route_takes(
+    follow_up_route: Mapping[str, str], replayed_output: object
+) -> None:
+    stored_turn: Final = {
+        **_spend_log("chatcmpl-loaded-tools", "session-tool-references", "", "Loaded."),
+        "proxy_server_request": {
+            "input": [
+                {"role": "user", "content": "Load the weather tools."},
+                {"type": "function_call", "call_id": "call_replayed_refs", "name": "load_tools", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_replayed_refs", "output": _STORED_REFERENCES},
+            ],
+            "model": "claude-bridge",
+        },
+    }
+
+    request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        previous_response_id="chatcmpl-loaded-tools",
+        litellm_completion_request={**follow_up_route, "messages": [{"role": "user", "content": "Weather in Paris?"}]},
+        instructions=None,
+        stored_turns=_stored_turns(stored_turn),
+        request_input="Weather in Paris?",
+    )
+
+    replayed: Final = _replayed_turns(ChatCompletionSession(messages=request["messages"], litellm_session_id=None))
+    assert [content for role, content in replayed if role == "tool"] == [replayed_output]
+
+
+@pytest.mark.asyncio
+async def test_stored_blank_user_items_that_inference_continues_replay_one_turn_each() -> None:
+    replay: Final = await _replay_of_a_blank_follow_up(
+        _ROUTE_THAT_FILLS, [{"role": "user", "content": ""}, {"role": "user", "content": "  "}], empty_user_turn_text=""
+    )
+
+    assert replay == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", ""),
+        ("user", "  "),
+        ("assistant", "Eight."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_stored_turn_with_no_answer_replays_no_empty_user_turn() -> None:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-unanswered", "What is 2+2?", "Four.")
+    unanswered: Final = {
+        **_spend_log("chatcmpl-unanswered", "session-unanswered", "", ""),
+        **_ROUTE_THAT_FILLS,
+        "proxy_server_request": {"input": [{"role": "user", "content": None}], "model": "claude-bridge"},
+        "response": {},
+    }
+    follow_up: Final = _spend_log("chatcmpl-follow-up", "session-unanswered", "And 3+3?", "Six.")
+
+    result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        "chatcmpl-follow-up",
+        stored_turns=_stored_turns(first_turn, unanswered, follow_up),
+        empty_user_turn_text=EMPTY_TEXT_PLACEHOLDER,
+    )
+
+    assert _replayed_turns(result) == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", "And 3+3?"),
+        ("assistant", "Six."),
+    ]

@@ -8,7 +8,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Final, Literal
@@ -1796,6 +1796,48 @@ async def test_pii_tokens_in_metadata_used_for_unmasking():
     )
 
     assert response.choices[0].message.content == "Hello John, how can I help you?"
+
+
+@pytest.mark.asyncio
+async def test_output_unmasking_restores_server_tool_call_arguments(mock_user_api_key: UserAPIKeyAuth) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    provider_specific_fields={
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01",
+                                "type": "function",
+                                "function": {"name": "web_search", "arguments": '{"query": "<PERSON_1> persimmon"}'},
+                            }
+                        ]
+                    },
+                ),
+            )
+        ]
+    )
+
+    result: Final = await guardrail.async_post_call_success_hook(
+        data={"metadata": {"pii_tokens": {"<PERSON_1>": "John Smith"}}},
+        user_api_key_dict=mock_user_api_key,
+        response=response,
+    )
+
+    assert result.choices[0].message.provider_specific_fields == {
+        "server_tool_calls": [
+            {
+                "id": "srvtoolu_01",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "John Smith persimmon"}'},
+            }
+        ]
+    }
 
 
 @pytest.mark.parametrize(
@@ -5466,6 +5508,7 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
 
+
 def _function_tool_call(call_id: str, arguments: str) -> dict:
     return {"id": call_id, "type": "function", "function": {"name": "lookup", "arguments": arguments}}
 
@@ -5855,6 +5898,54 @@ async def test_masking_history_tool_call_arguments_replays_a_byte_identical_pref
     assert second["messages"][: len(earlier)] == first["messages"]
 
 
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "provider_specific_fields": {
+                    "server_tool_calls": [_function_tool_call("srvtoolu_1", '{"query": "Alice Brown"}')]
+                },
+            },
+            id="server-tool-call-only",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [_function_tool_call("call_1", '{"name": "Alice Brown"}')],
+                "provider_specific_fields": {
+                    "server_tool_calls": [_function_tool_call("srvtoolu_1", '{"query": "Carol Davis"}')]
+                },
+            },
+            id="client-and-server-tool-calls",
+        ),
+    ],
+)
+async def test_masking_history_server_tool_call_arguments_replays_a_byte_identical_prefix_across_turns(
+    assistant_message: Mapping[str, object],
+) -> None:
+    earlier: Final = [
+        {"role": "user", "content": "My name is John Smith."},
+        assistant_message,
+        {"role": "tool", "tool_call_id": "call_1", "content": "Found one match."},
+    ]
+    later: Final = [
+        *earlier,
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": "Now add Bob Jones."},
+    ]
+    async with _reversible_presidio_guardrail() as guardrail:
+        first: Final = await _masked_chat_request(guardrail, earlier)
+        second: Final = await _masked_chat_request(guardrail, later)
+
+    assert "Alice Brown" not in json.dumps(first["messages"]), first["messages"]
+    assert "Carol Davis" not in json.dumps(first["messages"]), first["messages"]
+    assert second["messages"][: len(earlier)] == first["messages"]
+
+
 async def test_masking_anthropic_tool_use_input_replays_a_byte_identical_prefix_across_turns() -> None:
     earlier: Final = [
         {"role": "user", "content": "My name is John Smith."},
@@ -5904,3 +5995,18 @@ async def test_a_token_the_request_already_carries_is_never_assigned_to_another_
     assert "Jane Doe" not in " ".join(masked), masked
     assert set(literals).isdisjoint(pii_tokens), pii_tokens
     assert tuple(OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens) for text in masked) == contents, masked
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_records_its_verdict_on_a_request_dict_that_starts_empty() -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        guardrail_name="presidio-pii",
+        mock_testing=True,
+        mock_redacted_text={"text": "my name is <PERSON>"},
+    )
+    request_data: Final[dict[str, object]] = {}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["my name is Jane"]}, request_data=request_data, input_type="request")
+
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [record["guardrail_name"] for record in recorded] == ["presidio-pii"]

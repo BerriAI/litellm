@@ -1,6 +1,9 @@
 """Tests for the session-token KDF and the edge/token-endpoint resolvers."""
 
+import _hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -230,3 +233,73 @@ def test_signing_config_error_detail_never_leaks_key_material():
     )
     assert isinstance(resolved, SessionSigningConfigError)
     assert pem.splitlines()[1] not in resolved.detail
+
+
+def test_session_key_without_fips_stays_the_scrypt_key_of_the_master_key() -> None:
+    keys: Final = session_keys_from_master_key(MASTER_KEY)
+    assert keys.signing_key.get_secret_value() == "990dce331d97862e3af47815b707c42923fc760e6740d4a77a81583a206f339d"
+
+
+@pytest.mark.usefixtures("openssl_enforcing_fips")
+def test_session_key_on_a_fips_openssl_without_fips_mode_stays_the_scrypt_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    keys: Final = session_keys_from_master_key(MASTER_KEY)
+    assert keys.signing_key.get_secret_value() == "990dce331d97862e3af47815b707c42923fc760e6740d4a77a81583a206f339d"
+
+
+def _fips_keys(master_key: str) -> tuple[str, str, str]:
+    envelope_keys_from_master_key.cache_clear()
+    session_keys_from_master_key.cache_clear()
+    envelope: Final = envelope_keys_from_master_key(master_key)
+    session: Final = session_keys_from_master_key(master_key)
+    return (
+        envelope.signing_key.get_secret_value(),
+        envelope.encryption_key.get_secret_value(),
+        session.signing_key.get_secret_value(),
+    )
+
+
+_needs_shared_openssl: Final = pytest.mark.skipif(
+    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
+)
+
+
+@_needs_shared_openssl
+@pytest.mark.usefixtures("fips_mode_on")
+def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_every_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    salt_key: Final = "sk-" + "5a" * 32
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    first: Final = _fips_keys(MASTER_KEY)
+    assert first == _fips_keys(MASTER_KEY)
+    assert len(set(first)) == 3, first
+    labels: Final = (
+        b"litellm-mcp-bridge:envelope-signing:",
+        b"litellm-mcp-bridge:envelope-encryption:",
+        b"litellm-mcp-gateway:session-signing:",
+    )
+    assert first == tuple(
+        hmac.digest(
+            salt_key.encode(),
+            (1).to_bytes(4, "big") + label + b"\x00" + MASTER_KEY.encode() + (256).to_bytes(4, "big"),
+            "sha256",
+        ).hex()
+        for label in labels
+    )
+
+
+@_needs_shared_openssl
+@pytest.mark.usefixtures("fips_mode_on")
+def test_keys_under_fips_all_change_when_the_master_key_rotates(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + "5a" * 32)
+    before: Final = _fips_keys(MASTER_KEY)
+    after: Final = _fips_keys("sk-a-different-master-key")
+    assert set(before).isdisjoint(after), (before, after)
+
+
+@pytest.mark.usefixtures("fips_mode_on")
+def test_session_key_under_fips_refuses_an_unset_salt_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    with pytest.raises(ValueError, match="LITELLM_SALT_KEY"):
+        session_keys_from_master_key(MASTER_KEY)

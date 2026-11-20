@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.url_utils import (
     safe_get,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.videos.async_task_utils import video_image_params
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -488,6 +489,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
             "aigc_watermark",
             "extra",
             "parameters",
+            "frame_images",
+            "input_references",
+            "aspect_ratio",
         ]
 
     def map_openai_params(
@@ -496,12 +500,20 @@ class MinimaxVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
+        requested: Final = video_image_params(video_create_optional_params, model, "minimax", drop_params)
         mapped_params: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig contract; extra_body merges into it
         dropped_keys: Final = _DROP_FROM_CREATE_BODY | _additional_drop_keys(video_create_optional_params)
-        for key, value in video_create_optional_params.items():
+        for key, value in requested.items():
             if value is None or key in dropped_keys:
                 continue
-            if key == "seconds":
+            if key == "seconds" and requested.get("duration") is not None:
+                if not drop_params and _duration_param(value, model) != _duration_param(requested["duration"], model):
+                    raise UnsupportedParamsError(
+                        message="duration and seconds must agree, set drop_params=True to ignore seconds",
+                        model=model,
+                        llm_provider="minimax",
+                    )
+            elif key == "seconds":
                 mapped_params["duration"] = _duration_param(value, model)
             elif key == "size":
                 mapped_params.setdefault("ratio", _ratio_from_size(value, model))
@@ -791,7 +803,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             params.update(extra_query)
         return f"{api_base}/v2/query/video_generation", params
 
-    def transform_video_list_response(  # pyright: ignore[reportIncompatibleMethodOverride]  # base declares dict[str, str] but the payload is a heterogeneous list body
+    def transform_video_list_response(
         self,
         raw_response: httpx.Response,
         logging_obj: "Logging",

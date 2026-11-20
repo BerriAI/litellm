@@ -2,6 +2,7 @@ import datetime
 from collections.abc import Mapping
 from functools import reduce
 from typing import Final
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -137,6 +138,26 @@ def _provider_response_model(result: object) -> str | None:
     return model if isinstance(model, str) and model else None
 
 
+def _origin(url: str) -> str:
+    parts: Final = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}"
+
+
+def _called_bedrock_url(logging_obj: LiteLLMLoggingObject) -> str | None:
+    if getattr(logging_obj, "custom_llm_provider", None) != "bedrock":
+        return None
+    litellm_params: Final[object] = logging_obj.model_call_details.get("litellm_params")
+    called: Final[object] = _hidden_params_mapping(litellm_params).get("api_base")
+    return called if isinstance(called, str) and called else None
+
+
+def _reported_api_base(configured: str | None, logging_obj: LiteLLMLoggingObject) -> str | None:
+    called: Final = _called_bedrock_url(logging_obj)
+    if configured is None or called is None or _origin(called) == _origin(configured):
+        return configured
+    return _origin(called)
+
+
 class ResponseMetadata:
     """
     Handles setting and managing `_hidden_params`, `response_time_ms`, and `litellm_overhead_time_ms` for LiteLLM responses
@@ -170,7 +191,7 @@ class ResponseMetadata:
         model_id: Final = model_info.get("id", None)
         new_params: Final = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
-            "api_base": get_api_base(model=model or "", optional_params=kwargs),
+            "api_base": _reported_api_base(get_api_base(model=model or "", optional_params=kwargs), logging_obj),
             "model_id": model_id,
             "response_cost": logging_obj.response_cost_calculator(
                 result=self.result,
@@ -299,7 +320,7 @@ def update_response_metadata(
         # cannot hold ``_hidden_params``: keep only the timing on the logging object (no cost
         # recompute) so the proxy headers and the standard logging payload can still read it.
         logging_obj.set_response_timing_metrics(
-            response_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+            _logging_obj_timing_metrics(start_time, end_time, logging_obj, include_overhead)
         )
         return
 
@@ -307,3 +328,24 @@ def update_response_metadata(
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
     metadata.set_hidden_params(logging_obj, model, kwargs, cache_hit=cache_hit)
     metadata.apply()
+    if logging_obj.stream is True:
+        # the response assembled from the chunks never inherits the stream wrapper's
+        # ``_hidden_params``, so the logging payload reads the timing from the logging object
+        logging_obj.set_response_timing_metrics(
+            _logging_obj_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+        )
+
+
+def _logging_obj_timing_metrics(
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    logging_obj: LiteLLMLoggingObject,
+    include_overhead: bool,
+) -> Mapping[str, float]:
+    """A stream read to completion keeps the overhead stamped when the stream was handed back."""
+    timing_metrics: Final = response_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+    stamped: Final[Mapping[str, float]] = getattr(logging_obj, "response_timing_metrics", None) or {}
+    stamped_overhead_ms: Final = stamped.get("litellm_overhead_time_ms")
+    if include_overhead or stamped_overhead_ms is None:
+        return timing_metrics
+    return {**timing_metrics, "litellm_overhead_time_ms": stamped_overhead_ms}
