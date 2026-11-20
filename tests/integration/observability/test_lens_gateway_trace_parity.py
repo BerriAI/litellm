@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import gzip
 import json
+import time
 from collections.abc import Iterator, Mapping
 from itertools import chain
 from pathlib import Path
 from typing import Final
 
+import jwt
 from _openinference_support import _attribute_text, _rig
 from integration._support import claude_code as cc
 from integration._support.client import Gateway, eventually
@@ -219,3 +221,84 @@ def test_gateway_trace_of_a_claude_code_run_matches_the_trace_claude_code_upload
             for step in _DIRECT_TOOL_STEPS
         ),
     }
+
+
+_LENS_GATEWAY_SECRET: Final = "integration-lens-gateway-secret-32-chars"
+
+
+def _lens_internal_identity() -> str:
+    now: Final = int(time.time())
+    return jwt.encode(
+        {
+            "iss": "litellm-lens",
+            "aud": "litellm",
+            "sub": "lens-internal",
+            "purpose": "analysis",
+            "iat": now,
+            "exp": now + 60,
+        },
+        _LENS_GATEWAY_SECRET,
+        algorithm="HS256",
+    )
+
+
+def test_a_model_call_lens_makes_for_its_own_analysis_is_not_sent_back_to_lens_as_a_trace(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    def upstream(_request: Request) -> Reply:
+        return Reply(
+            body=cc.message_reply(
+                "msg_reply", _MODEL, ({"type": "text", "text": "ok"},), {"input_tokens": 3, "output_tokens": 1}
+            )
+        )
+
+    with (
+        wire_server(_lens) as lens,
+        _rig(
+            gateway,
+            tmp_path,
+            upstream,
+            callbacks=(),
+            model_name=f"anthropic/{_MODEL}",
+            api_base_suffix="",
+            destination_wire=lens,
+            environment={
+                "LITELLM_LENS_URL": lens.url,
+                "LITELLM_LENS_SERVICE_TOKEN": "integration-lens-service-token-32-chars",
+                "LENS_GATEWAY_SECRET": _LENS_GATEWAY_SECRET,
+            },
+            workers=1,
+        ) as rig,
+    ):
+        body: Final[dict[str, JsonValue]] = {
+            **cc.claude_code_request("lens-internal"),
+            "model": rig.model,
+            "stream": False,
+        }
+        analysis: Final = rig.proxy.client.post(
+            "/v1/messages",
+            json=body,
+            headers={
+                **cc.cli_headers(rig.proxy.key),
+                "x-claude-code-session-id": "lens-analysis-session",
+                "x-lens-internal": _lens_internal_identity(),
+            },
+        )
+        assert analysis.status_code == 200, analysis.text
+        customer: Final = rig.proxy.client.post(
+            "/v1/messages",
+            json=body,
+            headers={**cc.cli_headers(rig.proxy.key), "x-claude-code-session-id": "customer-session"},
+        )
+        assert customer.status_code == 200, customer.text
+
+        collected: Final[list[tuple[dict[str, str], dict[str, str]]]] = []  # mutable-ok: the sink is drained per poll
+        spans: Final = eventually(
+            lambda: collected.extend(_gateway_spans(lens)) or tuple(collected),
+            lambda found: any(span.get("gen_ai.conversation.id") == "customer-session" for span, _ in found),
+            seconds=60,
+        )
+
+    assert sorted(span.get("gen_ai.conversation.id", "") for span, _ in spans) == ["customer-session"], (
+        "only the customer's call is a trace: Lens analysing its own analysis calls never ends"
+    )
