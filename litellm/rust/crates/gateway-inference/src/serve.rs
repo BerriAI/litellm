@@ -23,7 +23,7 @@ use crate::{
     hooks::{self, CallType},
     model_restamp::ReportedModel,
     request,
-    routing::{self, Host, RouteAttempt},
+    routing::{self, Host, Prompt, RouteAttempt},
     stream_event::Counts,
 };
 
@@ -61,6 +61,10 @@ pub(crate) trait Endpoint: RouteAttempt {
     const PATH: &'static str;
     const ERRORS: ErrorFormat;
 
+    /// The request's prompt, which the host counts for the pre-call checks. `None` holds the
+    /// route's calls to no context window, so each route says so itself.
+    fn prompt(&self) -> Option<Prompt<'_>>;
+
     /// What a complete outcome counted. A stream's counts are read from its events.
     fn counts(outcome: &Self::Outcome) -> Option<Counts> {
         let _ = outcome;
@@ -93,7 +97,9 @@ where
     let serve = |hooks: Arc<H::Hooks>, body: Map<String, Value>| async move {
         let model = request::model(&body)?.to_owned();
         let endpoint = build(body)?;
-        let routed = routing::call(gateway, identity, E::OP, E::PATH, &model, &endpoint).await?;
+        let prompt = endpoint.prompt();
+        let routed =
+            routing::call(gateway, identity, E::OP, E::PATH, &model, &endpoint, prompt).await?;
         let routing = Routing::served(&routed);
         let reported = ReportedModel::of(&model, &routed);
         let model_group = routed.model_group;
