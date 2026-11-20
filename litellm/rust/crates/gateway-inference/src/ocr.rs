@@ -18,7 +18,7 @@ use crate::{
     hooks::CallType,
     model_restamp::ReportedModel,
     request::{InferenceBody, Upload},
-    routing::{self, Host, RouteAttempt},
+    routing::{self, Host, Prompt, RouteAttempt},
     serve::{self, Call, Endpoint},
     stream_event::Counts,
 };
@@ -86,6 +86,10 @@ impl Endpoint for OcrAttempt<'_> {
     const OP: Op = Op::OCR;
     const PATH: &'static str = "/ocr";
     const ERRORS: ErrorFormat = ErrorFormat::OpenAi;
+
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        None
+    }
 
     fn render(outcome: Value, _reported: ReportedModel<'_>) -> Result<Response, Error> {
         Ok(Json(outcome).into_response())

@@ -4161,6 +4161,7 @@ dependencies = [
  "litellm-router-core",
  "litellm-secret-value",
  "litellm-secrets",
+ "litellm-token-counter",
  "litellm-tracing",
  "litellm-yaml",
  "parking_lot",

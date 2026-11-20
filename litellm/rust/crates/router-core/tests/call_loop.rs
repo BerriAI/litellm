@@ -19,7 +19,7 @@ use litellm_router_core::{
     health::current_minute,
     host::UncountedRetries,
     mock::MockFailure,
-    precall::PreCallFacts,
+    precall::{DeploymentFacts, PreCallFacts},
     select,
     select::PassThrough,
 };
@@ -54,6 +54,8 @@ struct ScriptedHost {
     pre_routes: Option<(&'static str, PreRouted)>,
     /// The params each attempt carried, in the order the attempts ran.
     params_sent: Mutex<Vec<Option<Value>>>,
+    /// What every pre-call check is answered with.
+    pre_call_facts: PreCallFacts,
 }
 
 impl ScriptedHost {
@@ -288,6 +290,14 @@ impl RouterHost for ScriptedHost {
             Some(failure) => Err(failure.into()),
             None => Ok(candidates),
         }
+    }
+
+    async fn pre_call_facts(
+        &self,
+        _ctx: &RoutingContext<'_>,
+        _candidates: &[Arc<Deployment>],
+    ) -> Result<PreCallFacts, Error> {
+        Ok(self.pre_call_facts.clone())
     }
 
     async fn callback_filters(
@@ -1760,6 +1770,51 @@ async fn a_context_window_error_takes_its_own_chain_only_when_the_group_matches(
     };
     let response = router.call(Op::from("acompletion"), call).await.unwrap();
     assert_eq!(response.deployment_id, expected);
+}
+
+/// A 100 token prompt for `primary`, whose only deployment has a 50 token window.
+#[rstest]
+#[case::by_its_own_chain(json!({"context_window_fallbacks": [{"primary": ["context"]}]}), Ok("c1"))]
+#[case::by_the_regular_chain(json!({"fallbacks": [{"primary": ["backup"]}]}), Ok("b1"))]
+#[case::nowhere_without_a_chain(json!({}), Err(true))]
+#[tokio::test]
+async fn a_prompt_no_deployment_of_its_group_fits_falls_back_as_a_context_window_error(
+    #[case] dynamic: Value,
+    #[case] expected: Result<&str, bool>,
+) {
+    let window = |limit| DeploymentFacts {
+        max_input_tokens: Some(limit),
+        ..DeploymentFacts::default()
+    };
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts: PreCallFacts {
+            has_input: true,
+            countable: true,
+            input_tokens: Some(100),
+            deployments: [
+                ("p1".to_owned(), window(50)),
+                ("c1".to_owned(), window(1000)),
+            ]
+            .into(),
+            ..PreCallFacts::default()
+        },
+        ..ScriptedHost::default()
+    });
+    let config = RouterConfig {
+        enable_pre_call_checks: true,
+        ..tiers(false)
+    };
+    let router = router(config, dynamic, host.clone());
+
+    let answered = router.call(Op::from("acompletion"), request()).await;
+
+    assert_eq!(
+        answered
+            .as_ref()
+            .map(|response| response.deployment_id.as_str())
+            .map_err(|error| matches!(error, Error::ContextWindowExceeded { .. })),
+        expected
+    );
 }
 
 #[rstest]

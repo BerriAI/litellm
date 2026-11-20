@@ -6,18 +6,23 @@
 pub mod auth;
 mod boot;
 mod capacity;
+mod model_info;
+mod precall;
+mod prompt_estimate;
 mod router;
 
 pub use auth::NativeRows;
 pub use boot::NativeBootHost;
 pub use capacity::NativeCapacityHost;
-pub use router::{NativeRouterHost, answers};
+pub use precall::Windows;
+pub use router::NativeRouterHost;
 
 use std::sync::Arc;
 
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{Caller, authz::Layer};
-use litellm_gateway_inference::routing::{Host, RouteAttempt};
+use litellm_gateway_inference::routing::{Host, Prompt, RouteAttempt};
+use tokio::sync::OnceCell;
 
 use crate::{Gateway, callbacks, callbacks::Callbacks};
 
@@ -32,15 +37,17 @@ pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item
     key.into_iter()
 }
 
-/// The host the gateway's routes are served through.
-#[derive(Default)]
+/// The host the gateway's routes are served through, over each deployment's context window as
+/// read at boot.
+#[derive(Clone, Default)]
 pub struct NativeHost {
     callbacks: Arc<Callbacks>,
+    windows: Arc<Windows>,
 }
 
 impl NativeHost {
-    pub fn new(callbacks: Arc<Callbacks>) -> Self {
-        Self { callbacks }
+    pub fn new(callbacks: Arc<Callbacks>, windows: Arc<Windows>) -> Self {
+        Self { callbacks, windows }
     }
 }
 
@@ -65,11 +72,15 @@ impl Host for NativeHost {
         gateway: &'a Gateway,
         identity: &'a Authenticated<NativeRows>,
         route: &'a A,
+        prompt: Option<Prompt<'a>>,
     ) -> NativeRouterHost<'a, A> {
         NativeRouterHost {
             gateway,
             identity,
             route,
+            prompt,
+            windows: &self.windows,
+            prompt_tokens: OnceCell::new(),
         }
     }
 }
