@@ -1,7 +1,7 @@
 import asyncio, importlib, os, uuid
 import json
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
@@ -25,7 +25,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.types.llms.base import CachedTokensDetails
-from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
+from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, ModelInfo, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -10002,3 +10002,126 @@ def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every
     assert "deepwiki" not in json.dumps(mapped)
     assert "get_weather" in json.dumps(mapped["tools"])
     assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+
+def _gemini_config(config_cls: Literal["vertex", "studio"]) -> VertexGeminiConfig:
+    return VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+
+
+def _gemini_request_body(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
+) -> RequestBody:
+    from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
+
+    return transform_request_body(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini-zeta-9",
+        optional_params=optional_params,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        cached_content=None,
+    )
+
+
+_LOGPROBS_PARAMS: Final = {"logprobs": True, "top_logprobs": 3}
+_GEMINI_LOGPROBS_FIELDS: Final = {"responseLogprobs": True, "logprobs": 3}
+
+
+def _mapped_logprobs(config_cls: Literal["vertex", "studio"], model: str, drop_params: bool) -> Mapping[str, object]:
+    return _gemini_config(config_cls).map_openai_params(
+        non_default_params=dict(_LOGPROBS_PARAMS), optional_params={}, model=model, drop_params=drop_params
+    )
+
+
+@pytest.mark.parametrize("model", ["gemini-zeta-9", "vertex_ai/gemini-zeta-9"])
+def test_flagged_logprobs_are_dropped_only_under_drop_params(model: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+
+    assert _mapped_logprobs("vertex", model, drop_params=True) == {}
+    assert _mapped_logprobs("vertex", model, drop_params=False) == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",), ("logprobs", "top_logprobs")])
+@pytest.mark.parametrize("model", ["gemini-zeta-9", "zeta-9"], ids=["gemini_name_branch", "vertex_model_list_branch"])
+def test_allowed_openai_params_keep_flagged_logprobs_mapped_under_drop_params(
+    model: str, allowed: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "vertex_language_models", ["zeta-9"])
+    monkeypatch.setitem(litellm.model_cost, f"vertex_ai/{model}", {"supports_logprobs": False})
+
+    optional_params: Final = get_optional_params(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        drop_params=True,
+        allowed_openai_params=list(allowed),
+        **_LOGPROBS_PARAMS,
+    )
+    body: Final = _gemini_request_body("vertex_ai", dict(optional_params), {"drop_params": True})
+
+    assert body["generationConfig"] == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",), ("logprobs", "top_logprobs")])
+def test_allowed_openai_params_keep_ai_studio_flagged_logprobs_like_an_unflagged_model(
+    allowed: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.utils import get_optional_params
+
+    def generation_config(model: str) -> object:
+        optional_params: Final = get_optional_params(
+            model=model,
+            custom_llm_provider="gemini",
+            drop_params=True,
+            allowed_openai_params=list(allowed),
+            **_LOGPROBS_PARAMS,
+        )
+        return _gemini_request_body("gemini", dict(optional_params), {"drop_params": True}).get("generationConfig")
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini/gemini-zeta-9", {"supports_logprobs": False})
+    monkeypatch.setitem(litellm.model_cost, "gemini/gemini-zeta-10", {})
+
+    assert generation_config("gemini-zeta-9") == generation_config("gemini-zeta-10")
+
+
+def test_global_drop_params_drops_flagged_logprobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+
+    assert _mapped_logprobs("vertex", "gemini-zeta-9", drop_params=False) == {}
+
+
+@pytest.mark.parametrize("unflagged_row", [{}, {"supports_logprobs": True}], ids=["flag_absent", "flag_true"])
+def test_drop_params_keeps_logprobs_on_a_model_the_map_does_not_flag(
+    unflagged_row: Mapping[str, bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-10", unflagged_row)
+
+    assert _mapped_logprobs("vertex", "gemini-zeta-9", drop_params=True) == {}
+    assert _mapped_logprobs("vertex", "gemini-zeta-10", drop_params=True) == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.parametrize(
+    ("flagged_route", "flagged_config", "other_config"),
+    [("vertex_ai", "vertex", "studio"), ("gemini", "studio", "vertex")],
+    ids=["vertex_row", "studio_row"],
+)
+def test_logprobs_flag_applies_only_to_the_route_whose_row_carries_it(
+    flagged_route: str,
+    flagged_config: Literal["vertex", "studio"],
+    other_config: Literal["vertex", "studio"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, f"{flagged_route}/gemini-zeta-9", {"supports_logprobs": False})
+
+    assert _mapped_logprobs(flagged_config, "gemini-zeta-9", drop_params=True) == {}
+    assert _mapped_logprobs(other_config, "gemini-zeta-9", drop_params=True) == _GEMINI_LOGPROBS_FIELDS

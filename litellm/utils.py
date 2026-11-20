@@ -5051,6 +5051,7 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
             drop_params=bool(drop_params),
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
 
     elif custom_llm_provider == "gemini":
@@ -5059,6 +5060,7 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
             drop_params=bool(drop_params),
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     elif custom_llm_provider == "vertex_ai_beta" or (custom_llm_provider == "vertex_ai" and "gemini" in model):
         optional_params = litellm.VertexGeminiConfig().map_openai_params(
@@ -5066,6 +5068,7 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
             drop_params=bool(drop_params),
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     elif litellm.VertexAIAnthropicConfig.is_supported_model(model=model, custom_llm_provider=custom_llm_provider):
         optional_params = litellm.VertexAIAnthropicConfig().map_openai_params(
