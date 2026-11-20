@@ -11,6 +11,9 @@ import { budgetFields, parseBudget, type BudgetEditorFields } from "./customerBu
 
 type Windows = BudgetEditorFields["budgetWindows"];
 
+const nextPeriod = (periods: readonly string[]) =>
+  ["1mo", "12mo"].find((period) => !periods.map(normalizeBudgetDuration).includes(period)) ?? "";
+
 export default function CustomerBudgetWindows({
   id,
   windows,
@@ -43,20 +46,17 @@ export default function CustomerBudgetWindows({
       <Button
         type="button"
         variant={compact ? "ghost" : "outline"}
-        size={compact ? "icon-sm" : "default"}
-        className={compact ? "mr-0.5 size-6 text-muted-foreground" : undefined}
+        size={compact ? "icon-sm" : "icon"}
+        className={compact ? "mr-0.5 size-6 text-muted-foreground" : "text-muted-foreground"}
         disabled={disabled}
         aria-label={t("apps.removeWindow")}
         onClick={() => onChange(windows.filter((_, i) => i !== index))}
       >
-        {compact ? <X className="size-3" /> : t("apps.removeWindow")}
+        <X className={compact ? "size-3" : "size-4"} />
       </Button>
     );
     return (
       <div key={index} className={compact ? "shrink-0" : "space-y-2"}>
-        <Label htmlFor={inputId} className={compact ? "sr-only" : "font-normal text-muted-foreground"}>
-          {t("apps.additionalSpendLimit")}
-        </Label>
         <div className="flex items-center gap-2">
           <CustomerBudgetAmountInput
             id={inputId}
@@ -91,22 +91,44 @@ export default function CustomerBudgetWindows({
       </div>
     );
   });
+  const unavailablePeriods = [...primaryPeriods, ...windows.map(({ budget }) => budget.budget_duration)];
+  const add = onAdd ?? ((window: Windows[number]) => onChange([...windows, window]));
+  const hint = (
+    <p id={`${id}-windows-hint`} className={compact ? "sr-only" : "text-xs text-muted-foreground"}>
+      {t("apps.windowBudgetHint")}
+    </p>
+  );
+  if (!compact) {
+    return (
+      <div className="space-y-2">
+        {windows.length > 0 && (
+          <Label htmlFor={`${id}-window-0`} className="font-normal text-muted-foreground">
+            {t("apps.additionalSpendLimit")}
+          </Label>
+        )}
+        {rows}
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="h-auto gap-1 px-0 font-normal"
+          disabled={disabled}
+          onClick={() =>
+            add({ budget: { max_budget: 0, budget_duration: nextPeriod(unavailablePeriods) }, maxBudget: "" })
+          }
+        >
+          <Plus className="size-3" />
+          {t("apps.addAnotherSpendLimit")}
+        </Button>
+        {hint}
+      </div>
+    );
+  }
   return (
     <>
-      {windows.length > 0 && (
-        <p id={`${id}-windows-hint`} className={compact ? "sr-only" : "text-xs text-muted-foreground"}>
-          {t("apps.windowBudgetHint")}
-        </p>
-      )}
+      {windows.length > 0 && hint}
       {rows}
-      {compact && (
-        <AddBudgetWindow
-          id={id}
-          disabled={disabled}
-          unavailablePeriods={[...primaryPeriods, ...windows.map(({ budget }) => budget.budget_duration)]}
-          onAdd={onAdd ?? ((window) => onChange([...windows, window]))}
-        />
-      )}
+      <AddBudgetWindow id={id} disabled={disabled} unavailablePeriods={unavailablePeriods} onAdd={add} />
     </>
   );
 }
@@ -130,14 +152,16 @@ function AddBudgetWindow({
   const validPeriod =
     period !== "" && isValidBudgetDuration(period) && !unavailable.includes(normalizeBudgetDuration(period));
   const valid = amount != null && validPeriod;
-  const nextPeriod = ["1mo", "12mo"].find((value) => !unavailable.includes(value)) ?? "";
   const add = () => {
     if (!valid || !draft) return;
     onAdd({ budget: { max_budget: amount, budget_duration: period }, maxBudget: draft.amount });
     setDraft(null);
   };
   return (
-    <Popover open={draft !== null} onOpenChange={(open) => setDraft(open ? { amount: "", period: nextPeriod } : null)}>
+    <Popover
+      open={draft !== null}
+      onOpenChange={(open) => setDraft(open ? { amount: "", period: nextPeriod(unavailablePeriods) } : null)}
+    >
       <PopoverTrigger
         render={<Button type="button" variant="outline" size="icon-sm" />}
         className="shrink-0 border-dashed text-muted-foreground shadow-none"

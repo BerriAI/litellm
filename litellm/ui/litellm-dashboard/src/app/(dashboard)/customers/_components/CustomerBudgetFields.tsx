@@ -17,6 +17,7 @@ interface Props {
   idPrefix: string;
   disabled?: boolean;
   modelScope?: CustomerModelScope;
+  unavailablePeriods?: readonly string[];
 }
 
 function AmountField({ fields, onChange, idPrefix, disabled, name }: Props & { name: "maxBudget" | "softBudget" }) {
@@ -70,11 +71,13 @@ export function CustomerBudgetLimitFields({
   onChange,
   idPrefix,
   disabled = false,
+  unavailablePeriods,
 }: {
   fields: Pick<BudgetFields, "maxBudget" | "budgetDuration" | "tpm" | "rpm">;
   onChange: (key: "maxBudget" | "budgetDuration" | "tpm" | "rpm", value: string) => void;
   idPrefix: string;
   disabled?: boolean;
+  unavailablePeriods?: readonly string[];
 }) {
   const { t } = useTranslation();
   return (
@@ -93,6 +96,7 @@ export function CustomerBudgetLimitFields({
           <CustomerBudgetPeriodSelect
             value={fields.budgetDuration}
             disabled={disabled}
+            unavailablePeriods={unavailablePeriods}
             onChange={(value) => onChange("budgetDuration", value)}
           />
         </CustomerBudgetAmountInput>

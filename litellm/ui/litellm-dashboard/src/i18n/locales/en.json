@@ -115,6 +115,7 @@
     "windowBudgetHint": "Leave an amount blank to remove that spend limit. Other spend limits and TPM/RPM limits stay unchanged.",
     "removeWindow": "Remove limit",
     "addLimit": "Add limit",
+    "addAnotherSpendLimit": "Add another spend limit",
     "addAppDefault": "Add app default",
     "legacyOrganizationGroup": "{{name}} (overall organization group)",
     "legacyOrganizationGroupHint": "Existing assignment. Select an app × organization group to replace it.",

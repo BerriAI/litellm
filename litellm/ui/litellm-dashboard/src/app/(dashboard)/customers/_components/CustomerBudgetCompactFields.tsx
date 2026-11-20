@@ -23,12 +23,16 @@ export default function CustomerBudgetCompactFields({
       idPrefix={id}
       modelScope={modelScope}
       disabled={disabled}
+      unavailablePeriods={fields.budgetWindows
+        .filter(({ maxBudget }) => maxBudget.trim() !== "")
+        .map(({ budget }) => budget.budget_duration)}
     >
       <CustomerBudgetWindows
         id={id}
         windows={fields.budgetWindows}
         onChange={(budgetWindows) => onChange({ ...fields, budgetWindows })}
         disabled={disabled}
+        primaryPeriod={fields.maxBudget.trim() ? fields.budgetDuration : undefined}
       />
     </CustomerBudgetFields>
   );

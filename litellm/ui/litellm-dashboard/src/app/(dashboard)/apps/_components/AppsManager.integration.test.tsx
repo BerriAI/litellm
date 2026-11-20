@@ -326,6 +326,37 @@ describe("Gateway app definition", () => {
     expect(body).not.toHaveProperty("default_customer_member_budget");
   });
 
+  it("adds multiple spend limits and can add again after removing every additional row", async () => {
+    const user = await openAppSettings({ budget: { max_budget: 500, tpm_limit: 2000, rpm_limit: 100 } });
+    const editor = within(await screen.findByRole("region", { name: "Overall app budget" }));
+    const add = editor.getByRole("button", { name: "Add another spend limit" });
+    expect(editor.queryByText("Additional spend limit (USD)")).not.toBeInTheDocument();
+    await user.click(add);
+    fireEvent.change(editor.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+      target: { value: "1300" },
+    });
+    await user.click(add);
+    expect(editor.getByText("Additional spend limit (USD)")).toBeInTheDocument();
+    expect(editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveLength(2);
+    await user.click(editor.getAllByRole("button", { name: "Remove limit" })[1]);
+    await user.click(editor.getByRole("button", { name: "Remove limit" }));
+    expect(editor.queryByText("Additional spend limit (USD)")).not.toBeInTheDocument();
+    await user.click(add);
+    fireEvent.change(editor.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+      target: { value: "1300" },
+    });
+    await user.click(add);
+    fireEvent.change(editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })[1], {
+      target: { value: "9000" },
+    });
+    expect((await saveAppSettings(user)).budget).toEqual({
+      budget_limits: [
+        { max_budget: 1300, budget_duration: "1mo" },
+        { max_budget: 9000, budget_duration: "12mo" },
+      ],
+    });
+  });
+
   it("should send the app's customer creation switch turned off when the admin unchecks it", async () => {
     const user = await openAppSettings();
     await user.click(await screen.findByRole("checkbox", { name: "This app may create new customers" }));

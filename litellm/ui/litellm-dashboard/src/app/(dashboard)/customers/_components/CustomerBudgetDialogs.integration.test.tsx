@@ -129,6 +129,28 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it.each(["organization", "member"] as const)(
+  "replaces removed %s spend rows and ignores a blank new row",
+  async (scope) => {
+    const user = await openBudget(scope);
+    const dialog = within(await screen.findByRole("dialog", { name: views[scope].dialog }));
+    for (const remove of (await dialog.findAllByRole("button", { name: "Remove limit" })).toReversed())
+      await user.click(remove);
+    expect(dialog.queryByText("Additional spend limit (USD)")).not.toBeInTheDocument();
+    const add = dialog.getByRole("button", { name: "Add another spend limit" });
+    await user.click(add);
+    fireEvent.change(dialog.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+      target: { value: "5000" },
+    });
+    await user.click(add);
+    await user.click(dialog.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(await writes()[0].clone().json()).toEqual({
+      budget: { budget_limits: [{ max_budget: 5000, budget_duration: scope === "organization" ? "1mo" : "12mo" }] },
+    });
+  },
+);
+
 describe("organization budget dialog", () => {
   it("opens from the budget summary and saves custom spend, soft budget, rates and reset period", async () => {
     const user = await openBudget("organization");
