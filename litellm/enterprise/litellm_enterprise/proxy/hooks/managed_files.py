@@ -1116,7 +1116,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if self.prisma_client is None:
             return
         spellings: Final = list(provider_file_id_spellings(file_id))
-        managed_files = await _managed_file_table(self.prisma_client).find_many(
+        managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
             where={
                 "OR": [
                     {"unified_file_id": {"in": spellings}},  # bounded-ok: at most four spellings of one file id
