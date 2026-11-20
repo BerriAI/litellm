@@ -275,7 +275,7 @@ def test_known_app_customer_uses_shared_cache_when_its_database_read_fails(
                     "allow_requests_on_db_unavailable": True,
                     "coordination_redis": {"host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
                 },
-                "litellm_settings": {"enable_redis_customer_auth_cache": True, "enable_redis_auth_cache": True},
+                "litellm_settings": {"enable_redis_customer_auth_cache": True},
             }
         )
     )
@@ -312,6 +312,8 @@ def test_known_app_customer_uses_shared_cache_when_its_database_read_fails(
         customer: Final = _customer(scenario)
         warm: Final = _chat(primary, key, model, customer, asserted_app=app_id)
         assert warm.status_code == 200, warm.text
+        credential: Final = secondary.request("GET", "/key/info", key=key)
+        assert credential.status_code == 200, credential.text
         relay.arm()
         try:
             served: Final = _chat(secondary, key, model, customer, asserted_app=app_id)

@@ -174,12 +174,7 @@ async def _read_app_records(
     authenticated: UserAPIKeyAuth,
 ) -> _AppAuthRecords | None:
     resource_alias: Final = authenticated_resource_alias(resource_type, resource_id, authenticated)
-    if (
-        cache is None
-        or hierarchy is None
-        or hierarchy.customer_org_id is None
-        or not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
-    ):
+    if cache is None or hierarchy is None or hierarchy.customer_org_id is None:
         return await _load_app_records(
             store, resource_type, resource_id, assertion, hierarchy, resource_alias=resource_alias
         )
@@ -293,7 +288,9 @@ async def resolve_app_hierarchy(
         resource_id,
         assertion,
         hierarchy,
-        user_api_key_cache.customer_auth_store,
+        user_api_key_cache.customer_auth_store
+        if PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+        else None,
         authenticated,
     )
     if records is None:
