@@ -290,6 +290,18 @@ fn apply_issuer_claim_mappings(
         (&issuer.team_ids_jwt_field, InternalClaim::TeamIds),
         (&issuer.org_id_jwt_field, InternalClaim::OrgId),
         (&issuer.end_user_id_jwt_field, InternalClaim::EndUserId),
+        (
+            &issuer.customer_org_alias_jwt_field,
+            InternalClaim::CustomerOrgAlias,
+        ),
+        (
+            &issuer.customer_member_id_jwt_field,
+            InternalClaim::CustomerMemberId,
+        ),
+        (
+            &issuer.customer_team_id_jwt_field,
+            InternalClaim::CustomerTeamId,
+        ),
     ];
     let mapped = mappings.into_iter().filter_map(|(field, claim)| {
         let value = nested_value(payload, field.as_ref()?)?;
@@ -1286,7 +1298,7 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
 
         assert_eq!(
             denial.public(),
-            Some(PublicDenial::Plain {
+            Some(PublicDenial::NoMatchingJwtPublicKey {
                 message: format!(
                     "No matching public key found. keys=[\"{JWKS}\",\"{OTHER_JWKS}\"], kid=c"
                 )
@@ -1536,13 +1548,25 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
     #[rstest]
     #[tokio::test]
     async fn a_configured_issuer_maps_its_claims(settings: JwtSettings) {
-        let settings = with_issuer(settings, issuer_config());
+        let settings = with_issuer(
+            settings,
+            JwtIssuerConfig {
+                customer_org_alias_jwt_field: Some("customer.org".into()),
+                customer_member_id_jwt_field: Some("customer.member".into()),
+                customer_team_id_jwt_field: Some("customer.team".into()),
+                ..issuer_config()
+            },
+        );
         let host = host(&[(ISSUER_JWKS, jwks(&[rsa_jwk("k", RSA_A_N)]))]);
         let token = rs256(
             Some("k"),
             json!({
                 "iss": ISSUER, "aud": "proxy", "profile": {"id": "u1"}, "groups": ["t1"], "org": "",
                 "_litellm_team_id": "forged",
+                "_litellm_customer_org_alias": "forged-org",
+                "_litellm_customer_member_id": "forged-member",
+                "_litellm_customer_team_id": "forged-team",
+                "customer": {"org": "customer-org", "member": "customer-member", "team": "customer-team"},
             }),
         );
 
@@ -1551,6 +1575,10 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
         let expected = json!({
             "iss": ISSUER, "aud": "proxy", "profile": {"id": "u1"}, "groups": ["t1"], "org": "",
             "_litellm_jwt_issuer": ISSUER, "_litellm_user_id": "u1", "_litellm_team_ids": ["t1"],
+            "_litellm_customer_org_alias": "customer-org",
+            "_litellm_customer_member_id": "customer-member",
+            "_litellm_customer_team_id": "customer-team",
+            "customer": {"org": "customer-org", "member": "customer-member", "team": "customer-team"},
         });
         assert_eq!(verified, Ok(Claims(object(expected))));
         assert_eq!(fetches(&host), [format!("fetch {ISSUER_JWKS}")]);

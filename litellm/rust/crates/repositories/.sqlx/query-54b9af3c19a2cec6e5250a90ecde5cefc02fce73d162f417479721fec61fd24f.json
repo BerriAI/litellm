@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT access_group_name\nFROM \"LiteLLM_ModelAccessGroupBudgetTable\"\nLIMIT $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access_group_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ModelAccessGroupBudgetTable\"",
+            "name": "access_group_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "54b9af3c19a2cec6e5250a90ecde5cefc02fce73d162f417479721fec61fd24f"
+}

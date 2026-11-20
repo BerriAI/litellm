@@ -195,8 +195,10 @@ async def _claim(
 
 async def _approve(store: CustomerHierarchyStore, request_id: str, actor: str) -> BudgetIncreaseRequest:
     approved: Final = await _claim(store, request_id, actor, "approved", None)
+    await store.lock_member(approved.customer_member_id)
     member: Final = resolve(await store.get_member(approved.customer_member_id))
-    resolve(await store.update_member(approved.customer_member_id, _grant(member, approved, store.now), actor))
+    preserved: Final = resolve(await store.preserve_member_custom_budget(member, actor))
+    resolve(await store.update_member(approved.customer_member_id, _grant(preserved, approved, store.now), actor))
     return approved
 
 

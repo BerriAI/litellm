@@ -66,9 +66,6 @@ END_USER_RESTRICTED_PREDICATE: Final = (
     "(blocked OR (budget_id IS NOT NULL) OR (allowed_model_region IS NOT NULL) "
     "OR (default_model IS NOT NULL) OR (object_permission_id IS NOT NULL) OR (models <> '{}'::text[]))"
 )
-END_USER_RESTRICTED_QUERY: Final = (
-    'SELECT user_id FROM "LiteLLM_EndUserTable" WHERE ' + END_USER_RESTRICTED_PREDICATE + " ORDER BY user_id LIMIT $1"
-)
 
 REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", '("api_key", "startTime")'),

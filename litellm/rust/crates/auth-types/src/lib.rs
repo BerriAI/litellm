@@ -52,6 +52,9 @@ pub use credential::{
 };
 pub use error::{Error, ErrorDetail};
 pub use http::CredentialPlacement;
-pub use params::{AwsParams, AwsSessionTag, ParamKind, ParamSpec, VertexParams};
+pub use params::{
+    AwsParams, AwsSessionTag, ClaudePlatformParams, ParamKind, ParamSpec, UnsupportedParams,
+    VertexParams, WorkspaceId,
+};
 pub use policy::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
 pub use token::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};

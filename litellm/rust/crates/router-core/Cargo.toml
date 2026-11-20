@@ -9,7 +9,6 @@ description = "The router core behind litellm.Router: registry, settings, health
 [dependencies]
 litellm-python-compat.workspace = true
 arc-swap.workspace = true
-async-trait.workspace = true
 litellm-cache.workspace = true
 litellm-router-types.workspace = true
 jiff = { version = "0.2.37", default-features = false, features = ["std", "tzdb-zoneinfo", "tzdb-bundle-always"] }
