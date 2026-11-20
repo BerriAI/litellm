@@ -224,7 +224,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self._tool_call_id_to_name: OrderedDict[str, str] = OrderedDict()
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
-        self._pending_usage_metadata: dict | None = None
+        self._pending_usage_metadata: dict[str, object] | None = None
         self._cancelled_response_id: str | None = None
         self._closed_output_item_id: str | None = None
         self._unbilled_input_audio_bytes: int = 0
@@ -1452,6 +1452,19 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return self._consume_input_transcription_usage_estimate(model)
+
+    def unbilled_response_on_session_close(self, model: str) -> OpenAIRealtimeDoneEvent | None:
+        if self._pending_usage_metadata is None:
+            return None
+        cancelled_response_id: Final = self._cancelled_response_id
+        self._cancelled_response_id = None
+        return self.transform_response_done_event(
+            message=BidiGenerateContentServerMessage(),
+            current_response_id=cancelled_response_id,
+            current_conversation_id=None,
+            output_items=None,
+            cancelled=cancelled_response_id is not None,
+        )
 
     def transform_realtime_response(
         self,

@@ -2603,6 +2603,7 @@ async def test_provider_path_suppresses_duplicate_session_created_after_syntheti
     backend_ws.send = AsyncMock()
 
     provider_config = MagicMock()
+    provider_config.unbilled_response_on_session_close.return_value = None
     provider_config.transform_realtime_response = MagicMock(
         return_value={
             "response": [
@@ -2655,6 +2656,7 @@ async def test_duplicate_session_created_still_triggers_guardrail_turn_detection
     backend_ws.send = AsyncMock()
 
     provider_config = MagicMock()
+    provider_config.unbilled_response_on_session_close.return_value = None
     provider_config.transform_realtime_response = MagicMock(
         return_value={
             "response": [
@@ -4742,6 +4744,7 @@ async def test_session_close_flushes_unbilled_transcription_usage():
     provider_config: Final = MagicMock()
     provider_config.transform_realtime_response = MagicMock(return_value=transcript_frame)
     provider_config.unbilled_usage_on_session_close = MagicMock(return_value=usage)
+    provider_config.unbilled_response_on_session_close = MagicMock(return_value=None)
     provider_config.session_refusal = MagicMock(return_value=None)
 
     streaming: Final = RealTimeStreaming(
@@ -4779,6 +4782,57 @@ async def test_session_close_flushes_unbilled_transcription_usage():
 
 
 @pytest.mark.asyncio
+async def test_session_closed_after_gemini_barge_in_still_bills_the_interrupted_response():
+    from typing import Final
+
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    audio_turn: Final = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "QUJD"}}]}}}
+    interrupted_with_usage: Final = {
+        "serverContent": {"interrupted": True},
+        "usageMetadata": {"promptTokenCount": 30, "responseTokenCount": 12, "totalTokenCount": 42},
+    }
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[json.dumps(audio_turn), json.dumps(interrupted_with_usage), ConnectionClosed(None, None)]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-2.5-flash-native-audio",
+    )
+    logged_snapshots: Final[list[tuple]] = []
+    original_log_messages: Final = streaming.log_messages
+
+    async def _snapshot_then_log() -> None:
+        logged_snapshots.append(tuple(streaming.messages))
+        await original_log_messages()
+
+    streaming.log_messages = _snapshot_then_log
+
+    await streaming.backend_to_client_send_messages()
+
+    forwarded: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    created_id: Final = next(event["response"]["id"] for event in forwarded if event["type"] == "response.created")
+    assert [event["type"] for event in forwarded if event["type"] == "response.done"] == [], forwarded
+    logged_done: Final = [
+        message for message in logged_snapshots[0] if isinstance(message, dict) and message.get("type") == "response.done"
+    ]
+    assert [
+        (done["response"]["id"], done["response"]["status"], done["response"]["usage"]["total_tokens"])
+        for done in logged_done
+    ] == [(created_id, "cancelled", 42)], logged_done
+
+
+@pytest.mark.asyncio
 async def test_session_close_flush_noop_without_unbilled_usage():
     """Everything already billed mid-stream: the session-close flush must not append
     a duplicate transcription event."""
@@ -4795,6 +4849,7 @@ async def test_session_close_flush_noop_without_unbilled_usage():
 
     provider_config: Final = MagicMock()
     provider_config.unbilled_usage_on_session_close = MagicMock(return_value=None)
+    provider_config.unbilled_response_on_session_close = MagicMock(return_value=None)
 
     streaming: Final = RealTimeStreaming(
         client_ws,
@@ -5475,6 +5530,7 @@ async def test_transcription_guardrail_sends_no_session_update_after_transcripti
     provider_config: Final = MagicMock() if uses_provider_config else None
     if provider_config is not None:
         provider_config.requires_session_configuration.return_value = True
+        provider_config.unbilled_response_on_session_close.return_value = None
         provider_config.transform_realtime_response.return_value = {
             "response": session_created,
             "current_output_item_id": None,
@@ -5513,6 +5569,7 @@ async def test_provider_transcription_session_created_flags_session_without_inte
     monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
     session_created: Final = {"type": "session.created", "session": {"id": "sess_1", "type": "transcription"}}
     provider_config: Final = MagicMock()
+    provider_config.unbilled_response_on_session_close.return_value = None
     provider_config.requires_session_configuration.return_value = False
     provider_config.transform_realtime_response.return_value = {
         "response": session_created,
@@ -5592,6 +5649,7 @@ def _passthrough_transcription_config() -> MagicMock:
     provider_config.requires_session_configuration.return_value = False
     provider_config.transform_realtime_response.side_effect = transform_response
     provider_config.transform_realtime_request.side_effect = transform_request
+    provider_config.unbilled_response_on_session_close.return_value = None
     return provider_config
 
 

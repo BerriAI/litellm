@@ -2186,6 +2186,40 @@ def test_gemini_generation_and_turn_complete_in_one_frame_close_the_item_and_the
     assert response_done["response"]["usage"]["total_tokens"] == 42, response_done
 
 
+def test_gemini_session_close_returns_the_interrupted_response_with_its_buffered_usage_once() -> None:
+    config: Final = GeminiRealtimeConfig()
+    opened, _ = _events_per_frame(
+        config,
+        [_AUDIO_MODEL_TURN, {"serverContent": {"interrupted": True}, "usageMetadata": _INTERRUPTION_USAGE}],
+    )
+
+    flushed: Final = config.unbilled_response_on_session_close("gemini-2.5-flash-native-audio")
+
+    assert flushed is not None
+    response: Final = flushed["response"]
+    assert (response["id"], response["status"], response["status_details"], response["usage"]["total_tokens"]) == (
+        opened[0]["response"]["id"],
+        "cancelled",
+        {"type": "cancelled", "reason": "turn_detected"},
+        42,
+    ), flushed
+    assert config.unbilled_response_on_session_close("gemini-2.5-flash-native-audio") is None
+
+
+def test_gemini_session_close_returns_nothing_once_the_turn_already_billed() -> None:
+    config: Final = GeminiRealtimeConfig()
+    _events_per_frame(
+        config,
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
+        ],
+    )
+
+    assert config.unbilled_response_on_session_close("gemini-2.5-flash-native-audio") is None
+
+
 def test_gemini_interruption_with_no_open_response_emits_nothing() -> None:
     (interrupted,) = _events_per_frame(GeminiRealtimeConfig(), [{"serverContent": {"interrupted": True}}])
 
