@@ -102,15 +102,23 @@ class UserApiKeyCache(DualCache):
         key_object_in_memory_cache: InMemoryCache | None = None,
         auth_cache: AuthCacheFactory = _connected_auth_cache,
     ) -> None:
+        # The auth cache contract is that Redis mirrors the in-memory TTL when no
+        # explicit Redis TTL is configured (see #43187). Compute the effective
+        # Redis TTL here so DualCache stays generic and does not special-case us.
+        effective_redis_ttl: Final = (
+            default_redis_ttl
+            if default_redis_ttl is not None
+            else default_in_memory_ttl
+        )
         super().__init__(
             in_memory_cache=in_memory_cache,
             default_in_memory_ttl=default_in_memory_ttl,
-            default_redis_ttl=default_redis_ttl,
+            default_redis_ttl=effective_redis_ttl,
         )
         self.key_object_cache: Final = DualCache(
             in_memory_cache=key_object_in_memory_cache or InMemoryCache(),
             default_in_memory_ttl=default_in_memory_ttl,
-            default_redis_ttl=default_redis_ttl,
+            default_redis_ttl=effective_redis_ttl,
         )
         self._auth_cache: Final = auth_cache
         self._redis_connection: RedisCache | None = None
