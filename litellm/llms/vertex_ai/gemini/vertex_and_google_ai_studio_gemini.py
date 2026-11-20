@@ -32,7 +32,12 @@ from litellm.constants import (
     PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
@@ -838,6 +843,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     _route: ClassVar[str] = "vertex_ai"
     _removes_undeclared_thinking_levels: ClassVar[bool] = False
+    _flags_server_side_tool_invocations_for_mixed_tools: ClassVar[bool] = False
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -1093,31 +1099,39 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._search_tool_keys()
 
     @classmethod
-    def _drop_search_tools_mixed_with_functions(cls, optional_params: dict) -> None:
+    def _is_search_tool(cls, tool: object) -> bool:
+        return not cls.search_tool_keys().isdisjoint(as_str_mapping(tool) or ())
+
+    @classmethod
+    def _mixes_search_tools_with_functions(cls, tools: Sequence[object]) -> bool:
+        return any((as_str_mapping(tool) or {}).get("function_declarations") for tool in tools) and any(
+            map(cls._is_search_tool, tools)
+        )
+
+    @classmethod
+    def _drop_search_tools_mixed_with_functions(
+        cls,
+        optional_params: dict[str, object],  # mutable-ok: map_openai_params builds the request params in place
+        keeps_search_tools: bool = False,
+    ) -> None:
         """
         Drop search tools from optional_params when mixed with function declarations
-        and include_server_side_tool_invocations is not enabled.
+        and include_server_side_tool_invocations is not enabled. A model that keeps
+        search tools next to function declarations (Gemini 3+) keeps both, and a route
+        that needs it gets include_server_side_tool_invocations set instead.
 
         Runs after map_openai_params merges tools and web_search_options so both
         code paths (single _map_function call vs split tools + web_search_options)
         get the same conflict resolution.
         """
-        if optional_params.get("include_server_side_tool_invocations"):
+        tools: Final = as_object_list(optional_params.get("tools")) or ()
+        if optional_params.get("include_server_side_tool_invocations") or not cls._mixes_search_tools_with_functions(
+            tools
+        ):
             return
-
-        tools: Final = optional_params.get("tools")
-        if not isinstance(tools, list) or not tools:
-            return
-
-        search_tool_keys: Final = cls._search_tool_keys()
-        has_function_declarations = any(isinstance(tool, dict) and tool.get("function_declarations") for tool in tools)
-        if not has_function_declarations:
-            return
-
-        has_search_tools: Final = any(
-            isinstance(tool, dict) and any(key in tool for key in search_tool_keys) for tool in tools
-        )
-        if not has_search_tools:
+        if keeps_search_tools:
+            if cls._flags_server_side_tool_invocations_for_mixed_tools:
+                optional_params["include_server_side_tool_invocations"] = True
             return
 
         verbose_logger.warning(
@@ -1127,9 +1141,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "tools and keeping function declarations. To use search tools, "
             "send a request without function calling tools."
         )
-        optional_params["tools"] = [
-            tool for tool in tools if not (isinstance(tool, dict) and any(key in tool for key in search_tool_keys))
-        ]
+        optional_params["tools"] = [tool for tool in tools if not cls._is_search_tool(tool)]
 
     @classmethod
     def drop_search_tools_mixed_with_functions(
@@ -1253,14 +1265,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         enterpriseWebSearch: dict | None,
         urlContext: dict | None,
         optional_params: dict,
+        keep_search_tools_with_functions: bool = False,
     ) -> tuple:
         """
-        Resolve Vertex AI constraint: multiple Tool objects in a request must
+        Resolve the Gemini 2.x constraint: multiple Tool objects in a request must
         ALL be search tools. When function declarations are mixed with search
         tools, drop search tools to avoid 400 error.
 
-        Skip when include_server_side_tool_invocations is enabled (Gemini 3+
-        supports tool combination natively).
+        Skip when include_server_side_tool_invocations is enabled or the model
+        keeps search tools next to function declarations (Gemini 3+).
 
         Note: code_execution, computerUse, and googleMaps are NOT search tools
         and CAN coexist with function declarations, so they are preserved.
@@ -1279,8 +1292,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 urlContext,
             ]
         )
-        server_side_tool_invocations: Final = optional_params.get("include_server_side_tool_invocations", False)
-        if gtool_func_declarations and has_search_tools and not server_side_tool_invocations:
+        keeps_search_tools: Final = keep_search_tools_with_functions or optional_params.get(
+            "include_server_side_tool_invocations", False
+        )
+        if gtool_func_declarations and has_search_tools and not keeps_search_tools:
             verbose_logger.warning(
                 "Vertex AI does not support mixing function declarations with "
                 "search tools (googleSearch, enterpriseWebSearch, urlContext, "
@@ -1288,10 +1303,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "tools and keeping function declarations. To use search tools, "
                 "send a request without function calling tools."
             )
-            googleSearch = None
-            googleSearchRetrieval = None
-            enterpriseWebSearch = None
-            urlContext = None
+            return None, None, None, None
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
@@ -1303,6 +1315,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         allow_parameters_json_schema: bool = True,
         outside_declarations: JsonValue = None,
         tool_choice: object = None,
+        keep_search_tools_with_functions: bool = False,
     ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -1453,6 +1466,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             enterpriseWebSearch=enterpriseWebSearch,
             urlContext=urlContext,
             optional_params=optional_params,
+            keep_search_tools_with_functions=keep_search_tools_with_functions,
         )
 
         # Function declarations can be grouped together in one Tool
@@ -1978,6 +1992,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             non_default_params, model=model, route=self._route, drop_params=drop_params
         )
         self._apply_include_server_side_tool_invocations(request_params, optional_params)
+        keeps_search_tools_with_functions: Final = self._is_gemini_3_or_newer(model)
         supports_sampling_params: Final = self.supports_sampling_params(model)
         drops_logprobs: Final = self._drops_logprobs(model, drop_params, allowed_openai_params)
         for param, value in request_params.items():
@@ -2041,6 +2056,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         allow_parameters_json_schema=allow_parameters_json_schema,
                         outside_declarations=request_params.get("functions" if param == "tools" else "tools"),
                         tool_choice=_TOOL_CHOICE_PARAM.validate_python(request_params).get("tool_choice"),
+                        keep_search_tools_with_functions=keeps_search_tools_with_functions,
                     ),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                 )
@@ -2120,7 +2136,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "AUDIO" not in optional_params["responseModalities"]:
                 optional_params["responseModalities"].append("AUDIO")
 
-        self._drop_search_tools_mixed_with_functions(optional_params)
+        self._drop_search_tools_mixed_with_functions(
+            cast(dict[str, object], optional_params),  # cast-ok: map_openai_params keys request params by name
+            keeps_search_tools_with_functions,
+        )
 
         return optional_params
 
