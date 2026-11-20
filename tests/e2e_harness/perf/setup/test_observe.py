@@ -3,17 +3,20 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Final
 
+import pytest
+
+from cases.large_bodies_300_users import CASE as LARGE_BODY_CASE
 from cases.small_bodies_5rps import CASE
 from memory_readings import RssCapture
 from setup.datastore import DbCounters, StatementCalls
-from setup.observe import Contributor, Observation, breakdown, evaluate, junit_properties
+from setup.observe import Contributor, Observation, breakdown, evaluate, junit_properties, render
 from setup.performance_test_case import Limit
 from setup.wire import WireRecord
 
 NO_RSS: Final = RssCapture(readings=(), failures=())
 
 
-def served(seq: int, total_s: float) -> WireRecord:
+def served(seq: int, total_s: float, response_ms: float | None = None) -> WireRecord:
     return WireRecord(
         seq=seq,
         marker=f"perfreq-{seq:06d}-n",
@@ -32,6 +35,7 @@ def served(seq: int, total_s: float) -> WireRecord:
         mock_delay_s=1.0,
         call_id=None,
         error=None,
+        litellm_response_ms=response_ms,
     )
 
 
@@ -69,6 +73,8 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
     assert len({name for name, _ in properties}) == len(properties)
     assert {name: value for name, value in properties if not name.endswith("_breakdown")} == {
         "perf_unexpected_status_count": 0.0,
+        "perf_client_total_seconds_p50": 1.5,
+        "perf_client_total_seconds_p95": 1.75,
         "perf_gateway_added_seconds_p50": 0.5,
         "perf_gateway_added_seconds_p50_limit": 0.625,
         "perf_gateway_added_seconds_p99": 0.75,
@@ -80,6 +86,93 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
         "perf_postgres_slowest_statement_seconds": 0.002,
         "perf_redis_calls_per_request_limit": 35.0,
     }
+
+
+def test_large_bodies_report_client_percentiles_without_gating_them() -> None:
+    observation: Final = Observation(
+        records=tuple(served(seq, total, response_ms=4500.0) for seq, total in enumerate((10.0, 20.0, 30.0))),
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=NO_RSS,
+        rss_after=NO_RSS,
+        wall_seconds=30.0,
+        gateway_cpu_seconds=0.18,
+        gateway_cpu_coverage=0.98,
+    )
+
+    rows, exceeded = evaluate(LARGE_BODY_CASE, observation)
+    properties: Final = dict(junit_properties(rows))
+    output: Final = render(LARGE_BODY_CASE, observation, rows)
+
+    assert exceeded == []
+    assert {name: value for name, value in properties.items() if name.startswith("perf_client_total_seconds")} == {
+        "perf_client_total_seconds_p50": 20.0,
+        "perf_client_total_seconds_p95": 30.0,
+        "perf_client_total_seconds_p50_breakdown": '[{"label": "chat_completions", "value": 20.0, "share": 1.0}]',
+        "perf_client_total_seconds_p95_breakdown": '[{"label": "chat_completions", "value": 30.0, "share": 1.0}]',
+    }
+    assert [line.split() for line in output.splitlines() if line.strip().startswith("client_total_seconds")] == [
+        ["client_total_seconds", "percentile", "50", "20.0000"],
+        ["client_total_seconds", "percentile", "95", "30.0000"],
+    ]
+    assert properties["perf_litellm_response_seconds_p50"] == 4.5
+    assert properties["perf_litellm_response_seconds_p50_limit"] == 4.7
+    assert properties["perf_cpu_seconds_per_request"] == 0.06
+    assert properties["perf_cpu_seconds_per_request_limit"] == 0.09
+
+
+@pytest.mark.parametrize(
+    ("response_ms", "cpu_seconds", "expected"),
+    (
+        (4820.0, 0.06, ["litellm_response_seconds percentile 50: observed 4.8200 > limit 4.7000"]),
+        (4500.0, 0.1, ["cpu_seconds_per_request: observed 0.1000 > limit 0.0900"]),
+        (
+            None,
+            None,
+            [
+                "litellm_response_seconds percentile 50: limit set but nothing observed",
+                "cpu_seconds_per_request: limit set but nothing observed",
+            ],
+        ),
+    ),
+)
+def test_large_bodies_fail_on_a_steady_metric_step_or_missing_reading(
+    response_ms: float | None, cpu_seconds: float | None, expected: list[str]
+) -> None:
+    observation: Final = Observation(
+        records=(served(0, 20.0, response_ms=response_ms),),
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=NO_RSS,
+        rss_after=NO_RSS,
+        wall_seconds=20.0,
+        gateway_cpu_seconds=cpu_seconds,
+    )
+
+    _, exceeded = evaluate(LARGE_BODY_CASE, observation)
+
+    assert exceeded == expected
+
+
+def test_empty_large_body_pass_fails_the_gates_but_has_no_client_percentile_limits() -> None:
+    observation: Final = Observation(
+        records=(), mock_requests=(), guardrail_calls=(), rss_before=NO_RSS, rss_after=NO_RSS, wall_seconds=0.0
+    )
+
+    rows, exceeded = evaluate(LARGE_BODY_CASE, observation)
+
+    assert exceeded == [
+        "litellm_response_seconds percentile 50: limit set but nothing observed",
+        "cpu_seconds_per_request: limit set but nothing observed",
+    ]
+    assert [
+        line.split()
+        for line in render(LARGE_BODY_CASE, observation, rows).splitlines()
+        if line.strip().startswith("client_total_seconds")
+    ] == [
+        ["client_total_seconds", "percentile", "50", "n/a"],
+        ["client_total_seconds", "percentile", "95", "n/a"],
+    ]
 
 
 def _statement(queryid: int, query: str, calls: int) -> StatementCalls:
