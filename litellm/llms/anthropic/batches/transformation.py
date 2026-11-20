@@ -306,7 +306,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         from litellm.cost_calculator import BaseTokenUsageProcessor
         from litellm.types.utils import Usage
 
-        from ..chat.transformation import raise_for_non_object_body
+        from ..chat.transformation import response_body
 
         response_text: Final = raw_response.text.strip()
         all_usage: Final[list[Usage]] = []
@@ -322,10 +322,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                     response_json = _DECODED_JSON.validate_python(json.loads(line))
                     # Update model_response with the parsed JSON
                     completion_response = subscript(subscript(response_json, "result"), "message")
-                    if not isinstance(completion_response, dict):
-                        raise_for_non_object_body(completion_response)
                     transformed_response = self.anthropic_chat_config.transform_parsed_response(
-                        completion_response=completion_response,
+                        completion_response=response_body(completion_response),
                         raw_response=raw_response,
                         model_response=model_response,
                     )

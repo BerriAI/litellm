@@ -16,7 +16,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items, require_get
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
@@ -184,7 +184,7 @@ def init_conf(profile: str | None = None) -> object:
 
 
 def _config_credential(config: object, name: str) -> str | None:
-    values: Final = decoded_json_object(config)
+    values: Final = require_get(config)
     prefixed: Final = f"AICORE_{name.upper()}"
     return _str_or_none(values.get(prefixed) if values.get(prefixed) is not None else values.get(name))
 

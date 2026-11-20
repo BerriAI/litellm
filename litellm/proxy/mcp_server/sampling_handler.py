@@ -11,7 +11,7 @@ MCP Spec Reference:
 """
 
 import typing
-from collections.abc import Mapping, Sequence, Sized
+from collections.abc import Mapping, Sequence
 from typing import Final, NamedTuple, Optional, Protocol, Union, runtime_checkable
 
 if typing.TYPE_CHECKING:
@@ -37,7 +37,7 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import length_of, require_attributes
 
 # Guard imports that require the mcp package
 try:
@@ -1098,12 +1098,6 @@ async def _build_completion_kwargs(
     )
 
 
-def _message_count(messages: object) -> int:
-    if isinstance(messages, Sized):
-        return len(messages)
-    raise TypeError(f"object of type '{type(messages).__name__}' has no len()")
-
-
 class _AcompletionCall(NamedTuple):
     fn: "Callable[..., Awaitable[ModelResponse | CustomStreamWrapper]]"
 
@@ -1221,7 +1215,7 @@ async def handle_sampling_create_message(
         verbose_logger.debug(
             "MCP sampling: calling litellm.acompletion with model=%s, num_messages=%d, has_tools=%s",
             model,
-            _message_count(openai_messages),
+            length_of(openai_messages),
             bool(openai_tools),
         )
 

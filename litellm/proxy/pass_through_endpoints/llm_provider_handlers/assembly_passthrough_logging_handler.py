@@ -12,7 +12,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
@@ -211,7 +211,7 @@ class AssemblyAIPassthroughLoggingHandler:
             return None
         if transcript is None:
             return None
-        return dict(decoded_json_object(transcript))
+        return require_attributes(transcript, dict[str, object], "get")
 
     def _poll_assembly_for_transcript_response(
         self,

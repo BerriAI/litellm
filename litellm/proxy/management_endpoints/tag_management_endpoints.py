@@ -24,6 +24,8 @@ from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
     json_contains,
+    require_attributes,
+    set_item,
     subscript,
 )
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
@@ -376,20 +378,25 @@ def _decoded_litellm_params(stored: object) -> object:
     return stored_mapping
 
 
-def _with_tags(params: object, tags: Sequence[object]) -> Mapping[str, object]:
+def _with_tags(params: object, tags: object) -> object:
     mapping: Final = as_str_mapping(params)
     if mapping is not None:
         return {**mapping, "tags": tags}
-    if isinstance(params, list):
-        raise TypeError("list indices must be integers or slices, not str")
-    raise TypeError(f"'{type(params).__name__}' object does not support item assignment")
+    set_item(params, "tags", tags)
+    return params
 
 
-def _with_appended_tag(tags: object, tag: str) -> Sequence[object]:
+class _AppendsTag(Protocol):
+    def append(self, tag: str, /) -> None: ...
+
+
+def _with_appended_tag(tags: object, tag: str) -> object:
     listed: Final = as_object_list(tags)
-    if listed is None:
-        raise AttributeError(f"'{type(tags).__name__}' object has no attribute 'append'", name="append", obj=tags)
-    return [*listed, tag]
+    if listed is not None:
+        return [*listed, tag]
+    appendable: Final = require_attributes(tags, _AppendsTag, "append")
+    appendable.append(tag)
+    return appendable
 
 
 def _params_with_tag(params: object, tag: str) -> object:

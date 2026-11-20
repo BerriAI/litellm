@@ -15,7 +15,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -61,18 +61,10 @@ def _decoded_listing(stdout: str) -> object:
         return []
 
 
-def _sandbox_path(listed_path: object) -> str:
-    if isinstance(listed_path, str):
-        return listed_path
-    raise AttributeError(
-        f"'{type(listed_path).__name__}' object has no attribute 'replace'", name="replace", obj=listed_path
-    )
-
-
 def _listed_sandbox_paths(stdout: str) -> Iterator[str]:
     for listed_path in iter_items(_decoded_listing(stdout)):
         if listed_path:
-            yield _sandbox_path(listed_path)
+            yield require_attributes(listed_path, str, "replace")
 
 
 class SkillsSandboxExecutor:

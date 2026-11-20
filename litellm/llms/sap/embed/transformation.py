@@ -8,7 +8,7 @@ from typing import Final, Literal
 import httpx
 from pydantic import Field, TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, subscript
+from litellm.litellm_core_utils.core_helpers import iter_items, require_get, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
@@ -105,7 +105,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     def deployment_url(self) -> str:
         with httpx.Client(timeout=30) as client:
             valid_deployments: Final = []
-            deployments: Final = decoded_json_object(
+            deployments: Final = require_get(
                 _DECODED_JSON.validate_python(
                     client.get(join_api_base(self.base_url, "lm/deployments"), headers=self.headers).json()
                 )

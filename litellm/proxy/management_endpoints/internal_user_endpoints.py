@@ -30,7 +30,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_get
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
@@ -1283,7 +1283,7 @@ async def user_info_v2(
             )
 
         user_dump: Final = user_row.model_dump()
-        user_data: Final = decoded_json_object(user_dump)
+        user_data: Final = require_get(user_dump)
         row_user_id: Final = user_data.get("user_id", user_id)
         row_user_key: Final = None if row_user_id is None else f"{row_user_id}"
 

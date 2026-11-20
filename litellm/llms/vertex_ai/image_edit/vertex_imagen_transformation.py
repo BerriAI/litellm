@@ -12,7 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_get
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
@@ -232,7 +232,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
                 headers=raw_response.headers,
             )
 
-        predictions: Final = _JSON_CONTAINER.validate_python(decoded_json_object(response_json).get("predictions", []))
+        predictions: Final = _JSON_CONTAINER.validate_python(require_get(response_json).get("predictions", []))
         data_list: Final[list[ImageObject]] = []
 
         for raw_prediction in predictions:

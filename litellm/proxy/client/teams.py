@@ -130,7 +130,7 @@ class TeamsManagementClient:
         response.raise_for_status()
         return _DECODED_JSON.validate_python(response.json())
 
-    def get_available(self) -> object:
+    def get_available(self) -> builtins.list[dict[str, Any]]:
         """
         Get list of available teams that the user can join.
 
@@ -149,4 +149,4 @@ class TeamsManagementClient:
             raise UnauthorizedError("Authentication failed. Check your API key.")
 
         response.raise_for_status()
-        return _DECODED_JSON.validate_python(response.json())
+        return response.json()

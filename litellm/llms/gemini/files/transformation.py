@@ -8,15 +8,14 @@ import re
 import time
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Final, Literal, Protocol, SupportsIndex, SupportsInt, runtime_checkable
+from typing import Final, Literal, Protocol
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 from pydantic import TypeAdapter
-from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import int_of, require_attributes, require_get, subscript
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
 )
@@ -44,19 +43,6 @@ _RFC3339_PARTS: Final = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+
 
 class _ReplaceableText(Protocol):
     def replace(self, old: str, new: str, /) -> str: ...
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _int_value(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
 
 
 def _gemini_timestamp(rfc3339: object) -> int:
@@ -223,7 +209,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             return OpenAIFileObject.model_validate(
                 {
                     "id": subscript(response_object, "uri"),  # Gemini uses URI as identifier
-                    "bytes": _int_value(subscript(response_object, "sizeBytes")),  # Gemini doesn't return file size
+                    "bytes": int_of(subscript(response_object, "sizeBytes")),  # Gemini doesn't return file size
                     "created_at": _gemini_timestamp(subscript(response_object, "createTime")),
                     "filename": subscript(response_object, "displayName"),
                     "object": "file",
@@ -285,7 +271,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             verbose_logger.debug("Retrieve file response: %s", raw_response.text)
             decoded_response: Final = _DECODED_JSON.validate_python(raw_response.json())
             verbose_logger.debug("Response JSON: %s", decoded_response)
-            response_json: Final = decoded_json_object(decoded_response)
+            response_json: Final = require_get(decoded_response)
             # Map Gemini state to OpenAI status
             gemini_state: Final = response_json.get("state", "STATE_UNSPECIFIED")
             # Explicitly type status as the Literal union
@@ -299,8 +285,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             return OpenAIFileObject.model_validate(
                 {
                     "id": response_json.get("uri", ""),
-                    "bytes": _int_value(response_json.get("sizeBytes", 0)),
-                    "created_at": _gemini_timestamp(response_json["createTime"]),
+                    "bytes": int_of(response_json.get("sizeBytes", 0)),
+                    "created_at": _gemini_timestamp(subscript(response_json, "createTime")),
                     "filename": response_json.get("displayName", ""),
                     "object": "file",
                     "purpose": "user_data",

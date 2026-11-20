@@ -21,6 +21,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.core_helpers import (
     KeywordArguments,
     attribute_or_none,
+    dict_from_pairs,
     has_attributes,
     require_attributes,
 )
@@ -828,7 +829,8 @@ def _response_fields(result: object) -> Mapping[str, object]:
         return dict(result)
     if has_attributes(result, _KeyValuePairs, "__iter__") or has_attributes(result, _KeyValuePairs, "__getitem__"):
         return dict(result)
-    raise TypeError(f"'{type(result).__name__}' object is not iterable")
+    dict_from_pairs(result)
+    return _response_fields(result)
 
 
 async def _emit_management_endpoint_otel_span(

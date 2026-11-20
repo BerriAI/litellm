@@ -14,7 +14,12 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    keyword_arguments,
+    require_attributes,
+    require_get,
+)
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -479,7 +484,7 @@ async def create_realtime_client_secret(
             media_type="application/json",
         )
 
-    upstream_json: Final = decoded_json_object(_UPSTREAM_JSON.validate_python(upstream_resp.json()))
+    upstream_json: Final = require_get(_UPSTREAM_JSON.validate_python(upstream_resp.json()))
 
     # Encrypt upstream ephemeral key with routing metadata so /realtime/calls
     # can recover model without requiring query params.
@@ -499,10 +504,12 @@ async def create_realtime_client_secret(
     session_obj: Final = as_str_mapping(upstream_json.get("session"))
     session_secret: Final = None if session_obj is None else as_str_mapping(session_obj.get("client_secret"))
     if session_obj is None or session_secret is None or "value" not in session_secret:
-        return RealtimeClientSecretResponse.model_validate({**upstream_json, "value": encrypted_token})
+        return RealtimeClientSecretResponse.model_validate(
+            {**keyword_arguments(upstream_json, RealtimeClientSecretResponse), "value": encrypted_token}
+        )
     return RealtimeClientSecretResponse.model_validate(
         {
-            **upstream_json,
+            **keyword_arguments(upstream_json, RealtimeClientSecretResponse),
             "value": encrypted_token,
             "session": {**session_obj, "client_secret": {**session_secret, "value": encrypted_token}},
         }
@@ -815,13 +822,15 @@ async def create_realtime_transcription_session(
             media_type="application/json",
         )
 
-    upstream_json: Final = decoded_json_object(_UPSTREAM_JSON.validate_python(upstream_resp.json()))
+    upstream_json: Final = require_get(_UPSTREAM_JSON.validate_python(upstream_resp.json()))
 
     # Encrypt the ephemeral key (returned under client_secret.value) with routing
     # metadata so the follow-up /realtime/calls request can recover the model.
     client_secret: Final = as_str_mapping(upstream_json.get("client_secret"))
     if client_secret is None or "value" not in client_secret:
-        return RealtimeTranscriptionSessionResponse.model_validate(upstream_json)
+        return RealtimeTranscriptionSessionResponse.model_validate(
+            keyword_arguments(upstream_json, RealtimeTranscriptionSessionResponse)
+        )
     raw_value: Final = client_secret.get("value", "")
     expires_at: Final = client_secret.get("expires_at")
     token_payload: Final = _encode_realtime_token_payload(
@@ -833,5 +842,8 @@ async def create_realtime_transcription_session(
         session_type="transcription",
     )
     return RealtimeTranscriptionSessionResponse.model_validate(
-        {**upstream_json, "client_secret": {**client_secret, "value": encrypt_value_helper(token_payload)}}
+        {
+            **keyword_arguments(upstream_json, RealtimeTranscriptionSessionResponse),
+            "client_secret": {**client_secret, "value": encrypt_value_helper(token_payload)},
+        }
     )

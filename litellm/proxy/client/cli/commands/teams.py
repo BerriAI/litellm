@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import iter_items, require_get
 from litellm.proxy.client import Client
 
 from ._cli_context import cli_context_values
@@ -46,7 +46,7 @@ def display_teams_table(teams: object) -> None:
     table.add_column("Role", style="red")
 
     for i, entry in enumerate(iter_items(teams)):
-        team = decoded_json_object(entry)
+        team = require_get(entry)
         team_alias = team.get("team_alias") or "N/A"
         team_id = team.get("team_id", "N/A")
         models = team.get("models", [])

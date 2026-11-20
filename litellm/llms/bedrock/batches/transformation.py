@@ -6,13 +6,12 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
-from typing_extensions import TypedDict
 
 from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -54,10 +53,6 @@ _S3_BATCH_FILE_UUID_SUFFIX_PATTERN: Final = re.compile(
 
 _BEDROCK_TAGS_ADAPTER: Final[TypeAdapter[list[BedrockTag]]] = TypeAdapter(list[BedrockTag])
 _DECODED_JSON: Final = TypeAdapter(object)
-
-
-class _BatchResponseFields(TypedDict, total=False, extra_items=object):
-    pass
 
 
 def _build_s3_input_config(s3_uri: str, s3_bucket_owner: str | None) -> BedrockS3InputDataConfig:
@@ -323,7 +318,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         except Exception as e:
             raise ValueError(f"Failed to parse Bedrock batch response: {e}")
 
-        response_data: Final = decoded_json_object(decoded_response)
+        response_data: Final = require_get(decoded_response)
         job_arn: Final = response_data.get("jobArn", "")
         status_str: Final[str] = str(response_data.get("status", "Submitted"))
 
@@ -596,14 +591,12 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         """
         Transform Bedrock batch retrieval response to LiteLLM format.
         """
-        from litellm.types.llms.bedrock import BedrockGetBatchResponse
-
         try:
             decoded_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Failed to parse Bedrock batch response: {e}")
 
-        response_data: Final = BedrockGetBatchResponse(**_BatchResponseFields(**decoded_json_object(decoded_response)))
+        response_data: Final = require_get(decoded_response)
 
         job_arn: Final = response_data.get("jobArn", "")
         status_str: Final[str] = str(response_data.get("status", "Submitted"))
@@ -651,27 +644,29 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         # Extract errors and metadata
         errors, enriched_metadata = self._extract_errors_and_metadata(response_data, raw_response)
 
-        return LiteLLMBatch(
-            id=job_arn,
-            object="batch",
-            endpoint="/v1/chat/completions",
-            errors=errors,
-            input_file_id=input_file_id,
-            completion_window="24h",
-            status=openai_status,
-            output_file_id=output_file_id,
-            error_file_id=None,
-            created_at=created_at or int(time.time()),
-            in_progress_at=in_progress_at,
-            expires_at=expires_at,
-            finalizing_at=None,
-            completed_at=completed_at,
-            failed_at=failed_at,
-            expired_at=None,
-            cancelling_at=None,
-            cancelled_at=cancelled_at,
-            request_counts=None,
-            metadata=enriched_metadata,
+        return LiteLLMBatch.model_validate(
+            {
+                "id": job_arn,
+                "object": "batch",
+                "endpoint": "/v1/chat/completions",
+                "errors": errors,
+                "input_file_id": input_file_id,
+                "completion_window": "24h",
+                "status": openai_status,
+                "output_file_id": output_file_id,
+                "error_file_id": None,
+                "created_at": created_at or int(time.time()),
+                "in_progress_at": in_progress_at,
+                "expires_at": expires_at,
+                "finalizing_at": None,
+                "completed_at": completed_at,
+                "failed_at": failed_at,
+                "expired_at": None,
+                "cancelling_at": None,
+                "cancelled_at": cancelled_at,
+                "request_counts": None,
+                "metadata": enriched_metadata,
+            }
         )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:

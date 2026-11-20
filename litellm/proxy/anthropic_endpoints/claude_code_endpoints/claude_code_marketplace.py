@@ -33,7 +33,7 @@ from pydantic import Json, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.litellm_core_utils.url_utils import is_https_url_with_host
 from litellm.models.plugin_upload import (
     PluginDownloader,
@@ -405,14 +405,15 @@ async def get_marketplace(request: Request, key: str | None = None):
                 verbose_proxy_logger.warning("Plugin %s has no source field, skipping", plugin.name)
                 continue
 
-            manifest_fields = decoded_json_object(manifest)
-            installation_preference = get_installation_preference(manifest_fields)
+            installation_preference = get_installation_preference(
+                manifest,  # pyright: ignore[reportArgumentType]  # main passed the raw manifest
+            )
             entry: _MarketplaceEntry = (
-                {"name": plugin.name, "source": manifest_fields["source"]}
+                {"name": plugin.name, "source": subscript(manifest, "source")}
                 if installation_preference is None
                 else {
                     "name": plugin.name,
-                    "source": manifest_fields["source"],
+                    "source": subscript(manifest, "source"),
                     "installationPreference": installation_preference,
                 }
             )
@@ -421,14 +422,14 @@ async def get_marketplace(request: Request, key: str | None = None):
                 entry["version"] = plugin.version
             if plugin.description:
                 entry["description"] = plugin.description
-            if "author" in manifest_fields:
-                entry["author"] = manifest_fields["author"]
-            if "homepage" in manifest_fields:
-                entry["homepage"] = manifest_fields["homepage"]
-            if "keywords" in manifest_fields:
-                entry["keywords"] = manifest_fields["keywords"]
-            if "category" in manifest_fields:
-                entry["category"] = manifest_fields["category"]
+            if json_contains(manifest, "author"):
+                entry["author"] = subscript(manifest, "author")
+            if json_contains(manifest, "homepage"):
+                entry["homepage"] = subscript(manifest, "homepage")
+            if json_contains(manifest, "keywords"):
+                entry["keywords"] = subscript(manifest, "keywords")
+            if json_contains(manifest, "category"):
+                entry["category"] = subscript(manifest, "category")
 
             plugin_list.append(entry)
 

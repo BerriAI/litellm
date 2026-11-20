@@ -243,11 +243,10 @@ from litellm.utils import (
 from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
-    KeywordArguments,
     allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
-    has_attributes,
+    keyword_arguments,
     normalize_drop_params,
     safe_deep_copy,
     without,
@@ -1082,25 +1081,19 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
     return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
 
 
-class _AsyncLineSource(Protocol):
-    def __aiter__(self) -> AsyncIterator[object]: ...
-
-
 async def _awaited_stream(pending: Awaitable[object]) -> object:
     return await pending
 
 
-def _async_line_source(value: object) -> _AsyncLineSource:
-    if has_attributes(value, _AsyncLineSource, "__aiter__"):
-        return value
-    raise TypeError(f"'async for' requires an object with __aiter__ method, got {type(value).__name__}")
-
-
-async def _async_streaming(response: object, model, custom_llm_provider, litellm_params: Mapping[str, object]):
+async def _async_streaming(
+    response: object, model, custom_llm_provider, litellm_params: Mapping[str, object]
+) -> AsyncIterator[object]:
     try:
         print_verbose(f"received response in _async_streaming: {response}")
         resolved: Final = await _awaited_stream(response) if asyncio.iscoroutine(response) else response
-        async for line in _async_line_source(resolved):
+        async for line in (  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # untyped stream
+            resolved
+        ):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
@@ -9834,20 +9827,15 @@ def print_verbose(print_statement: object):
         pass
 
 
-def _completion_config_args(config_args: object) -> KeywordArguments:
-    if has_attributes(config_args, KeywordArguments, "keys"):
-        return config_args
-    raise TypeError(
-        f"{completion.__module__}.{completion.__qualname__}() argument after ** must be a mapping, "
-        f"not {type(config_args).__name__}"
-    )
-
-
 def config_completion(**kwargs):
     if litellm.config_path is not None:
         config_args: Final = read_config_args(litellm.config_path)
         # overwrite any args passed in with config args
-        return completion(**kwargs, **_ForwardedCompletionParams(**_completion_config_args(config_args)))
+        forwarded: Final = keyword_arguments(
+            config_args,
+            completion,  # pyright: ignore[reportUnknownArgumentType]  # completion has untyped params
+        )
+        return completion(**kwargs, **_ForwardedCompletionParams(**forwarded))
     else:
         raise ValueError(
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"

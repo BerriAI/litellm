@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import Final, Protocol, runtime_checkable
+from typing import Final
 
 import httpx
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, json_contains, subscript
+from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_get, set_item, subscript
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 
@@ -34,17 +34,6 @@ class GenAIHubOrchestrationError(BaseLLMException):
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-@runtime_checkable
-class _SupportsSetItem(Protocol):
-    def __setitem__(self, key: str, value: object, /) -> None: ...
-
-
-def _assignable(container: object) -> _SupportsSetItem:
-    if isinstance(container, _SupportsSetItem):
-        return container
-    raise TypeError(f"'{type(container).__name__}' object does not support item assignment")
-
-
 def _now_ts() -> int:
     return int(time.time())
 
@@ -68,11 +57,11 @@ class _StreamParser:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
         """
-        event: Final = decoded_json_object(evt)
+        event: Final = require_get(evt)
         orc_value: Final = event.get("orchestration_result")
         if not orc_value:
             return None
-        orc: Final = decoded_json_object(orc_value)
+        orc: Final = require_get(orc_value)
 
         return OpenAIChatCompletionChunk.model_validate(
             {
@@ -86,7 +75,7 @@ class _StreamParser:
                         "delta": c.get("delta") or {},
                         "finish_reason": c.get("finish_reason"),
                     }
-                    for c in map(decoded_json_object, iter_items(orc.get("choices") or []))
+                    for c in map(require_get, iter_items(orc.get("choices") or []))
                 ],
             }
         )
@@ -111,7 +100,7 @@ class _StreamParser:
             fr: Final[object] = subscript(event_obj, "final_result") or {}
             # ensure it looks like an OpenAI chunk
             if not json_contains(fr, "object"):
-                _assignable(fr)["object"] = "chat.completion.chunk"
+                set_item(fr, "object", "chat.completion.chunk")
             return OpenAIChatCompletionChunk.model_validate(fr)
 
         # Orchestration incremental delta

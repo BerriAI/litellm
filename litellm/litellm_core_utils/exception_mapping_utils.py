@@ -2,7 +2,7 @@ import inspect
 import json
 import re
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, cast
@@ -18,7 +18,13 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     should_report_bug,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, json_contains, subscript
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    callable_of,
+    json_contains,
+    subscript,
+)
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.llms.bedrock.common_utils import bedrock_model_reaches_converse_by_default
 from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
@@ -232,10 +238,10 @@ def _get_response_headers(original_exception: Exception) -> httpx.Headers | None
     return _response_headers
 
 
-def _accepted_init_kwargs(
-    exception_class: Callable[..., object], candidates: Mapping[str, object]
-) -> Mapping[str, object]:
-    accepted: Final = inspect.signature(exception_class).parameters
+def _accepted_init_kwargs(exception_class: object, candidates: Mapping[str, object]) -> Mapping[str, object]:
+    accepted: Final = inspect.signature(
+        exception_class  # pyright: ignore[reportArgumentType]  # signature raises its own TypeError
+    ).parameters
     return MappingProxyType({name: value for name, value in candidates.items() if name in accepted})
 
 
@@ -261,18 +267,16 @@ def extract_and_raise_litellm_exception(
     raised_exception_obj: Final[object] = getattr(litellm, exception_name, None)
     if not raised_exception_obj:
         return
-    if not callable(raised_exception_obj):
-        not_callable: Final = f"{raised_exception_obj!r} is not a callable object"
-        raise TypeError(not_callable)
-    raised: Final = raised_exception_obj(
+    init_kwargs: Final = _accepted_init_kwargs(
+        raised_exception_obj, MappingProxyType({"response": response, "body": body})
+    )
+    raised: Final = callable_of(raised_exception_obj)(
         message=error_str,
         llm_provider=custom_llm_provider,
         model=model,
-        **_accepted_init_kwargs(raised_exception_obj, MappingProxyType({"response": response, "body": body})),
+        **init_kwargs,
     )
-    if isinstance(raised, BaseException) or (isinstance(raised, type) and issubclass(raised, BaseException)):
-        raise raised
-    raise TypeError("exceptions must derive from BaseException")
+    raise raised  # pyright: ignore[reportGeneralTypeIssues]  # raise rejects a non-exception itself
 
 
 class _ProviderHTTPException(Protocol):

@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_in_auto_mode,
     allowed_tools_tool_choice_with_builtin_as_function,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.llms.base_llm.sandbox.transformation import (
     CodeExecutionResult,
     ContainerHandle,
@@ -758,9 +758,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     def _parse_code(arguments: str) -> object:
         try:
             return (
-                decoded_json_object(_DECODED_JSON.validate_python(json.loads(arguments))).get("code", "")
-                if arguments
-                else ""
+                require_get(_DECODED_JSON.validate_python(json.loads(arguments))).get("code", "") if arguments else ""
             )
         except (json.JSONDecodeError, TypeError, AttributeError):
             return ""

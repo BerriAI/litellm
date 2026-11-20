@@ -2,8 +2,8 @@ import os
 import sys
 import time
 import webbrowser
-from collections.abc import Callable, Iterator, Mapping, Sequence, Sized
-from typing import Final, Protocol, TypeVar, runtime_checkable
+from collections.abc import Callable, Mapping, Sequence
+from typing import Final, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import click
@@ -41,7 +41,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     load_cli_token_left_in_keychain,
     save_cli_token,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import joined, length_of, require_get, subscript
 
 from .claude_settings import (
     STARTING_MODEL_ROLE,
@@ -337,45 +337,20 @@ def _login_command(renews: bool) -> str:
     return "lite login --pkce" if renews else "lite login"
 
 
-@runtime_checkable
-class _SupportsIteration(Protocol):
-    def __iter__(self) -> Iterator[object]: ...
-
-
-@runtime_checkable
-class _SupportsSlicing(Protocol):
-    def __getitem__(self, key: slice, /) -> object: ...
-
-
 def sized_len(value: object) -> int:
-    if isinstance(value, Sized):
-        return len(value)
-    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+    return length_of(value)
 
 
 def joined_names(names: object) -> str:
-    if not isinstance(names, (_SupportsIteration, _SupportsSlicing)):
-        raise TypeError("can only join an iterable")
-    entries: Final = tuple(iter_items(names))
-    strings: Final = tuple(entry for entry in entries if isinstance(entry, str))
-    if len(strings) == len(entries):
-        return ", ".join(strings)
-    first_bad: Final = next(position for position, entry in enumerate(entries) if not isinstance(entry, str))
-    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(entries[first_bad]).__name__} found")
-
-
-def _leading_models(models: object) -> object:
-    if isinstance(models, _SupportsSlicing):
-        return models[:3]
-    raise TypeError(f"'{type(models).__name__}' object is not subscriptable")
+    return joined(", ", names)
 
 
 def models_summary(models: object) -> str:
     if not models:
         return "All models"
-    count: Final = sized_len(models)
+    count: Final = length_of(models)
     if count > 3:
-        return joined_names(_leading_models(models)) + f" (+{count - 3} more)"
+        return joined_names(subscript(models, slice(None, 3))) + f" (+{count - 3} more)"
     return joined_names(models)
 
 
@@ -704,7 +679,7 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
             f"Response starts with: {response.text[:200]!r}"
         )
 
-    data: Final = decoded_json_object(decoded)
+    data: Final = require_get(decoded)
     login_id: Final = data.get("login_id")
     poll_secret: Final = data.get("poll_secret")
     user_code: Final = data.get("user_code")

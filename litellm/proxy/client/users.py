@@ -1,10 +1,8 @@
 from collections.abc import Iterable, Mapping
-from typing import Final
+from typing import Any, Final
 
 import requests
 from pydantic import ConfigDict, TypeAdapter
-
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
 
 from .exceptions import NotFoundError, UnauthorizedError
 
@@ -26,16 +24,14 @@ class UsersManagementClient:
 
     def list_users(
         self, params: Mapping[str, str | bytes | int | float | Iterable[str | bytes | int | float] | None] | None = None
-    ) -> object:
+    ) -> list[dict[str, Any]]:
         """List users (GET /user/list)"""
         url: Final = f"{self.base_url}/user/list"
         response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self.timeout)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
-        return decoded_json_object(_JSON_VALUE.validate_python(response.json())).get(
-            "users", _JSON_VALUE.validate_python(response.json())
-        )
+        return response.json().get("users", response.json())
 
     def get_user(self, user_id: str | None = None) -> dict[str, object]:
         """Get user info (GET /user/info)"""

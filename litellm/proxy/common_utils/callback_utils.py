@@ -143,27 +143,6 @@ def _loaded_callback_or_raise(entry: str, loaded: object) -> CustomLogger | Call
     return resolved
 
 
-_IMMUTABLE_TYPE_FLAG: Final = 1 << 8
-
-
-def _runtime_type_name(cls: type) -> str:
-    if cls.__flags__ & _IMMUTABLE_TYPE_FLAG and cls.__module__ != "builtins":
-        return f"{cls.__module__}.{cls.__name__}"
-    return cls.__name__
-
-
-def _non_str_callback_path_error(value: object) -> TypeError | AttributeError:
-    if isinstance(value, bytes | bytearray):
-        return TypeError("startswith first arg must be bytes or a tuple of bytes, not str")
-    if isinstance(value, type):
-        return AttributeError(
-            f"type object '{_runtime_type_name(value)}' has no attribute 'startswith'", name="startswith", obj=value
-        )
-    return AttributeError(
-        f"'{_runtime_type_name(type(value))}' object has no attribute 'startswith'", name="startswith", obj=value
-    )
-
-
 def initialize_callbacks_on_proxy(
     value: object,
     premium_user: bool,
@@ -467,20 +446,18 @@ def initialize_callbacks_on_proxy(
             from litellm.integrations.prometheus import PrometheusLogger
 
             PrometheusLogger._mount_metrics_endpoint()
-    elif isinstance(value, str):
+    else:
         litellm.callbacks = [
             _loaded_callback_or_raise(
-                entry=value,
+                entry=str(value),
                 loaded=_LOADED_CALLBACK.validate_python(
                     get_instance_fn(
-                        value=value,
+                        value=value,  # pyright: ignore[reportArgumentType]  # non-str fails as on main
                         config_file_path=config_file_path,
                     )
                 ),
             )
         ]
-    else:
-        raise _non_str_callback_path_error(value)
     verbose_proxy_logger.debug("%s Initialized Callbacks - %s %s", blue_color_code, litellm.callbacks, reset_color_code)
 
 

@@ -3,13 +3,11 @@ import copy
 import inspect
 import json
 import ssl
-import sys
 from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
     Coroutine,
-    Generator,
     Iterable,
     Iterator,
     Mapping,
@@ -27,8 +25,6 @@ from typing import (
     NamedTuple,
     Optional,
     Protocol,
-    SupportsFloat,
-    SupportsIndex,
     TypeAlias,
     TypedDict,
     TypeVar,
@@ -46,7 +42,7 @@ from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
 from pydantic import TypeAdapter
-from typing_extensions import Buffer, ReadOnly
+from typing_extensions import ReadOnly
 
 import litellm
 import litellm.litellm_core_utils
@@ -95,8 +91,8 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
-    attribute_or_none,
-    decoded_json_object,
+    callable_of,
+    float_of,
     require_attributes,
     set_provider_response_headers_in_hidden_params,
 )
@@ -391,11 +387,6 @@ class _AsyncHttpVerbs(Protocol):
     def delete(self) -> Callable[..., Awaitable[httpx.Response]]: ...
 
 
-@runtime_checkable
-class _AwaitableObject(Protocol):
-    def __await__(self) -> Generator[object, None, object]: ...
-
-
 class _VerbRequest(NamedTuple):
     method: str
     keywords: Mapping[str, object]
@@ -414,31 +405,10 @@ def _retrieve_request(request: Mapping[str, object]) -> _VerbRequest:
 
 
 def _client_attribute(client: object, name: str) -> object:
-    attribute: Final = attribute_or_none(client, name)
-    if attribute is None and not hasattr(client, name):
-        raise AttributeError(f"'{type(client).__name__}' object has no attribute '{name}'", name=name, obj=client)
-    return attribute
-
-
-def _callable_attribute(attribute: object) -> Callable[..., object]:
-    if callable(attribute):
-        return attribute
-    raise TypeError(f"'{type(attribute).__name__}' object is not callable")
-
-
-def _not_awaitable(value: object) -> TypeError:
-    if sys.version_info >= (3, 14):
-        return TypeError(f"'{type(value).__name__}' object can't be awaited")
-    return TypeError(f"object {type(value).__name__} can't be used in 'await' expression")
-
-
-def _unexpected_verb_result(client: object, name: str, result: object) -> TypeError:
-    return TypeError(f"{type(client).__name__}.{name}() returned {type(result).__name__}, not httpx.Response")
+    return getattr(client, name)  # pyright: ignore[reportAny]  # main looked the verb up with getattr
 
 
 class _UnlistedVerb(NamedTuple):
-    client: object
-    name: str
     attribute: object
 
 
@@ -455,7 +425,7 @@ def _sync_http_verb(client: _SyncHttpVerbs, method: str) -> Callable[..., httpx.
         case "delete":
             return client.delete
         case _:
-            return _UnlistedVerb(client=client, name=method, attribute=_client_attribute(client, method))
+            return _UnlistedVerb(attribute=_client_attribute(client, method))
 
 
 def _async_http_verb(client: _AsyncHttpVerbs, method: str) -> Callable[..., Awaitable[httpx.Response]] | _UnlistedVerb:
@@ -471,7 +441,7 @@ def _async_http_verb(client: _AsyncHttpVerbs, method: str) -> Callable[..., Awai
         case "delete":
             return client.delete
         case _:
-            return _UnlistedVerb(client=client, name=method, attribute=_client_attribute(client, method))
+            return _UnlistedVerb(attribute=_client_attribute(client, method))
 
 
 def _call_sync_verb(
@@ -479,10 +449,7 @@ def _call_sync_verb(
 ) -> httpx.Response:
     if not isinstance(verb, _UnlistedVerb):
         return verb(**keywords)
-    response: Final = _callable_attribute(verb.attribute)(**keywords)
-    if isinstance(response, httpx.Response):
-        return response
-    raise _unexpected_verb_result(verb.client, verb.name, response)
+    return callable_of(verb.attribute)(**keywords)  # pyright: ignore[reportReturnType]  # main returned it as is
 
 
 async def _call_async_verb(
@@ -490,13 +457,8 @@ async def _call_async_verb(
 ) -> httpx.Response:
     if not isinstance(verb, _UnlistedVerb):
         return await verb(**keywords)
-    pending: Final = _callable_attribute(verb.attribute)(**keywords)
-    if not isinstance(pending, _AwaitableObject):
-        raise _not_awaitable(pending)
-    response: Final = await pending
-    if isinstance(response, httpx.Response):
-        return response
-    raise _unexpected_verb_result(verb.client, verb.name, response)
+    pending: Final = callable_of(verb.attribute)(**keywords)
+    return await pending  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # main awaited it as is
 
 
 def _send_sync_upload(
@@ -895,10 +857,7 @@ _AGENTIC_HOOK_RESULT: Final = TypeAdapter(object)
 
 
 def _timeout_param(params: Mapping[str, object]) -> float:
-    value: Final = params.get("timeout", 0)
-    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
-        return float(value)
-    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
+    return float_of(params.get("timeout", 0))
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -6441,7 +6400,7 @@ class BaseLLMHTTPHandler:
             with internal_sub_call(logging_obj.litellm_call_id):
                 response: Final[ResponsesAPIResponse | BaseResponsesAPIStreamingIterator] = await litellm.aresponses(
                     model=patch.model or model,
-                    input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
+                    input=patch.messages,
                     **optional_params,
                     **kwargs_for_followup,
                 )
@@ -9054,9 +9013,7 @@ class BaseLLMHTTPHandler:
                 litellm_params=litellm_params,
                 headers=headers,
                 extra_body=extra_body,
-                prefetched_source_data=(
-                    None if prefetched_source_data is None else dict(decoded_json_object(prefetched_source_data))
-                ),
+                prefetched_source_data=prefetched_source_data,  # pyright: ignore[reportArgumentType]  # raw, as on main
             )
 
             logging_obj.pre_call(
@@ -9154,9 +9111,7 @@ class BaseLLMHTTPHandler:
                 litellm_params=litellm_params,
                 headers=headers,
                 extra_body=extra_body,
-                prefetched_source_data=(
-                    None if prefetched_source_data is None else dict(decoded_json_object(prefetched_source_data))
-                ),
+                prefetched_source_data=prefetched_source_data,  # pyright: ignore[reportArgumentType]  # raw, as on main
             )
 
             logging_obj.pre_call(

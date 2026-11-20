@@ -18,7 +18,7 @@ from litellm.constants import (
     RUNWAYML_DEFAULT_API_VERSION,
     RUNWAYML_POLLING_TIMEOUT,
 )
-from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object, require_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, require_attributes, require_get
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -261,7 +261,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         Raises:
             ValueError: If task failed or status is unknown
         """
-        fields: Final = decoded_json_object(response_data)
+        fields: Final = require_get(response_data)
         status: Final = require_attributes(fields.get("status", ""), _SupportsUpper, "upper").upper()
 
         verbose_logger.debug("RunwayML TTS task status: %s", status)
@@ -466,7 +466,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         verbose_logger.debug("RunwayML TTS starting polling...")
 
         # Get task ID
-        task_id: Final = decoded_json_object(response_data).get("id")
+        task_id: Final = require_get(response_data).get("id")
         if not task_id:
             raise ValueError("RunwayML TTS response missing task ID")
 
@@ -490,7 +490,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         verbose_logger.debug("RunwayML TTS polling complete, downloading audio")
 
         # Get audio URL from output
-        output: Final = as_object_list(decoded_json_object(task_data).get("output", []))
+        output: Final = as_object_list(require_get(task_data).get("output", []))
         if not output:
             raise ValueError("RunwayML TTS response missing audio URL in output")
 
@@ -535,7 +535,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         verbose_logger.debug("RunwayML TTS starting polling (async)...")
 
         # Get task ID
-        task_id: Final = decoded_json_object(response_data).get("id")
+        task_id: Final = require_get(response_data).get("id")
         if not task_id:
             raise ValueError("RunwayML TTS response missing task ID")
 
@@ -559,7 +559,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         verbose_logger.debug("RunwayML TTS polling complete (async), downloading audio")
 
         # Get audio URL from output
-        output: Final = as_object_list(decoded_json_object(task_data).get("output", []))
+        output: Final = as_object_list(require_get(task_data).get("output", []))
         if not output:
             raise ValueError("RunwayML TTS response missing audio URL in output")
 

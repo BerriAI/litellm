@@ -6,10 +6,9 @@ import re
 import unicodedata
 from collections.abc import Mapping
 from re import Pattern
-from typing import Any, Final, SupportsFloat, SupportsIndex, cast
+from typing import Any, Final, cast
 
-from typing_extensions import Buffer
-
+from litellm.litellm_core_utils.core_helpers import float_of
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     CompetitorActionHint,
     CompetitorIntentEvidenceEntry,
@@ -70,10 +69,7 @@ def text_for_entity_matching(text: str) -> str:
 
 
 def _float_setting(config: Mapping[str, object], key: str, default: float) -> float:
-    value: Final = config.get(key, default)
-    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
-        return float(value)
-    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
+    return float_of(config.get(key, default))
 
 
 class BaseCompetitorIntentChecker:

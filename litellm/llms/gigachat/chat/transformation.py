@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.core_helpers import (
     decoded_json_object,
     iter_items,
     require_attributes,
+    require_get,
 )
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -469,8 +470,8 @@ class GigaChatConfig(BaseConfig):
         is_structured_output: Final = optional_params.get("_structured_output", False)
 
         choices: Final[list[Choices]] = []  # mutable-ok: accumulator for building response choices
-        for choice in iter_items(decoded_json_object(_JSON_VALUE.validate_python(response_json)).get("choices", [])):
-            choice_fields = decoded_json_object(choice)
+        for choice in iter_items(require_get(_JSON_VALUE.validate_python(response_json)).get("choices", [])):
+            choice_fields = require_get(choice)
             message_data = choice_fields.get("message", {})
             finish_reason = choice_fields.get("finish_reason", "stop")
 
@@ -504,7 +505,7 @@ class GigaChatConfig(BaseConfig):
                 message_slots.pop("function_call", None)
 
             require_attributes(message_data, _SupportsPop, "pop").pop("functions_state_id", None)
-            message_fields = decoded_json_object(message_data)
+            message_fields = require_get(message_data)
 
             choices.append(
                 Choices(

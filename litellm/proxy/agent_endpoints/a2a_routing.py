@@ -18,7 +18,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     bridge_model_name,
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, callable_of
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     resolve_databricks_backend_auth,
@@ -208,6 +208,4 @@ def _bridge_agent_request(
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
     endpoint: Final = _ROUTE_ENDPOINT.validate_python(getattr(litellm, route_type))
-    if not callable(endpoint):
-        raise TypeError(f"'{type(endpoint).__name__}' object is not callable")
-    return endpoint(**request_data)
+    return callable_of(endpoint)(**request_data)

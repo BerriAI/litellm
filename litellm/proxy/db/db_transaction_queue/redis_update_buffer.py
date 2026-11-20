@@ -141,14 +141,10 @@ def _encode_spend_log_row(row: SpendLogRow) -> str:
     return json.dumps(row, default=_spend_log_json_default)
 
 
-def _json_document(value: object) -> str | bytes | bytearray:
-    if isinstance(value, (str, bytes, bytearray)):
-        return value
-    raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
-
-
 def _decode_spend_log_row(encoded: object) -> dict[str, object] | None:
-    decoded: Final = _DECODED_JSON.validate_python(_load_buffered_transaction(_json_document(encoded)))
+    decoded: Final = _DECODED_JSON.validate_python(
+        _load_buffered_transaction(encoded)  # pyright: ignore[reportArgumentType]  # loads raises
+    )
     return decoded if isinstance(decoded, dict) else None
 
 
@@ -965,7 +961,8 @@ class RedisUpdateBuffer:
         if list_of_transactions is None:
             return None
         return [
-            _load_buffered_transaction(_json_document(transaction)) for transaction in iter_items(list_of_transactions)
+            _load_buffered_transaction(transaction)  # pyright: ignore[reportArgumentType]  # loads raises
+            for transaction in iter_items(list_of_transactions)
         ]
 
     async def get_all_daily_spend_update_transactions_from_redis_buffer(
@@ -1097,9 +1094,14 @@ class RedisUpdateBuffer:
         """
         listed_transactions: Final = as_object_list(list_of_transactions)
         if listed_transactions is not None:
-            return [_load_buffered_transaction(_json_document(transaction)) for transaction in listed_transactions]
+            return [
+                _load_buffered_transaction(transaction)  # pyright: ignore[reportArgumentType]  # loads raises
+                for transaction in listed_transactions
+            ]
         else:
-            return [_load_buffered_transaction(_json_document(list_of_transactions))]
+            return [
+                _load_buffered_transaction(list_of_transactions)  # pyright: ignore[reportArgumentType]  # loads raises
+            ]
 
     @staticmethod
     def _combine_list_of_transactions(

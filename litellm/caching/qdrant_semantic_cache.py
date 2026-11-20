@@ -10,7 +10,6 @@ Has 4 methods:
 
 import ast
 import asyncio
-import json
 import os
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
@@ -27,7 +26,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
-    attribute_or_none,
+    json_loaded,
     require_attributes,
     subscript,
 )
@@ -62,20 +61,6 @@ class _QdrantCollectionDetailsResponse(Protocol):
 
 class _CacheKeyPayload(Protocol):
     def get(self, key: str, /) -> object: ...
-
-
-def _json_document(value: object) -> str | bytes | bytearray:
-    if isinstance(value, (str, bytes, bytearray)):
-        return value
-    raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
-
-
-def _literal_source(value: object) -> str | ast.AST:
-    if isinstance(value, (str, ast.AST)):
-        return value
-    lineno: Final = attribute_or_none(value, "lineno")
-    location: Final = f" on line {lineno}" if lineno else ""
-    raise ValueError(f"malformed node or string{location}: {value!r}")
 
 
 class QdrantSemanticCache(BaseCache):
@@ -205,9 +190,11 @@ class QdrantSemanticCache(BaseCache):
         if cached_response is None:
             return cached_response
         try:
-            return _CACHED_RESPONSE.validate_python(json.loads(_json_document(cached_response)))
+            return _CACHED_RESPONSE.validate_python(json_loaded(cached_response))
         except Exception:
-            return _CACHED_RESPONSE.validate_python(ast.literal_eval(_literal_source(cached_response)))
+            return _CACHED_RESPONSE.validate_python(
+                ast.literal_eval(cached_response)  # pyright: ignore[reportArgumentType]  # raises its own ValueError
+            )
 
     def _get_qdrant_cache_key_filter(self, key: str) -> dict:
         return {

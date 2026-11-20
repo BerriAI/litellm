@@ -23,7 +23,7 @@ from litellm.cost_calculator import infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields
 from litellm.proxy._types import UserAPIKeyAuth
@@ -104,14 +104,8 @@ def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTran
     return translation
 
 
-class _ModuloDivisor(Protocol):
-    def __rmod__(self, other: int, /) -> object: ...
-
-
 def _remainder(counter: int, divisor: object) -> object:
-    if has_attributes(divisor, _ModuloDivisor, "__rmod__"):
-        return counter % divisor
-    raise TypeError(f"unsupported operand type(s) for %: '{type(counter).__name__}' and '{type(divisor).__name__}'")
+    return counter % divisor  # pyright: ignore[reportOperatorIssue, reportUnknownVariableType]  # % raises the error
 
 
 def resolve_endpoint_translation(

@@ -1,9 +1,8 @@
 import json
-import sys
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 from httpx._models import Headers, Response
 from pydantic import BaseModel, TypeAdapter
@@ -14,10 +13,13 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import (
     decoded_json_object,
     json_contains,
+    json_loaded,
     keyword_arguments,
     map_finish_reason,
     require_attributes,
+    require_get,
     subscript,
+    sum_of,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -62,12 +64,6 @@ _REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def _json_document(value: object) -> str | bytes | bytearray:
-    if isinstance(value, (str, bytes, bytearray)):
-        return value
-    raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
-
-
 _TOOL_CALL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
 
 
@@ -83,24 +79,6 @@ class _MessageSlots(_SupportsSetItem, Protocol):
     def __delitem__(self, key: str, /) -> None: ...
 
 
-@runtime_checkable
-class _SupportsAdd(Protocol):
-    def __add__(self, other: object, /) -> object: ...
-
-
-@runtime_checkable
-class _SupportsRightAdd(Protocol):
-    def __radd__(self, other: object, /) -> object: ...
-
-
-def _token_sum(left: object, right: object) -> object:
-    if isinstance(left, _SupportsAdd):
-        return left + right
-    if isinstance(right, _SupportsRightAdd):
-        return left + right
-    raise TypeError(f"unsupported operand type(s) for +: '{type(left).__name__}' and '{type(right).__name__}'")
-
-
 _NON_STRING_FINISH_REASONS: Final[Mapping[object, OpenAIChatCompletionFinishReason]] = MappingProxyType({})
 
 
@@ -110,17 +88,8 @@ def _json_finish_reason(value: object) -> OpenAIChatCompletionFinishReason:
     return _NON_STRING_FINISH_REASONS.get(value) or map_finish_reason(str(value))
 
 
-def _regex_subject_error(value: object) -> TypeError:
-    detail: Final = f", got {type(value).__name__!r}" if sys.version_info >= (3, 11) else ""
-    return TypeError(f"expected string or bytes-like object{detail}")
-
-
-def _split_json_reasoning_content(content: object) -> tuple[str | None, object]:
-    if isinstance(content, str):
-        return parse_content_for_reasoning(content)
-    if not content:
-        return None, content
-    raise _regex_subject_error(content)
+def _split_json_reasoning_content(content: object) -> tuple[str | None, str | None]:
+    return parse_content_for_reasoning(content)  # pyright: ignore[reportArgumentType]  # re raises its own TypeError
 
 
 def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistantToolCall) -> OllamaToolCallFunction:
@@ -437,7 +406,7 @@ class OllamaChatConfig(BaseConfig):
         )
 
         response_json: Final = raw_response.json()
-        response_fields: Final = decoded_json_object(_DECODED_JSON.validate_python(response_json))
+        response_fields: Final = require_get(_DECODED_JSON.validate_python(response_json))
 
         ## RESPONSE OBJECT
         _done_reason: Final = _json_finish_reason(response_fields.get("done_reason") or "stop")
@@ -464,9 +433,7 @@ class OllamaChatConfig(BaseConfig):
             and litellm_params.get("function_name") is not None
             and response_json_message is not None
         ):
-            function_call: Final = decoded_json_object(
-                _DECODED_JSON.validate_python(json.loads(_json_document(subscript(response_json_message, "content"))))
-            )
+            function_call: Final = decoded_json_object(json_loaded(subscript(response_json_message, "content")))
             message: Final = litellm.Message(
                 **_KeywordFields(
                     content=None,
@@ -482,7 +449,7 @@ class OllamaChatConfig(BaseConfig):
                             "type": "function",
                         }
                     ],
-                    reasoning_content=decoded_json_object(response_json_message).get("reasoning_content"),
+                    reasoning_content=require_get(response_json_message).get("reasoning_content"),
                 )
             )
             model_response.choices[0].message = message
@@ -510,7 +477,7 @@ class OllamaChatConfig(BaseConfig):
                 **_KeywordFields(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
-                    total_tokens=_token_sum(prompt_tokens, completion_tokens),
+                    total_tokens=sum_of(prompt_tokens, completion_tokens),
                 )
             ),
         )

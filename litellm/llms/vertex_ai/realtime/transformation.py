@@ -23,7 +23,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, require_attributes
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
@@ -228,11 +228,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
             session: Final = fields.get("session")
             session_params: Final = dict(as_str_mapping(session) or {})
             if session_configuration_request is None:
-                if session and not isinstance(session, dict):
-                    raise AttributeError(
-                        f"'{type(session).__name__}' object has no attribute 'items'", name="items", obj=session
-                    )
-                setup_config: Final = self._build_vertex_ai_setup_config(model, session_params)
+                setup_config: Final = self._build_vertex_ai_setup_config(
+                    model, require_attributes(session or {}, dict[str, object], "items")
+                )
                 gemini_setup_msg: Final = json.dumps({"setup": setup_config})
 
                 verbose_logger.debug("Vertex AI Realtime: Sending initial setup with tools to backend")

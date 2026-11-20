@@ -25,7 +25,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_str_mapping, require_get
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -267,7 +267,7 @@ class OvalixGuardrail(CustomGuardrail):
         return _DECODED_JSON.validate_python(response.json())
 
     def _verdict(self, resp: object) -> tuple[str, str | None]:
-        decoded: Final = decoded_json_object(resp)
+        decoded: Final = require_get(resp)
         return (str_or_none(decoded.get("action_type")) or "").lower(), self._get_trackers_corrected_message(decoded)
 
     async def _block_reason_for_item(
@@ -491,7 +491,7 @@ class OvalixGuardrail(CustomGuardrail):
             should_wrap_with_default_message=False,
         )
 
-    def _get_trackers_corrected_message(self, resp: Mapping[str, object]) -> str | None:
+    def _get_trackers_corrected_message(self, resp: SupportsGet) -> str | None:
         """Extract corrected/blocking message content from Tracker checkpoint response."""
         modified: Final = as_str_mapping(resp.get("modified_data"))
         if modified is None:

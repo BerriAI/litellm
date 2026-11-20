@@ -19,7 +19,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes, require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes, require_get, subscript
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -409,7 +409,7 @@ class A2AGuardrailHandler(BaseTranslation):
                 task_mappings=task_mappings,
             )
 
-        result_fields: Final = decoded_json_object(result)
+        result_fields: Final = require_get(result)
         # Case 2: Nested message
         message: Final = result_fields.get("message")
         if message and isinstance(message, dict) and "parts" in message:

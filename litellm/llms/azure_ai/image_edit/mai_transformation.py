@@ -5,7 +5,7 @@ import httpx
 from httpx._types import RequestFiles
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     get_azure_ai_auth_headers,
@@ -115,7 +115,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
 
         if "usage" in response:
             response["usage"] = AzureFoundryMAIImageGenerationConfig.normalize_mai_image_usage(
-                decoded_json_object(_DECODED_JSON.validate_python(response)).get("usage")
+                require_get(_DECODED_JSON.validate_python(response)).get("usage")
             )
 
         logging_obj.post_call(

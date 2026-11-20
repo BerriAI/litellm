@@ -1,11 +1,11 @@
 # What is this?
 ## Helper utilities
 import copy
+import json
 import logging
 import math
 import re
-import sys
-from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from types import MappingProxyType
@@ -15,8 +15,6 @@ from typing import (
     Final,
     Literal,
     Protocol,
-    SupportsIndex,
-    SupportsInt,
     TypeVar,
     cast,
     overload,
@@ -25,10 +23,7 @@ from typing import (
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import (
-    Buffer,
-    TypeIs,  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
-)
+from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
 from litellm._logging import verbose_logger
@@ -197,11 +192,6 @@ class _SupportsIter(Protocol):
     def __iter__(self) -> Iterator[object]: ...
 
 
-@runtime_checkable
-class _SupportsGetItem(Protocol):
-    def __getitem__(self, key: str | int, /) -> object: ...
-
-
 def attribute_or_none(source: object, name: str) -> object:
     return getattr(source, name, None)
 
@@ -263,21 +253,52 @@ def has_attributes(
 def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shape:
     if has_attributes(value, shape, *names):
         return value
-    missing: Final = next(name for name in names if not hasattr(value, name))
-    raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
+    for name in names:
+        getattr(value, name)
+    return require_attributes(value, shape, *names)
 
 
 def int_of(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
+    return int(value)  # pyright: ignore[reportArgumentType]  # int() raises its own TypeError
+
+
+def float_of(value: object) -> float:
+    return float(value)  # pyright: ignore[reportArgumentType]  # float() raises its own TypeError
+
+
+def length_of(value: object) -> int:
+    return len(value)  # pyright: ignore[reportArgumentType]  # len() raises its own TypeError
+
+
+def joined(separator: str, parts: object) -> str:
+    return separator.join(parts)  # pyright: ignore[reportArgumentType]  # join raises its own TypeError
+
+
+def json_loaded(document: object) -> object:
+    return json.loads(document)  # pyright: ignore[reportArgumentType, reportAny]  # loads raises its own TypeError
+
+
+def set_item(container: object, key: object, value: object) -> None:
+    container[key] = value  # pyright: ignore[reportIndexIssue]  # raises its own TypeError
+
+
+def sum_of(left: object, right: object) -> object:
+    return left + right  # pyright: ignore[reportOperatorIssue, reportUnknownVariableType]  # + raises its TypeError
+
+
+def concatenated(prefix: str, suffix: object) -> str:
+    return prefix + suffix  # pyright: ignore[reportOperatorIssue, reportUnknownVariableType]  # + raises its TypeError
+
+
+def spread(value: object) -> tuple[object, ...]:
+    return (*value,)  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # * raises its TypeError
+
+
+def callable_of(value: object) -> Callable[..., object]:
+    if callable(value):
+        return value
+    value()  # pyright: ignore[reportCallIssue]  # raises its own TypeError
+    return callable_of(value)
 
 
 class KeywordArguments(Protocol):
@@ -286,12 +307,29 @@ class KeywordArguments(Protocol):
     def __getitem__(self, key: str, /) -> object: ...
 
 
-def keyword_arguments(value: object, target: type[object]) -> KeywordArguments:
+def keyword_arguments(value: object, target: Callable[..., object]) -> KeywordArguments:
     if has_attributes(value, KeywordArguments, "keys"):
         return value
-    raise TypeError(
-        f"{target.__module__}.{target.__qualname__}() argument after ** must be a mapping, not {type(value).__name__}"
-    )
+    target(**value)  # pyright: ignore[reportCallIssue]  # ** fails before target runs
+    return keyword_arguments(value, target)
+
+
+def unpackable_mapping(value: object) -> KeywordArguments:
+    if has_attributes(value, KeywordArguments, "keys"):
+        return value
+    return {**value}  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # ** raises its TypeError
+
+
+class SupportsGet(Protocol):
+    @overload
+    def get(self, key: str, /) -> object: ...
+
+    @overload
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+def require_get(value: object) -> SupportsGet:
+    return require_attributes(value, SupportsGet, "get")
 
 
 def iter_items(value: object) -> Iterable[object]:
@@ -300,52 +338,19 @@ def iter_items(value: object) -> Iterable[object]:
         return listed
     if isinstance(value, _SupportsIter):
         return value
-    if isinstance(value, _SupportsGetItem):
-        return iter(value)
-    raise TypeError(f"'{type(value).__name__}' object is not iterable")
-
-
-def _unconvertible_update_element(index: int) -> TypeError:
-    if sys.version_info < (3, 14):
-        return TypeError(f"cannot convert dictionary update sequence element #{index} to a sequence")
-    error: Final = TypeError("object is not iterable")
-    error.add_note(f"Cannot convert dictionary update sequence element #{index} to a sequence")
-    return error
-
-
-def _update_pair(index: int, element: object) -> tuple[object, object]:
-    if not isinstance(element, (_SupportsIter, _SupportsGetItem)):
-        raise _unconvertible_update_element(index)
-    fields: Final = tuple(iter_items(element))
-    if len(fields) != 2:
-        raise ValueError(f"dictionary update sequence element #{index} has length {len(fields)}; 2 is required")
-    return fields[0], fields[1]
+    return iter(value)  # pyright: ignore[reportCallIssue, reportArgumentType, reportUnknownVariableType]  # raises
 
 
 def dict_from_pairs(value: object) -> Mapping[object, object]:
-    return dict(_update_pair(index, element) for index, element in enumerate(iter_items(value)))
-
-
-@runtime_checkable
-class _SupportsContains(Protocol):
-    def __contains__(self, key: object, /) -> bool: ...
-
-
-_NOT_A_CONTAINER: Final = "is not a container or iterable" if sys.version_info >= (3, 14) else "is not iterable"
+    return dict[object, object](value)  # pyright: ignore[reportCallIssue, reportArgumentType]  # dict() raises
 
 
 def json_contains(value: object, key: object) -> bool:
-    if isinstance(value, _SupportsContains):
-        return key in value
-    if isinstance(value, (_SupportsIter, _SupportsGetItem)):
-        return key in tuple(iter_items(value))
-    raise TypeError(f"argument of type '{type(value).__name__}' {_NOT_A_CONTAINER}")
+    return key in value  # pyright: ignore[reportOperatorIssue]  # in raises its own TypeError
 
 
-def subscript(value: object, key: str | int) -> object:
-    if isinstance(value, _SupportsGetItem):
-        return value[key]
-    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+def subscript(value: object, key: object) -> object:
+    return value[key]  # pyright: ignore[reportIndexIssue, reportUnknownVariableType]  # [] raises its own TypeError
 
 
 def attribute_items(source: object, name: str) -> Iterable[object]:

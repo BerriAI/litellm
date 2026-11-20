@@ -27,7 +27,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.web_identity_session_policy import SECRETS_MANAGER_SESSION_POLICY, WebIdentitySessionPolicy
@@ -249,7 +249,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             Dictionary of key-value pairs from the primary secret
         """
         decoded: Final = _PRIMARY_SECRET_JSON.validate_python(json.loads(primary_secret_json_str or "{}"))
-        return dict(decoded_json_object(decoded))
+        return require_attributes(decoded, dict[str, object], "get")
 
     def sync_read_secret_from_primary_secret(self, secret_name: str, primary_secret_name: str) -> str | None:
         """

@@ -15,16 +15,15 @@ import contextvars
 import os
 from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, cast
+from typing import Final, Literal, Protocol, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
 from pydantic import TypeAdapter
-from typing_extensions import Buffer
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import float_of, require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -72,12 +71,6 @@ class _PopsKeys(Protocol):
     def pop(self, key: str, default: None, /) -> object: ...
 
 
-def _timeout_seconds(value: object) -> float:
-    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
-        return float(value)
-    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
-
-
 def _resolve_timeout(
     optional_params: GenericLiteLLMParams,
     kwargs: Mapping[str, object],
@@ -114,7 +107,7 @@ def _resolve_timeout(
         return float(default_timeout)
 
     # Handle numeric values (int, float, string representations)
-    return _timeout_seconds(timeout)
+    return float_of(timeout)
 
 
 @client

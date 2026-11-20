@@ -25,7 +25,7 @@ from typing_extensions import assert_never
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get, unpackable_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import BatchGuardrailRecord, BatchGuardrailReport
 from litellm.types.utils import CallTypes, CallTypesLiteral
@@ -322,7 +322,7 @@ def _scannable_call_type(url: object, body: Mapping[str, object]) -> CallTypesLi
     return from_url if from_url is not None else _call_type_from_body(body)
 
 
-def _custom_id_of(payload: Mapping[str, object]) -> str | None:
+def _custom_id_of(payload: SupportsGet) -> str | None:
     """
     The record's identifier, rendered as text.
 
@@ -367,7 +367,7 @@ async def _scan_record(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
 ) -> _ScanOutcome | None:
-    payload: Final = decoded_json_object(record.payload)
+    payload: Final = require_get(record.payload)
     body: Final = payload.get("body")
     if not isinstance(body, dict):
         return UnparseableRecord(line_number=record.line_number)
@@ -425,7 +425,7 @@ async def _scan_record(
     return _Redaction(
         line_number=record.line_number,
         custom_id=custom_id,
-        text=json.dumps({**payload, "body": scanned}),
+        text=json.dumps({**unpackable_mapping(payload), "body": scanned}),
     )
 
 

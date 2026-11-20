@@ -3,19 +3,21 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
-from typing_extensions import Buffer, NotRequired, TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     attribute_or_none,
     decoded_json_object,
+    int_of,
     iter_items,
     json_contains,
+    require_get,
     subscript,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -45,19 +47,6 @@ _DECODED_JSON: Final = TypeAdapter(object)
 class GraphTokenResponse(TypedDict):
     access_token: str
     expires_in: NotRequired[int]
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _expires_in_seconds(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
 
 
 def _policy_action_blocks(action: object) -> bool:
@@ -150,7 +139,7 @@ class PurviewGuardrailBase:
         response.raise_for_status()
         token_data: Final = _DECODED_JSON.validate_python(response.json())
         access_token: Final = subscript(token_data, "access_token")
-        expires_in: Final = _expires_in_seconds(decoded_json_object(token_data).get("expires_in", 3599))
+        expires_in: Final = int_of(require_get(token_data).get("expires_in", 3599))
         # Recompute ``now`` after the await so the expiry reflects when the
         # token was actually received, not when the request started.
         with self._cache_lock:
@@ -297,14 +286,13 @@ class PurviewGuardrailBase:
             extra_headers["If-None-Match"] = etag
 
         response_json, _ = await self._graph_post(url, body, extra_headers)
-        processed: Final = decoded_json_object(response_json)
 
         # If policies changed, invalidate scope cache so next call re-fetches.
-        if processed.get("protectionScopeState") == "modified":
+        if require_get(response_json).get("protectionScopeState") == "modified":
             with self._cache_lock:
                 self._scope_cache.pop(user_id, None)
 
-        return processed
+        return response_json  # pyright: ignore[reportReturnType]  # main returned the raw Graph JSON
 
     # ------------------------------------------------------------------
     # User ID resolution

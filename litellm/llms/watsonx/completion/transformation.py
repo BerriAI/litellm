@@ -2,13 +2,13 @@ import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, subscript
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, subscript, sum_of
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock, OpenAIChatCompletionFinishReason
@@ -46,24 +46,6 @@ def _json_finish_reason(value: object) -> OpenAIChatCompletionFinishReason:
 
 class _KeywordFields(TypedDict, total=False, extra_items=object):
     pass
-
-
-@runtime_checkable
-class _SupportsAdd(Protocol):
-    def __add__(self, other: object, /) -> object: ...
-
-
-@runtime_checkable
-class _SupportsRightAdd(Protocol):
-    def __radd__(self, other: object, /) -> object: ...
-
-
-def _token_sum(left: object, right: object) -> object:
-    if isinstance(left, _SupportsAdd):
-        return left + right
-    if isinstance(right, _SupportsRightAdd):
-        return left + right
-    raise TypeError(f"unsupported operand type(s) for +: '{type(left).__name__}' and '{type(right).__name__}'")
 
 
 class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
@@ -359,7 +341,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             **_KeywordFields(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
-                total_tokens=_token_sum(prompt_tokens, completion_tokens),
+                total_tokens=sum_of(prompt_tokens, completion_tokens),
             )
         )
         setattr(model_response, "usage", usage)

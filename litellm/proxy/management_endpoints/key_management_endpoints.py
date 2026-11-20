@@ -54,6 +54,7 @@ from litellm.litellm_core_utils.core_helpers import (
     has_attributes,
     int_of,
     require_attributes,
+    sum_of,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -1979,7 +1980,8 @@ class _AddsToAllocation(Protocol):
 def _allocation_total(allocated: int, requested: object) -> float:
     if has_attributes(requested, _AddsToAllocation, "__radd__"):
         return allocated + requested
-    raise TypeError(f"unsupported operand type(s) for +: '{type(allocated).__name__}' and '{type(requested).__name__}'")
+    sum_of(allocated, requested)
+    return _allocation_total(allocated, requested)
 
 
 def _check_key_model_specific_limits(

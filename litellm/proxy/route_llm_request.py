@@ -18,6 +18,8 @@ from litellm.constants import ROUTE_CALL_TYPE_METADATA_KEY
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
+    callable_of,
+    has_attributes,
     normalize_drop_params,
     require_attributes,
 )
@@ -74,9 +76,15 @@ class _FastestResponseRouter(Protocol):
     abatch_completion_fastest_response: Callable[..., Awaitable[object]]
 
 
-def _router_endpoint(llm_router: LitellmRouter, route_type: str) -> Callable[..., Awaitable[object]]:
-    endpoint: Final = attribute_or_none(require_attributes(llm_router, object, route_type), route_type)
-    return require_attributes(endpoint, _AsyncEndpoint, "__call__")
+def _named_endpoint(owner: object, name: str) -> Callable[..., Awaitable[object]]:
+    return _async_endpoint(attribute_or_none(require_attributes(owner, object, name), name))
+
+
+def _async_endpoint(endpoint: object) -> Callable[..., Awaitable[object]]:
+    if has_attributes(endpoint, _AsyncEndpoint, "__call__"):
+        return endpoint
+    callable_of(endpoint)
+    return _async_endpoint(endpoint)
 
 
 _PER_REQUEST_ROUTER_SETTINGS: Final = (
@@ -135,7 +143,7 @@ async def _route_user_config_request(data: dict, route_type: str) -> object:
         filtered_config, lambda: litellm.Router.from_config(build_router_config(router_arguments(**filtered_config)))
     )
     cached_router.observe(logging_obj)
-    return await _router_endpoint(cached_router, route_type)(**{**data, "litellm_logging_obj": logging_obj})
+    return await _named_endpoint(cached_router, route_type)(**{**data, "litellm_logging_obj": logging_obj})
 
 
 def _request_logging_obj(data: Mapping[str, object], route_type: str) -> LiteLLMLoggingObj:
@@ -954,11 +962,7 @@ async def _route_request_single_attempt(
         )
 
     def direct_litellm_endpoint() -> Callable[..., Awaitable[object]]:
-        if not hasattr(litellm, route_type):
-            raise AttributeError(f"module 'litellm' has no attribute {route_type!r}", name=route_type, obj=litellm)
-        return without_global_fallbacks_around(
-            require_attributes(attribute_or_none(litellm, route_type), _AsyncEndpoint, "__call__")
-        )
+        return without_global_fallbacks_around(_named_endpoint(litellm, route_type))
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.registry().names(kind="group_set") if llm_router is not None else []
@@ -971,7 +975,7 @@ async def _route_request_single_attempt(
             data["config"] = data.pop("generationConfig")
     if "api_key" in data or "api_base" in data:
         if llm_router is not None:
-            return _router_endpoint(llm_router, route_type)(**data)
+            return _named_endpoint(llm_router, route_type)(**data)
         else:
             return direct_litellm_endpoint()(**direct_litellm_kwargs())
 
@@ -1047,7 +1051,7 @@ async def _route_request_single_attempt(
             "adelete_container_file",
             "aretrieve_container_file_content",
         ]:
-            return _router_endpoint(llm_router, route_type)(**data)
+            return _named_endpoint(llm_router, route_type)(**data)
         # Interactions API: create with agent, get/delete/cancel don't need model routing
         if route_type in [
             "acreate_interaction",
@@ -1055,7 +1059,7 @@ async def _route_request_single_attempt(
             "adelete_interaction",
             "acancel_interaction",
         ]:
-            return _router_endpoint(llm_router, route_type)(**data)
+            return _named_endpoint(llm_router, route_type)(**data)
         # Managed Agents API: these don't need model routing
         if route_type in [
             "acreate_agent",
@@ -1064,7 +1068,7 @@ async def _route_request_single_attempt(
             "adelete_agent",
             "alist_agent_versions",
         ]:
-            return _router_endpoint(llm_router, route_type)(**data)
+            return _named_endpoint(llm_router, route_type)(**data)
         model_less_team_file_call: Final = _model_less_team_vector_store_file_call(
             route_type, JSON_OBJECT_ADAPTER.validate_python(data), user_api_key_dict
         )
@@ -1130,14 +1134,14 @@ async def _route_request_single_attempt(
         )
         if team_model_name is not None:
             data["model"] = team_model_name
-            return _router_endpoint(llm_router, route_type)(**data)
+            return _named_endpoint(llm_router, route_type)(**data)
 
         elif (
             is_proxy_admin_without_team
             and data["model"] not in router_model_names
             and data["model"] in llm_router.registry().names(kind="team_public")
         ) or (data["model"] is not None and llm_router.registry().resolve(data["model"], kind="recognized")):
-            return _router_endpoint(llm_router, route_type)(**data)
+            return _named_endpoint(llm_router, route_type)(**data)
 
         elif data["model"] not in router_model_names:
             # Check wildcards before checking deployment_names
@@ -1148,10 +1152,10 @@ async def _route_request_single_attempt(
                 llm_router.settings().default_deployment is not None
                 or len(llm_router.registry().patterns().patterns) > 0
             ):
-                return _router_endpoint(llm_router, route_type)(**data)
+                return _named_endpoint(llm_router, route_type)(**data)
             elif data["model"] in llm_router.registry().names(kind="deployment_names"):
                 # Only match deployment_names if no wildcard matched
-                return _router_endpoint(llm_router, route_type)(**data, specific_deployment=True)
+                return _named_endpoint(llm_router, route_type)(**data, specific_deployment=True)
             elif route_type in [
                 "amoderation",
                 "aget_responses",
@@ -1182,7 +1186,7 @@ async def _route_request_single_attempt(
                 "aretrieve_container_file_content",
             ]:
                 # These endpoints can work with or without model parameter
-                return _router_endpoint(llm_router, route_type)(**data)
+                return _named_endpoint(llm_router, route_type)(**data)
             elif route_type in [
                 "avideo_status",
                 "avideo_content",
@@ -1195,7 +1199,7 @@ async def _route_request_single_attempt(
                 # Video endpoints: If model is provided (e.g., from decoded video_id or target_model_names),
                 # try router first to allow for multi-deployment load balancing
                 try:
-                    return _router_endpoint(llm_router, route_type)(**data)
+                    return _named_endpoint(llm_router, route_type)(**data)
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
                     return direct_litellm_endpoint()(**direct_litellm_kwargs())

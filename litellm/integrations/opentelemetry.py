@@ -37,7 +37,7 @@ from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routed_model_name, routing_decision_attributes
-from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_attributes, spread, subscript
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -151,13 +151,6 @@ def _response_view(response_obj: object) -> _SupportsGet | None:
     if response_obj is None:
         return None
     return require_attributes(response_obj, _SupportsGet, "get")
-
-
-def _spread_items(value: object) -> Iterable[object]:
-    try:
-        return iter_items(value)
-    except TypeError:
-        raise TypeError(f"Value after * must be an iterable, not {type(value).__name__}") from None
 
 
 def _semconv_response_model(
@@ -2944,7 +2937,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if json_contains(msg, "id"):
                 transformed_msg["id"] = subscript(msg, "id")
             if server_tool_calls := anthropic_server_tool_call_params(msg):
-                transformed_msg["tool_calls"] = [*server_tool_calls, *_spread_items(msg_fields.get("tool_calls") or ())]
+                transformed_msg["tool_calls"] = [*server_tool_calls, *spread(msg_fields.get("tool_calls") or ())]
             elif json_contains(msg, "tool_calls"):
                 transformed_msg["tool_calls"] = subscript(msg, "tool_calls")
             if json_contains(msg, "tool_call_id"):

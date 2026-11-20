@@ -3,14 +3,14 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Final, Literal
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS_FOR_TRITON
-from litellm.litellm_core_utils.core_helpers import as_object_list, subscript
+from litellm.litellm_core_utils.core_helpers import as_object_list, joined, subscript
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import (
@@ -34,14 +34,6 @@ if TYPE_CHECKING:
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
-
-
-def _joined_text(parts: Sequence[object]) -> str:
-    strings: Final = [part for part in parts if isinstance(part, str)]
-    if len(strings) == len(parts):
-        return "".join(strings)
-    first_bad: Final = next(position for position, part in enumerate(parts) if not isinstance(part, str))
-    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(parts[first_bad]).__name__} found")
 
 
 class TritonConfig(BaseConfig):
@@ -304,7 +296,7 @@ class TritonInferConfig(TritonConfig):
         _triton_response_data: Final = subscript(subscript(subscript(raw_response_json, "outputs"), 0), "data")
         triton_response_parts: Final = as_object_list(_triton_response_data)
         triton_response_data: Final = (
-            _triton_response_data if triton_response_parts is None else _joined_text(triton_response_parts)
+            _triton_response_data if triton_response_parts is None else joined("", triton_response_parts)
         )
 
         model_response.choices = [

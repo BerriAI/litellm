@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import (
@@ -427,7 +427,9 @@ class PolicyValidator:
 
         for policy_name, policy_data in policy_config.items():
             try:
-                policy = temp_registry.parse_policy(policy_name, decoded_json_object(policy_data))
+                policy = temp_registry.parse_policy(
+                    policy_name, require_attributes(policy_data, dict[str, object], "get")
+                )
                 policies[policy_name] = policy
             except Exception as e:
                 errors.append(

@@ -18,7 +18,7 @@ from typing_extensions import Buffer, ReadOnly
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, subscript
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, require_get, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -763,7 +763,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if not prefetched_source_data.get("done", False):
             raise ValueError("Source video generation is not complete yet. Check the video status before editing.")
 
-        source_response: Final = decoded_json_object(prefetched_source_data.get("response", {}))
+        source_response: Final = require_get(prefetched_source_data.get("response", {}))
         videos: Final = source_response.get("videos", [])
         if not videos:
             raise ValueError("No videos found in the completed operation. Cannot edit.")
@@ -774,7 +774,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             video_input["gcsUri"] = subscript(source_video, "gcsUri")
         elif json_contains(source_video, "bytesBase64Encoded"):
             video_input["bytesBase64Encoded"] = subscript(source_video, "bytesBase64Encoded")
-            video_input["mimeType"] = decoded_json_object(source_video).get("mimeType", "video/mp4")
+            video_input["mimeType"] = require_get(source_video).get("mimeType", "video/mp4")
         else:
             raise ValueError("Source video has neither gcsUri nor bytesBase64Encoded. Cannot edit.")
 

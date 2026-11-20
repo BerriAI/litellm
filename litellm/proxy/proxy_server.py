@@ -401,7 +401,6 @@ from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
 )
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
-    KeywordArguments,
     as_object_list,
     as_str_mapping,
     attribute_or_none,
@@ -414,6 +413,7 @@ from litellm.litellm_core_utils.core_helpers import (
     json_contains,
     normalize_drop_params,
     require_attributes,
+    unpackable_mapping,
     without,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -11487,9 +11487,11 @@ def select_data_generator(
     )
 
 
-def _pricing_override_stamps(
-    model_info: Mapping[str, object], litellm_params: Mapping[str, object]
-) -> Mapping[str, object]:
+class _PricingParams(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+
+def _pricing_override_stamps(model_info: Mapping[str, object], litellm_params: _PricingParams) -> Mapping[str, object]:
     own_pricing: Final = MappingProxyType(
         {k: v for k, v in litellm_params.items() if v is not None and is_server_derived_pricing_key(k)}
     )
@@ -17620,20 +17622,12 @@ async def get_all_team_and_direct_access_models(
     return _filter_models_to_user_accessible(all_models)
 
 
-def _model_info_mapping(value: object, first_read: str) -> Mapping[str, object]:
+def _model_info_mapping(value: object) -> Mapping[str, object]:
     model_info: Final = as_str_mapping(value)
-    if model_info is not None:
-        return model_info
-    raise AttributeError(f"'{type(value).__name__}' object has no attribute '{first_read}'", name=first_read, obj=value)
+    return model_info if model_info is not None else {**unpackable_mapping(value)}
 
 
-def _unpackable_mapping(value: object) -> KeywordArguments:
-    if has_attributes(value, KeywordArguments, "keys"):
-        return value
-    raise TypeError(f"'{type(value).__name__}' object is not a mapping")
-
-
-def _discovered_info_lookup_id(model_info: Mapping[str, object]) -> str | None:
+def _discovered_info_lookup_id(model_info: "_SupportsGet") -> str | None:
     model_id: Final = model_info.get("id")
     if model_id is None or isinstance(model_id, str):
         return model_id
@@ -17674,19 +17668,16 @@ def _enrich_model_info_with_litellm_data(
     # read litellm model_prices_and_context_window.json to get the following:
     # input_cost_per_token, output_cost_per_token, max_tokens
     priced_as: Final = wildcard_row_priced_model(model, llm_router, caller_aliases)
-    model_info: Final = _model_info_mapping(
-        model_info_value, "items" if isinstance(priced_as, OtherDeploymentsBill) else "get"
-    )
     billed_model: Final = priced_as.model if isinstance(priced_as, OtherDeploymentsBill) else priced_as
     lookup_model_info: Final = (
-        {k: v for k, v in model_info.items() if k != "base_model"}
+        {k: v for k, v in require_attributes(model_info_value, _SupportsItems, "items").items() if k != "base_model"}
         if isinstance(priced_as, OtherDeploymentsBill)
-        else model_info
+        else model_info_value
     )
     priced_model: Final = (
         {
             **model,
-            "litellm_params": {**_unpackable_mapping(model["litellm_params"]), "model": billed_model},
+            "litellm_params": {**unpackable_mapping(model["litellm_params"]), "model": billed_model},
             "model_info": lookup_model_info,
         }
         if isinstance(billed_model, str)
@@ -17703,17 +17694,19 @@ def _enrich_model_info_with_litellm_data(
             else MappingProxyType({})
         )
     )
+    model_info_reader: Final = require_attributes(model_info_value, _SupportsGet, "get")
     discovered_model_info: Final = (
-        llm_router.registry().discovered_model_info(_discovered_info_lookup_id(model_info))
+        llm_router.registry().discovered_model_info(_discovered_info_lookup_id(model_info_reader))
         if llm_router is not None
         else MappingProxyType({})
     )
-    unpriced: Final = cost_map_omits_token_price(model_info.get("id"), litellm_model_info.get("key"))
+    unpriced: Final = cost_map_omits_token_price(model_info_reader.get("id"), litellm_model_info.get("key"))
+    model_info: Final = _model_info_mapping(model_info_value)
     stamped_model_info: Final = MappingProxyType(
         {
             **model_info,
             **_pricing_override_stamps(
-                model_info, _model_info_mapping(model.get("litellm_params") or _EMPTY_MAPPING, "items")
+                model_info, require_attributes(model.get("litellm_params") or _EMPTY_MAPPING, _PricingParams, "items")
             ),
         }
     )
@@ -20241,7 +20234,7 @@ async def async_queue_request(
         queued_body: Final = _UNTYPED_VALUE.validate_python(request_body)
         require_attributes(queued_body, _SupportsPop, "pop").pop("_litellm_strip_stream_usage", None)
         str_keyed_body: Final = as_str_mapping(queued_body)
-        data: Final = str_keyed_body if isinstance(str_keyed_body, dict) else _queued_body_not_json_object()
+        data: Final = str_keyed_body if isinstance(str_keyed_body, dict) else {**unpackable_mapping(queued_body)}
         data.pop(STREAM_USAGE_INJECTED_FIELD, None)
         await refuse_s3_media_the_key_may_not_read(
             data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
@@ -20378,10 +20371,6 @@ async def async_queue_request(
         if failure is e:
             raise
         raise failure from e
-
-
-def _queued_body_not_json_object() -> NoReturn:
-    raise TypeError("queued request body must be a JSON object")
 
 
 def _queued_call_failure(e: Exception) -> ProxyException:

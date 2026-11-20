@@ -2,7 +2,6 @@
 OpenAI-like chat completion transformation
 """
 
-from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -11,12 +10,14 @@ from typing_extensions import TypedDict
 
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
-    decoded_json_object,
     iter_items,
     json_contains,
     keyword_arguments,
+    length_of,
+    require_get,
     set_provider_response_headers_in_hidden_params,
     subscript,
+    unpackable_mapping,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -37,12 +38,6 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 class _ModelResponseFields(TypedDict, total=False, extra_items=object):
     pass
-
-
-def _json_len(value: object) -> int:
-    if isinstance(value, Sized):
-        return len(value)
-    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 class OpenAILikeChatConfig(OpenAIGPTConfig):
@@ -78,24 +73,21 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if not json_mode:
             return message
 
-        message_fields: Final = decoded_json_object(message)
+        message_fields: Final = require_get(message)
         _tool_calls: Final = message_fields.get("tool_calls")
 
-        if _tool_calls is None or _json_len(_tool_calls) != 1:
+        if _tool_calls is None or length_of(_tool_calls) != 1:
             return message
 
-        arguments: Final = decoded_json_object(subscript(subscript(_tool_calls, 0), "function")).get("arguments")
-        return {**message_fields, "content": arguments or "", "tool_calls": None}
+        arguments: Final = require_get(subscript(subscript(_tool_calls, 0), "function")).get("arguments")
+        return {**unpackable_mapping(message), "content": arguments or "", "tool_calls": None}
 
     @staticmethod
     def _json_mode_convert_choice(choice: object, json_mode: bool) -> object:
-        choice_fields: Final = decoded_json_object(choice)
-        return {
-            **choice_fields,
-            "message": OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
-                choice_fields.get("message"), json_mode
-            ),
-        }
+        message: Final = OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
+            require_get(choice).get("message"), json_mode
+        )
+        return {**unpackable_mapping(choice), "message": message}
 
     @staticmethod
     def _json_mode_convert_choices(response_json: object, json_mode: bool) -> object:
@@ -103,7 +95,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         converted: Final = [
             OpenAILikeChatConfig._json_mode_convert_choice(choice, json_mode) for choice in iter_items(choices)
         ]
-        return {**decoded_json_object(response_json), "choices": converted or choices}
+        return {**keyword_arguments(response_json, ModelResponse), "choices": converted or choices}
 
     @staticmethod
     def _sanitize_usage_obj(response_json: object) -> object:
@@ -115,13 +107,12 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         """
         if not json_contains(response_json, "usage"):
             return response_json
-        response_fields: Final = decoded_json_object(response_json)
-        usage: Final = response_fields.get("usage")
+        usage: Final = require_get(response_json).get("usage")
         usage_fields: Final = as_str_mapping(usage)
         if not isinstance(usage_fields, dict):
             return response_json
         return {
-            **response_fields,
+            **keyword_arguments(response_json, ModelResponse),
             "usage": {
                 key: 0 if key.endswith("_tokens") and value is None else value for key, value in usage_fields.items()
             },

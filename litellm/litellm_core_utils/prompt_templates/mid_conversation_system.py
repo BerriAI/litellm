@@ -37,7 +37,7 @@ from typing import Final, Literal, TypeAlias, TypeVar
 
 from pydantic import ValidationError
 
-from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.core_helpers import spread
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
@@ -312,13 +312,6 @@ def anthropic_tool_search_result(block: object) -> AnthropicToolSearchToolResult
         return None
 
 
-def _spread_items(value: object) -> Iterable[object]:
-    try:
-        return iter_items(value)
-    except TypeError:
-        raise TypeError(f"Value after * must be an iterable, not {type(value).__name__}") from None
-
-
 def find_anthropic_server_tool_result(
     tool_id: str,
     web_search_results: object,
@@ -326,7 +319,7 @@ def find_anthropic_server_tool_result(
 ) -> dict[str, object] | None:
     if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
         return None
-    candidates: Final = (*_spread_items(web_search_results or ()), *_spread_items(tool_results or ()))
+    candidates: Final = (*spread(web_search_results or ()), *spread(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
         None,

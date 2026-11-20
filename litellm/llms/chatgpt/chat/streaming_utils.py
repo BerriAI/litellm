@@ -40,7 +40,7 @@ _DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
 def _next_chunk(stream: object) -> ModelResponseStream:
     if any("__next__" in vars(klass) for klass in type(stream).__mro__):
         return next(require_attributes(stream, _SyncChunkStream, "__next__"))
-    raise TypeError(f"'{type(stream).__name__}' object is not an iterator")
+    return next(stream)  # pyright: ignore[reportUnknownVariableType, reportArgumentType]  # raises its own TypeError
 
 
 def _first_choice_delta(chunk: ModelResponseStream) -> Delta | None:

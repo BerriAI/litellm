@@ -11,7 +11,7 @@ import rich
 from rich.table import Table
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_get
 from litellm.models.credentials import UserConnectionPollResponse, UserConnectionPollStatus
 
 from ...credentials import CredentialsManagementClient
@@ -83,13 +83,13 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
 
         # Add rows
         for cred in iter_items(response.get("credentials", [])):
-            entry = decoded_json_object(cred)
+            entry = require_get(cred)
             info = entry.get("credential_info", {})
             table.add_row(
                 str(entry.get("credential_name", "")),
                 entry.get("display_name") or "",
                 str(entry.get("source", "")),
-                str(decoded_json_object(info).get("custom_llm_provider", "")),
+                str(require_get(info).get("custom_llm_provider", "")),
             )
 
         rich.print(table)

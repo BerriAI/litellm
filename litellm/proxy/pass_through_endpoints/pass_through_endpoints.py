@@ -79,9 +79,9 @@ from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
-    has_attributes,
     iter_items,
     require_attributes,
+    set_item,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
@@ -4867,10 +4867,6 @@ class _IdentifiedEndpoint(Protocol):
     def id(self) -> object: ...
 
 
-class _IndexAssignable(Protocol):
-    def __setitem__(self, index: int, value: object, /) -> None: ...
-
-
 class _PopsIndex(Protocol):
     def pop(self, index: int, /) -> object: ...
 
@@ -4878,12 +4874,6 @@ class _PopsIndex(Protocol):
 def _stored_endpoint_id(endpoint: object) -> object:
     stored: Final = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
     return require_attributes(stored, _IdentifiedEndpoint, "id").id
-
-
-def _index_assignable(endpoints: object) -> _IndexAssignable:
-    if has_attributes(endpoints, _IndexAssignable, "__setitem__"):
-        return endpoints
-    raise TypeError(f"'{type(endpoints).__name__}' object does not support item assignment")
 
 
 def _request_app(request: Request) -> FastAPI:
@@ -5127,7 +5117,7 @@ async def update_pass_through_endpoints(
     updated_endpoint: Final = PassThroughGenericEndpoint.model_validate(endpoint_dict)
 
     # Update the list
-    _index_assignable(pass_through_endpoint_data)[endpoint_index] = endpoint_dict
+    set_item(pass_through_endpoint_data, endpoint_index, endpoint_dict)
     replaced_llm_api_routes: Final = InitPassThroughEndpointHelpers.llm_api_routes_of_endpoint(endpoint_id)
 
     ## Update db

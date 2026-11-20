@@ -20,12 +20,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from types import TracebackType
-from typing import TYPE_CHECKING, Final, Protocol, SupportsFloat, SupportsIndex
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
-from typing_extensions import Buffer, LiteralString, ReadOnly, TypedDict
+from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import float_of
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -314,15 +315,9 @@ async def spend_logs_seed_totals(
     if not rows:
         return WindowSeedTotals(total=0.0, before_batch=0.0)
     return WindowSeedTotals(
-        total=_seed_total(rows[0].get("total") or 0.0),
-        before_batch=_seed_total(rows[0].get("before_batch") or 0.0),
+        total=float_of(rows[0].get("total") or 0.0),
+        before_batch=float_of(rows[0].get("before_batch") or 0.0),
     )
-
-
-def _seed_total(value: object) -> float:
-    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
-        return float(value)
-    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
 
 
 def _exclusion_upper_bound(started_at: datetime) -> datetime:

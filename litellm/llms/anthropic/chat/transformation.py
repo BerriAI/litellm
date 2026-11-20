@@ -36,9 +36,10 @@ from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     json_contains,
     map_finish_reason,
+    require_attributes,
     subscript,
 )
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     defs_unpacked,
     invalid_type_message,
@@ -3554,10 +3555,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         response_format_schema: Final = (
             JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None
         )
-        if not isinstance(completion_response, dict):
-            raise_for_non_object_body(completion_response)
         model_response = self.transform_parsed_response(
-            completion_response=completion_response,
+            completion_response=response_body(completion_response),
             raw_response=raw_response,
             model_response=model_response,
             json_mode=json_mode,
@@ -3627,9 +3626,11 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
-def raise_for_non_object_body(completion_response: object) -> NoReturn:
-    _ = subscript(completion_response, "error" if json_contains(completion_response, "error") else "content")
-    raise TypeError(f"expected a JSON object response body, got {type(completion_response).__name__}")
+def response_body(completion_response: object) -> dict[str, object]:
+    if is_str_keyed_dict(completion_response):
+        return completion_response
+    subscript(completion_response, "error" if json_contains(completion_response, "error") else "content")
+    return require_attributes(completion_response, dict[str, object], "__getitem__")
 
 
 class JsonModeRequest(BaseModel):

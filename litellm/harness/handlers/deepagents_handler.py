@@ -14,7 +14,7 @@ import importlib
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
@@ -22,7 +22,7 @@ from litellm.harness.handlers.base import BaseHarnessHandler
 from litellm.harness.handlers.cli_handler import copy_skills
 from litellm.harness.options import DeepAgentsOptions
 from litellm.harness.types import Approval, Event
-from litellm.litellm_core_utils.core_helpers import KeywordArguments, has_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import callable_of, require_attributes, subscript, unpackable_mapping
 from litellm.llms.deepagents.harness.transformation import (
     EXECUTE_TOOLS,
     INSTALL_HINT,
@@ -107,25 +107,11 @@ def load_deps() -> DeepAgentsDeps:
 
 
 def _in_memory_saver(memory: ModuleType) -> object:
-    if has_attributes(memory, _MemoryModule, "InMemorySaver"):
-        return memory.InMemorySaver
-    _raise_missing_attribute(memory, "InMemorySaver")
+    return require_attributes(memory, _MemoryModule, "InMemorySaver").InMemorySaver
 
 
 def _general_purpose_subagent(subagents: ModuleType) -> object:
-    if has_attributes(subagents, _SubagentsModule, "GENERAL_PURPOSE_SUBAGENT"):
-        return subagents.GENERAL_PURPOSE_SUBAGENT
-    _raise_missing_attribute(subagents, "GENERAL_PURPOSE_SUBAGENT")
-
-
-def _raise_missing_attribute(module: ModuleType, name: str) -> NoReturn:
-    raise AttributeError(f"module '{module.__name__}' has no attribute '{name}'", name=name, obj=module)
-
-
-def _new_checkpointer(factory: object) -> object:
-    if callable(factory):
-        return factory()
-    raise TypeError(f"'{type(factory).__name__}' object is not callable")
+    return require_attributes(subagents, _SubagentsModule, "GENERAL_PURPOSE_SUBAGENT").GENERAL_PURPOSE_SUBAGENT
 
 
 _SHARED_CHECKPOINTER: dict[str, object] = {}  # mutable-ok: process-wide lazy singleton slot for the checkpointer
@@ -135,7 +121,7 @@ def shared_checkpointer(deps: DeepAgentsDeps) -> object:
     """One in-memory checkpointer per process, so resume() works across sessions in-process."""
     saver = _SHARED_CHECKPOINTER.get("saver")
     if saver is None:
-        saver = _new_checkpointer(deps.checkpointer_cls)
+        saver = callable_of(deps.checkpointer_cls)()
         _SHARED_CHECKPOINTER["saver"] = saver
     return saver
 
@@ -287,9 +273,10 @@ class DeepAgentsHandler(BaseHarnessHandler):
         has_general = any(
             isinstance(s, Mapping) and s.get("name") == subscript(defaults, "name") for s in user_subagents
         )
-        if not has_attributes(defaults, KeywordArguments, "keys"):
-            raise TypeError(f"'{type(defaults).__name__}' object is not a mapping")
-        spec = {**defaults, "middleware": self._middleware(deps, blocked)}  # mutable-ok: SubAgent dict
+        spec = {
+            **unpackable_mapping(defaults),
+            "middleware": self._middleware(deps, blocked),
+        }  # mutable-ok: SubAgent dict
         general = (spec,) if blocked and not has_general else ()
         return [*general, *user_subagents]  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
 

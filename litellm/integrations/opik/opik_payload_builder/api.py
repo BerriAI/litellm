@@ -7,7 +7,7 @@ from typing import Any, Final
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.integrations.opik import utils
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, subscript
+from litellm.litellm_core_utils.core_helpers import require_attributes, subscript
 
 from . import extractors, payload_builders, types
 
@@ -52,8 +52,8 @@ def build_opik_payload(
     )
 
     # Extract and merge Opik metadata
-    opik_metadata: Final = decoded_json_object(
-        extractors.extract_opik_metadata(litellm_metadata, standard_logging_metadata)
+    opik_metadata: Final = require_attributes(
+        extractors.extract_opik_metadata(litellm_metadata, standard_logging_metadata), dict[str, object], "get"
     )
 
     # Extract project name

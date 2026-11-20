@@ -24,10 +24,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import (
+    SupportsGet,
     attribute_items,
-    decoded_json_object,
     iter_items,
     require_attributes,
+    require_get,
     subscript,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
@@ -692,9 +693,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             try:
                 while True:
                     raw_message = await self._await_cato_message(websocket, sender)
-                    result: Mapping[str, object] = decoded_json_object(
-                        _DECODED_JSON.validate_python(json.loads(raw_message))
-                    )
+                    result: SupportsGet = require_get(_DECODED_JSON.validate_python(json.loads(raw_message)))
                     if verified_chunk := result.get("verified_chunk"):
                         yield ModelResponseStream.model_validate(verified_chunk)
                         continue

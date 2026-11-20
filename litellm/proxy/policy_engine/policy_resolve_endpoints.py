@@ -14,7 +14,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_POLICY_ESTIMATE_IMPACT_ROWS
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -76,7 +76,7 @@ def _parse_metadata(raw_metadata: object) -> dict:
             decoded: Final = _DECODED_METADATA.validate_python(json.loads(raw_metadata))
         except (json.JSONDecodeError, TypeError):
             return {}
-        return dict(decoded_json_object(decoded))
+        return require_attributes(decoded, dict[str, object], "get")
     return raw_metadata if isinstance(raw_metadata, dict) else {}
 
 

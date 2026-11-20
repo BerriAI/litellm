@@ -19,8 +19,6 @@ from typing import (
     Literal,
     NoReturn,
     Protocol,
-    SupportsIndex,
-    SupportsInt,
     TypeAlias,
     cast,
     overload,
@@ -30,7 +28,7 @@ from typing import (
 import httpx
 from openai._streaming import SSEDecoder
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import Buffer, TypeIs
+from typing_extensions import TypeIs
 
 import litellm
 from litellm.constants import (
@@ -44,10 +42,13 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
     attribute_or_none,
+    callable_of,
     error_status_code,
+    int_of,
     process_response_headers,
     provider_reported_usage_cost,
     require_attributes,
+    set_item,
     set_response_cost_in_hidden_params,
     stamp_litellm_bill_on_usage,
 )
@@ -164,15 +165,8 @@ class _GetsByKey(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
-@runtime_checkable
-class _SupportsSetItem(Protocol):
-    def __setitem__(self, key: str, value: object, /) -> None: ...
-
-
-def _assignable(container: object) -> _SupportsSetItem:
-    if isinstance(container, _SupportsSetItem):
-        return container
-    raise TypeError(f"'{type(container).__name__}' object does not support item assignment")
+class _TerminalEvent(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
 
 
 class _PostStreamingDeploymentHook(Protocol):
@@ -198,20 +192,11 @@ _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
 _DECODED_JSON: Final = TypeAdapter(object)
 _HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 def _required_attribute(source: object, name: str) -> object:
     return attribute_or_none(require_attributes(source, object, name), name)
-
-
-def _require_callable(value: object) -> Callable[..., object]:
-    if callable(value):
-        return value
-    raise TypeError(f"'{type(value).__name__}' object is not callable")
-
-
-def _raise_missing_get(value: object) -> NoReturn:
-    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -219,7 +204,7 @@ def _load_json_object(payload: str | bytes) -> dict[str, object]:
     decoded: Final = _load_json_value(payload)
     if _is_json_object(decoded):
         return decoded
-    _raise_missing_get(decoded)
+    return _JSON_OBJECT.validate_python(require_attributes(decoded, _GetsByKey, "get"))
 
 
 def _load_json_value(payload: str | bytes) -> object:
@@ -403,19 +388,6 @@ def _error_event_error_object(event: object) -> object:
     if nested_error is not None:
         return nested_error
     return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _int_status_code(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
@@ -853,7 +825,7 @@ class BaseResponsesAPIStreamingIterator:
             llm_provider=self.custom_llm_provider or "",
             original_exception=mapped_exception,
             response=httpx.Response(
-                status_code=_int_status_code(mapped_status) if mapped_status is not None else 503,
+                status_code=int_of(mapped_status) if mapped_status is not None else 503,
                 headers=provider_request_id_headers(self._raw_response_headers),
                 request=httpx.Request(method="POST", url=f"https://{self.custom_llm_provider or ''}.com/v1/"),
             ),
@@ -918,9 +890,7 @@ class BaseResponsesAPIStreamingIterator:
 
         should_store_result_in_cache: Final = _required_attribute(caching_handler, _SHOULD_STORE_RESULT_IN_CACHE_ATTR)
         original_function: Final = attribute_or_none(caching_handler, "original_function")
-        if not _require_callable(should_store_result_in_cache)(
-            original_function=original_function, kwargs=request_kwargs
-        ):
+        if not callable_of(should_store_result_in_cache)(original_function=original_function, kwargs=request_kwargs):
             return
 
         cache: Final = litellm.cache
@@ -2395,7 +2365,7 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
                     continue
                 text = content_block.get("text")
                 if isinstance(text, str):
-                    unmasked = _require_callable(unmask_pii_text)(text, pii_tokens)
+                    unmasked = callable_of(unmask_pii_text)(text, pii_tokens)
                     if unmasked != text:
                         content_block["text"] = unmasked
                         modified = True
@@ -2404,7 +2374,7 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
     if event_type in _PII_DELTA_EVENT_TYPES:
         delta: Final = evt_obj.get("delta")
         if isinstance(delta, str):
-            unmasked = _require_callable(unmask_pii_text)(delta, pii_tokens)
+            unmasked = callable_of(unmask_pii_text)(delta, pii_tokens)
             if unmasked != delta:
                 evt_obj["delta"] = unmasked
                 return json.dumps(evt_obj)
@@ -3335,7 +3305,7 @@ class ManagedResponsesWebSocketHandler:
         self._session_history[response_id] = messages
 
     @staticmethod
-    def _extract_response_id(completed_event: _MutableJsonObject) -> str | None:
+    def _extract_response_id(completed_event: _TerminalEvent) -> str | None:
         """
         Pull the raw (decoded) response ID out of a terminal (``response.completed`` or ``response.incomplete``) event.
         Returns *None* if the event doesn't contain a usable ID.
@@ -3350,7 +3320,7 @@ class ManagedResponsesWebSocketHandler:
 
     @staticmethod
     def _extract_output_messages(
-        completed_event: _MutableJsonObject,
+        completed_event: _TerminalEvent,
     ) -> list[dict[str, object]]:
         """
         Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
@@ -3599,7 +3569,7 @@ class ManagedResponsesWebSocketHandler:
         litellm_metadata: Final = require_attributes(
             call_kwargs.get("litellm_metadata") or dict[str, object](), _GetsByKey, "get"
         )
-        proxy_server_request = litellm_metadata.get("proxy_server_request") or {}
+        proxy_server_request: Final = litellm_metadata.get("proxy_server_request") or {}
         if not isinstance(proxy_server_request, dict):
             return
         body: Final = dict(proxy_server_request.get("body") or {})
@@ -3609,11 +3579,11 @@ class ManagedResponsesWebSocketHandler:
         for k in ("tools", "tool_choice", "instructions", "metadata"):
             if k in call_kwargs and call_kwargs[k] is not None:
                 body[k] = call_kwargs[k]
-        proxy_server_request = {**proxy_server_request, "body": body}
+        forwarded_request: Final[dict[str, object]] = {**proxy_server_request, "body": body}
         if "litellm_metadata" not in call_kwargs:
             call_kwargs["litellm_metadata"] = {}
-        _assignable(call_kwargs["litellm_metadata"])["proxy_server_request"] = proxy_server_request
-        call_kwargs["proxy_server_request"] = proxy_server_request
+        set_item(call_kwargs["litellm_metadata"], "proxy_server_request", forwarded_request)
+        call_kwargs["proxy_server_request"] = forwarded_request
 
     async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> object:
         """
@@ -3661,12 +3631,11 @@ class ManagedResponsesWebSocketHandler:
         """Store this terminal (``response.completed`` or ``response.incomplete``) event for future history lookups."""
         if terminal_event is None:
             return
-        if not _is_json_object(terminal_event):
-            _raise_missing_get(terminal_event)
-        new_response_id: Final = self._extract_response_id(terminal_event)
+        event: Final = require_attributes(terminal_event, _TerminalEvent, "get")
+        new_response_id: Final = self._extract_response_id(event)
         if not new_response_id:
             return
-        output_msgs: Final = self._extract_output_messages(terminal_event)
+        output_msgs: Final = self._extract_output_messages(event)
         all_messages: Final = prior_history + current_messages + output_msgs
         self._store_history(new_response_id, all_messages)
         verbose_logger.debug(

@@ -1012,9 +1012,7 @@ def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str | bool]]) -
         return
 
     for key, value in decrypt_env().items():
-        if not isinstance(value, str):
-            raise TypeError(f"str expected, not {type(value).__name__}")
-        os.environ[key] = value
+        os.environ[key] = value  # pyright: ignore[reportArgumentType]  # environ raises its own TypeError for a bool
 
 
 def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | None) -> "Tls | None":

@@ -825,9 +825,9 @@ class RegisterGuardrailRequest(LiteLLMBaseModel):
 
 
 def _parsed_api_base(api_base: object) -> ParseResult | ParseResultBytes:
-    if isinstance(api_base, (str, bytes, bytearray)):
-        return urlparse(api_base)
-    raise AttributeError(f"{type(api_base).__name__!r} object has no attribute 'decode'", name="decode", obj=api_base)
+    return urlparse(  # pyright: ignore[reportCallIssue, reportUnknownVariableType]  # urlparse raises its own error
+        api_base  # pyright: ignore[reportArgumentType]  # urlparse raises its own error
+    )
 
 
 class RegisterGuardrailResponse(LiteLLMBaseModel):

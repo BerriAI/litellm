@@ -10,7 +10,7 @@ import rich
 from rich.table import Table
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_get, subscript
 
 from ...keys import KeysManagementClient
 from .auth import sized_len
@@ -122,7 +122,7 @@ def list(
         table.add_column("Team ID", style="yellow")
         table.add_column("Spend", style="red")
         for key in iter_items(response.get("keys", [])):
-            row = decoded_json_object(key)
+            row = require_get(key)
             table.add_row(
                 str(row.get("token", "")),
                 str(row.get("key_alias", "")),
@@ -273,7 +273,7 @@ def _filter_keys_by_created_since(
 
     filtered_keys: Final[builtins.list[object]] = []
     for key in source_keys:
-        key_created_at = decoded_json_object(key).get("created_at")
+        key_created_at = require_get(key).get("created_at")
         if key_created_at:
             # Parse the key's created_at timestamp
             if isinstance(key_created_at, str):
@@ -302,7 +302,7 @@ def _display_dry_run_table(source_keys: Sequence[object]) -> None:
     table.add_column("Created", style="cyan")
 
     for key in source_keys:
-        row = decoded_json_object(key)
+        row = require_get(key)
         created_at = row.get("created_at", "")
         # Format the timestamp if it exists
         if created_at:
@@ -319,8 +319,10 @@ def _display_dry_run_table(source_keys: Sequence[object]) -> None:
 
 def _prepare_key_import_data(key: object) -> _KeyImportFields:
     """Prepare key data for import by extracting relevant fields."""
-    fields: Final = decoded_json_object(key)
-    return _KeyImportFields(**{field: fields[field] for field in _KEY_IMPORT_FIELD_NAMES if fields.get(field)})
+    fields: Final = require_get(key)
+    return _KeyImportFields(
+        **{field: subscript(fields, field) for field in _KEY_IMPORT_FIELD_NAMES if fields.get(field)}
+    )
 
 
 def _import_keys_to_destination(source_keys: Sequence[object], dest_client: KeysManagementClient) -> tuple[int, int]:
@@ -339,12 +341,12 @@ def _import_keys_to_destination(source_keys: Sequence[object], dest_client: Keys
             # The generate method returns JSON data directly, not a Response object
             imported_count += 1
 
-            key_alias = decoded_json_object(key).get("key_alias", "N/A")
+            key_alias = require_get(key).get("key_alias", "N/A")
             click.echo(f"Imported key: {key_alias}")
 
         except Exception as e:
             failed_count += 1
-            key_alias = decoded_json_object(key).get("key_alias", "N/A")
+            key_alias = require_get(key).get("key_alias", "N/A")
             click.echo(f"Failed to import key {key_alias}: {e}", err=True)
 
     return imported_count, failed_count

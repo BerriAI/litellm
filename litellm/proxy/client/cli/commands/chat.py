@@ -11,7 +11,13 @@ from rich.prompt import Prompt
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, decoded_json_object, subscript
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    concatenated,
+    require_get,
+    subscript,
+)
 
 from ... import Client
 from ...chat import ChatClient
@@ -368,16 +374,16 @@ def _handle_special_commands(
 
 
 def _stream_chunk_content(chunk: object) -> str:
-    choices: Final = decoded_json_object(chunk).get("choices", ())
+    choices: Final = require_get(chunk).get("choices", ())
     if sized_len(choices) == 0:
         return ""
-    delta: Final = decoded_json_object(subscript(choices, 0)).get("delta", {})
-    content: Final = decoded_json_object(delta).get("content", "")
+    delta: Final = require_get(subscript(choices, 0)).get("delta", {})
+    content: Final = require_get(delta).get("content", "")
     if not content:
         return ""
     if isinstance(content, str):
         return content
-    raise TypeError(f'can only concatenate str (not "{type(content).__name__}") to str')
+    return concatenated("", content)
 
 
 def _stream_response(

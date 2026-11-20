@@ -14,7 +14,6 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.router_api import RoutingContext
 
 if TYPE_CHECKING:
@@ -41,7 +40,8 @@ class SemanticGuardRouteLoader:
                 f"Available templates: {SemanticGuardRouteLoader.list_builtin_templates()}"
             )
         with open(file_path, "r") as f:
-            return decoded_json_object(_DECODED_YAML.validate_python(yaml.safe_load(f)))
+            template: Final = _DECODED_YAML.validate_python(yaml.safe_load(f))
+        return template  # pyright: ignore[reportReturnType]  # main returned the raw YAML document
 
     @staticmethod
     def list_builtin_templates() -> list[str]:

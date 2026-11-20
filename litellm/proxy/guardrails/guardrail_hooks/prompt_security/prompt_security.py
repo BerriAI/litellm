@@ -16,7 +16,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts, message_with_slot_texts
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -528,7 +528,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
         upload_response.raise_for_status()
         upload_result: Final = _DECODED_JSON.validate_python(upload_response.json())
-        job_id: Final = decoded_json_object(upload_result).get("jobId")
+        job_id: Final = require_get(upload_result).get("jobId")
 
         self._log_api_response(
             url=f"{self.api_base}/api/sanitizeFile",

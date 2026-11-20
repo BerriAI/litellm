@@ -29,7 +29,7 @@ from typing_extensions import ReadOnly, Required
 from yaml.events import AliasEvent, ScalarEvent
 from yaml.nodes import MappingNode, Node, ScalarNode
 
-from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy.mcp_server.exceptions import (
     MCPOpenApiUpstreamError,
@@ -243,14 +243,15 @@ def _scalar_text(node: ScalarNode) -> str:
             raise ValueError("Invalid YAML OpenAPI spec")
 
 
+class _NodePairs(Protocol):
+    @property
+    def value(self) -> object: ...
+
+
 def _mapping_keys(node: MappingNode) -> Iterator[object]:
-    match node:
-        case MappingNode(value=object() as pairs):
-            for pair in iter_items(pairs):
-                key, _ = iter_items(pair)
-                yield key
-        case _:
-            raise ValueError("Invalid YAML OpenAPI spec")
+    for pair in iter_items(require_attributes(node, _NodePairs, "value").value):
+        key, _ = iter_items(pair)
+        yield key
 
 
 class _OpenAPISafeLoader(yaml.SafeLoader):

@@ -13,10 +13,9 @@ import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, SupportsIndex, SupportsInt, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from typing_extensions import (
-    Buffer,
     ReadOnly,
     TypedDict,
     TypeIs,  # noqa: TID251  # narrows the caller's tools without copying them
@@ -37,7 +36,13 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, lax_bool, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    int_of,
+    lax_bool,
+    require_attributes,
+    require_get,
+)
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_property_count,
@@ -2450,23 +2455,10 @@ def get_bedrock_response_stream_shape():
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
 
 
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _modeled_status_int(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
-
-
 def _modeled_error_status(member: Shape) -> int | None:
-    error: Final = decoded_json_object(_JSON_VALUE.validate_python((member.metadata or {}).get("error", {})))
+    error: Final = require_get(_JSON_VALUE.validate_python((member.metadata or {}).get("error", {})))
     status: Final = error.get("httpStatusCode")
-    return None if status is None else _modeled_status_int(status)
+    return None if status is None else int_of(status)
 
 
 def _structure_members(shape: Shape | None) -> Mapping[str, Shape]:

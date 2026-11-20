@@ -11,7 +11,7 @@ import httpx
 from pydantic import BaseModel, TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues
@@ -203,7 +203,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                         headers=self.headers,
                     ).json()
                 )
-                if decoded_json_object(cfg).get("executableId") == "orchestration":
+                if require_get(cfg).get("executableId") == "orchestration":
                     valid.append((dep["deploymentUrl"], dep["createdAt"]))
             # newest first
         return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]

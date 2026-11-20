@@ -24,7 +24,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -288,7 +287,8 @@ class lakeraAI_Moderation(CustomGuardrail):
                 }
             }
             """
-            self._check_response_flagged(response=decoded_json_object(_DECODED_JSON.validate_python(response.json())))
+            body: Final = _DECODED_JSON.validate_python(response.json())
+            self._check_response_flagged(body)  # pyright: ignore[reportArgumentType]  # main passed the raw JSON
 
     @log_guardrail_information
     async def async_pre_call_hook(

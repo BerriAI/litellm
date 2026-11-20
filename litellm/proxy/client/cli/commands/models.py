@@ -14,11 +14,12 @@ from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.core_helpers import (
+    SupportsGet,
     as_object_list,
-    decoded_json_object,
     iter_items,
     json_contains,
     require_attributes,
+    require_get,
     subscript,
 )
 
@@ -59,21 +60,21 @@ class ModelYamlInfo:
 def _get_model_info_obj_from_yaml(model: dict[str, Any], model_id: str) -> ModelYamlInfo:
     """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
     model_name: Final[str] = model["model_name"]
-    model_params: Final = decoded_json_object(_DECODED_YAML.validate_python(model["litellm_params"]))
-    model_info: Final = decoded_json_object(_DECODED_YAML.validate_python(model.get("model_info", {})))
-    access_groups: Final = model_info.get("access_groups", [])
+    model_params: Final = _DECODED_YAML.validate_python(model["litellm_params"])
+    model_info: Final = _DECODED_YAML.validate_python(model.get("model_info", {}))
+    access_groups: Final = require_get(model_info).get("access_groups", [])
     provider: Final = model_id.split("/", 1)[0] if "/" in model_id else model_id
     return ModelYamlInfo(
         model_name=model_name,
-        model_params=model_params,
-        model_info=model_info,
+        model_params=model_params,  # pyright: ignore[reportArgumentType]  # main kept the raw YAML value
+        model_info=model_info,  # pyright: ignore[reportArgumentType]  # main kept the raw YAML value
         model_id=model_id,
         access_groups=access_groups,
         provider=provider,
     )
 
 
-def _str_field(model: Mapping[str, object], key: str, default: str) -> str:
+def _str_field(model: SupportsGet, key: str, default: str) -> str:
     return str(model.get(key, default))
 
 
@@ -158,7 +159,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
 
         # Add rows
         for model in iter_items(models_list):
-            entry = decoded_json_object(model)
+            entry = require_get(model)
             created = entry.get("created")
             # Convert string timestamp to integer if needed
             if isinstance(created, str) and created.isdigit():

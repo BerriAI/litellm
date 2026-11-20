@@ -22,7 +22,7 @@ from typing import (
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_get
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PolicyRepository
 from litellm.types.proxy.policy_engine import (
@@ -246,7 +246,7 @@ class PolicyRegistry:
         condition = None
         condition_data: Final = policy_data.get("condition")
         if condition_data:
-            condition = PolicyCondition.model_validate({"model": decoded_json_object(condition_data).get("model")})
+            condition = PolicyCondition.model_validate({"model": require_get(condition_data).get("model")})
 
         # Parse pipeline (optional ordered guardrail execution)
         pipeline: Final = PolicyRegistry._parse_pipeline(policy_data.get("pipeline"))
@@ -271,7 +271,7 @@ class PolicyRegistry:
         if pipeline_data is None:
             return None
 
-        pipeline_fields: Final = decoded_json_object(pipeline_data)
+        pipeline_fields: Final = require_get(pipeline_data)
         steps_data: Final = pipeline_fields.get("steps", [])
         steps: Final = [_pipeline_step(step_data) for step_data in iter_items(steps_data)]
 

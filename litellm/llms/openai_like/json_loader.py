@@ -5,16 +5,16 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 import json
 import os
 import platform
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._version import version as _LITELLM_VERSION
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, subscript
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes, subscript
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
@@ -30,11 +30,8 @@ _VERSION_PLACEHOLDER: Final = "{version}"
 _PYTHON_PLACEHOLDER: Final = "{python}"
 
 
-def _provider_entries(data: object) -> Mapping[str, object]:
-    entries: Final = as_str_mapping(data)
-    if entries is not None:
-        return entries
-    raise AttributeError(f"'{type(data).__name__}' object has no attribute 'items'", name="items", obj=data)
+class _ProviderEntries(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
 
 
 class SimpleProviderConfig:
@@ -99,7 +96,7 @@ def _provider_config(slug: str, config: object) -> SimpleProviderConfig:
     if isinstance(mapping, dict):
         return SimpleProviderConfig(slug, mapping)
     subscript(config, "base_url")
-    raise TypeError(f"provider config must be a JSON object, not {type(config).__name__}")
+    return SimpleProviderConfig(slug, require_attributes(config, dict[str, object], "__getitem__"))
 
 
 class JSONProviderRegistry:
@@ -125,7 +122,7 @@ class JSONProviderRegistry:
             with open(json_path) as f:
                 data: Final = _DECODED_JSON.validate_python(json.load(f))
 
-            for slug, config in _provider_entries(data).items():
+            for slug, config in require_attributes(data, _ProviderEntries, "items").items():
                 cls._providers[slug] = _provider_config(slug, config)
 
             cls._loaded = True

@@ -1,7 +1,7 @@
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence, Sized
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -16,7 +16,14 @@ from litellm.integrations.anthropic_cache_control_hook import (
     deployment_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, process_response_headers
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    length_of,
+    normalize_drop_params,
+    process_response_headers,
+    subscript,
+    sum_of,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -346,36 +353,10 @@ def _json_object_body(response: _JsonObjectResponse) -> dict[str, object]:
     return response.json()
 
 
-@runtime_checkable
-class _Sliceable(Protocol):
-    def __getitem__(self, key: slice, /) -> object: ...
-
-
-@runtime_checkable
-class _ConcatenatesStr(Protocol):
-    def __add__(self, other: str, /) -> object: ...
-
-
-def _sized_len(value: object) -> int:
-    if isinstance(value, Sized):
-        return len(value)
-    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
-
-
-def _head(value: object, stop: int) -> object:
-    if isinstance(value, _Sliceable):
-        return value[:stop]
-    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
-
-
-def _with_ellipsis(value: object) -> object:
-    if isinstance(value, _ConcatenatesStr):
-        return value + "..."
-    raise TypeError(f"unsupported operand type(s) for +: '{type(value).__name__}' and 'str'")
-
-
 def _reasoning_summary(reasoning_content: object) -> object:
-    return _with_ellipsis(_head(reasoning_content, 100)) if _sized_len(reasoning_content) > 100 else reasoning_content
+    if length_of(reasoning_content) > 100:
+        return sum_of(subscript(reasoning_content, slice(100)), "...")
+    return reasoning_content
 
 
 def list_input_items_query_params(

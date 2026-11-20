@@ -24,7 +24,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     ModifyResponseException,
 )
-from litellm.litellm_core_utils.core_helpers import KeywordArguments, has_attributes
+from litellm.litellm_core_utils.core_helpers import unpackable_mapping
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.proxy._types import (
     LitellmUserRoles,
@@ -125,16 +125,6 @@ _NO_TOOL_ARGUMENTS: Final[Mapping[str, Never]] = MappingProxyType({})
 _NO_REQUEST_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 _DECODED_JSON: Final = TypeAdapter(object)
-
-
-def _missing_get(value: object) -> Never:
-    raise AttributeError(f"'{type(value).__name__}' object has no attribute 'get'", name="get", obj=value)
-
-
-def _unpackable_metadata(metadata: object) -> KeywordArguments:
-    if has_attributes(metadata, KeywordArguments, "keys"):
-        return metadata
-    raise TypeError(f"'{type(metadata).__name__}' object is not a mapping")
 
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
@@ -1366,7 +1356,7 @@ if MCP_AVAILABLE:
 
             tool_name: Final[str | None] = body.get("name")
             decoded_body: Final = _DECODED_JSON.validate_python(body)
-            data = decoded_body if is_str_keyed_dict(decoded_body) else _missing_get(decoded_body)
+            data = decoded_body if is_str_keyed_dict(decoded_body) else {**unpackable_mapping(decoded_body)}
             tool_arguments: Final[object] = data.get("arguments") or {}
 
             from litellm.proxy.mcp_server.tool_search import VIRTUAL_TOOL_NAMES
@@ -1396,7 +1386,7 @@ if MCP_AVAILABLE:
 
             data["model"] = f"MCP: {tool_name}"
             model_metadata: Final[_MCPModelMetadata] = {
-                **_unpackable_metadata(data.get("metadata") or _NO_REQUEST_METADATA),
+                **unpackable_mapping(data.get("metadata") or _NO_REQUEST_METADATA),
                 "model_group": f"MCP: {tool_name}",
             }
             data["metadata"] = model_metadata

@@ -10,7 +10,7 @@ contract of `base_llm_http_handler.audio_transcriptions`.
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, NoReturn, SupportsFloat, SupportsIndex
@@ -19,7 +19,7 @@ from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import Buffer
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items, joined, require_get
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -179,14 +179,6 @@ def _as_float(value: object) -> float:
     if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
         return float(value)
     raise TypeError(f"float() argument must be a string or a real number, not {type(value).__name__!r}")
-
-
-def _concatenated(texts: Sequence[object]) -> str:
-    strings: Final = tuple(text for text in texts if isinstance(text, str))
-    if len(strings) == len(texts):
-        return "".join(strings)
-    first_bad: Final = next(position for position, text in enumerate(texts) if not isinstance(text, str))
-    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(texts[first_bad]).__name__} found")
 
 
 def _is_soniox_context(value: object) -> bool:
@@ -375,8 +367,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             transcript = payload if isinstance(payload, dict) else {}
 
         tokens: Final = tuple(
-            decoded_json_object(token)
-            for token in iter_items(_DECODED_JSON.validate_python(transcript.get("tokens")) or ())
+            require_get(token) for token in iter_items(_DECODED_JSON.validate_python(transcript.get("tokens")) or ())
         )
 
         # Decide what to put in `text` based on response_format:
@@ -385,9 +376,9 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         #   - "verbose_json": return JSON with word-level timing (handled below)
         #   - "text" / "json" / None: default plain text rendering
         if response_format == "srt" and tokens:
-            text = render_soniox_tokens_as_srt(tokens)
+            text = render_soniox_tokens_as_srt(tokens)  # pyright: ignore[reportArgumentType]  # renderers only call .get on each token
         elif response_format == "vtt" and tokens:
-            text = render_soniox_tokens_as_vtt(tokens)
+            text = render_soniox_tokens_as_vtt(tokens)  # pyright: ignore[reportArgumentType]  # renderers only call .get on each token
         else:
             # Default text rendering (also used for "json", "text",
             # "verbose_json")
@@ -395,11 +386,11 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             has_language = any(t.get("language") is not None for t in tokens)
 
             if (has_speaker or has_language) and tokens:
-                text = render_soniox_tokens(tokens)
+                text = render_soniox_tokens(tokens)  # pyright: ignore[reportArgumentType]  # renderers only call .get on each token
             elif transcript.get("text"):
                 text = transcript["text"]
             elif tokens:
-                text = _concatenated(tuple(t.get("text", "") for t in tokens))
+                text = joined("", (t.get("text", "") for t in tokens))
             else:
                 text = ""
 

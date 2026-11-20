@@ -20,15 +20,14 @@ from litellm.integrations.langfuse.langfuse_mock_client import (
     should_use_langfuse_mock,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    KeywordArguments,
     as_str_mapping,
     filter_exceptions_from_params,
-    has_attributes,
     json_contains,
     reconstruct_model_name,
     require_attributes,
     safe_deep_copy,
     subscript,
+    unpackable_mapping,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_environment_value,
@@ -78,12 +77,6 @@ class _DumpsToMapping(Protocol):
 def _first_message_dump(response_obj: object) -> Mapping[str, object]:
     message: Final = subscript(subscript(subscript(response_obj, "choices"), 0), "message")
     return require_attributes(message, _DumpsToMapping, "json").json()
-
-
-def _splattable_metadata(metadata: object) -> KeywordArguments:
-    if has_attributes(metadata, KeywordArguments, "keys"):
-        return metadata
-    raise TypeError(f"'{type(metadata).__name__}' object is not a mapping")
 
 
 def _widened_items(mapping: Mapping[str, object]) -> Iterable[tuple[object, object]]:
@@ -824,7 +817,7 @@ class LangFuseLogger:
                     key: value for key, value in metadata.items() if isinstance(value, (str, int, float, bool))
                 }
                 trace_params["metadata"] = {
-                    **_splattable_metadata(trace_params.get("metadata") or _NO_METADATA),
+                    **unpackable_mapping(trace_params.get("metadata") or _NO_METADATA),
                     "metadata_passed_to_litellm": debug_metadata,
                 }
 

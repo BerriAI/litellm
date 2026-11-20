@@ -21,7 +21,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_str_mapping, require_get
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
@@ -164,7 +164,7 @@ class NomaV2Guardrail(CustomGuardrail):
 
     def _resolve_action_from_response(
         self,
-        response_json: Mapping[str, object],
+        response_json: SupportsGet,
     ) -> _Action:
         action: Final = response_json.get("action")
         if isinstance(action, str):
@@ -300,7 +300,7 @@ class NomaV2Guardrail(CustomGuardrail):
             raise NomaBlockedMessage(response_json)
 
         if action == _Action.GUARDRAIL_INTERVENED:
-            verdict: Final = decoded_json_object(response_json)
+            verdict: Final = require_get(response_json)
             updated_inputs: Final = cast(GenericGuardrailAPIInputs, dict(inputs))
             for field in _INTERVENED_INPUT_FIELDS:
                 value = verdict.get(field)
@@ -352,7 +352,7 @@ class NomaV2Guardrail(CustomGuardrail):
             if self.monitor_mode:
                 action = _Action.NONE
             else:
-                action = self._resolve_action_from_response(response_json=decoded_json_object(response_json))
+                action = self._resolve_action_from_response(response_json=require_get(response_json))
             guardrail_json_response = response_json
             verbose_proxy_logger.debug(
                 "Noma v2 guardrail decision: input_type=%s action=%s",

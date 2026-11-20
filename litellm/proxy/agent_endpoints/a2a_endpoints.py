@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, keyword_arguments
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments, require_get
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
@@ -129,7 +129,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 def _httpx_url(url: object) -> str | httpx.URL:
     if isinstance(url, (str, httpx.URL)):
         return url
-    raise TypeError(f"Invalid type for url.  Expected str or httpx.URL, got {type(url)}: {url!r}")
+    return httpx.URL(url)  # pyright: ignore[reportArgumentType]  # httpx.URL raises its own TypeError
 
 
 def _sse_event(payload: object) -> str:
@@ -841,7 +841,7 @@ async def invoke_agent_a2a(
         request_id: Final[Any | None] = body.get("id")
         original_method: Final[str | None] = body.get("method")
         method: str | None = original_method
-        params = decoded_json_object(body).get("params", {})
+        params = require_get(body).get("params", {})
 
         if method:
             method = _PASCAL_TO_WIRE.get(method, method)

@@ -29,11 +29,11 @@ from functools import partial
 from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, SupportsFloat, SupportsIndex, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, cast
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
-from typing_extensions import Buffer, ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
@@ -51,6 +51,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.core_helpers import (
+    float_of,
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
     is_codex_user_agent,
@@ -204,12 +205,6 @@ class _AdaptiveRouterPreferencesFields(TypedDict, total=False, extra_items=objec
 
 def _deployment_model_info(deployment: DeploymentTypedDict) -> Mapping[str, object]:
     return deployment.get("model_info") or {}
-
-
-def _as_float(value: object) -> float:
-    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
-        return float(value)
-    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
 
 
 _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProxyType(
@@ -3357,7 +3352,7 @@ class ComplexityRouter(CustomLogger):
             cost = deployment.get("litellm_params", {}).get("input_cost_per_token")
             if cost is None:
                 cost = mi_dict.get("input_cost_per_token")
-            model_to_cost[name] = _as_float(cost) if cost is not None else 0.0
+            model_to_cost[name] = float_of(cost) if cost is not None else 0.0
 
         self.adaptive_router = AdaptiveRouter(
             router_name=self.model_name,

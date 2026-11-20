@@ -22,7 +22,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
 
@@ -457,7 +457,7 @@ async def _execute_file_search_tool_calls(
 
         try:
             args: Mapping[str, object] = (
-                decoded_json_object(_DECODED_JSON.validate_python(json.loads(raw_args)))
+                require_attributes(_DECODED_JSON.validate_python(json.loads(raw_args)), dict[str, object], "get")
                 if isinstance(raw_args, str)
                 else raw_args
             )

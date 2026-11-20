@@ -10,7 +10,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import json_contains, require_get, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -142,8 +142,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        payload: Final = decoded_json_object(response_json)
-        text: Final = payload.get("text") or ""
+        text: Final = require_get(response_json).get("text") or ""
         response: Final = (
             TranscriptionResponse(text=text)
             if isinstance(text, str)
@@ -151,10 +150,10 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         )
 
         # Preserve Mistral-specific fields (e.g. diarization segments)
-        if "segments" in payload:
-            response["segments"] = payload["segments"]
-        if "language" in payload:
-            response["language"] = payload["language"]
+        if json_contains(response_json, "segments"):
+            response["segments"] = subscript(response_json, "segments")
+        if json_contains(response_json, "language"):
+            response["language"] = subscript(response_json, "language")
 
-        response.hidden_params = dict(payload)
+        response.hidden_params = response_json  # pyright: ignore[reportAttributeAccessIssue]  # main stored it as is
         return response

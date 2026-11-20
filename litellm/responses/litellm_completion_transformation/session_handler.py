@@ -70,12 +70,6 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
 
-def _json_document(value: object) -> str | bytes | bytearray:
-    if isinstance(value, (str, bytes, bytearray)):
-        return value
-    raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
-
-
 _MCP_TOOL_CALL_TYPES: Final = frozenset((CallTypes.list_mcp_tools.value, CallTypes.call_mcp_tool.value))
 
 
@@ -588,7 +582,9 @@ class ResponsesSessionHandler:
         if isinstance(stored_request_mapping, dict):
             proxy_server_request_dict = stored_request_mapping
         else:
-            proxy_server_request_dict = json.loads(_json_document(proxy_server_request))
+            proxy_server_request_dict = json.loads(
+                proxy_server_request  # pyright: ignore[reportArgumentType]  # loads raises its own TypeError
+            )
 
         ############################################################
         # Check if user has setup cold storage for session handling

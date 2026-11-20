@@ -24,7 +24,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS, A2A_COMPLETION_BRIDGE_WORKING_MESSAGE
 from litellm.interactions.agents.utils import merge_agent_headers
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ModelResponse
 
@@ -88,7 +88,7 @@ class A2ACompletionBridgeHandler:
         stream: bool,
     ) -> Mapping[str, object]:
         # Extract message from params
-        message: Final = decoded_json_object(params.get("message", {}))
+        message: Final = require_attributes(params.get("message", {}), dict[str, object], "get")
 
         # Transform A2A message to OpenAI format
         openai_messages: Final = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
@@ -246,7 +246,7 @@ class A2ACompletionBridgeHandler:
         # Create streaming context
         ctx: Final = A2AStreamingContext(
             request_id=request_id,
-            input_message=decoded_json_object(params.get("message", {})),
+            input_message=require_attributes(params.get("message", {}), dict[str, object], "get"),
         )
 
         completion_params: Final = A2ACompletionBridgeHandler._build_completion_params(

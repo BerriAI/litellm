@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_items,
     finish_evidence_of,
+    joined,
 )
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.messages.safeguards import StreamedSafeguardResults
@@ -92,14 +93,6 @@ class _FailureLoggingWaiter(Protocol):
     def has_dispatched_failure_logging(self) -> bool: ...
 
     async def wait_for_failure_logging(self, timeout: float | None) -> None: ...
-
-
-def _joined_text(parts: Sequence[object]) -> str:
-    strings: Final = [part for part in parts if isinstance(part, str)]
-    if len(strings) == len(parts):
-        return "".join(strings)
-    first_bad: Final = next(position for position, part in enumerate(parts) if not isinstance(part, str))
-    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(parts[first_bad]).__name__} found")
 
 
 def _optional_attr(obj: object, name: str) -> object:
@@ -599,12 +592,13 @@ class _CombinedChunkSplitter:
         """
         if any(block.get("signature") for block in blocks if isinstance(block, dict)):
             return None
-        thinking_text: Final = _joined_text(
-            tuple(
+        thinking_text: Final = joined(
+            "",
+            (
                 block.get("thinking") or ""
                 for block in blocks
                 if isinstance(block, dict) and block.get("type") == "thinking"
-            )
+            ),
         )
         return thinking_text or None
 

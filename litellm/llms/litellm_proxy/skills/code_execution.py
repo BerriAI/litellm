@@ -13,7 +13,7 @@ Generated files are returned directly in the response - no separate storage need
 
 import base64
 import json
-from collections.abc import Mapping, Sequence, Sized
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Final, Protocol, TypedDict
 
@@ -21,7 +21,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, require_attributes
+from litellm.litellm_core_utils.core_helpers import SupportsGet, length_of, require_attributes, require_get
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -114,14 +114,8 @@ class _CodeExecutionOutcome(TypedDict, total=False):
     max_iterations_reached: ReadOnly[bool]
 
 
-def _parse_code_execution_arguments(serialized_arguments: str) -> Mapping[str, object]:
-    return decoded_json_object(_DECODED_JSON.validate_python(json.loads(serialized_arguments)))
-
-
-def _sized_len(value: object) -> int:
-    if isinstance(value, Sized):
-        return len(value)
-    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+def _parse_code_execution_arguments(serialized_arguments: str) -> SupportsGet:
+    return require_get(_DECODED_JSON.validate_python(json.loads(serialized_arguments)))
 
 
 class LiteLLMInternalTools(str, Enum):
@@ -303,7 +297,7 @@ class CodeExecutionHandler:
                         args = _parse_code_execution_arguments(tool_call.function.arguments)
                         code = args.get("code", "")
 
-                        verbose_logger.debug("CodeExecutionHandler: Executing code (%s chars)", _sized_len(code))
+                        verbose_logger.debug("CodeExecutionHandler: Executing code (%s chars)", length_of(code))
 
                         exec_result: _SandboxExecutionResult = executor.execute(
                             code=code,

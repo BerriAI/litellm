@@ -6,7 +6,7 @@ Fetches prompt versions from Arize Phoenix and provides workspace-based access c
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, Protocol, cast
 
-from jinja2 import DictLoader, nodes, select_autoescape
+from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import ReadOnly, TypedDict
 
@@ -16,10 +16,10 @@ from litellm.integrations.prompt_management_base import (
     PromptManagementClient,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    decoded_json_object,
     iter_items,
     json_contains,
     require_attributes,
+    require_get,
     subscript,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -49,7 +49,7 @@ class ArizePhoenixPromptMetadata(TypedDict):
     description: ReadOnly[object]
     template_type: ReadOnly[object]
     template_format: ReadOnly[object]
-    invocation_parameters: ReadOnly[Mapping[str, object]]
+    invocation_parameters: ReadOnly[object]
     temperature: ReadOnly[object]
     max_tokens: ReadOnly[object]
 
@@ -67,12 +67,6 @@ def _provider_params_of(invocation_params: object) -> object:
         if isinstance(value, dict):
             return value
     return {}
-
-
-def _template_source(text: object) -> str | nodes.Template:
-    if isinstance(text, (str, nodes.Template)):
-        return text
-    raise TypeError("Can't compile non template nodes")
 
 
 class ArizePhoenixPromptTemplate:
@@ -166,11 +160,11 @@ class ArizePhoenixTemplateManager:
 
     def _parse_prompt_data(self, data: Mapping[str, object], prompt_version_id: str) -> ArizePhoenixPromptTemplate:
         """Parse Arize Phoenix prompt data and extract messages and metadata."""
-        messages: Final = decoded_json_object(data.get("template", {})).get("messages", [])
+        messages: Final = require_get(data.get("template", {})).get("messages", [])
 
         # Extract invocation parameters
         invocation_params: Final = data.get("invocation_parameters", {})
-        provider_params: Final = decoded_json_object(_provider_params_of(invocation_params))
+        provider_params: Final = require_get(_provider_params_of(invocation_params))
 
         # Build metadata dictionary
         metadata: Final[ArizePhoenixPromptMetadata] = {
@@ -179,7 +173,7 @@ class ArizePhoenixTemplateManager:
             "description": data.get("description", ""),
             "template_type": data.get("template_type"),
             "template_format": data.get("template_format", "MUSTACHE"),
-            "invocation_parameters": decoded_json_object(invocation_params),
+            "invocation_parameters": invocation_params,
             "temperature": provider_params.get("temperature"),
             "max_tokens": provider_params.get("max_tokens"),
         }
@@ -200,17 +194,19 @@ class ArizePhoenixTemplateManager:
         template: Final = self.prompts[template_id]
         rendered_messages: Final[list[AllMessageValues]] = []
 
-        for message in map(decoded_json_object, iter_items(template.messages)):
+        for message in map(require_get, iter_items(template.messages)):
             role = message.get("role", "user")
             content_parts = message.get("content", [])
 
             # Render each content part
             rendered_content_parts = []
-            for part in map(decoded_json_object, iter_items(content_parts)):
+            for part in map(require_get, iter_items(content_parts)):
                 if part.get("type") == "text":
                     text = part.get("text", "")
                     # Render the text with Jinja2 (Mustache-style)
-                    jinja_template = self.jinja_env.from_string(_template_source(text))
+                    jinja_template = self.jinja_env.from_string(
+                        text  # pyright: ignore[reportArgumentType]  # from_string raises its own TypeError
+                    )
                     rendered_text = jinja_template.render(**(variables or {}))
                     rendered_content_parts.append(rendered_text)
                 else:
@@ -319,11 +315,13 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
         # Add additional invocation parameters
         invocation_params: Final = template.invocation_parameters
-        provider_name: Final = next((name for name in ("openai", "anthropic") if name in invocation_params), None)
+        provider_name: Final = next(
+            (name for name in ("openai", "anthropic") if json_contains(invocation_params, name)), None
+        )
         provider_params: Final = (
             ()
             if provider_name is None
-            else require_attributes(invocation_params[provider_name], _SupportsItems, "items").items()
+            else require_attributes(subscript(invocation_params, provider_name), _SupportsItems, "items").items()
         )
 
         # Add any additional parameters

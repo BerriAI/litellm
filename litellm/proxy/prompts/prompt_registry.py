@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
-from litellm.litellm_core_utils.core_helpers import attribute_or_none
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, callable_of
 from litellm.types.prompts.init_prompts import (
     PromptInfo,
     PromptLiteLLMParams,
@@ -233,11 +233,8 @@ class InMemoryPromptRegistry:
         initializer: Final = prompt_initializer_registry.get(prompt_integration)
         if initializer is None:
             raise ValueError(f"Unsupported prompt: {prompt_integration}")
-        if not callable(initializer):
-            not_callable: Final = f"'{type(initializer).__name__}' object is not callable"
-            raise TypeError(not_callable)
 
-        custom_prompt_callback: Final = initializer(litellm_params, prompt)
+        custom_prompt_callback: Final = callable_of(initializer)(litellm_params, prompt)
         if not isinstance(custom_prompt_callback, CustomPromptManagement):
             raise ValueError(  # noqa: TRY004  # prompt endpoints map ValueError to HTTP 400; keep the existing contract
                 f"CustomPromptManagement is required, got {type(custom_prompt_callback)}"

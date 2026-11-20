@@ -20,7 +20,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, require_attributes
+from litellm.litellm_core_utils.core_helpers import require_attributes, require_get
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
 )
@@ -264,7 +264,7 @@ class ManusFilesConfig(BaseFilesConfig):
                 response_json = _DECODED_JSON.validate_python(raw_response.json())
 
             verbose_logger.debug("Manus file response: %s", response_json)
-            file_fields: Final = decoded_json_object(response_json)
+            file_fields: Final = require_get(response_json)
 
             # Parse created_at timestamp
             created_at_str: Final = file_fields.get("created_at", "")

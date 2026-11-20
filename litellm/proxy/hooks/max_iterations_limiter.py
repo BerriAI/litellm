@@ -11,16 +11,16 @@ Follows the same pattern as parallel_request_limiter_v3.py.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter
-from typing_extensions import Buffer
 
 from litellm import DualCache
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import int_of
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
@@ -52,19 +52,6 @@ return current
 DEFAULT_MAX_ITERATIONS_TTL: Final = 3600
 
 _CACHED_COUNT: Final = TypeAdapter(object)
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _script_count(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
 
 
 class _PROXY_MaxIterationsHandler(CustomLogger):
@@ -213,7 +200,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
                     keys=[cache_key],
                     args=[self.ttl],
                 )
-                return _script_count(result)
+                return int_of(result)
             except Exception as e:
                 verbose_proxy_logger.warning(
                     "MaxIterationsHandler: Redis failed, falling back to in-memory: %s",
@@ -232,7 +219,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
                 local_only=True,
             )
         )
-        new_value: Final = (_script_count(current) if current is not None else 0) + 1
+        new_value: Final = (int_of(current) if current is not None else 0) + 1
         await self.internal_usage_cache.async_set_cache(
             key=cache_key,
             value=new_value,

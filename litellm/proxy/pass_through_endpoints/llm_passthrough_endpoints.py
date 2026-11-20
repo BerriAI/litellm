@@ -53,10 +53,11 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import (
+    SupportsGet,
     as_object_list,
     as_str_mapping,
     attribute_or_none,
-    decoded_json_object,
+    require_get,
 )
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.llms.anthropic.common_utils import (
@@ -363,8 +364,8 @@ async def _json_request_value(request: Request) -> object:
     return _DECODED_JSON.validate_python(await request.json())
 
 
-async def _json_request_body(request: Request) -> Mapping[str, object]:
-    return decoded_json_object(await _json_request_value(request))
+async def _json_request_body(request: Request) -> SupportsGet:
+    return require_get(await _json_request_value(request))
 
 
 _METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])

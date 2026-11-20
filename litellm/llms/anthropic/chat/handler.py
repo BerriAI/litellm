@@ -22,7 +22,7 @@ from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import map_finish_reason, require_attributes
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.base_utils import (
@@ -98,10 +98,7 @@ _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
-    decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
-    if is_str_keyed_dict(decoded):
-        return decoded
-    raise AttributeError(f"'{type(decoded).__name__}' object has no attribute 'get'", name="get", obj=decoded)
+    return require_attributes(_DECODED_JSON.validate_python(json.loads(payload)), dict[str, object], "get")
 
 
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]

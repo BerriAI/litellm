@@ -98,12 +98,13 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
     bind_budget_reservation_to_callbacks,
-    decoded_json_object,
+    callable_of,
     has_attributes,
     iter_items,
     json_contains,
     normalize_drop_params,
     require_attributes,
+    subscript,
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.litellm_core_utils.fallback_generalizations import (
@@ -1905,17 +1906,6 @@ def _get_wrapper_num_retries(kwargs: dict[str, object], exception: Exception) ->
     return num_retries, kwargs
 
 
-@runtime_checkable
-class _ModelFallbackLookup(Protocol):
-    def __getitem__(self, model: str | None, /) -> object: ...
-
-
-def _context_window_fallback_model(fallbacks: object, model: str | None) -> object:
-    if isinstance(fallbacks, _ModelFallbackLookup):
-        return fallbacks[model]
-    raise TypeError(f"'{type(fallbacks).__name__}' object is not subscriptable")
-
-
 def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -2994,9 +2984,9 @@ def client(original_function):
                     and not is_acompletion_litellm_router_call
                 ):
                     if len(args) > 0:
-                        args[0] = _context_window_fallback_model(context_window_fallback_dict, model)
+                        args[0] = subscript(context_window_fallback_dict, model)
                     else:
-                        kwargs["model"] = _context_window_fallback_model(context_window_fallback_dict, model)
+                        kwargs["model"] = subscript(context_window_fallback_dict, model)
                     result = await original_function(*args, **kwargs)
                     return result
             elif retry_call_type == CallTypes.aresponses.value:
@@ -10107,12 +10097,11 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
 def get_bundled_model_cost_map() -> Mapping[str, Mapping[str, object]]:
     try:
         model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        bundled_entries: Final = decoded_json_object(
-            _OPAQUE_VALUE.validate_python(json.loads(model_cost_path.read_text()))
-        )
-        return {key: entry for key, value in bundled_entries.items() if (entry := as_str_mapping(value)) is not None}
+        bundled_entries: Final = _OPAQUE_VALUE.validate_python(json.loads(model_cost_path.read_text()))
     except Exception:
         return {}
+    else:
+        return bundled_entries  # pyright: ignore[reportReturnType]  # main returns the parsed JSON unchecked
 
 
 _get_bundled_model_cost_map = get_bundled_model_cost_map
@@ -12311,12 +12300,6 @@ def get_requester_metadata(metadata: Mapping[str, object]):
     return None
 
 
-def _callable_endpoint(endpoint: object) -> Callable[..., object]:
-    if callable(endpoint):
-        return endpoint
-    raise TypeError(f"'{type(endpoint).__name__}' object is not callable")
-
-
 def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
     """
     Return the json str of the request
@@ -12344,7 +12327,7 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
     received_exception = ""
 
     try:
-        _callable_endpoint(llm_api_endpoint)(
+        callable_of(llm_api_endpoint)(
             **kwargs,
             litellm_logging_obj=litellm_logging_obj,
             api_key="my-fake-api-key",

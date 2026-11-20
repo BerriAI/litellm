@@ -15,7 +15,7 @@ from litellm.integrations.prompt_management_base import (
     PromptManagementBase,
     PromptManagementClient,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
@@ -128,7 +128,7 @@ class GenericPromptManager(CustomPromptManagement):
             )
 
             response.raise_for_status()
-            return decoded_json_object(_DECODED_JSON.validate_python(response.json()))
+            return require_attributes(_DECODED_JSON.validate_python(response.json()), dict[str, object], "get")
         except httpx.HTTPError as e:
             raise Exception(f"Failed to fetch prompt '{prompt_id}' from API: {e}")
         except json.JSONDecodeError as e:
@@ -164,7 +164,7 @@ class GenericPromptManager(CustomPromptManagement):
                 headers=self._get_headers(),
             )
             response.raise_for_status()
-            return decoded_json_object(_DECODED_JSON.validate_python(response.json()))
+            return require_attributes(_DECODED_JSON.validate_python(response.json()), dict[str, object], "get")
         except httpx.HTTPError as e:
             raise Exception(f"Failed to fetch prompt '{prompt_id}' from API: {e}")
         except json.JSONDecodeError as e:

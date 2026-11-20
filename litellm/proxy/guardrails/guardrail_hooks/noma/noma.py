@@ -29,7 +29,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -228,10 +228,13 @@ class NomaGuardrail(CustomGuardrail):
             await self._handle_verdict_background(USER_ROLE, json.dumps(input_items), response_json)
             return json.dumps(input_items)
 
-        verdict: Final = decoded_json_object(response_json)
+        verdict: Final = require_get(response_json)
         # Check if we should anonymize content
         if self._should_anonymize(verdict, USER_ROLE):
-            anonymized_content: Final = self._extract_anonymized_content(verdict, USER_ROLE)
+            anonymized_content: Final = self._extract_anonymized_content(
+                verdict,  # pyright: ignore[reportArgumentType]  # main passed the raw JSON
+                USER_ROLE,
+            )
             if anonymized_content:
                 # Replace the user message content with anonymized version
                 self._replace_user_message_content(request_data, anonymized_content)
@@ -323,10 +326,13 @@ class NomaGuardrail(CustomGuardrail):
             await self._handle_verdict_background(ASSISTANT_ROLE, json.dumps(content), response_json)
             return content
 
-        verdict: Final = decoded_json_object(response_json)
+        verdict: Final = require_get(response_json)
         # Check if we should anonymize content
         if self._should_anonymize(verdict, ASSISTANT_ROLE):
-            anonymized_content: Final = self._extract_anonymized_content(verdict, ASSISTANT_ROLE)
+            anonymized_content: Final = self._extract_anonymized_content(
+                verdict,  # pyright: ignore[reportArgumentType]  # main passed the raw JSON
+                ASSISTANT_ROLE,
+            )
             if anonymized_content:
                 # Replace the LLM response content with anonymized version
                 self._replace_llm_response_content(response, anonymized_content, position)
@@ -434,7 +440,7 @@ class NomaGuardrail(CustomGuardrail):
 
         return None
 
-    def _should_anonymize(self, response_json: Mapping[str, object], message_type: MessageRole) -> bool:
+    def _should_anonymize(self, response_json: SupportsGet, message_type: MessageRole) -> bool:
         """
         Determine if content should be anonymized based on Noma API response.
 
@@ -551,7 +557,7 @@ class NomaGuardrail(CustomGuardrail):
         """
         try:
             # aggregatedScanResult=True means blocked, False means allowed
-            aggregated_scan_result: Final = decoded_json_object(response_json).get("aggregatedScanResult", False)
+            aggregated_scan_result: Final = require_get(response_json).get("aggregatedScanResult", False)
 
             if aggregated_scan_result:  # True = unsafe
                 msg = f"Noma guardrail blocked {type} message: {message}"
@@ -776,7 +782,7 @@ class NomaGuardrail(CustomGuardrail):
         self,
         type: MessageRole,
         message: str,
-        response_json: Mapping[str, object],
+        response_json: SupportsGet,
     ) -> None:
         """
         Check the aggregatedScanResult from the Noma API and raise an exception if needed.

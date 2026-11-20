@@ -9,7 +9,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, json_contains, require_attributes
+from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_attributes, set_item
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -31,10 +31,6 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 class _JavelinVerdict(TypedDict):
     assessments: ReadOnly[object]
-
-
-class _AssessmentSlot(Protocol):
-    def __setitem__(self, key: str, value: object, /) -> None: ...
 
 
 class _JsonLookup(Protocol):
@@ -140,9 +136,7 @@ class JavelinGuardrail(CustomGuardrail):
             response_data: Final = _DECODED_JSON.validate_python(response.json())
             # Ensure the response has the required assessments field
             if not json_contains(response_data, "assessments"):
-                if not has_attributes(response_data, _AssessmentSlot, "__setitem__"):
-                    raise TypeError(f"'{type(response_data).__name__}' object does not support item assignment")
-                response_data["assessments"] = []
+                set_item(response_data, "assessments", [])
 
             javelin_response = {
                 "assessments": require_attributes(response_data, _JsonLookup, "get").get("assessments", [])

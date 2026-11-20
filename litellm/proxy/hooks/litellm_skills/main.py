@@ -26,7 +26,7 @@ Usage:
 
 import base64
 import json
-from collections.abc import Mapping, Sequence, Sized
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -36,7 +36,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, require_attributes
+from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, length_of, require_attributes
 from litellm.llms.litellm_proxy.skills.constants import LITELLM_SKILL_ID_PREFIX
 from litellm.llms.litellm_proxy.skills.prompt_injection import (
     SkillPromptInjectionHandler,
@@ -133,12 +133,6 @@ def _first_choice(response: _ChatCompletion) -> _ChatChoice:
 
 def _dict_or_none(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
-
-
-def _sized_len(value: object) -> int:
-    if isinstance(value, Sized):
-        return len(value)
-    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 def _record_generated_files(response: _AttributeTarget, generated_files: Sequence[Mapping[str, object]]) -> None:
@@ -690,7 +684,7 @@ class SkillsInjectionHook(CustomLogger):
     ) -> str:
         """Execute code in sandbox and return result string."""
         try:
-            verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", _sized_len(code))
+            verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", length_of(code))
 
             exec_result: Final = executor.execute(code=code, skill_files=skill_files)
 

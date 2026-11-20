@@ -4,7 +4,7 @@ import click
 import rich
 import rich.table
 
-from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_object_list, require_get
 
 from ... import Client
 from ._cli_context import cli_context_values
@@ -17,7 +17,7 @@ def create_client(ctx: click.Context) -> Client:
 
 def _rendered_field(group: object, key: str, default: str) -> str:
     """The rendered value of one model group field, or ``default`` when the group omits it."""
-    return str(decoded_json_object(group).get(key, default))
+    return str(require_get(group).get(key, default))
 
 
 @click.group(name="model-groups")

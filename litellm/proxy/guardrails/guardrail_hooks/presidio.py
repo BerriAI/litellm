@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import accumulate, count, pairwise
-from typing import TYPE_CHECKING, Final, Literal, NoReturn, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
@@ -31,7 +31,13 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
-from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import (
+    attribute_items,
+    attribute_or_none,
+    float_of,
+    int_of,
+    require_attributes,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -223,28 +229,28 @@ def _collapse_run(run: Sequence[_Detection]) -> _Detection:
     return _Detection(label.entity_type, run[0].start, max(detection.end for detection in run), label.score)
 
 
-def _to_detection(item: PresidioAnalyzeResponseItem) -> _Detection:
+class _DetectionFields(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def _to_detection(item: _DetectionFields) -> _Detection:
     return _Detection(
         str(item.get("entity_type")),
-        int(item.get("start") or 0),
-        int(item.get("end") or 0),
-        float(item.get("score") or 0.0),
+        int_of(item.get("start") or 0),
+        int_of(item.get("end") or 0),
+        float_of(item.get("score") or 0.0),
     )
-
-
-def _key_as_analyze_item(key: object) -> NoReturn:
-    raise AttributeError(f"{type(key).__name__!r} object has no attribute 'get'", name="get", obj=key)
 
 
 def _analyze_items(
     analyze_results: Sequence[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
-) -> Sequence[PresidioAnalyzeResponseItem]:
+) -> Sequence[_DetectionFields]:
     if isinstance(analyze_results, dict):
-        return tuple(map(_key_as_analyze_item, analyze_results))
+        return tuple(require_attributes(key, _DetectionFields, "get") for key in analyze_results)
     return analyze_results
 
 
-def _resolve_overlapping_spans(analyze_results: Sequence[PresidioAnalyzeResponseItem]) -> tuple[_Detection, ...]:
+def _resolve_overlapping_spans(analyze_results: Sequence[_DetectionFields]) -> tuple[_Detection, ...]:
     """
     Collapse each run of overlapping detections into one detection covering the whole run.
 

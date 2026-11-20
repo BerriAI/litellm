@@ -18,7 +18,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_attributes, require_get, subscript
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -194,16 +194,16 @@ class AimGuardrail(CustomGuardrail):
             timeout=self.timeout,
         )
         response.raise_for_status()
-        res: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
+        res: Final = require_get(_DECODED_JSON.validate_python(response.json()))
         required_action: Final = res.get("required_action")
-        action_type: Final = required_action and decoded_json_object(required_action).get("action_type", None)
+        action_type: Final = required_action and require_get(required_action).get("action_type", None)
         if action_type is None:
             verbose_proxy_logger.debug("Aim: No required action specified")
             return data
         if action_type == "monitor_action":
             verbose_proxy_logger.info("Aim: monitor action")
         elif action_type == "block_action":
-            self._handle_block_action(res["analysis_result"], decoded_json_object(required_action))
+            self._handle_block_action(subscript(res, "analysis_result"), require_get(required_action))
         elif action_type == "anonymize_action":
             return self._anonymize_request(res, data)
         else:
@@ -229,7 +229,7 @@ class AimGuardrail(CustomGuardrail):
             openai_code=openai_code,
         )
 
-    def _handle_block_action(self, analysis_result: object, required_action: Mapping[str, object]) -> None:
+    def _handle_block_action(self, analysis_result: object, required_action: SupportsGet) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: Violation detected enabled policies: {policies}".format(
@@ -238,7 +238,7 @@ class AimGuardrail(CustomGuardrail):
         )
         raise self._rejection(str(detection_message), openai_code="content_policy_violation")
 
-    def _anonymize_request(self, res: Mapping[str, object], data: dict) -> dict:
+    def _anonymize_request(self, res: SupportsGet, data: dict) -> dict:
         verbose_proxy_logger.info("Aim: anonymize action")
         redacted_chat: Final = res.get("redacted_chat")
         if not redacted_chat:
@@ -299,11 +299,11 @@ class AimGuardrail(CustomGuardrail):
             timeout=self.timeout,
         )
         response.raise_for_status()
-        res: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
+        res: Final = require_get(_DECODED_JSON.validate_python(response.json()))
         required_action: Final = res.get("required_action")
-        action_type: Final = required_action and decoded_json_object(required_action).get("action_type", None)
+        action_type: Final = required_action and require_get(required_action).get("action_type", None)
         if action_type and action_type == "block_action":
-            return self._handle_block_action_on_output(res["analysis_result"], decoded_json_object(required_action))
+            return self._handle_block_action_on_output(subscript(res, "analysis_result"), require_get(required_action))
         redacted_chat: Final = res.get("redacted_chat", None)
 
         if action_type != "anonymize_action":
@@ -331,7 +331,7 @@ class AimGuardrail(CustomGuardrail):
         return {"redacted_output": redacted_output}
 
     def _handle_block_action_on_output(
-        self, analysis_result: object, required_action: Mapping[str, object]
+        self, analysis_result: object, required_action: SupportsGet
     ) -> AimOutputGuardrailResult | None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
@@ -438,9 +438,7 @@ class AimGuardrail(CustomGuardrail):
         ) as websocket:
             sender: Final = asyncio.create_task(self.forward_the_stream_to_aim(websocket, response))
             while True:
-                result: Mapping[str, object] = decoded_json_object(
-                    _DECODED_JSON.validate_python(json.loads(await websocket.recv()))
-                )
+                result: SupportsGet = require_get(_DECODED_JSON.validate_python(json.loads(await websocket.recv())))
                 if verified_chunk := result.get("verified_chunk"):
                     yield ModelResponseStream.model_validate(verified_chunk)
                 else:

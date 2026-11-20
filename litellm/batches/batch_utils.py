@@ -12,7 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils import batch_utils as core_batch_utils
 from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, json_contains
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -872,9 +872,7 @@ def _get_response_from_batch_job_output_file(
         )
     if custom_llm_provider == "bedrock":
         model_output: Final = batch_job_output_file.get("modelOutput", None) or dict[str, object]()
-        if as_str_mapping(model_output) is None:
-            _ = json_contains(model_output, "embedding")
-        return decoded_json_object(model_output)
+        return model_output  # pyright: ignore[reportReturnType]  # main returns it unchecked, consumers fail as before
     _response: Final = cast(  # cast-ok: batch output response comes from provider JSON
         Mapping[str, object], batch_job_output_file.get("response", None) or {}
     )

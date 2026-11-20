@@ -28,7 +28,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, json_contains
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, joined, json_contains
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     tool_calls_with_server_tool_calls,
@@ -167,14 +167,6 @@ def _mcp_tool_input(mcp_arguments: object) -> str | None:
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-
-
-def _space_joined(parts: Sequence[object]) -> str:
-    strings: Final = tuple(part for part in parts if isinstance(part, str))
-    if len(strings) == len(parts):
-        return " ".join(strings)
-    first_bad: Final = next(position for position, part in enumerate(parts) if not isinstance(part, str))
-    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(parts[first_bad]).__name__} found")
 
 
 def _parse_bool_setting(name: str, value: object) -> bool:
@@ -363,7 +355,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             for part in map(as_str_mapping, content_list)
             if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
         ]
-        return _space_joined(text_parts) if text_parts else ""
+        return joined(" ", text_parts) if text_parts else ""
 
     def _extract_response_text(self, response: ModelResponse) -> str:
         """

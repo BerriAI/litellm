@@ -3,7 +3,7 @@ from typing import Final
 import click
 import rich
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_get
 
 from ... import UsersManagementClient
 from ._cli_context import cli_context_values
@@ -36,7 +36,7 @@ def list_users(ctx: click.Context):
     table.add_column("Role", style="magenta")
     table.add_column("Teams", style="yellow")
     for user in iter_items(users):
-        row = decoded_json_object(user)
+        row = require_get(user)
         table.add_row(
             str(row.get("user_id", "")),
             str(row.get("user_email", "")),

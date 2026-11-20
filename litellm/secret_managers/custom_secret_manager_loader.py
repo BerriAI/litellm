@@ -72,11 +72,11 @@ def load_custom_secret_manager(config_file_path: str | None = None) -> None:
     spec.loader.exec_module(module)
     _secret_manager_class: Final = _LOADED_ATTRIBUTE.validate_python(getattr(module, _class_name))
 
-    if not isinstance(_secret_manager_class, type):
-        raise TypeError("issubclass() arg 1 must be a class")
-
     # Validate that it's a CustomSecretManager subclass
-    if not issubclass(_secret_manager_class, CustomSecretManager):
+    if not issubclass(
+        _secret_manager_class,  # pyright: ignore[reportArgumentType]  # issubclass raises its own TypeError
+        CustomSecretManager,
+    ):
         raise TypeError(f"CustomSecretManagerException - {_class_name} must be a subclass of CustomSecretManager")
 
     # Instantiate the custom secret manager

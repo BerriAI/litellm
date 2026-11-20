@@ -125,7 +125,6 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    as_object_list,
     as_str_mapping,
     attribute_or_none,
     claude_subscription_usage,
@@ -6534,7 +6533,7 @@ class Logging(LiteLLMLoggingBaseClass):
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
         decoded_body: Final = _DECODED_BODY.validate_python(httpx_response.json())
         result = litellm.VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
-            completion_response=dict(decoded_json_object(decoded_body)),
+            completion_response=require_attributes(decoded_body, dict[str, object], "get"),
             model_response=litellm.ModelResponse(),
             model=self.model,
             logging_obj=self,
@@ -8333,13 +8332,7 @@ class StandardLoggingPayloadSetup:
 
         if isinstance(modified_final_response_obj, BaseModel):
             return modified_final_response_obj.model_dump()
-        if modified_final_response_obj is None or isinstance(modified_final_response_obj, str):
-            return modified_final_response_obj
-        redacted_items: Final = as_object_list(modified_final_response_obj)
-        if isinstance(redacted_items, list):
-            return redacted_items
-        redacted_fields: Final = decoded_json_object(modified_final_response_obj)
-        return redacted_fields if isinstance(redacted_fields, dict) else dict(redacted_fields)
+        return modified_final_response_obj  # pyright: ignore[reportReturnType]  # main returns the redacted value as is
 
     @staticmethod
     def get_additional_headers(

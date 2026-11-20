@@ -7,14 +7,13 @@ Why separate file? Make it easy to see how transformation works
 import math
 import uuid
 from collections.abc import Mapping
-from typing import Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
+from typing import Final
 
 import httpx
 from pydantic import TypeAdapter
-from typing_extensions import Buffer
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, json_contains, subscript
+from litellm.litellm_core_utils.core_helpers import int_of, iter_items, json_contains, require_get, subscript
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
@@ -29,19 +28,6 @@ from litellm.types.rerank import (
 )
 
 _DECODED_JSON: Final = TypeAdapter(object)
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _record_index(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
 
 
 class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
@@ -194,7 +180,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
             raise ValueError(f"Failed to parse response: {e}")
 
         # Extract records from response
-        records: Final = decoded_json_object(raw_response_json).get("records", [])
+        records: Final = require_get(raw_response_json).get("records", [])
 
         # Convert to Cohere format
         results: Final = []
@@ -204,8 +190,8 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
                 # Full response with score and details
                 results.append(
                     {
-                        "index": _record_index(subscript(record, "id")),
-                        "relevance_score": decoded_json_object(record).get("score", 0.0),
+                        "index": int_of(subscript(record, "id")),
+                        "relevance_score": require_get(record).get("score", 0.0),
                     }
                 )
             else:
@@ -213,7 +199,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
                 # We can't provide a relevance score, so we'll use a default
                 results.append(
                     {
-                        "index": _record_index(subscript(record, "id")),
+                        "index": int_of(subscript(record, "id")),
                         "relevance_score": 1.0,  # Default score when details are ignored
                     }
                 )

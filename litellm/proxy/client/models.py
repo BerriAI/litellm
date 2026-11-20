@@ -1,10 +1,11 @@
+import builtins
 from collections.abc import Mapping
-from typing import Final
+from typing import Any, Final
 
 import requests
 from pydantic import ConfigDict, TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object, iter_items, subscript
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 
 from .exceptions import NotFoundError, UnauthorizedError
 
@@ -38,7 +39,7 @@ class ModelsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def list(self, return_request: bool = False) -> object | requests.Request:
+    def list(self, return_request: bool = False) -> builtins.list[dict[str, Any]] | requests.Request:
         """
         Get the list of models supported by the server.
 
@@ -65,7 +66,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return subscript(_DECODED_JSON.validate_python(response.json()), "data")
+            return response.json()["data"]
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -163,7 +164,7 @@ class ModelsManagementClient:
         model_id: str | None = None,
         model_name: str | None = None,
         return_request: bool = False,
-    ) -> Mapping[str, object] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Get information about a specific model by its ID or name.
 
@@ -173,7 +174,7 @@ class ModelsManagementClient:
             return_request (bool): If True, returns the prepared request object instead of executing it
 
         Returns:
-            Mapping[str, object] | requests.Request: Either the model information from the server or
+            dict[str, object] | requests.Request: Either the model information from the server or
             a prepared request object if return_request is True
 
         Raises:
@@ -193,14 +194,16 @@ class ModelsManagementClient:
 
         # Get all models and filter
         models: Final = self.info()
-        assert as_object_list(models) is not None
+        assert isinstance(models, list)
 
         # Find the matching model
-        for model in iter_items(models):
+        for model in models:
             if (
-                model_id and decoded_json_object(decoded_json_object(model).get("model_info", {})).get("id") == model_id
-            ) or (model_name and decoded_json_object(model).get("model_name") == model_name):
-                return decoded_json_object(model)
+                model_id
+                and decoded_json_object(_DECODED_JSON.validate_python(model.get("model_info", {}))).get("id")
+                == model_id
+            ) or (model_name and model.get("model_name") == model_name):
+                return model
 
         # If we get here, no model was found
         if model_id:
@@ -216,7 +219,7 @@ class ModelsManagementClient:
             )
         )
 
-    def info(self, return_request: bool = False) -> object | requests.Request:
+    def info(self, return_request: bool = False) -> builtins.list[dict[str, Any]] | requests.Request:
         """
         Get detailed information about all models from the server.
 
@@ -242,7 +245,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return subscript(_DECODED_JSON.validate_python(response.json()), "data")
+            return response.json()["data"]
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

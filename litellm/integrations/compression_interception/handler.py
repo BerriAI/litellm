@@ -8,15 +8,16 @@ litellm_content_retrieve tool calls server-side via the typed agentic loop plan.
 import time
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, Final, Protocol, SupportsIndex, SupportsInt, cast, runtime_checkable
+from typing import Any, ClassVar, Final, Protocol, cast
 
-from typing_extensions import Buffer, ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.compression import compress
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tools_tool_choice_with_function
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import int_of
 from litellm.types.integrations.compression_interception import (
     CompressionInterceptionConfig,
     CompressionSavingsMetadata,
@@ -29,19 +30,6 @@ from litellm.types.utils import CallTypes
 
 LITELLM_CONTENT_RETRIEVE_TOOL_NAME: Final = "litellm_content_retrieve"
 _CACHE_TTL_SECONDS: Final = 15 * 60
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _agentic_loop_depth(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
 
 
 class _AgenticLoopParams(TypedDict, total=False):
@@ -155,7 +143,7 @@ class CompressionInterceptionLogger(CustomLogger):
             return None
         if call_type is not None and call_type != CallTypes.anthropic_messages:
             return None
-        if _agentic_loop_depth(kwargs.get("_agentic_loop_depth", 0) or 0) > 0:
+        if int_of(kwargs.get("_agentic_loop_depth", 0) or 0) > 0:
             return None
 
         messages: Final = kwargs.get("messages")
