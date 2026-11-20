@@ -7268,6 +7268,49 @@ def test_azure_spillover_absent_without_spillover_headers():
     assert metadata["azure_spillover"] is None
 
 
+def _provider_request_ids_of(kwargs: Mapping[str, object], response_id: str) -> object:
+    payload = get_logging_payload(
+        kwargs=dict(kwargs),
+        response_obj=litellm.ModelResponse(id=response_id, choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    return json.loads(payload["metadata"])["provider_request_ids"]
+
+
+def test_provider_request_ids_stamped_from_response_headers():
+    kwargs: Final = {
+        **_routed_call_kwargs({"id": "mi-1"}),
+        "response_headers": {"apim-request-id": "azure-corr-1", "x-request-id": "openai-req-1", "retry-after": "7"},
+    }
+    assert _provider_request_ids_of(kwargs, "chatcmpl-prid-raw") == {
+        "apim-request-id": "azure-corr-1",
+        "x-request-id": "openai-req-1",
+    }
+
+
+def test_provider_request_ids_stamped_from_standard_logging_additional_headers():
+    kwargs: Final = {
+        **_routed_call_kwargs({"id": "mi-1"}),
+        "standard_logging_object": {
+            "hidden_params": {"additional_headers": {"llm_provider-apim-request-id": "azure-corr-2"}},
+            "metadata": {},
+            "model_map_information": None,
+        },
+    }
+    assert _provider_request_ids_of(kwargs, "chatcmpl-prid-sl") == {"apim-request-id": "azure-corr-2"}
+
+
+def test_provider_request_ids_absent_without_request_id_headers():
+    assert _provider_request_ids_of(_routed_call_kwargs({"id": "mi-1"}), "chatcmpl-prid-none") is None
+
+
+def test_provider_request_ids_cannot_be_set_through_request_metadata():
+    kwargs: Final = _routed_call_kwargs({"id": "mi-1"})
+    kwargs["litellm_params"]["metadata"]["provider_request_ids"] = {"apim-request-id": "forged"}
+    assert _provider_request_ids_of(kwargs, "chatcmpl-prid-forged") is None
+
+
 def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
     supplied: Final = MappingProxyType({"version": 1, "status": "estimated", "reason": "caller_supplied"})
     recorded: Final = MappingProxyType({"version": 1, "status": "unknown", "reason": "history_unavailable"})

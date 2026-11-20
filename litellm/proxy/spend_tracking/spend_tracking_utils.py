@@ -74,6 +74,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
 )
+from litellm.litellm_core_utils.llm_response_utils.get_headers import header_mapping, provider_request_ids
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.redact_messages import numeric_compression_stats
@@ -212,6 +213,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
     (
         "router_metadata",
         "azure_spillover",
+        "provider_request_ids",
         "autorouter_savings",
         "autorouter_savings_estimate",
         "autorouter_baseline_observation",
@@ -314,6 +316,7 @@ def _get_spend_logs_metadata(
     autorouter_baseline_observation: str | None = None,
     router_metadata: SpendLogsRouterMetadata | None = None,
     azure_spillover: AzureSpillover | None = None,
+    provider_request_ids: Mapping[str, str] | None = None,
     used_client_oauth_token: bool | None = None,
     subscription_usage: ClaudeSubscriptionUsage | None = None,
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
@@ -373,6 +376,7 @@ def _get_spend_logs_metadata(
             litellm_call_id=litellm_call_id,
             router_metadata=router_metadata,
             azure_spillover=azure_spillover,
+            provider_request_ids=provider_request_ids,
             used_client_oauth_token=used_client_oauth_token,
             claude_subscription_usage=subscription_usage,
             kubernetes_pod_routing=None,
@@ -395,6 +399,7 @@ def _get_spend_logs_metadata(
         autorouter_baseline_observation=autorouter_baseline_observation,
         router_metadata=router_metadata,
         azure_spillover=azure_spillover,
+        provider_request_ids=provider_request_ids,
         used_client_oauth_token=used_client_oauth_token,
         claude_subscription_usage=subscription_usage,
         kubernetes_pod_routing=kubernetes_pod_routing,
@@ -924,6 +929,13 @@ def get_logging_payload(
         kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
     )
 
+    provider_response_headers: Final = header_mapping(kwargs.get("response_headers"))
+    provider_additional_headers: Final = header_mapping(
+        standard_logging_payload["hidden_params"].get("additional_headers")
+        if standard_logging_payload is not None and isinstance(standard_logging_payload.get("hidden_params"), Mapping)
+        else None
+    )
+
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         persisted_metadata,
@@ -1020,14 +1032,9 @@ def get_logging_payload(
         kubernetes_pod_routing=kubernetes_pod_routing,
         route_call_type=route_call_type,
         azure_spillover=azure_spillover(
-            response_headers=kwargs.get("response_headers")
-            if isinstance(kwargs.get("response_headers"), Mapping)
-            else None,
-            additional_headers=standard_logging_payload["hidden_params"].get("additional_headers")
-            if standard_logging_payload is not None
-            and isinstance(standard_logging_payload.get("hidden_params"), Mapping)
-            else None,
+            response_headers=provider_response_headers, additional_headers=provider_additional_headers
         ),
+        provider_request_ids=provider_request_ids(provider_response_headers, provider_additional_headers),
     )
 
     special_usage_fields: Final = ["completion_tokens", "prompt_tokens", "total_tokens"]
