@@ -2,7 +2,7 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 
 ## Layout
 
-- `price`, `bound` and `rates` are the three entry points, and `RowSource` (`row.rs`) is the only way they reach a row. Model Catalog implements it over its per-call snapshot, so this crate never reads the cost map, never merges rows and holds no provider list beyond the pricing rules it ports
+- `price`, `bound` and `rates` are the three entry points, and `RowSource` (`row.rs`) is the only way they reach a row. `candidates::PricingRows` implements it over the rows a catalog's `PricingTable` hands over, so this crate never reads the cost map, never merges rows and holds no provider list beyond the pricing rules it ports
 - `engine.rs` hands each `PriceQuery` kind to its handler module. A kind or case without a handler answers `Unpriced::NotPorted`, and only then may the caller price it the old way
 - `tokens.rs` and `tokens/` port the token path of `completion_cost`: `rule.rs` for what each provider branch of `cost_per_token` adds, `breakdown.rs` for the values main stores beside the total, `custom.rs` for `custom_cost_per_token`
 - `adjust.rs` ports the discount and margin config. Rules keep the order the config wrote them in
