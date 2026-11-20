@@ -8,19 +8,19 @@ import json
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
-from typing import ClassVar, Final, Literal, TypedDict
+from typing import Final, Literal, NamedTuple, TypedDict
 from unittest.mock import AsyncMock, MagicMock, call
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
+import requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import Response
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from pydantic import JsonValue, TypeAdapter
-from typing_extensions import ReadOnly, override
+from typing_extensions import ReadOnly
 
 from litellm.constants import (
     AGENT_TRACING_AGENT_LIST_LIMIT,
@@ -38,7 +38,7 @@ from litellm.tracing.errors import TraceChanged
 from litellm.tracing.generated.models import TraceQueryHelp
 from litellm.tracing.generated.responses import TraceSQLResponse
 from litellm.tracing.generated.types import TraceScope
-from litellm.tracing.remote import RemoteTraceStore
+from litellm.tracing.remote import LensConnection, RemoteTraceStore
 from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing.types import TraceAgent, TraceAgentList
 
@@ -1066,57 +1066,66 @@ async def test_storage_rejects_remote_query_help_that_drifts_from_the_contract(d
             await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret")
 
 
-class _FakeLens(BaseHTTPRequestHandler):
-    uploads: ClassVar[
-        list[tuple[str, str, bytes]]
-    ] = []  # mutable-ok: the handler class is the only place the stdlib server lets a test collect requests
+_LENS_URL: Final = "http://lens.test"
 
-    def do_POST(self) -> None:
-        body: Final = self.rfile.read(int(self.headers.get("content-length", "0")))
-        inflated: Final = gzip.decompress(body) if self.headers.get("content-encoding") == "gzip" else body
-        self.uploads.append((self.path, self.headers.get("authorization", ""), inflated))
-        self.send_response(200)
-        self.end_headers()
 
-    @override
-    def log_message(self, format: str, *args: object) -> None:
-        return None
+class _Upload(NamedTuple):
+    path: str
+    authorization: str
+    body: bytes
+
+
+@pytest.fixture
+def lens_uploads(monkeypatch: pytest.MonkeyPatch) -> list[_Upload]:
+    """Every OTLP export the gateway makes, taken at the HTTP library so nothing leaves the process."""
+    uploads: Final[list[_Upload]] = []  # mutable-ok: collects what the exporter thread sends during the test
+
+    def send(_session: requests.Session, request: requests.PreparedRequest, **_options: object) -> requests.Response:
+        raw: Final = request.body if isinstance(request.body, bytes) else b""
+        body: Final = gzip.decompress(raw) if request.headers.get("content-encoding") == "gzip" else raw
+        uploads.append(_Upload(urlsplit(request.url or "").path, request.headers.get("authorization", ""), body))
+        response: Final = requests.Response()
+        response.status_code = 200
+        return response
+
+    monkeypatch.setattr(requests.Session, "send", send)
+    monkeypatch.setenv("LITELLM_LENS_URL", _LENS_URL)
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
+    return uploads
+
+
+def _in_process_lens(connection: LensConnection) -> httpx.AsyncClient:
+    return httpx.AsyncClient(base_url=connection.url, transport=httpx.MockTransport(lambda _: httpx.Response(200)))
 
 
 @pytest.mark.asyncio
 async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_with_the_caller_ip(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, lens_uploads: list[_Upload]
 ) -> None:
     import litellm
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.proxy import proxy_server
 
-    _FakeLens.uploads.clear()
-    server: Final = HTTPServer(("127.0.0.1", 0), _FakeLens)
-    Thread(target=server.serve_forever, daemon=True).start()
-    monkeypatch.setenv("LITELLM_LENS_URL", f"http://127.0.0.1:{server.server_port}")
-    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
     monkeypatch.setenv("OTEL_EXPORTER", "otlp_http")
-    monkeypatch.setenv("OTEL_ENDPOINT", f"http://127.0.0.1:{server.server_port}/operator")
+    monkeypatch.setenv("OTEL_ENDPOINT", f"{_LENS_URL}/operator")
     monkeypatch.setenv("OTEL_SERVICE_NAME", "operator-service")
 
-    try:
-        async with manage_tracing(True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage))):
-            await litellm.acompletion(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": "what is the capital of France"}],
-                mock_response="Paris",
-                metadata={"user_api_key_user_id": "user-1", "requester_ip_address": "203.0.113.7"},
-            )
-            await asyncio.sleep(0.2)
-            assert proxy_server.open_telemetry_logger is None
-    finally:
-        server.shutdown()
+    async with manage_tracing(
+        True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage)), client_factory=_in_process_lens
+    ):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "what is the capital of France"}],
+            mock_response="Paris",
+            metadata={"user_api_key_user_id": "user-1", "requester_ip_address": "203.0.113.7"},
+        )
+        await asyncio.sleep(0.2)
+        assert proxy_server.open_telemetry_logger is None
 
     traces: Final = tuple(
         ExportTraceServiceRequest.FromString(body)
-        for path, auth, body in _FakeLens.uploads
+        for path, auth, body in lens_uploads
         if path == "/internal/traces" and auth == "Bearer test-service-token-with-32-characters" and body
     )
     spans: Final = tuple(
@@ -1127,7 +1136,7 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
         for span in scope.spans
     )
     assert tuple(span.name for span in spans) == ("chat gpt-4o-mini",)
-    assert tuple(path for path, _, _ in _FakeLens.uploads if path.startswith("/operator")) == ()
+    assert tuple(path for path, _, _ in lens_uploads if path.startswith("/operator")) == ()
     assert "operator-service" not in str(traces[0].resource_spans[0].resource)
     attributes: Final = {attribute.key: attribute.value.string_value for attribute in spans[0].attributes}
     assert attributes["litellm.metadata.user_api_key_user_id"] == "user-1"
@@ -1139,48 +1148,42 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
 
 @pytest.mark.asyncio
 async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call_as_a_step(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, lens_uploads: list[_Upload]
 ) -> None:
     import litellm
     from litellm.proxy import proxy_server
 
-    _FakeLens.uploads.clear()
-    server: Final = HTTPServer(("127.0.0.1", 0), _FakeLens)
-    Thread(target=server.serve_forever, daemon=True).start()
-    monkeypatch.setenv("LITELLM_LENS_URL", f"http://127.0.0.1:{server.server_port}")
-    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
 
-    try:
-        async with manage_tracing(True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage))):
-            await litellm.acompletion(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "user", "content": "list the files"},
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": "call-ls",
-                                "type": "function",
-                                "function": {"name": "Bash", "arguments": '{"command": "ls"}'},
-                            }
-                        ],
-                    },
-                    {"role": "tool", "tool_call_id": "call-ls", "content": "a.txt"},
-                ],
-                mock_response="one file",
-                litellm_session_id="session-1",
-                metadata={"user_agent": "claude-cli/2.1.329 (external, sdk-cli)"},
-            )
-            await asyncio.sleep(0.2)
-    finally:
-        server.shutdown()
+    async with manage_tracing(
+        True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage)), client_factory=_in_process_lens
+    ):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": "list the files"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-ls",
+                            "type": "function",
+                            "function": {"name": "Bash", "arguments": '{"command": "ls"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call-ls", "content": "a.txt"},
+            ],
+            mock_response="one file",
+            litellm_session_id="session-1",
+            metadata={"user_agent": "claude-cli/2.1.329 (external, sdk-cli)"},
+        )
+        await asyncio.sleep(0.2)
 
     resources: Final = tuple(
         resource
-        for path, _, body in _FakeLens.uploads
+        for path, _, body in lens_uploads
         if path == "/internal/traces" and body
         for resource in ExportTraceServiceRequest.FromString(body).resource_spans
     )
