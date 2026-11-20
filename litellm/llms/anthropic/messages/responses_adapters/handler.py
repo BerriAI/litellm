@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
+from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -249,10 +250,7 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
 
 def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
     extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
-    additional_drop_params: Final = request_params.get("additional_drop_params")
-    drops_store: Final = isinstance(additional_drop_params, list) and "store" in additional_drop_params
-    upstream_store: Final = extra_body.get("store", None if drops_store else request_params.get("store"))
-    return upstream_store is not False or any(
+    return any(
         params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
         for params in (request_params, extra_body)
     )
@@ -433,24 +431,28 @@ class LiteLLMMessagesToResponsesAPIHandler:
         polyfill_result: Final = await _polyfilled(
             model=model, messages=messages, tools=tools, system=system, edits=polyfilled_edits, kwargs=kwargs
         )
-        responses_kwargs: Final = _build_responses_kwargs(
-            max_tokens=max_tokens,
-            messages=polyfill_result.messages if polyfill_result is not None else messages,
-            model=model,
-            context_management=native_context_management,
-            metadata=metadata,
-            output_config=output_config,
-            stop_sequences=stop_sequences,
-            stream=stream,
-            system=system,
-            temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
-            top_k=top_k,
-            top_p=top_p,
-            output_format=output_format,
-            extra_kwargs=kwargs,
+        responses_kwargs: Final = dict(
+            await awithout_stored_instructions(
+                _build_responses_kwargs(
+                    max_tokens=max_tokens,
+                    messages=polyfill_result.messages if polyfill_result is not None else messages,
+                    model=model,
+                    context_management=native_context_management,
+                    metadata=metadata,
+                    output_config=output_config,
+                    stop_sequences=stop_sequences,
+                    stream=stream,
+                    system=system,
+                    temperature=temperature,
+                    thinking=thinking,
+                    tool_choice=tool_choice,
+                    tools=tools,
+                    top_k=top_k,
+                    top_p=top_p,
+                    output_format=output_format,
+                    extra_kwargs=kwargs,
+                )
+            )
         )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
@@ -537,24 +539,28 @@ class LiteLLMMessagesToResponsesAPIHandler:
             else None
         )
         polyfill_result: Final = ran if isinstance(ran, PolyfillResult) else None
-        responses_kwargs: Final = _build_responses_kwargs(
-            max_tokens=max_tokens,
-            messages=polyfill_result.messages if polyfill_result is not None else messages,
-            model=model,
-            context_management=native_context_management,
-            metadata=metadata,
-            output_config=output_config,
-            stop_sequences=stop_sequences,
-            stream=stream,
-            system=system,
-            temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
-            top_k=top_k,
-            top_p=top_p,
-            output_format=output_format,
-            extra_kwargs=kwargs,
+        responses_kwargs: Final = dict(
+            without_stored_instructions(
+                _build_responses_kwargs(
+                    max_tokens=max_tokens,
+                    messages=polyfill_result.messages if polyfill_result is not None else messages,
+                    model=model,
+                    context_management=native_context_management,
+                    metadata=metadata,
+                    output_config=output_config,
+                    stop_sequences=stop_sequences,
+                    stream=stream,
+                    system=system,
+                    temperature=temperature,
+                    thinking=thinking,
+                    tool_choice=tool_choice,
+                    tools=tools,
+                    top_k=top_k,
+                    top_p=top_p,
+                    output_format=output_format,
+                    extra_kwargs=kwargs,
+                )
+            )
         )
 
         result: Final = litellm.responses(**responses_kwargs)
