@@ -188,7 +188,7 @@ export const PromptCachingPanel: React.FC<{
   };
 
   return (
-    <Card>
+    <Card className="max-w-4xl">
       <CardContent>
         <CardTitle>{t("routerSettings.promptCaching.title")}</CardTitle>
 
@@ -201,8 +201,8 @@ export const PromptCachingPanel: React.FC<{
         </div>
 
         {ttlSetting && (
-          <div className="mt-6 flex items-start justify-between gap-8">
-            <div className="min-w-0 max-w-2xl">
+          <div className="mt-6 flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 max-w-2xl basis-64 flex-1">
               <p className={`font-medium ${enabled ? "" : "text-muted-foreground"}`}>
                 {t("routerSettings.promptCaching.cacheLifetime")}
               </p>
