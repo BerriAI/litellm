@@ -1297,10 +1297,14 @@ async def test_streaming_tool_pages_preserve_upstream_page_sizes_and_empty_pages
     )
     await publisher.start(deadline_at=1300)
     tools: Final = tuple(Tool(name=f"tool-{index}", inputSchema={"type": "object"}) for index in range(205))
-    await publisher.publish(ListToolsResult(tools=list(tools), next_cursor="upstream-next"))
+    await publisher.publish(
+        ListToolsResult(tools=list(tools), next_cursor="upstream-next", _meta={"revision": "upstream-v1"})
+    )
     first: Final = first_page.result()
     assert first.tools == list(tools)
     assert first.next_cursor == catalog._tool_page_cursor("a" * 32, 1)
+    assert first.meta["revision"] == "upstream-v1"
+    assert first.meta[SERVER_OUTCOMES_META_KEY]["bounded"] == {"tag": "ok", "tool_count": 205}
 
     await publisher.publish(ListToolsResult(tools=[]))
     await publisher.finish(ServerListOk(tool_count=len(tools)), failed=False)

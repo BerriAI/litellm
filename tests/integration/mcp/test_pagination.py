@@ -684,27 +684,26 @@ def test_partial_catalog_keeps_sanitized_failure_metadata_on_following_pages(tmp
             asyncio.run(exercise(gateway))
 
 
-def test_session_bound_tools_listing_uses_gateway_pages_and_isolates_peer_failure(tmp_path: Path):
+@pytest.mark.parametrize(
+    "fail_listing",
+    (pytest.param(False, id="continuation-failure"), pytest.param(True, id="initial-failure")),
+)
+def test_session_bound_tools_listing_uses_gateway_pages_and_isolates_peer_failure(
+    tmp_path: Path, fail_listing: bool
+):
     async def exercise(gateway, healthy: McpPeer, broken: McpPeer):
         async with catalog_session(gateway, "2025-11-25") as session:
             first = await session.list_tools()
-            assert len(first.tools) == 31
-            assert set(tool.name for tool in first.tools) == {
-                *(f"pages-add{index}" for index in range(30)),
-                "broken-add0",
-            }
+            expected_first_names = {f"pages-add{index}" for index in range(30)}
+            if not fail_listing:
+                expected_first_names.add("broken-add0")
+            assert len(first.tools) == (30 if fail_listing else 31)
+            assert {tool.name for tool in first.tools} == expected_first_names
             assert first.next_cursor
 
-            def tool_requests(peer: McpPeer) -> tuple[dict[str, object], ...]:
-                return tuple(
-                    call
-                    for call in peer.drain()
-                    if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
-                )
-
             healthy_requests: Final = collect_tool_list_requests(healthy, (205 + 29) // 30)
-            broken_requests: Final = collect_tool_list_requests(broken, 2)
-            assert len(broken_requests) == 2
+            broken_requests: Final = collect_tool_list_requests(broken, 1 if fail_listing else 2)
+            assert len(broken_requests) == (1 if fail_listing else 2)
             for requests in (healthy_requests, broken_requests):
                 headers = tuple(request.get("headers") for request in requests)
                 assert all(isinstance(value, dict) for value in headers)
@@ -721,16 +720,26 @@ def test_session_bound_tools_listing_uses_gateway_pages_and_isolates_peer_failur
             while pages[-1].next_cursor is not None:
                 pages.append(await session.list_tools(params=PaginatedRequestParams(cursor=pages[-1].next_cursor)))
             names = tuple(tool.name for page in pages for tool in page.tools)
-            assert len(names) == 206
-            assert set(names) == {*[f"pages-add{index}" for index in range(205)], "broken-add0"}
-            assert tuple(len(page.tools) for page in pages) == (31, 30, 30, 30, 30, 30, 25)
+            expected_names = {f"pages-add{index}" for index in range(205)}
+            if not fail_listing:
+                expected_names.add("broken-add0")
+            assert len(names) == (205 if fail_listing else 206)
+            assert set(names) == expected_names
+            assert tuple(len(page.tools) for page in pages) == (
+                (30, 30, 30, 30, 30, 30, 25)
+                if fail_listing
+                else (31, 30, 30, 30, 30, 30, 25)
+            )
             assert pages[-1].next_cursor is None
             assert all(page.ttl_ms == 0 for page in pages)
-            for page in pages[1:]:
-                failure = page.meta["litellm.ai/server_outcomes"]["broken"]
-                assert failure["status"] != "ok"
-                assert "tag" not in failure
-                assert "untrusted upstream message" not in page.model_dump_json()
+            for page_index, page in enumerate(pages):
+                outcomes = page.meta["litellm.ai/server_outcomes"]
+                assert outcomes["pages"]["status"] == "ok"
+                if fail_listing or page_index > 0:
+                    failure = outcomes["broken"]
+                    assert failure["status"] != "ok"
+                    assert "tag" not in failure
+                    assert "untrusted upstream message" not in page.model_dump_json()
             assert not any(
                 isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
                 for call in healthy.drain()
@@ -742,7 +751,9 @@ def test_session_bound_tools_listing_uses_gateway_pages_and_isolates_peer_failur
 
     with (
         paginated_mcp_peer(session_bound=True, tool_count=205, tool_page_size=30) as healthy,
-        paginated_mcp_peer(session_bound=True, fail_continuation=True) as broken,
+        paginated_mcp_peer(
+            session_bound=True, fail_listing=fail_listing, fail_continuation=not fail_listing
+        ) as broken,
         owned_redis(tmp_path / "redis") as redis,
         httpx.Client() as client,
     ):
@@ -761,7 +772,7 @@ def test_session_bound_tools_listing_uses_gateway_pages_and_isolates_peer_failur
             seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
         ) as gateway:
             discard_startup_tool_requests(healthy, 7, session_bound=True)
-            discard_startup_tool_requests(broken, 2, session_bound=True)
+            discard_startup_tool_requests(broken, 1 if fail_listing else 2, session_bound=True)
             asyncio.run(exercise(gateway, healthy, broken))
 
 

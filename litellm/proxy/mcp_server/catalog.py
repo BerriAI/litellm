@@ -1026,11 +1026,14 @@ class _StreamingToolPagePublisher:
             return False, 0
 
     async def _publish(self, result: ListToolsResult) -> tuple[bool, int]:
+        from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
+
         self.last_meta = result.meta
         if not result.next_cursor:
             self.pending_final = result
             return False, 0
-        page: Final = result.model_copy(
+        page_with_outcome: Final = self._with_outcome(result, ServerListOk(tool_count=len(result.tools)))
+        page: Final = page_with_outcome.model_copy(
             update={"next_cursor": _tool_page_cursor(self.snapshot_id, self.next_index + 1)}
         )
         await self._write(page)
