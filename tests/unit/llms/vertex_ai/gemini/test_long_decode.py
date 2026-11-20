@@ -799,6 +799,46 @@ async def test_streaming_long_decode_carries_only_the_last_hops_finish_reason_on
     assert rebuilt.choices[0].provider_specific_fields == {"native_finish_reason": "STOP"}
 
 
+THOUGHT_IMAGE_PART: Final = {"inlineData": {"mimeType": "image/png", "data": "ZHJhZnQ="}, "thought": True}
+FINAL_IMAGE_PART: Final = {"inlineData": {"mimeType": "image/png", "data": "ZmluYWw="}}
+
+
+@pytest.mark.parametrize(
+    ("hop_2_end", "expected_images"),
+    [
+        pytest.param(
+            {"content": {"role": "model", "parts": [FINAL_IMAGE_PART]}, "finishReason": "STOP"},
+            ["data:image/png;base64,ZmluYWw="],
+            id="later-hop-renders-the-final-image",
+        ),
+        pytest.param(
+            {"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "MAX_TOKENS"},
+            ["data:image/png;base64,ZHJhZnQ="],
+            id="later-hop-is-cut-off",
+        ),
+    ],
+)
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_long_decode_holds_a_thought_image_until_the_last_hop_finishes(
+    is_async: bool, hop_2_end: Mapping[str, object], expected_images: list[str]
+):
+    hop_1_end: Final = {
+        "candidates": [{**HOP_1["candidates"][0], "content": {"role": "model", "parts": [THOUGHT_IMAGE_PART]}}],
+        "usageMetadata": HOP_1["usageMetadata"],
+    }
+    hop_2: Final = {"candidates": [hop_2_end], "usageMetadata": HOP_2["usageMetadata"]}
+
+    chunks: Final = await _collect_stream(is_async, (_sse(STREAM_FIRST_CHUNK, hop_1_end), _sse(hop_2)), [])
+
+    assert [
+        image["image_url"]["url"]
+        for image in chain.from_iterable(
+            getattr(chunk.choices[0].delta, "images", None) or [] for chunk in chunks if chunk.choices
+        )
+    ] == expected_images
+
+
 TOOL_CALL_PART: Final = {
     "functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
     "thoughtSignature": "c2lnLTI=",

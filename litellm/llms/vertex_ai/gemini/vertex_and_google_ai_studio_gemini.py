@@ -32,7 +32,12 @@ from litellm.constants import (
     PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    map_finish_reason,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
@@ -294,6 +299,19 @@ def _final_images(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...
 
 def _last_thought_image(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
     return _images_in(tuple(part for part in parts if part.get("thought") is True))[-1:]
+
+
+def _blocks_its_output(candidate: Candidates) -> bool:
+    reason: Final = candidate.get("finishReason")
+    return reason is not None and map_finish_reason(reason) == "content_filter"
+
+
+def _fallback_thought_image(candidate: Candidates) -> tuple[ImageURLListItem, ...]:
+    return () if _blocks_its_output(candidate) else _last_thought_image(_content_parts(candidate))
+
+
+def _with_delta_images(choice: "StreamingChoices", images: tuple[ImageURLListItem, ...]) -> "StreamingChoices":
+    return choice.model_copy(update={"delta": choice.delta.model_copy(update={"images": list(images)})})
 
 
 def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
@@ -2413,10 +2431,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return invocations if invocations else None
 
-    def _extract_image_response_from_parts(self, parts: list[HttpxPartType]) -> list[ImageURLListItem] | None:
-        """Extract image response from parts if present"""
-        return list(_final_images(parts) or _last_thought_image(parts))
-
     def _extract_audio_response_from_parts(self, parts: list[HttpxPartType]) -> ChatCompletionAudioResponse | None:
         """Extract audio response from parts if present"""
         for part in parts:
@@ -3190,10 +3204,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
                     parts=candidate["content"]["parts"]
                 )
-                image_response = (
-                    list(_final_images(candidate["content"]["parts"]))
+                image_response = list(
+                    _final_images(candidate["content"]["parts"])
                     if isinstance(model_response, ModelResponseStream)
-                    else VertexGeminiConfig()._extract_image_response_from_parts(parts=candidate["content"]["parts"])
+                    else _final_images(candidate["content"]["parts"]) or _fallback_thought_image(candidate)
                 )
 
                 thinking_blocks = VertexGeminiConfig()._extract_thinking_blocks_from_parts(
@@ -3213,9 +3227,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if audio_response is not None:
                     cast(dict[str, object], chat_completion_message)["audio"] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
-                if image_response is not None:
-                    # Handle image response - combine with text content into structured format
-                    cast(dict[str, object], chat_completion_message)["images"] = image_response
+                cast(dict[str, object], chat_completion_message)["images"] = image_response
                 if content is not None:
                     chat_completion_message["content"] = content
 
@@ -4524,19 +4536,19 @@ class ModelResponseIterator:
             setattr(model_response, "usage", usage)
             self._plan_resume(processed_chunk, model_response)
             self._hold_thought_images(_candidates or ())
-            self._release_held_thought_images(_candidates or (), model_response)
+            released_response: Final = self._release_held_thought_images(_candidates or (), model_response)
 
             provider_finish_reasons: Final = _provider_finish_reasons(
                 _candidates or (),
-                model_response.choices,
+                released_response.choices,
                 frozenset(choice.index for choice in blocked_response.choices)
                 if blocked_response is not None
                 else frozenset(),
             )
             if provider_finish_reasons:
-                set_hidden_param(model_response, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, provider_finish_reasons)
-            model_response.hidden_params["is_finished"] = False
-            return model_response
+                set_hidden_param(released_response, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, provider_finish_reasons)
+            released_response.hidden_params["is_finished"] = False
+            return released_response
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
@@ -4578,22 +4590,39 @@ class ModelResponseIterator:
 
     def _release_held_thought_images(
         self, candidates: Sequence[Candidates], model_response: "ModelResponseStream"
-    ) -> None:
-        finishing_indexes: Final = frozenset(
-            candidate.get("index", position)
-            for position, candidate in enumerate(candidates)
-            if _names_its_finish(candidate)
+    ) -> "ModelResponseStream":
+        finishing: Final = MappingProxyType(
+            {
+                candidate.get("index", position): candidate
+                for position, candidate in enumerate(candidates)
+                if _names_its_finish(candidate)
+            }
         )
-        for choice in model_response.choices:
-            if (
-                choice.index not in finishing_indexes
-                or choice.finish_reason is None
-                or choice.index in self._image_settled_indexes
-            ):
-                continue
-            self._image_settled_indexes = self._image_settled_indexes | {choice.index}
-            if held := self._held_thought_images.get(choice.index):
-                choice.delta.images = list(held)
+        settling: Final = frozenset(
+            choice.index
+            for choice in model_response.choices
+            if choice.index in finishing
+            and choice.finish_reason is not None
+            and choice.index not in self._image_settled_indexes
+        )
+        self._image_settled_indexes = self._image_settled_indexes | settling
+        released: Final = MappingProxyType(
+            {
+                index: held
+                for index in settling
+                if (held := self._held_thought_images.get(index)) and not _blocks_its_output(finishing[index])
+            }
+        )
+        if not released:
+            return model_response
+        return model_response.model_copy(
+            update={
+                "choices": [
+                    _with_delta_images(choice, released[choice.index]) if choice.index in released else choice
+                    for choice in model_response.choices
+                ]
+            }
+        )
 
     def _plan_resume(self, processed_chunk: GenerateContentResponseBody, model_response: "ModelResponseStream") -> None:
         if self._output_cap is None:
