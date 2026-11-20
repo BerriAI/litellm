@@ -107,6 +107,7 @@ from litellm.proxy.auth.model_access_denied import (
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     broadcast_evictions,
+    evict_and_broadcast,
     evict_local,
     evict_shared,
     publish_auth_cache_invalidation,
@@ -130,6 +131,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
+    app_cache_key,
+    app_key_resource_cache_key,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
     get_management_object_ttl,
@@ -3455,7 +3458,11 @@ async def delete_cache_team_object(
     rows are already gone, so letting an unreachable cache backend raise here would fail a request
     whose delete has committed.
     """
-    keys: Final = (f"team_id:{team_id}", *((f"team_alias:{team_alias}",) if team_alias else ()))
+    keys: Final = (
+        f"team_id:{team_id}",
+        *((f"team_alias:{team_alias}",) if team_alias else ()),
+        app_cache_key("team", team_id),
+    )
 
     for key in keys:
         try:
@@ -3534,6 +3541,7 @@ async def delete_cache_key_object(
         )
 
     await publish_auth_cache_invalidation(cache_key=key)
+    await evict_and_broadcast((app_key_resource_cache_key(hashed_token),), user_api_key_cache)
     await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.KEY, entity_id=hashed_token)
 
 
@@ -3569,14 +3577,15 @@ async def delete_cache_key_objects(
     an auth refill source, so its batch delete runs beside that chain and a hung Redis costs one
     bounded wait there instead of another in line.
     """
-    evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
+    keys: Final = (*hashed_tokens, *(app_key_resource_cache_key(token) for token in hashed_tokens))
+    evict_local(cache_keys=keys, user_api_key_cache=user_api_key_cache)
     usage_eviction: Final = (
         ()
         if proxy_logging_obj is None
         else (evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache),)
     )
     _ = await asyncio.gather(
-        _evict_auth_cache_then_broadcast(hashed_tokens=hashed_tokens, user_api_key_cache=user_api_key_cache),
+        _evict_auth_cache_then_broadcast(hashed_tokens=keys, user_api_key_cache=user_api_key_cache),
         *usage_eviction,
     )
 
@@ -7876,7 +7885,7 @@ async def delete_cached_project_object(
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
     await evict_and_broadcast(
-        cache_keys=(project_cache_key(project_id),),
+        cache_keys=(project_cache_key(project_id), app_cache_key("project", project_id)),
         user_api_key_cache=user_api_key_cache,
     )
 

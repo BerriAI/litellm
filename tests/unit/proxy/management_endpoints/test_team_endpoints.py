@@ -10312,7 +10312,12 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     in-memory cache until the TTL, so both stay usable for auth cluster-wide.
     """
     from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        app_cache_key,
+        app_key_resource_cache_key,
+    )
 
     team = LiteLLM_TeamTable(
         team_id="team-doomed",
@@ -10345,10 +10350,24 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 
     redis = _BroadcastRecordingRedis()
+    cache: Final = UserApiKeyCache()
+    peer_cache: Final = UserApiKeyCache()
+    expected_keys: Final = (
+        "hashed-doomed-key",
+        app_key_resource_cache_key("hashed-doomed-key"),
+        "team_id:team-doomed",
+        "team_alias:doomed-team",
+        app_cache_key("team", "team-doomed"),
+    )
+    unrelated_key: Final = app_cache_key("team", "team-other")
+    for worker_cache in (cache, peer_cache):
+        for key in (*expected_keys, unrelated_key):
+            worker_cache.set_cache(key=key, value="cached")
+    peer_subscriber: Final = AuthCacheInvalidationSubscriber(redis_cache=redis, user_api_key_cache=peer_cache)
     monkeypatch.setattr(pubsub_module, "coordination_redis_cache", lambda: redis)
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
     monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
 
@@ -10365,9 +10384,14 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
 
     await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
 
-    # the deleted key first, then both keys `_cache_team_object` writes: miss the alias one and the
-    # JWT-by-alias path keeps resolving the team, miss the token and the key still authenticates
-    assert redis.broadcast_keys == ["hashed-doomed-key", "team_id:team-doomed", "team_alias:doomed-team"]
+    assert tuple(redis.broadcast_keys) == expected_keys
+    for key in redis.broadcast_keys:
+        peer_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercise the cross-worker eviction handler
+            {"type": "message", "data": json.dumps({"cache_key": key})}
+        )
+    for worker_cache in (cache, peer_cache):
+        assert tuple(worker_cache.get_cache(key=key) for key in expected_keys) == (None,) * len(expected_keys)
+        assert worker_cache.get_cache(key=unrelated_key) == "cached"
 
 
 @pytest.mark.asyncio
@@ -12310,7 +12334,10 @@ async def test_upsert_team_member_model_max_budget_updates_default_budget_and_ev
     assert result["metadata"]["team_member_budget_id"] == "member-budget-1"
     assert "team_member_model_max_budget" not in result
     cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:member-budget-1")
-    budget_cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:member-budget-1")
+    assert budget_cache.async_delete_cache.await_args_list == [
+        call(key="customer_app_budget:member-budget-1"),
+        call(key="team_member_default_budget:member-budget-1"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -12366,6 +12393,7 @@ async def test_update_team_clears_explicitly_null_member_model_budget_and_evicts
     assert "team_member_model_max_budget" in request_data.model_fields_set
     assert "model_max_budget" in budget_update["data"]
     assert cache.async_delete_cache.await_args_list == [
+        call(key="customer_app_budget:member-budget-1"),
         call(key="team_member_default_budget:member-budget-1"),
         call(key="team_member_default_budget:member-budget-1"),
     ]
@@ -12437,6 +12465,7 @@ async def test_update_team_persists_member_model_budget_to_default_budget_row(
         }
     }
     assert cache.async_delete_cache.await_args_list == [
+        call(key="customer_app_budget:member-budget-1"),
         call(key="team_member_default_budget:member-budget-1"),
         call(key="team_member_default_budget:member-budget-1"),
     ]
