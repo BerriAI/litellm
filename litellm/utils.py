@@ -5842,6 +5842,11 @@ _DROP_UNREAD_OUTPUT_CONFIG_WARNING: Final = (
     "Dropping `output_config` for model=%s (drop_params=True) because the %s chat transformation does not read it."
 )
 
+_OUTPUT_FORMAT_UNSUPPORTED_ON_CHAT: Final = (
+    "`output_format` is only supported on the Messages API (`/v1/messages`). "
+    "On chat completions, send `response_format` instead."
+)
+
 
 def _turns_reasoning_off(value: object) -> bool:
     match value:
@@ -6499,6 +6504,16 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
             drop_params=bool(drop_params),
+        )
+    if isinstance(provider_config, litellm.AnthropicConfig) and any(
+        params.get("output_format") is not None
+        for params in (passed_params, as_str_mapping(passed_params.get("extra_body")) or {})
+    ):
+        raise UnsupportedParamsError(
+            status_code=400,
+            message=_OUTPUT_FORMAT_UNSUPPORTED_ON_CHAT,
+            model=model,
+            llm_provider=custom_llm_provider,
         )
     if (litellm.drop_params or drop_params) and custom_llm_provider != "litellm_proxy":
         litellm.AnthropicConfig.maybe_drop_speed_param(

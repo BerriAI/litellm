@@ -10315,7 +10315,9 @@ def test_validate_environment_takes_any_together_ai_key_name_for_bare_and_prefix
 def test_validate_environment_keeps_the_wandb_key_check_for_bare_ids_wandb_shares_with_together_ai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shared_bare_ids: Final = tuple(sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model)))
+    shared_bare_ids: Final = tuple(
+        sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model))
+    )
     monkeypatch.setattr(
         litellm,
         "together_ai_models",
@@ -11576,7 +11578,8 @@ def test_check_valid_key_never_counts_a_global_fallback_answer_as_a_valid_key(
 
     with respx.mock(assert_all_called=False) as upstream:
         _ = upstream.post("https://api.openai.com/v1/chat/completions").respond(
-            401, json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}
+            401,
+            json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}},
         )
         fallback_route: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(
             200,
@@ -12892,3 +12895,44 @@ async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_rea
     assert type(recorder.failures[0]) is type(raised.value)
     assert recorder.failures[0] is not raised.value
     assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [
+        pytest.param({"output_format": {"type": "json_schema", "schema": {"type": "object"}}}, id="top_level"),
+        pytest.param(
+            {"extra_body": {"output_format": {"type": "json_schema", "schema": {"type": "object"}}}}, id="extra_body"
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("claude-sonnet-4-5", "anthropic"), ("claude-sonnet-4-5@20250929", "vertex_ai")],
+)
+def test_anthropic_output_format_is_rejected_on_chat_completions(
+    sent: dict[str, object], model: str, custom_llm_provider: str
+):
+    from litellm.utils import get_optional_params
+
+    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+        get_optional_params(model=model, custom_llm_provider=custom_llm_provider, **sent)
+
+    assert exc_info.value.status_code == 400
+    assert "only supported on the Messages API" in str(exc_info.value)
+    assert "`response_format`" in str(exc_info.value)
+
+
+def test_response_format_still_maps_to_anthropic_native_structured_output():
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "answer", "schema": {"type": "object", "properties": {}}, "strict": True},
+        },
+    )
+
+    assert optional_params["output_format"]["type"] == "json_schema"
