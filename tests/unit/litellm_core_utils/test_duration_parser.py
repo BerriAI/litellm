@@ -489,6 +489,22 @@ class TestGetBudgetWindowStart(unittest.TestCase):
         )
 
 
+@pytest.mark.parametrize(
+    ("duration", "zone", "current_time", "expected"),
+    (
+        ("48h", "UTC", "2024-01-30T00:00:00+00:00", "2024-02-01T00:00:00+00:00"),
+        ("2400h", "UTC", "2024-01-30T00:00:00+00:00", "2024-05-09T00:00:00+00:00"),
+        ("49h", "UTC", "2024-01-30T14:15:30+00:00", "2024-02-01T01:00:00+00:00"),
+        ("2885m", "UTC", "2024-01-30T14:15:30+00:00", "2024-02-01T14:05:00+00:00"),
+        ("172805s", "Asia/Kolkata", "2024-01-30T08:45:30+00:00", "2024-02-01T08:45:05+00:00"),
+    ),
+)
+def test_reset_rollover_keeps_all_elapsed_days(duration: str, zone: str, current_time: str, expected: str) -> None:
+    reset_at: Final = get_next_standardized_reset_time(duration, datetime.fromisoformat(current_time), zone)
+
+    assert reset_at.astimezone(timezone.utc) == datetime.fromisoformat(expected)
+
+
 @pytest.mark.parametrize("duration", ("1d", "24h", "7d", "2w", "30d", "monthly", "1mo", "12mo", "5h", "45s"))
 @pytest.mark.parametrize("zone", ("UTC", "America/Los_Angeles", "Asia/Kolkata"))
 def test_committed_window_end_preserves_its_calendar_and_reset_time(duration: str, zone: str) -> None:

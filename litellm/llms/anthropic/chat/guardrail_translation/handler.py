@@ -34,8 +34,8 @@ from litellm.llms.anthropic.messages.adapters.transformation import (
     truncate_tool_name,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
-    keep_non_string_tool_result_texts,
-    keep_url_documents,
+    is_non_empty_text_block,
+    keep_original_fields,
     scannable_tool_result_request,
 )
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
@@ -1105,15 +1105,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not isinstance(content, list):
             return None
         blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "text":
-                continue
-            text = block.get("text")
-            if not isinstance(text, str) or not text:
+        for item in cast(Sequence[object], content):  # cast-ok: untrusted client payload
+            if (block := as_str_mapping(item)) is None or not is_non_empty_text_block(block):
                 continue
             anthropic_block: dict[str, object] = {  # mutable-ok: API message payload
                 "type": "text",
-                "text": text,
+                "text": block["text"],
             }
             cache_control = block.get("cache_control")
             if cache_control:
@@ -1278,9 +1275,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             original_tool_names,
         )
         original_messages: Final = data.get("messages")
-        data["messages"] = keep_url_documents(
-            keep_non_string_tool_result_texts(converted, original_messages), original_messages
-        )
+        data["messages"] = keep_original_fields(converted, original_messages)
 
     @staticmethod
     def _extract_midturn_system_text(
