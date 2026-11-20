@@ -1,5 +1,6 @@
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,6 +10,7 @@ import pytest
 import litellm
 
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
@@ -1655,7 +1657,8 @@ class TestContextCachingEndpoints:
                     "role": "system",
                     "content": "Tool results are authoritative.",
                     "cache_control": {"type": "ephemeral"},
-                }
+                },
+                {"role": "tool", "tool_call_id": "call_abc123", "content": "72F and sunny"},
             ],
         }[final_cached_role]
         return [
@@ -1765,6 +1768,16 @@ def test_cached_messages_end_on_supported_turn():
                 {"role": "user", "content": "hello"},
                 {"role": "assistant", "content": "hi"},
                 {"role": "system", "content": "be brief"},
+            ]
+        )
+        is True
+    )
+    assert (
+        cached_messages_end_on_supported_turn(
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+                {"role": "system", "content": ""},
             ]
         )
         is False
@@ -2527,3 +2540,77 @@ async def test_a_strict_request_rejects_tool_call_arguments_even_when_a_lenient_
 
     with pytest.raises(litellm.BadRequestError, match="get_weather"):
         await complete({**request, "drop_params": False}, calls)
+
+
+def _cached_conversation_with_a_reminder_after_each_user_turn(user_turns: int) -> list:
+    cached_prefix: Final = (
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "shared policy " * 3000, "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "question 1", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "system", "content": "1 of 8 turns used"},
+    )
+    later_turns: Final = tuple(
+        chain.from_iterable(
+            (
+                {"role": "assistant", "content": f"answer {turn - 1}"},
+                {"role": "user", "content": f"question {turn}"},
+                {"role": "system", "content": f"{turn} of 8 turns used"},
+            )
+            for turn in range(2, user_turns + 1)
+        )
+    )
+    return [*cached_prefix, *later_turns]
+
+
+def test_a_reminder_after_the_cached_block_stays_out_of_the_gemini_cache_and_reaches_the_request(
+    local_model_cost_map,
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    for user_turns in (1, 2):
+        litellm.completion(
+            model="gemini/gemini-flash-latest",
+            messages=_cached_conversation_with_a_reminder_after_each_user_turn(user_turns),
+            api_key="test-key",
+            client=_recording_gemini_client(calls),
+        )
+
+    created: Final = tuple(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert len(created) == 1
+    assert created[0]["system_instruction"] == {"parts": [{"text": "shared policy " * 3000}]}
+    assert created[0]["contents"] == [{"role": "user", "parts": [{"text": "question 1"}]}]
+    assert generated[1]["cachedContent"] == "cachedContents/created"
+    assert "system_instruction" not in generated[1]
+    assert generated[1]["contents"] == [
+        {"role": "user", "parts": [{"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}]},
+        {"role": "model", "parts": [{"text": "answer 1"}]},
+        {"role": "user", "parts": [{"text": "question 2"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "2 of 8 turns used"}]},
+    ]
+
+
+def test_an_uncached_leading_system_message_stays_a_system_message_beside_the_converted_reminder():
+    from litellm.llms.vertex_ai.context_caching.transformation import separate_cached_messages
+
+    leading: Final = {"role": "system", "content": "You are terse."}
+    cached_doc: Final = {
+        "role": "user",
+        "content": [{"type": "text", "text": "contract text", "cache_control": {"type": "ephemeral"}}],
+    }
+
+    cached, remaining = separate_cached_messages(
+        [leading, cached_doc, {"role": "system", "content": "1 of 8 turns used"}, {"role": "user", "content": "question 2"}]
+    )
+
+    assert cached == [cached_doc]
+    assert remaining == [
+        leading,
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": CONVERTED_SYSTEM_NOTE}, {"type": "text", "text": "1 of 8 turns used"}],
+        },
+        {"role": "user", "content": "question 2"},
+    ]

@@ -29,6 +29,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     response_schema_prompt,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    message_field,
+    parts_of,
+    place_mid_conversation_system,
+    split_leading_system_run,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import pop_vertex_caller_labels, pop_vertex_request_labels
 from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
@@ -1415,50 +1421,47 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     return ChatCompletionUserMessage(content=".", role="user")
 
 
+def _part_text(part: object) -> str:
+    text: Final = message_field(part, "text")
+    return text if isinstance(text, str) else ""
+
+
+def _system_instruction_part(message: AllMessageValues) -> PartType | None:
+    content: Final = message_field(message, "content")
+    if isinstance(content, str):
+        return PartType(text=content)
+    text: Final = "".join(map(_part_text, parts_of(content)))
+    return PartType(text=text) if isinstance(content, list) else None
+
+
 def transform_system_message(
     supports_system_message: bool, messages: list[AllMessageValues]
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
-    Extracts the system message from the openai message list.
+    Extracts the leading run of system messages from the openai message list as Gemini system instructions.
 
-    Converts the system message to Gemini format
+    Gemini contents only take the user and model roles, so every later system message becomes a user turn
+    in place. Hoisting it into system_instruction would change the head of the prompt every time a client
+    adds a reminder, which breaks implicit prompt caching.
 
     Returns
-    - system_content_blocks: Optional[SystemInstructions] - the system message list in Gemini format.
-    - messages: List[AllMessageValues] - filtered list of messages in OpenAI format (transformed separately)
+    - system_content_blocks: Optional[SystemInstructions] - the leading system messages in Gemini format.
+    - messages: List[AllMessageValues] - the remaining messages in OpenAI format (transformed separately)
     """
-    # Separate system prompt from rest of message
-    system_prompt_indices: Final = []
-    system_content_blocks: Final[list[PartType]] = []
-    if supports_system_message is True:
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                _system_content_block: PartType | None = None
-                if isinstance(message["content"], str):
-                    _system_content_block = PartType(text=message["content"])
-                elif isinstance(message["content"], list):
-                    system_text = ""
-                    for content in message["content"]:
-                        system_text += content.get("text") or ""
-                    _system_content_block = PartType(text=system_text)
-                if _system_content_block is not None:
-                    system_content_blocks.append(_system_content_block)
-                    system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-
-    if len(system_content_blocks) > 0:
-        #########################################################
-        # If no messages are passed in, add a blank user message
-        # Relevant Issue - https://github.com/BerriAI/litellm/issues/13769
-        #########################################################
-        if len(messages) == 0:
-            messages.append(_default_user_message_when_system_message_passed())
-        #########################################################
-        return SystemInstructions(parts=system_content_blocks), messages
-
-    return None, messages
+    if supports_system_message is not True:
+        return None, messages
+    leading_system_run, rest = split_leading_system_run(messages)
+    parts_by_message: Final = tuple((message, _system_instruction_part(message)) for message in leading_system_run)
+    system_content_blocks: Final = [part for _, part in parts_by_message if part is not None]
+    remaining_messages: Final = [
+        *(message for message, part in parts_by_message if part is None),
+        *place_mid_conversation_system(rest, supports_mid_conversation_system=False),
+    ]
+    if not system_content_blocks:
+        return None, remaining_messages
+    return SystemInstructions(parts=system_content_blocks), remaining_messages or [
+        _default_user_message_when_system_message_passed()
+    ]
 
 
 _transform_system_message = transform_system_message

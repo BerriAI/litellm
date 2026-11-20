@@ -11,6 +11,12 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.litellm_core_utils.prompt_templates.factory import convert_to_gemini_tool_call_invoke
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    is_system_message,
+    message_field,
+    place_mid_conversation_system,
+    split_leading_system_run,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
@@ -107,56 +113,68 @@ def _normalize_ttl_to_seconds(ttl: object) -> str | None:
     return f"{seconds:.9f}".rstrip("0").rstrip(".") + "s"
 
 
+_TOOL_RESULT_ROLES: Final = frozenset({"tool", "function"})
+_MODEL_TURN_ROLES: Final = frozenset({"assistant", *_TOOL_RESULT_ROLES})
+
+
+def _cached_block_end(messages: Sequence[AllMessageValues], block_start: int, block_end: int) -> int:
+    if block_end >= len(messages) or message_field(messages[block_end], "role") not in _TOOL_RESULT_ROLES:
+        return block_end
+    return next(
+        (end for end in range(block_end, block_start, -1) if not is_system_message(messages[end - 1])),
+        block_start,
+    )
+
+
 def separate_cached_messages(
     messages: list[AllMessageValues],
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
-    Returns separated cached and non-cached messages.
+    Returns the first continuous block of cached messages and the remaining messages.
 
-    Args:
-        messages: List of messages to be separated.
-
-    Returns:
-        Tuple containing:
-        - cached_messages: List of cached messages.
-        - non_cached_messages: List of non-cached messages.
+    The leading run of system messages outside that block stays as it is in the remaining messages, so it
+    still becomes the system_instruction. Every later system message comes back already converted to a user
+    turn in place, so a reminder added each turn is never hoisted into a system_instruction beside the
+    cachedContent. A system run that ends the cached block right before a tool result stays out of the
+    cached block, since its user turn goes after that tool result.
     """
-    cached_messages: list[AllMessageValues] = []
-    non_cached_messages: list[AllMessageValues] = []
+    filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
+    if not filtered_messages:
+        return [], messages
 
-    # Extract cached messages and their indices
-    filtered_messages: Final[list[tuple[int, AllMessageValues]]] = []
-    for idx, message in enumerate(messages):
-        if is_cached_message(message=message):
-            filtered_messages.append((idx, message))
-
-    # Validate only one block of continuous cached messages
+    leading_system_run, _ = split_leading_system_run(messages)
     last_continuous_block_idx: Final = get_first_continuous_block_idx(filtered_messages)
-    # Separate messages based on the block of cached messages
-    if filtered_messages and last_continuous_block_idx is not None:
-        first_cached_idx: Final = filtered_messages[0][0]
-        last_cached_idx: Final = filtered_messages[last_continuous_block_idx][0]
-
-        cached_messages = messages[first_cached_idx : last_cached_idx + 1]
-        non_cached_messages = messages[:first_cached_idx] + messages[last_cached_idx + 1 :]
-    else:
-        non_cached_messages = messages
-
-    return cached_messages, non_cached_messages
+    block_start: Final = filtered_messages[0][0]
+    cached_block: Final = range(
+        block_start,
+        _cached_block_end(messages, block_start, filtered_messages[last_continuous_block_idx][0] + 1),
+    )
+    uncached: Final = tuple((idx, message) for idx, message in enumerate(messages) if idx not in cached_block)
+    return (
+        messages[cached_block.start : cached_block.stop],
+        [
+            *(message for idx, message in uncached if idx < len(leading_system_run)),
+            *place_mid_conversation_system(
+                tuple(message for idx, message in uncached if idx >= len(leading_system_run)),
+                supports_mid_conversation_system=False,
+            ),
+        ],
+    )
 
 
 def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageValues]) -> bool:
     """
     The cachedContents API rejects contents ending on a model turn, which is how it
     classifies both assistant messages and tool results, with HTTP 400
-    "Requests ending with a model turn are not supported". System messages are
-    extracted into system_instruction before contents are built, so the terminal
-    turn is the last non-system message.
+    "Requests ending with a model turn are not supported". The leading system messages
+    are extracted into system_instruction and every later one becomes a user turn before
+    contents are built, so the terminal turn is the last message after that conversion.
     """
-    non_system_messages: Final = tuple(message for message in cached_messages if message.get("role") != "system")
-    if not non_system_messages:
+    _, rest = split_leading_system_run(cached_messages)
+    contents_messages: Final = place_mid_conversation_system(rest, supports_mid_conversation_system=False)
+    if not contents_messages:
         return bool(cached_messages)
-    return non_system_messages[-1].get("role") not in ("assistant", "tool", "function")
+    return message_field(contents_messages[-1], "role") not in _MODEL_TURN_ROLES
 
 
 def reject_unusable_tool_call_arguments(
