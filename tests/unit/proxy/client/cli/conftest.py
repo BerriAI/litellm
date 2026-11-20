@@ -1,10 +1,16 @@
+import json
 import os
 import shlex
+import urllib.error
+import urllib.request
+import webbrowser
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Final
+from urllib.parse import parse_qs, urlparse
 
 import pytest
+import requests
 
 from litellm.proxy.client.cli.commands import claude_settings
 from litellm.proxy.client.cli.commands.agents import run_agent
@@ -109,3 +115,100 @@ def launch_claude(isolated_claude_home: Path) -> Callable[[bool], Path]:
         return Path(args[args.index("--settings") + 1])
 
     return launch
+
+
+class _ProxyResponse:
+    def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+        self.status_code: Final = status_code
+        self.headers: Final = {"content-type": "application/json"}
+        self.text: Final = json.dumps(payload)
+        self.content: Final = self.text.encode()
+        self._payload: Final = payload
+
+    def json(self) -> dict[str, object]:
+        return self._payload
+
+
+def _cli_auth_contract(base_url: str) -> dict[str, object]:
+    return {
+        "contract_version": 1,
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/authorize",
+        "token_endpoint": f"{base_url}/token",
+        "registration_endpoint": f"{base_url}/register",
+        "revocation_endpoint": f"{base_url}/revoke",
+        "resource": base_url,
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "revocation_endpoint_auth_methods_supported": ["none"],
+    }
+
+
+def _query_value(url: str, name: str) -> str | None:
+    return parse_qs(urlparse(url).query).get(name, [None])[0]
+
+
+class LoginEdges:
+    teams: Final = ({"team_id": "team-a", "team_alias": "Team A"}, {"team_id": "team-b", "team_alias": "Team B"})
+
+    def __init__(self) -> None:
+        self.opened: Final[list[str]] = []
+        self.polled: Final[list[str]] = []
+
+    def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool:
+        self.opened.append(url)
+        query: Final = parse_qs(urlparse(url).query)
+        if "redirect_uri" in query:
+            try:
+                urllib.request.urlopen(
+                    f"{query['redirect_uri'][0]}?state={query['state'][0]}&error=access_denied", timeout=5
+                ).close()
+            except urllib.error.HTTPError:
+                pass
+        return True
+
+    def session_get(self, url: str, *, timeout: float) -> _ProxyResponse:
+        return _ProxyResponse(200, _cli_auth_contract(url.removesuffix("/.well-known/litellm-cli-auth")))
+
+    def session_post(self, url: str, *, data=None, json=None, timeout: float, allow_redirects: bool) -> _ProxyResponse:
+        return _ProxyResponse(201, {"client_id": "llm_dcrc_abc"})
+
+    def start_classic(self, url: str, *, timeout: float) -> _ProxyResponse:
+        return _ProxyResponse(200, {"login_id": "cli-1", "poll_secret": "secret", "user_code": "ABCD-EFGH"})
+
+    def poll(self, url: str, *, headers=None, timeout: float) -> _ProxyResponse:
+        self.polled.append(url)
+        if "team_id=" in url:
+            return _ProxyResponse(403, {"detail": "no key from this proxy"})
+        return _ProxyResponse(
+            200, {"status": "ready", "requires_team_selection": True, "user_id": "u1", "team_details": list(self.teams)}
+        )
+
+    @property
+    def login_reached(self) -> list[tuple[str, str | None]]:
+        authorize_urls: Final = [url for url in self.opened if urlparse(url).path == "/authorize"]
+        team_polls: Final = [url for url in self.polled if "team_id=" in url]
+        return [
+            *(("pkce", _query_value(url, "team")) for url in authorize_urls),
+            *(("classic", _query_value(url, "team_id")) for url in (team_polls or self.polled[:1])),
+        ]
+
+
+@pytest.fixture
+def login_edges(monkeypatch: pytest.MonkeyPatch) -> LoginEdges:
+    edges: Final = LoginEdges()
+
+    class _Session:
+        get = staticmethod(edges.session_get)
+        post = staticmethod(edges.session_post)
+
+    monkeypatch.setattr(requests, "Session", _Session)
+    monkeypatch.setattr(requests, "post", edges.start_classic)
+    monkeypatch.setattr(requests, "get", edges.poll)
+    # run_pkce_login binds webbrowser.open as a default argument, so the browser is registered, not patched
+    monkeypatch.setattr(webbrowser, "_tryorder", [])
+    monkeypatch.setattr(webbrowser, "_browsers", {})
+    webbrowser.register("lite-login-test", None, edges, preferred=True)
+    return edges

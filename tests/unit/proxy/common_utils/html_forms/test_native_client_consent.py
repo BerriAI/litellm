@@ -1,7 +1,10 @@
 
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
-from litellm.proxy.common_utils.html_forms.native_client_consent import render_native_client_consent_page
+from litellm.proxy.common_utils.html_forms.native_client_consent import (
+    render_native_client_consent_page,
+    team_select_field,
+)
 
 
 def _render(teams=(), **overrides) -> str:
@@ -40,6 +43,26 @@ def test_consent_page_offers_a_chooser_for_several_teams():
     assert '<option value="team-a">Team A</option>' in page
     assert '<option value="team-b">team-b</option>' in page
     assert 'type="hidden" name="team_id"' not in page
+
+
+def test_consent_page_preselects_only_the_requested_team():
+    page = _render(teams=(("team-a", "Team A"), ("team-b", "Team B")), selected_team_id="team-b")
+    assert '<option value="team-a">Team A</option><option value="team-b" selected>Team B</option>' in page
+
+
+def test_consent_page_for_a_team_the_user_does_not_have_is_the_unhinted_page():
+    teams = (("team-a", "Team A"), ("team-b", "Team B"))
+    assert _render(teams=teams, selected_team_id="team-z") == _render(teams=teams)
+    assert _render(teams=teams[:1], selected_team_id="team-a") == _render(teams=teams[:1])
+
+
+def test_team_chooser_that_requires_a_choice_keeps_its_placeholder_selected_without_a_requested_team():
+    assert team_select_field((("team-a", "Team A"), ("team-b", "team-b")), require_choice=True) == (
+        '<label for="team_id">Attribute requests to team</label>'
+        '<select id="team_id" name="team_id" required>'
+        '<option value="" disabled selected>Choose a team</option>'
+        '<option value="team-a">Team A</option><option value="team-b">team-b</option></select>'
+    )
 
 
 def test_consent_page_escapes_every_untrusted_value():

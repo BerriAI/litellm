@@ -639,6 +639,39 @@ def test_device_flow_mints_the_session_for_the_team_the_developer_picks_in_the_b
 
 
 @pytest.mark.timeout(300)
+def test_gateway_team_picker_opens_on_its_placeholder_when_the_login_link_carries_a_team(
+    enabled_gateway: Gateway, identity_provider: Wire
+) -> None:
+    with enabled_gateway.scenario() as scenario:
+        user_id: Final = scenario.user(user_id=_USER_ID, user_email=_USER_EMAIL, user_role="internal_user")
+        teams: Final = (scenario.team(), scenario.team())
+        for team_id in teams:
+            enabled_gateway.post(
+                "/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}}
+            )
+        authorization_response: Final = enabled_gateway.client.post(
+            "/claude_code_gateway/oauth/device_authorization", data={"client_id": _CLIENT_ID}
+        )
+        assert authorization_response.status_code == 200, authorization_response.text
+        authorization: Final = _DeviceAuthorization.model_validate_json(authorization_response.content)
+        joiner: Final = "&" if "?" in authorization.verification_uri else "?"
+        verification: Final = enabled_gateway.client.get(
+            f"{authorization.verification_uri}{joiner}{urlencode({'team': teams[1]})}", follow_redirects=False
+        )
+        assert verification.status_code == 303, verification.text
+        identity_provider_redirect: Final = enabled_gateway.client.get(
+            verification.headers["location"], follow_redirects=False
+        )
+        assert identity_provider_redirect.status_code == 302, identity_provider_redirect.text
+        callback: Final = enabled_gateway.client.get(
+            identity_provider_redirect.headers["location"], follow_redirects=False
+        )
+        assert callback.status_code == 200, callback.text
+        assert sorted(_TEAM_OPTION.findall(callback.text)) == sorted(teams), callback.text
+        assert re.findall(r'<option value="([^"]*)"[^>]*selected', callback.text) == [""], callback.text
+        identity_provider.drain()
+
+
 def test_gateway_login_lists_and_defaults_to_the_first_team_on_the_user_record_after_a_write_to_its_row(
     enabled_gateway: Gateway, identity_provider: Wire
 ) -> None:

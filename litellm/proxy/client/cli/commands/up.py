@@ -27,6 +27,8 @@ from .auth import (
     is_pkce_login,
     load_token,
     login,
+    login_pkce_from_env,
+    login_team_from_env,
 )
 from .claude_settings import (
     BACKUP_PATH,
@@ -135,13 +137,13 @@ def ensure_fresh_login(ctx: click.Context) -> None:
     if _usable_login(_key_resolved_on_the_way_in(ctx_obj, base_url, vault), vault):
         return
 
-    pkce: Final = is_pkce_login(load_token(vault=vault), base_url) or pkce_default()
+    pkce: Final = login_pkce_from_env(default=is_pkce_login(load_token(vault=vault), base_url) or pkce_default())
     login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
         raise UpError(f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first.")
 
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
-    ctx.invoke(login, config_claude=False, pkce=pkce)
+    ctx.invoke(login, config_claude=False, pkce=pkce, team=login_team_from_env())
     if not _usable_login(get_stored_api_key(expected_base_url=base_url, vault=vault), vault):
         raise UpError("Login did not produce a usable token.")
 

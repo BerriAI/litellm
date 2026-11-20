@@ -3135,7 +3135,7 @@ class TestAgentCommands:
 
         @click.command()
         @click.option("--pkce", is_flag=True, default=None)
-        def fake_login(pkce):
+        def fake_login(pkce, team=None):
             pass
 
         with (
@@ -3179,7 +3179,7 @@ class TestAgentCommands:
 
         @click.command()
         @click.option("--pkce", is_flag=True, default=None)
-        def fake_login(pkce):
+        def fake_login(pkce, team=None):
             logins.append(pkce)
 
         with (
@@ -3196,6 +3196,45 @@ class TestAgentCommands:
 
         assert result.exit_code == 0, result.output
         assert logins == [expected_pkce]
+
+    @pytest.mark.parametrize(
+        ("env", "saved_pkce", "flow", "team"),
+        [
+            ({"LITELLM_PROXY_LOGIN_PKCE": "true", "LITELLM_PROXY_TEAM": "Team A"}, "false", "pkce", "Team A"),
+            ({"LITELLM_PROXY_TEAM": "Team B"}, "false", "classic", "team-b"),
+            ({"LITELLM_PROXY_LOGIN_PKCE": "false"}, "true", "classic", "team-a"),
+            ({}, "true", "pkce", None),
+        ],
+        ids=["pkce-and-team-from-env", "team-from-env", "env-pkce-off-beats-saved-setting", "no-env-keeps-saved-setting"],
+    )
+    def test_the_login_lite_claude_starts_honors_the_login_env_vars(
+        self, secret_vault_factory, login_edges, env, saved_pkce, flow, team
+    ):
+        save_config({"pkce": saved_pkce})
+        with patch(f"{AGENTS_MODULE}._is_interactive", return_value=True):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": secret_vault_factory()},
+                env=env,
+                input="1\n",
+            )
+
+        assert login_edges.login_reached == [(flow, team)], result.output
+        prompted = "Select a team by entering the index number" in result.output
+        assert prompted is (flow == "classic" and "LITELLM_PROXY_TEAM" not in env)
+
+    def test_an_invalid_pkce_env_var_is_named_in_the_error_lite_claude_shows(self, secret_vault_factory):
+        result = self.runner.invoke(
+            _agent_command("claude"),
+            [],
+            obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": secret_vault_factory()},
+            env={"LITELLM_PROXY_LOGIN_PKCE": "maybe"},
+        )
+
+        assert result.exit_code != 0
+        assert "LITELLM_PROXY_LOGIN_PKCE" in result.output
+        assert "'maybe' is not a valid boolean" in result.output
 
     def test_child_exit_code_reaches_the_shell(self):
         with patch(f"{AGENTS_MODULE}.run_agent", side_effect=SystemExit(42)):
