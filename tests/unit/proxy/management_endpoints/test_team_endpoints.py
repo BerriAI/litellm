@@ -12280,7 +12280,7 @@ async def test_upsert_team_member_model_max_budget_updates_default_budget_and_ev
     )
     cache: Final = MagicMock()
     cache.async_delete_cache = AsyncMock()
-    budget_cache: Final = MagicMock()
+    budget_cache: Final = MagicMock(customer_auth_store=None)
     budget_cache.async_delete_cache = AsyncMock()
     prisma: Final = MagicMock()
     prisma.db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
@@ -12326,7 +12326,7 @@ async def test_update_team_clears_explicitly_null_member_model_budget_and_evicts
     existing.members_with_roles = []
     existing.model_dump.return_value["metadata"] = existing.metadata
     existing.model_dump.return_value["members_with_roles"] = []
-    cache: Final = MagicMock()
+    cache: Final = MagicMock(customer_auth_store=None)
     cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_set_cache = AsyncMock()
     cache.async_delete_cache = AsyncMock()
@@ -12385,7 +12385,7 @@ async def test_update_team_persists_member_model_budget_to_default_budget_row(
     existing.members_with_roles = []
     existing.model_dump.return_value["metadata"] = existing.metadata
     existing.model_dump.return_value["members_with_roles"] = []
-    cache: Final = MagicMock()
+    cache: Final = MagicMock(customer_auth_store=None)
     cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_set_cache = AsyncMock()
     cache.async_delete_cache = AsyncMock()
