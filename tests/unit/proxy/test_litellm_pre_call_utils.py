@@ -8597,7 +8597,11 @@ async def test_key_cache_metadata_only_keeps_request_controls_the_key_allows(
         ),
         pytest.param("NO-STORE", None, [], {"no-store": True}, id="no-store-skips-the-cache-write"),
         pytest.param(
-            "no-store", {"no-cache": False}, [], {"no-cache": False, "no-store": True}, id="body-controls-win"
+            "no-cache, no-store",
+            {"no-cache": False},
+            [],
+            {"no-cache": False, "no-store": True},
+            id="body-controls-win",
         ),
         pytest.param(
             "no-cache, no-store", None, ["no-store"], {"no-store": True}, id="key-allowed-directives-are-kept"
