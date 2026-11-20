@@ -780,6 +780,18 @@ def test_initialize_callbacks_on_proxy_accepts_instance_non_list_value(probe_con
     assert isinstance(litellm.callbacks[0], CustomLogger)
 
 
+@pytest.mark.parametrize("as_list", [False, True], ids=["string_value", "list_value"])
+def test_initialize_callbacks_on_proxy_keeps_previously_registered_callbacks(probe_config_path: str, as_list: bool):
+    entry: Final = f"{_PROBE_MODULE_NAME}.proxy_handler_instance"
+    internal_callback: Final = CustomLogger()
+    litellm.callbacks.append(internal_callback)
+
+    _load_callbacks([entry] if as_list else entry, probe_config_path)
+
+    assert litellm.callbacks[0] is internal_callback
+    assert [type(cb).__name__ for cb in litellm.callbacks[1:]] == ["FloorMaxTokens"]
+
+
 def _credential(name: str, values: dict[str, object]) -> CredentialItem:
     return CredentialItem(credential_name=name, credential_values=values, credential_info={})
 
