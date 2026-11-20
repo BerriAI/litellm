@@ -4132,6 +4132,7 @@ dependencies = [
  "litellm-python-compat",
  "litellm-secret-value",
  "litellm-starlette",
+ "openssl",
  "rstest",
  "serde_json",
  "sha2 0.10.9",

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+fips = ["dep:openssl"]
+
 [dependencies]
 base64.workspace = true
 http.workspace = true
@@ -15,6 +18,7 @@ litellm-fnmatch.workspace = true
 litellm-python-compat.workspace = true
 litellm-secret-value.workspace = true
 litellm-starlette.workspace = true
+openssl = { workspace = true, optional = true }
 serde_json.workspace = true
 sha2.workspace = true
 strum.workspace = true

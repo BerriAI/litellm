@@ -1,6 +1,7 @@
 use std::fmt;
 
 use litellm_secret_value::SecretValue;
+#[cfg(not(feature = "fips"))]
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -38,8 +39,19 @@ impl Token {
         is_jwt(self.expose())
     }
 
+    #[cfg(not(feature = "fips"))]
     pub fn hash(&self) -> KeyHash {
         KeyHash(format!("{:x}", Sha256::digest(self.expose().as_bytes())))
+    }
+
+    #[cfg(feature = "fips")]
+    pub fn hash(&self) -> KeyHash {
+        let digest = openssl::hash::hash(
+            openssl::hash::MessageDigest::sha256(),
+            self.expose().as_bytes(),
+        )
+        .expect("OpenSSL serves SHA-256");
+        KeyHash(digest.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 
     pub(crate) fn masked(&self) -> String {
@@ -122,13 +134,18 @@ mod tests {
 
     const MASTER: &str = "sk-master";
 
-    #[test]
-    fn hashes_with_sha256() {
-        // FIPS 180-2 test vector for "abc"
-        assert_eq!(
-            Token::new("abc").hash().as_str(),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
+    #[rstest]
+    #[case::fips_180_2_vector_abc(
+        "abc",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )]
+    #[case::empty("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")]
+    #[case::non_ascii(
+        "sk-ü",
+        "39733fedd08389c527695749573f585ae204d740c0adbbff5787fd694692e863"
+    )]
+    fn hashes_with_sha256(#[case] token: &str, #[case] expected: &str) {
+        assert_eq!(Token::new(token).hash().as_str(), expected);
     }
 
     #[rstest]
