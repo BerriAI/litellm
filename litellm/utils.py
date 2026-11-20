@@ -7953,6 +7953,8 @@ def get_model_info_helper(
             for cost_key, cost_value in cost_entries.items():
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
                     returned_model_info[cost_key] = cost_value
+            if (minimum := _model_info.get("min_billed_input_tokens")) is not None:
+                return {**returned_model_info, "min_billed_input_tokens": minimum}
             return returned_model_info
     except ModelNotMappedError:
         raise
@@ -9344,6 +9346,13 @@ _model_cache: Final = AvailableModelsCache()
 _FAILED_PROVIDER_LISTING_TTL_SECONDS: Final = 30
 
 
+def _json_provider_api_key_is_set(provider: str) -> bool:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    json_provider: Final = JSONProviderRegistry.get(provider)
+    return json_provider is not None and json_provider.api_key_env in os.environ
+
+
 def _provider_api_key_env_vars(provider: str) -> tuple[str, ...]:
     if provider == LlmProviders.TOGETHER_AI:
         return TOGETHER_AI_API_KEY_ENV_VARS
@@ -9358,7 +9367,10 @@ def _infer_valid_provider_from_env_vars(
         provider
         for provider in litellm.provider_list
         if (not custom_llm_provider or provider == custom_llm_provider)
-        and any(name in environ_keys for name in _provider_api_key_env_vars(provider))
+        and (
+            any(name in environ_keys for name in _provider_api_key_env_vars(provider))
+            or _json_provider_api_key_is_set(provider)
+        )
     ]
 
 

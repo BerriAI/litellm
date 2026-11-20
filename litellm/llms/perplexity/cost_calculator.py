@@ -8,7 +8,11 @@ from datetime import datetime
 from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import finite_reported_cost
-from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    TokenRates,
+    apply_off_peak_pricing,
+    unbilled_minimum_input_tokens,
+)
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -78,7 +82,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         input_cost_per_token if math.isnan(rates.cache_read_rate) else rates.cache_read_rate
     )
     prompt_cost: float = (
-        prompt_tokens - cached_tokens
+        prompt_tokens + unbilled_minimum_input_tokens(model_info, prompt_tokens) - cached_tokens
     ) * input_cost_per_token + cached_tokens * cache_read_cost_per_token
 
     ## ADD CITATION TOKENS COST (if present)

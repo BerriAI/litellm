@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     parse_completion_tokens_details,
     parse_prompt_tokens_details,
     resolve_explicit_cache_read_cost_rate,
+    unbilled_minimum_input_tokens,
 )
 from litellm.types.utils import CacheCreationTokenDetails, ModelInfo, Usage
 from litellm.utils import get_model_info
@@ -176,4 +177,6 @@ def cost_per_token(
         rates if explicit_cache_read_rate is None else replace(rates, cache_read_rate=explicit_cache_read_rate)
     )
 
-    return _bill(breakdown, billed_rates)
+    prompt_cost, completion_cost = _bill(breakdown, billed_rates)
+    minimum_cost: Final = unbilled_minimum_input_tokens(model_info, usage.prompt_tokens) * billed_rates.input_rate
+    return prompt_cost + minimum_cost, completion_cost

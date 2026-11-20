@@ -35,10 +35,10 @@ class SimpleProviderConfig:
         self.base_url: str = _STR_ADAPTER.validate_python(data["base_url"])
         self.api_key_env: str = data["api_key_env"]
         self.api_base_env: str | None = data.get("api_base_env")
-        self.base_class = data.get("base_class", "openai_gpt")
+        self.base_class: str = data.get("base_class", "openai_gpt")
         self.user_agent: str | None = _STR_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
-        self.param_mappings = data.get("param_mappings", {})
-        self.constraints = data.get("constraints", {})
+        self.param_mappings: Mapping[str, str] = data.get("param_mappings", {})
+        self.constraints: Mapping[str, float] = data.get("constraints", {})
         self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
             data.get("special_handling", {})
         )
