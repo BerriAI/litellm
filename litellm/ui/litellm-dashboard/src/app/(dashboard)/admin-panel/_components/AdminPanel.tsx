@@ -388,7 +388,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     },
     {
       key: "scim",
-      label: t("adminPanel.page.tabs.scim"),
+      label: "SCIM",
       children: <SCIMConfig accessToken={accessToken} userID={userID} proxySettings={proxySettings} />,
     },
     {
@@ -409,12 +409,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     },
     {
       key: "hashicorp-vault",
-      label: t("adminPanel.page.tabs.hashicorpVault"),
+      label: "Hashicorp Vault",
       children: <HashicorpVault />,
     },
     {
       key: "cyberark",
-      label: t("adminPanel.page.tabs.cyberArk"),
+      label: "CyberArk Conjur",
       children: <CyberArk />,
     },
     {

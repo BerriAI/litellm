@@ -5169,9 +5169,6 @@
         "ssoSettings": "SSO Settings",
         "securitySettings": "Security Settings",
         "uiSettings": "UI Settings",
-        "scim": "SCIM",
-        "hashicorpVault": "Hashicorp Vault",
-        "cyberArk": "CyberArk Conjur",
         "loggingSettings": "Logging Settings",
         "plugins": "Plugins",
         "webSearchInterception": "Web Search Interception"

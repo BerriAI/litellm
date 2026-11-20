@@ -5169,9 +5169,6 @@
         "ssoSettings": "单点登录设置",
         "securitySettings": "安全设置",
         "uiSettings": "界面设置",
-        "scim": "SCIM",
-        "hashicorpVault": "Hashicorp Vault",
-        "cyberArk": "CyberArk Conjur",
         "loggingSettings": "日志设置",
         "plugins": "插件",
         "webSearchInterception": "网页搜索拦截"
