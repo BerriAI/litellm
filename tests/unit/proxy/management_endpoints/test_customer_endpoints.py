@@ -1497,3 +1497,17 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
         "end_user_id:c2",
         "end_user_restricted_registry",
     ]
+
+
+def test_a_new_customer_cannot_grant_an_mcp_auth_profile(mock_prisma_client: MagicMock, mock_user_api_key_auth: None) -> None:
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    response: Final = client.post(
+        "/customer/new",
+        json={"user_id": "c1", "object_permission": {"mcp_auth_profiles": ["ana-bots"]}},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "not on a customer" in response.text
+    mock_prisma_client.db.litellm_endusertable.create.assert_not_awaited()

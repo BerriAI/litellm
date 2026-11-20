@@ -149,6 +149,7 @@ from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.budget_limits_usage import budget_limit_windows, build_budget_limits_usage
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.management_helpers.managed_resource_owner_sync import repoint_key_owned_managed_resources
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import with_canonical_auth_profile_grants
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     ObjectPermissionUpsert,
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -211,6 +212,7 @@ from litellm.router import Router
 from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_name
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.object_permission import row_without_empty_auth_profile_grants
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -462,6 +464,7 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_PERMISSION_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _decode_json_string_column(column: str, value: object) -> object:
@@ -849,6 +852,20 @@ def _object_permission_to_dict(
     if object_permission is None:
         return None
     return cast(ObjectPermissionDict, object_permission.model_dump(exclude_unset=True))
+
+
+async def _with_canonical_grant(
+    permission: LiteLLM_ObjectPermissionBase | None,
+    existing_object_permission_id: str | None,
+    is_proxy_admin: bool,
+    prisma_client: PrismaClient | None,
+) -> LiteLLM_ObjectPermissionBase | None:
+    if permission is None or permission.mcp_auth_profiles is None:
+        return permission
+    canonical: Final = await with_canonical_auth_profile_grants(
+        permission.model_dump(exclude_unset=True), existing_object_permission_id, is_proxy_admin, prisma_client
+    )
+    return LiteLLM_ObjectPermissionBase.model_validate(canonical)
 
 
 def _personal_key_generation_check(user_api_key_dict: UserAPIKeyAuth, data: GenerateKeyRequest):
@@ -1688,6 +1705,35 @@ async def _common_key_generation_helper(
         ),
     )
 
+    _is_proxy_admin_caller: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    data.object_permission = await _with_canonical_grant(  # rebind-ok: the key is written with the canonical grant
+        data.object_permission, None, _is_proxy_admin_caller, prisma_client
+    )
+    _default_object_permission: Final[object] = (
+        litellm.default_key_generate_params.get("object_permission")
+        if litellm.default_key_generate_params is not None
+        else None
+    )
+    _caller_permission_fields: Final = frozenset(
+        data.object_permission.model_dump(exclude_unset=True, exclude_none=True)
+        if data.object_permission is not None
+        else ()
+    )
+    _defaults: Final = (
+        await with_canonical_auth_profile_grants(
+            {
+                field: value
+                for field, value in _PERMISSION_FIELDS.validate_python(_default_object_permission).items()
+                if field not in _caller_permission_fields
+            },
+            None,
+            True,
+            prisma_client,
+        )
+        if isinstance(_default_object_permission, dict)
+        else None
+    )
+
     # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
     _budget_id = data.budget_id
     if prisma_client is not None and data.soft_budget is not None:
@@ -1783,7 +1829,6 @@ async def _common_key_generation_helper(
         data_json.pop("tags")
 
     # Validate MCP servers in object_permission are within team scope
-    _is_proxy_admin_caller: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     normalized_object_permission: Final = await validate_key_mcp_servers_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
@@ -1807,17 +1852,12 @@ async def _common_key_generation_helper(
     # checks above, so an admin-configured default (e.g. vector_stores, search_tools)
     # is never mistaken for a caller-requested permission and rejected by those
     # non-admin/no-team checks. Only fields the caller left unset are filled in.
-    _default_object_permission: Final = (
-        litellm.default_key_generate_params.get("object_permission")
-        if litellm.default_key_generate_params is not None
-        else None
-    )
-    if isinstance(_default_object_permission, dict):
+    if _defaults is not None:
         _caller_object_permission: Final = data_json.get("object_permission")
         if _caller_object_permission is None:
-            data_json["object_permission"] = dict(_default_object_permission)
+            data_json["object_permission"] = dict(_defaults)
         elif isinstance(_caller_object_permission, dict):
-            for _op_field, _op_default_value in _default_object_permission.items():
+            for _op_field, _op_default_value in _defaults.items():
                 _caller_object_permission.setdefault(_op_field, _op_default_value)
 
     should_create_object_permission: Final = prisma_client is not None and isinstance(
@@ -3026,7 +3066,9 @@ async def _update_key_row_assigning_project(
             ),
         )
     updated_data: Final[Mapping[str, object]] = (
-        updated_row.model_dump() if updated_row is not None else MappingProxyType({})
+        row_without_empty_auth_profile_grants(updated_row.model_dump())
+        if updated_row is not None
+        else MappingProxyType({})
     )
     result: Final[_KeyUpdateResult] = {"token": hashed_token, "data": updated_data}
     return result
@@ -3083,7 +3125,9 @@ async def _update_key_row_with_soft_budget(
             )
         )
     updated_data: Final[Mapping[str, object]] = (
-        updated_row.model_dump() if updated_row is not None else MappingProxyType({})
+        row_without_empty_auth_profile_grants(updated_row.model_dump())
+        if updated_row is not None
+        else MappingProxyType({})
     )
     result: Final[_KeyUpdateResult] = {"token": hashed_token, "data": updated_data}
     return result
@@ -3671,7 +3715,11 @@ async def _validate_mcp_servers_for_key_update(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
-    object_permission_dict: Final = _object_permission_to_dict(data.object_permission)
+    object_permission_dict: Final = _object_permission_to_dict(
+        await _with_canonical_grant(
+            data.object_permission, existing_key_row.object_permission_id, is_proxy_admin, prisma_client
+        )
+    )
     team_unchanged: Final = data.team_id is None or data.team_id == existing_key_row.team_id
     normalized_object_permission: Final = await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
@@ -6822,7 +6870,11 @@ async def regenerate_key_fn(
                 team_table=regenerate_team_table,
                 access_group_ids=data.access_group_ids,
             )
-            _regen_object_permission_dict = _object_permission_to_dict(data.object_permission)
+            _regen_object_permission_dict = _object_permission_to_dict(
+                await _with_canonical_grant(
+                    data.object_permission, _key_in_db.object_permission_id, _regen_is_proxy_admin, prisma_client
+                )
+            )
             normalized_object_permission: Final = await validate_key_mcp_servers_against_team(
                 object_permission=_regen_object_permission_dict,
                 team_obj=regenerate_team_table,

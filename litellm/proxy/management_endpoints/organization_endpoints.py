@@ -57,6 +57,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
 )
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import refuse_auth_profile_grants
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
@@ -485,6 +486,7 @@ async def new_organization(
     if llm_router is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
 
+    refuse_auth_profile_grants("organization", data.object_permission)
     # Validate budget values are not negative
     if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
         raise HTTPException(
@@ -709,6 +711,7 @@ async def _set_object_permission(
 
     Returns the object_permission_id if created, otherwise None.
     """
+    refuse_auth_profile_grants("organization", data.object_permission)
     if prisma_client is None:
         return None
 
@@ -871,6 +874,7 @@ async def handle_update_object_permission(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    refuse_auth_profile_grants("organization", data_json.get("object_permission"))
     # Use the common helper to handle the object permission update
     object_permission_id: Final = await handle_update_object_permission_common(
         data_json=data_json,
@@ -995,6 +999,7 @@ async def update_organization_v2(
         **({"metadata": data.metadata or {}} if "metadata" in present_fields else {}),
     }
 
+    refuse_auth_profile_grants("organization", data.object_permission)
     object_permission_cleared: Final = "object_permission" in present_fields and data.object_permission is None
     can_grant_apps: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
     await reject_clearing_app_grants(

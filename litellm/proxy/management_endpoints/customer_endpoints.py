@@ -36,6 +36,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import refuse_auth_profile_grants
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
@@ -310,6 +311,7 @@ async def _handle_customer_object_permission_update(
         prisma_client: Prisma database client
     """
     if "object_permission" in non_default_values:
+        refuse_auth_profile_grants("customer", non_default_values["object_permission"])
         existing_object_permission_id: Final = (
             end_user_table_data_typed.object_permission_id if end_user_table_data_typed is not None else None
         )
@@ -432,6 +434,7 @@ async def new_end_user(
         )
     try:
         ## VALIDATION ##
+        refuse_auth_profile_grants("customer", data.object_permission)
         if data.default_model is not None:
             if llm_router is None:
                 raise HTTPException(

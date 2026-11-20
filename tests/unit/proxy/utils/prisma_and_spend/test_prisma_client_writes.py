@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import BaseModel
 from prisma.errors import UniqueViolationError
 
 from litellm._service_logger import ServiceTypes
@@ -349,6 +350,37 @@ async def test_update_data_token_hashes_and_updates(
         "include": {"object_permission": True},
         "data_token": hashed,
         "data_spend": 1.0,
+    }
+
+
+class _PermissionRow(BaseModel, frozen=True):
+    object_permission_id: str
+    mcp_servers: tuple[str, ...]
+    mcp_auth_profiles: tuple[str, ...]
+
+
+class _KeyRow(BaseModel, frozen=True):
+    token: str
+    object_permission: _PermissionRow
+
+
+@pytest.mark.asyncio
+async def test_update_data_answers_a_key_without_grants_without_the_grant_field(
+    prisma_client: PrismaClient,
+) -> None:
+    hashed: Final = hashlib.sha256(b"sk-update-2").hexdigest()
+    prisma_client.db.litellm_verificationtoken.update = AsyncMock(  # rebind-ok: the fixture's table is the database
+        return_value=_KeyRow(
+            token=hashed,
+            object_permission=_PermissionRow(object_permission_id="op-1", mcp_servers=("srv-1",), mcp_auth_profiles=()),
+        )
+    )
+
+    result: Final = await prisma_client.update_data(token="sk-update-2", data={"spend": 1.0})
+
+    assert result == {
+        "token": hashed,
+        "data": {"token": hashed, "object_permission": {"object_permission_id": "op-1", "mcp_servers": ("srv-1",)}},
     }
 
 

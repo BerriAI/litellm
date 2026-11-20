@@ -11,10 +11,12 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel, SerializeAsAny
 
 from litellm.proxy._types import (
     GenerateKeyRequest,
     GenerateKeyResponse,
+    LiteLLM_AuditLogs,
     LiteLLM_VerificationToken,
     UpdateKeyRequest,
     UserAPIKeyAuth,
@@ -863,3 +865,63 @@ async def test_secret_manager_optional_params_come_from_the_team_metadata(
     monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", fake_get_team_object)
 
     assert await KeyManagementEventHooks._get_secret_manager_optional_params("team-a") == expected
+
+
+class _BasePermissionRow(BaseModel):
+    object_permission_id: str
+    mcp_servers: list[str] = []
+
+
+class _PermissionRow(_BasePermissionRow):
+    mcp_auth_profiles: list[str] = []
+
+
+class _KeyRow(BaseModel):
+    token: str
+    key_alias: str | None = None
+    object_permission_id: str | None = None
+    object_permission: SerializeAsAny[_BasePermissionRow] | None = None
+
+
+async def _key_update_before_value(row: BaseModel) -> object:
+    captured: list[LiteLLM_AuditLogs] = []
+
+    async def capture(request_data: LiteLLM_AuditLogs) -> None:
+        captured.append(request_data)
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update", new=capture),
+    ):
+        await KeyManagementEventHooks.async_key_updated_hook(
+            data=UpdateKeyRequest(key="hashed-token", max_budget=5.0),
+            existing_key_row=row,  # pyright: ignore[reportArgumentType]  # a raw Prisma row, as /key/update passes
+            response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin"),
+        )
+        await asyncio.sleep(0)
+    (audit,) = captured
+    return audit.before_value
+
+
+def _raw_key_row(permission: _BasePermissionRow) -> _KeyRow:
+    return _KeyRow(
+        token="hashed-token", object_permission_id=permission.object_permission_id, object_permission=permission
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_key_update_audit_snapshot_without_grants_keeps_the_bytes_it_had_before_the_grant_column() -> None:
+    before_column: Final = _raw_key_row(_BasePermissionRow(object_permission_id="perm-1", mcp_servers=["github"]))
+    with_column: Final = _raw_key_row(_PermissionRow(object_permission_id="perm-1", mcp_servers=["github"]))
+
+    assert await _key_update_before_value(with_column) == await _key_update_before_value(before_column)
+
+
+@pytest.mark.asyncio
+async def test_a_key_update_audit_snapshot_keeps_granted_auth_profiles() -> None:
+    granted: Final = _raw_key_row(_PermissionRow(object_permission_id="perm-1", mcp_auth_profiles=["ana-bots"]))
+
+    snapshot: Final = json.loads(json.loads(str(await _key_update_before_value(granted))))
+
+    assert snapshot["object_permission"]["mcp_auth_profiles"] == ["ana-bots"]

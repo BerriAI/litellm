@@ -91,6 +91,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
 from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.budget_limits_usage import build_budget_limits_usage
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import refuse_auth_profile_grants
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
@@ -119,6 +120,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.object_permission import without_empty_auth_profile_grants
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -172,6 +174,7 @@ _ADMIN_USER_ROW_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDic
 _ADMIN_BUDGET_LIMITS_ADAPTER: Final[TypeAdapter[Sequence[BudgetLimitEntry] | str | None]] = TypeAdapter(
     Sequence[BudgetLimitEntry] | str | None
 )
+_STR_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _user_table(
@@ -284,7 +287,18 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
     data_json.pop("teams", None)  # handled separately
-    return data_json
+    permission: Final[object] = _STR_OBJECT_DICT_ADAPTER.validate_python(data_json).get("object_permission")
+    refuse_auth_profile_grants("user", permission)
+    return (
+        {
+            **data_json,
+            "object_permission": dict(
+                without_empty_auth_profile_grants(_STR_OBJECT_DICT_ADAPTER.validate_python(permission))
+            ),
+        }
+        if isinstance(permission, Mapping)
+        else data_json
+    )
 
 
 async def _check_duplicate_user_field(
@@ -1742,11 +1756,13 @@ async def _update_single_user_helper(
     # Upsert the grants into their own row and link it, mirroring /key/update and /team/update.
     # This also removes object_permission from the payload, which is not a column on the user table.
     if "object_permission" in non_default_values:
+        refuse_auth_profile_grants("user", user_request.object_permission)
         object_permission_id: Final = await handle_update_object_permission_common(
             data_json=non_default_values,
             existing_object_permission_id=getattr(existing_user_row, "object_permission_id", None),
             prisma_client=prisma_client,
             can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            carries_auth_profile_grants=False,
         )
         if object_permission_id is not None:
             non_default_values["object_permission_id"] = object_permission_id
@@ -2123,6 +2139,7 @@ async def bulk_user_update(
                 status_code=403,
                 detail="Only proxy admins can update all users at once.",
             )
+        refuse_auth_profile_grants("user", data.user_updates.object_permission)
         if data.user_updates.password is not None:
             bulk_password_error: Final[HTTPExceptionErrorDetail] = {
                 "error": (

@@ -61,6 +61,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  #
 from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.object_permission import response_without_empty_auth_profile_grants
 from litellm.types.utils import OTEL_DESTINATION_VARS
 
 router: Final = APIRouter()
@@ -461,7 +462,7 @@ async def add_team_callbacks(
 
         return {
             "status": "success",
-            "data": new_team_row,
+            "data": response_without_empty_auth_profile_grants(new_team_row),
         }
 
     except HTTPException as e:

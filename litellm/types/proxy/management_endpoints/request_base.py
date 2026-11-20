@@ -1,10 +1,15 @@
-from collections.abc import Sequence
-from typing import Any  # noqa: TID251  # metadata and models stay Any so existing callers keep type-checking
+from collections.abc import Mapping, Sequence
+from typing import (
+    Any,  # noqa: TID251  # metadata and models stay Any so existing callers keep type-checking
+    Final,
+)
 
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, SerializerFunctionWrapHandler, TypeAdapter, field_validator, model_serializer
 
 from litellm.models.team import BudgetLimitEntry
 from litellm.types.utils import LiteLLMPydanticObjectBase
+
+_DUMPED: Final = TypeAdapter(Mapping[str, object])
 
 
 class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
@@ -21,6 +26,14 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_tool_search_enabled: bool | None = None
     skills: list[str] | None = None
     apps: Sequence[str] | None = None
+    mcp_auth_profiles: list[str] | None = None  # mutable-ok: request schema matches its sibling list fields
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_auth_profile_grants(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202  # a return annotation collapses the OpenAPI response schema
+        dumped: Final = _DUMPED.validate_python(handler(self))
+        if dumped.get("mcp_auth_profiles", ()) is not None:
+            return dumped
+        return {key: value for key, value in dumped.items() if key != "mcp_auth_profiles"}
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):

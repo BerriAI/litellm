@@ -110,11 +110,16 @@ async def prepare_object_permission_upsert(
     existing_object_permission: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
         where={"object_permission_id": object_permission_id},
     )
-    existing_fields: Final[dict[str, object]] = (
+    stored_fields: Final[Mapping[str, object]] = (
         existing_object_permission.model_dump(exclude_unset=True, exclude_none=True)
         if existing_object_permission is not None
         else {}
     )
+    existing_fields: Final[dict[str, object]] = {
+        column: value
+        for column, value in stored_fields.items()
+        if column != "mcp_auth_profiles"  # written only when sent, so a stale read never restores a revoked grant
+    }
     reject_app_grant_change(new_object_permission.get("apps"), existing_fields.get("apps"), can_grant_apps)
     await reject_ambiguous_mcp_tool_permission_keys(
         new_mcp_tool_permissions=new_object_permission.get("mcp_tool_permissions"),
@@ -163,6 +168,7 @@ async def handle_update_object_permission_common(
     existing_object_permission_id: str | None,
     prisma_client: PrismaClient | None,
     can_grant_apps: bool = False,
+    carries_auth_profile_grants: bool = True,
 ) -> str | None:
     """
     Common logic for handling object permission updates across organizations, teams, and keys.
@@ -179,6 +185,7 @@ async def handle_update_object_permission_common(
         existing_object_permission_id: The current object_permission_id from the entity (can be None)
         prisma_client: The database client
         can_grant_apps: Whether the caller may change the customer management apps granted
+        carries_auth_profile_grants: False leaves ``mcp_auth_profiles`` as stored, for a user, whose row its keys may share
 
     Returns:
         Optional[str]: The object_permission_id after the update/creation, or None if no object_permission to process
@@ -199,11 +206,16 @@ async def handle_update_object_permission_common(
         prisma_client=prisma_client,
         can_grant_apps=can_grant_apps,
     )
+    record: Final = (
+        upsert.record
+        if carries_auth_profile_grants
+        else {column: value for column, value in upsert.record.items() if column != "mcp_auth_profiles"}
+    )
     created_object_permission_row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
         where={"object_permission_id": upsert.object_permission_id},
         data={
-            "create": upsert.record,
-            "update": upsert.record,
+            "create": record,
+            "update": record,
         },
     )
 

@@ -38212,6 +38212,8 @@ export interface components {
             blocked_tools?: string[] | null;
             /** Mcp Access Groups */
             mcp_access_groups?: string[] | null;
+            /** Mcp Auth Profiles */
+            mcp_auth_profiles?: string[] | null;
             /** Mcp Servers */
             mcp_servers?: string[] | null;
             /** Mcp Tool Permissions */
