@@ -682,9 +682,22 @@ class TestFileContentBlocks:
         )
         assert result.usage.prompt_tokens == 0
 
-    def test_image_block_counts_as_image_only_input(self) -> None:
+    @pytest.mark.parametrize(
+        "embedding_input, image_tokens",
+        [
+            ([_file_block(file_data=IMAGE_DATA_URI)], 258),
+            ([IMAGE_DATA_URI], 258),
+            ([GCS_URL], 258),
+            ([IMAGE_DATA_URI, VIDEO_DATA_URI], 0),
+            (["a red shoe"], 0),
+        ],
+        ids=["image-block", "bare-image-data-uri", "bare-image-gcs-url", "image-and-video", "plain-text"],
+    )
+    def test_only_image_only_input_bills_undetailed_usage_as_image_tokens(
+        self, embedding_input: list[object], image_tokens: int
+    ) -> None:
         result: Final = process_embed_content_response(
-            input=[_file_block(file_data=IMAGE_DATA_URI)],
+            input=embedding_input,
             model_response=EmbeddingResponse(),
             model=self.MODEL,
             response_json={
@@ -692,7 +705,8 @@ class TestFileContentBlocks:
                 "usageMetadata": {"promptTokenCount": 258, "totalTokenCount": 258},
             },
         )
-        assert result.usage.prompt_tokens_details.image_tokens == 258
+        assert result.usage.prompt_tokens == 258
+        assert result.usage.prompt_tokens_details.image_tokens == image_tokens
 
 
 @pytest.mark.respx(assert_all_called=True)
