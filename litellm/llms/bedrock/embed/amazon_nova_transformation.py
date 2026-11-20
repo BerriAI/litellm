@@ -12,6 +12,7 @@ Supports:
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.types.utils import (
@@ -20,6 +21,11 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+
+
+def _is_audio_or_video_request(request_data: Mapping[str, object]) -> bool:
+    params: Final = request_data.get("singleEmbeddingParams") or request_data.get("segmentedEmbeddingParams")
+    return isinstance(params, Mapping) and ("audio" in params or "video" in params)
 
 
 class AmazonNovaEmbeddingConfig:
@@ -335,7 +341,10 @@ class AmazonNovaEmbeddingConfig:
         batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
         metered_input_tokens: int | None = None,
     ) -> EmbeddingResponse:
-        return self._transform_response(response_list, model, batch_data, metered_input_tokens)
+        has_audio_or_video: Final = any(_is_audio_or_video_request(request_data) for request_data in batch_data or ())
+        return self._transform_response(
+            response_list, model, batch_data, None if has_audio_or_video else metered_input_tokens
+        )
 
     def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
         """
