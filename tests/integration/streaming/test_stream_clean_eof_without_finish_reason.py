@@ -225,7 +225,7 @@ def _event_types(text: str) -> tuple[str, ...]:
     return tuple(event for event, _ in sse_events(text))
 
 
-@pytest.mark.parametrize("family", ["openai", "anthropic", "agentcore"])
+@pytest.mark.parametrize("family", ["openai", "anthropic", "gemini", "agentcore"])
 def test_chat_stream_that_ends_cleanly_without_a_finish_reason_reaches_the_client_as_an_error(
     gateway: Gateway, family: Family
 ) -> None:
@@ -283,12 +283,13 @@ def test_chat_stream_from_a_mock_response_deployment_still_completes(gateway: Ga
         assert spend_row(call_id)["status"] == "success"
 
 
+@pytest.mark.parametrize("family", ["hosted_vllm", "gemini"])
 @pytest.mark.parametrize(("ending", "terminal"), [("ending-complete", True), ("ending-clean-eof", False)])
 def test_messages_over_a_chat_bridged_deployment_reports_end_turn_only_for_a_finished_stream(
-    gateway: Gateway, ending: Ending, terminal: bool
+    gateway: Gateway, family: Family, ending: Ending, terminal: bool
 ) -> None:
-    with wire_server(_upstream("hosted_vllm")) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=_DEPLOYMENTS["hosted_vllm"], api_base=wire.url, api_key=_PROVIDER_KEY)
+    with wire_server(_upstream(family)) as wire, gateway.scenario() as scenario:
+        model: Final = _deploy(scenario, family, wire)
         text, call_id = _post(
             gateway,
             "/v1/messages",
@@ -307,12 +308,13 @@ def test_messages_over_a_chat_bridged_deployment_reports_end_turn_only_for_a_fin
         assert spend_row(call_id)["status"] == ("success" if terminal else "failure")
 
 
+@pytest.mark.parametrize("family", ["anthropic", "gemini"])
 @pytest.mark.parametrize(("ending", "terminal"), [("ending-complete", True), ("ending-clean-eof", False)])
-def test_responses_over_a_chat_bridged_anthropic_deployment_completes_only_a_finished_stream(
-    gateway: Gateway, ending: Ending, terminal: bool
+def test_responses_over_a_chat_bridged_deployment_completes_only_a_finished_stream(
+    gateway: Gateway, family: Family, ending: Ending, terminal: bool
 ) -> None:
-    with wire_server(_upstream("anthropic")) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=_DEPLOYMENTS["anthropic"], api_base=wire.url, api_key=_PROVIDER_KEY)
+    with wire_server(_upstream(family)) as wire, gateway.scenario() as scenario:
+        model: Final = _deploy(scenario, family, wire)
         text, call_id = _post(gateway, "/v1/responses", {"model": model, "input": _prompt(ending)})
         types: Final = tuple(string_value(frame.get("type") or "") for frame in data_frames(text))
         assert types[:1] == ("response.created",), text
