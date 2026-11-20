@@ -1,7 +1,13 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
 
 use axum::http::{Request, request::Parts};
+use jiff::Timestamp;
 use litellm_config::Config;
+use litellm_error::Source;
+use litellm_gateway_auth_core::{
+    self as core, AuthHost, Identity, KeyDenial, KeyRow, Outcome, Settings, Token,
+    authenticate_key, identity::key::KeyIdentity,
+};
 use litellm_secret_value::SecretValue;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -10,6 +16,7 @@ use crate::{
     AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod, Authorizer,
     Bearer, CredentialExtractor, Error, NoAdditionalPolicy, Permissions, Principal, PrincipalKind,
     ResolvedIdentity, VerifiedIdentity,
+    keys::{HeldKey, KeyHash},
 };
 
 pub type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -54,7 +61,7 @@ impl IdentityResolver for LocalAdministrator {
         Box::pin(async move {
             let allowed = match identity.authentication.method {
                 AuthenticationMethod::MasterKey => identity.principal == master_principal(),
-                AuthenticationMethod::External(_) => false,
+                AuthenticationMethod::VirtualKey | AuthenticationMethod::External(_) => false,
             };
             if !allowed {
                 return Err(Error::Forbidden);
@@ -64,6 +71,27 @@ impl IdentityResolver for LocalAdministrator {
                 permissions: Permissions::All,
             })
         })
+    }
+}
+
+/// Grants the master key and a verified virtual key everything, within the model list a key's
+/// credential carries. A key with other limits of its own is never verified, since its host
+/// declines one.
+pub struct KeyHolder;
+
+impl IdentityResolver for KeyHolder {
+    fn resolve<'a>(&'a self, identity: &'a VerifiedIdentity) -> AuthFuture<'a, ResolvedIdentity> {
+        match identity.authentication.method {
+            AuthenticationMethod::VirtualKey => Box::pin(async {
+                Ok(ResolvedIdentity {
+                    principal: identity.principal.clone(),
+                    permissions: Permissions::All,
+                })
+            }),
+            AuthenticationMethod::MasterKey | AuthenticationMethod::External(_) => {
+                LocalAdministrator.resolve(identity)
+            }
+        }
     }
 }
 
@@ -102,6 +130,15 @@ impl Auth {
             identities: Arc::new(LocalAdministrator),
             authorizer: Arc::new(NoAdditionalPolicy),
             clock: Arc::new(SystemClock),
+        }
+    }
+
+    /// [`Self::from_config`], with every credential verified by `keys`, a virtual key's included.
+    pub fn with_keys(config: &Config, keys: Arc<dyn Authenticator>) -> Self {
+        Self {
+            authenticator: keys,
+            identities: Arc::new(KeyHolder),
+            ..Self::from_config(config)
         }
     }
 
@@ -183,6 +220,17 @@ impl MasterKeyAuthenticator {
             .filter(|key| !key.expose().trim().is_empty())
             .ok_or(Error::Unconfigured)
     }
+
+    /// Whether `credential` is the master key.
+    fn holds(&self, credential: &Credential) -> Result<bool, Error> {
+        let expected = self.key()?;
+        Ok(match credential {
+            Credential::Token(token) => {
+                bool::from(Sha256::digest(token.expose()).ct_eq(&Sha256::digest(expected.expose())))
+            }
+            Credential::Transport => false,
+        })
+    }
 }
 
 impl Authenticator for MasterKeyAuthenticator {
@@ -196,26 +244,166 @@ impl Authenticator for MasterKeyAuthenticator {
         _: &'a Parts,
     ) -> AuthFuture<'a, VerifiedIdentity> {
         Box::pin(async move {
-            let expected = self.key()?;
-            let Credential::Token(credential) = credential else {
+            match self.holds(credential)? {
+                true => Ok(master_identity()),
+                false => Err(Error::InvalidToken),
+            }
+        })
+    }
+}
+
+const VIRTUAL_KEY: &str = "litellm:virtual-key";
+
+/// Verifies the master key and the virtual keys `H` holds through `gateway-auth-core`'s key path.
+/// Every route this crate guards is an inference route, which is what the request it hands the
+/// core says.
+pub struct KeyAuthenticator<H> {
+    host: H,
+    settings: Settings,
+    clock: Arc<dyn Clock>,
+}
+
+impl<H> KeyAuthenticator<H> {
+    pub fn new(host: H, settings: Settings) -> Self {
+        Self {
+            host,
+            settings,
+            clock: Arc::new(SystemClock),
+        }
+    }
+
+    pub fn with_clock(self, clock: Arc<dyn Clock>) -> Self {
+        Self { clock, ..self }
+    }
+}
+
+impl<H> Authenticator for KeyAuthenticator<H>
+where
+    H: AuthHost,
+    KeyRow<H>: HeldKey,
+{
+    fn validate(&self) -> AuthFuture<'_, ()> {
+        Box::pin(async {
+            match self.settings.key.master_key {
+                Some(_) => Ok(()),
+                None => Err(Error::Unconfigured),
+            }
+        })
+    }
+
+    fn verify<'a>(
+        &'a self,
+        credential: &'a Credential,
+        request: &'a Parts,
+    ) -> AuthFuture<'a, VerifiedIdentity> {
+        Box::pin(async move {
+            let Credential::Token(presented) = credential else {
                 return Err(Error::InvalidToken);
             };
-            if !bool::from(
-                Sha256::digest(credential.expose()).ct_eq(&Sha256::digest(expected.expose())),
-            ) {
-                return Err(Error::InvalidToken);
+            let token = Token::new(presented.clone());
+            let now = Timestamp::try_from(self.clock.now())
+                .map_err(|error| Error::Unavailable(Source::new(error)))?;
+            let request = core::Request {
+                route: request.uri.path(),
+                method: Some(&request.method),
+                token: Some(&token),
+                is_llm_api_route: true,
+                runs_inference_checks: true,
+                now,
+                ..core::Request::default()
+            };
+            match authenticate_key(&self.host, &request, Some(&token), &self.settings).await {
+                Ok(Outcome::Authenticated(Identity::Key(identity))) => {
+                    identified::<H>(identity, presented)
+                }
+                Ok(Outcome::Authenticated(_)) => Err(Error::NotNative),
+                Ok(Outcome::Denied(error, _)) | Err(error) => Err(rejected(error)),
             }
-            Ok(VerifiedIdentity {
-                principal: master_principal(),
-                authentication: Authentication {
-                    method: AuthenticationMethod::MasterKey,
-                    verifier: "litellm:master-key".into(),
-                    credential_id: "master".into(),
-                    expires_at: None,
-                },
-                restrictions: Permissions::All,
-            })
         })
+    }
+}
+
+fn identified<H>(
+    identity: KeyIdentity<H::Rows>,
+    presented: &SecretValue,
+) -> Result<VerifiedIdentity, Error>
+where
+    H: AuthHost,
+    KeyRow<H>: HeldKey,
+{
+    match identity {
+        KeyIdentity::MasterKey { .. } => Ok(master_identity()),
+        KeyIdentity::VirtualKey(context) => Ok(VerifiedIdentity::virtual_key(
+            &KeyHash::from_token(presented),
+            &context.key,
+        )),
+        KeyIdentity::NoMasterKey { .. } => Err(Error::Unconfigured),
+        KeyIdentity::UserAuthRoute | KeyIdentity::CachedAdmin { .. } => Err(Error::NotNative),
+    }
+}
+
+/// What this server answers a credential the core did not authenticate with. The core's own text
+/// is the proxy's, which answers instead wherever one stands behind this server.
+fn rejected(error: core::Error) -> Error {
+    match error {
+        core::Error::HostDeclined => Error::NotNative,
+        core::Error::HostFailed => Error::Unavailable(Source::new(error)),
+        core::Error::Key(KeyDenial::Expired { .. }) => Error::Expired,
+        core::Error::Key(
+            KeyDenial::MasterKeyOnlyRoute { .. }
+            | KeyDenial::UserAuthDisabled
+            | KeyDenial::UserDeactivated { .. },
+        )
+        | core::Error::PremiumRequired(_)
+        | core::Error::BudgetExceeded(_) => Error::Forbidden,
+        core::Error::Key(
+            KeyDenial::MissingKey
+            | KeyDenial::MalformedKey
+            | KeyDenial::NoDb
+            | KeyDenial::NoDbConfigured
+            | KeyDenial::NotVirtualKey { .. }
+            | KeyDenial::NotFound { .. }
+            | KeyDenial::Blocked
+            | KeyDenial::NoToken,
+        )
+        | core::Error::Jwt(_) => Error::InvalidToken,
+    }
+}
+
+impl VerifiedIdentity {
+    /// The virtual key stored under `hash`, with what its row `key` says of it.
+    pub fn virtual_key(hash: &KeyHash, key: &impl HeldKey) -> Self {
+        let models = key.models();
+        Self {
+            principal: Principal::new(
+                VIRTUAL_KEY.into(),
+                hash.as_str().into(),
+                PrincipalKind::Service,
+            ),
+            authentication: Authentication {
+                method: AuthenticationMethod::VirtualKey,
+                verifier: VIRTUAL_KEY.into(),
+                credential_id: hash.as_str().into(),
+                expires_at: key.expires_at(),
+            },
+            restrictions: match models.is_empty() {
+                true => Permissions::All,
+                false => Permissions::Models(models),
+            },
+        }
+    }
+}
+
+fn master_identity() -> VerifiedIdentity {
+    VerifiedIdentity {
+        principal: master_principal(),
+        authentication: Authentication {
+            method: AuthenticationMethod::MasterKey,
+            verifier: "litellm:master-key".into(),
+            credential_id: "master".into(),
+            expires_at: None,
+        },
+        restrictions: Permissions::All,
     }
 }
 

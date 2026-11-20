@@ -2,7 +2,7 @@
 //! organization) and the rotation grace-period lookup in `LiteLLM_DeprecatedVerificationToken`.
 
 use chrono::NaiveDateTime;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgExecutor;
 
 use litellm_db::Error;
@@ -10,10 +10,12 @@ use litellm_db::Error;
 use crate::{RawJson, utc_timestamp};
 
 /// The key as the auth flow sees it: the key's own columns, with its budget row filling the limits the key
-/// leaves unset, and the team, membership, project and organization values it is checked against.
+/// leaves unset, and the team, membership, project and organization values it is checked against. It
+/// also reads back from the JSON Python caches it as, where a field it does not name is refused.
 #[macro_rules_attribute::apply(crate::db_row)]
-#[derive(Serialize)]
-pub(super) struct KeyView {
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyView {
     pub token: String,
     pub key_name: Option<String>,
     pub key_alias: Option<String>,

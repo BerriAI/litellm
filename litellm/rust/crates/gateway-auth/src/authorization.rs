@@ -4,9 +4,22 @@ use crate::{AuthFuture, AuthenticatedCaller, Clock, Error, SharedCaller};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AccessRequest {
-    Route { method: String, path: String },
-    Model { name: String, deployment: String },
+    Route {
+        method: String,
+        path: String,
+    },
+    /// `name` as the request asks for it, the model `group` it resolves to and the access groups
+    /// of that group's deployments, which the proxy's model lists may name in its place.
+    Model {
+        name: String,
+        group: String,
+        access_groups: Arc<[String]>,
+        deployment: String,
+    },
 }
+
+/// The names in a model list that reach every model, as the proxy reads them.
+const EVERY_MODEL: [&str; 2] = ["*", "all-proxy-models"];
 
 #[derive(Clone, Debug, Default)]
 pub enum Permissions {
@@ -14,6 +27,9 @@ pub enum Permissions {
     #[default]
     None,
     Only(Arc<[AccessRequest]>),
+    /// A key's `models` column: every route, and a model only when the list names it, the group
+    /// it resolves to, one of that group's access groups or every model.
+    Models(Arc<[String]>),
 }
 
 impl Permissions {
@@ -22,6 +38,20 @@ impl Permissions {
             Self::All => true,
             Self::None => false,
             Self::Only(allowed) => allowed.contains(request),
+            Self::Models(models) => match request {
+                AccessRequest::Route { .. } => true,
+                AccessRequest::Model {
+                    name,
+                    group,
+                    access_groups,
+                    deployment: _,
+                } => models.iter().any(|model| {
+                    EVERY_MODEL.contains(&model.as_str())
+                        || model == name
+                        || model == group
+                        || access_groups.contains(model)
+                }),
+            },
         }
     }
 }

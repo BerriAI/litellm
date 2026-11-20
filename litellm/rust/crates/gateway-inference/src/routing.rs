@@ -84,13 +84,21 @@ fn first_model<H: Host>(gateway: &Gateway<H>, request: &RouterRequest) -> Option
     Some(routable.first()?.params.model.clone())
 }
 
-async fn authorize(
+/// `name` as the caller asks for it, with the group and the access groups a model list may name
+/// in its place, as `can_key_call_model` reads them from the router.
+async fn authorize<H: Host>(
+    gateway: &Gateway<H>,
     identity: &AuthenticatedRequest,
     name: &str,
     model: String,
 ) -> Result<(), Error> {
+    let registry = gateway.router.registry();
     let access = AccessRequest::Model {
         name: name.to_owned(),
+        group: registry.alias_of(name).unwrap_or(name).to_owned(),
+        access_groups: resolve::model_access_groups(&registry, name, None)
+            .into_iter()
+            .collect(),
         deployment: model,
     };
     identity
@@ -167,23 +175,33 @@ pub async fn allows<H: Host>(
     target: &str,
 ) -> bool {
     match first_model(gateway, &caller_request(identity, target)) {
-        Some(model) => authorize(identity, target, model).await.is_ok(),
+        Some(model) => authorize(gateway, identity, target, model).await.is_ok(),
         None => true,
     }
 }
 
-/// The model names a caller's grants name, which the core narrows access groups by.
-fn allowed_models(identity: &AuthenticatedRequest) -> Vec<String> {
-    match identity.caller().permissions() {
+fn granted_models(permissions: &Permissions) -> Vec<String> {
+    match permissions {
         Permissions::Only(grants) => grants
             .iter()
             .filter_map(|grant| match grant {
                 AccessRequest::Model { name, .. } => Some(name.clone()),
-                _ => None,
+                AccessRequest::Route { .. } => None,
             })
             .collect(),
+        Permissions::Models(models) => models.to_vec(),
         Permissions::All | Permissions::None => Vec::new(),
     }
+}
+
+/// The model names a caller's grants and its credential's model list name, which the core
+/// narrows access groups by, as Python's router reads the key's `models`.
+fn allowed_models(identity: &AuthenticatedRequest) -> Vec<String> {
+    let caller = identity.caller();
+    granted_models(caller.permissions())
+        .into_iter()
+        .chain(granted_models(caller.restrictions()))
+        .collect()
 }
 
 /// A request for `model` carrying what the caller's grants say.
@@ -212,7 +230,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
         route: path,
         model: model.to_owned(),
     })?;
-    authorize(identity, model, first).await?;
+    authorize(gateway, identity, model, first).await?;
     let host = gateway.host.router_host(gateway, identity, route);
     let ended = gateway
         .router

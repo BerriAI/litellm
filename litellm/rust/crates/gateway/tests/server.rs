@@ -64,6 +64,7 @@ fn without_stores(inference: Arc<Gateway>) -> AppState {
         inference,
         redis: RedisClients::default(),
         database: None,
+        keys: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
     }
@@ -1422,4 +1423,154 @@ async fn chat_drops_sampling_params_the_catalog_says_the_model_rejects(
     );
     assert_eq!(forwarded["inferenceConfig"].get("topP").cloned(), top_p);
     assert_eq!(forwarded["inferenceConfig"]["maxTokens"], json!(16));
+}
+
+const VIRTUAL_KEY: &str = "sk-cached-virtual-key";
+
+/// A key as Python's auth cache holds it, cut down to the fields the gateway cannot do without.
+fn python_cached_key() -> Value {
+    json!({
+        "token": litellm_gateway_auth::hash_token(VIRTUAL_KEY), "soft_budget_cooldown": false,
+        "spend": 0.0, "total_spend": 0.0, "models": [], "aliases": {}, "config": {},
+        "permissions": {}, "metadata": {}, "model_spend": {}, "model_max_budget": {},
+        "budget_fallbacks": {}, "team_models": [], "team_blocked": false, "expires": null,
+        "budget_reset_at": null, "created_at": null, "updated_at": null,
+        "settings_updated_at": null, "last_active": null, "last_rotation_at": null,
+        "key_rotation_at": null
+    })
+}
+
+/// A gateway whose database never answers and whose coordination Redis holds `cached` under the
+/// key's hash, as Python's `UserApiKeyCache` writes it.
+async fn behind_the_auth_cache(
+    cached: Option<Value>,
+    litellm_settings: &str,
+    upstream: &MockServer,
+) -> axum::response::Response {
+    asking_behind_the_auth_cache(cached, litellm_settings, upstream, "claude").await
+}
+
+async fn asking_behind_the_auth_cache(
+    cached: Option<Value>,
+    litellm_settings: &str,
+    upstream: &MockServer,
+    model: &str,
+) -> axum::response::Response {
+    let redis = litellm_redis_testing::RedisServer::start().await.unwrap();
+    if let Some(cached) = cached {
+        let hash = litellm_gateway_auth::hash_token(VIRTUAL_KEY);
+        redis
+            .cli(&["SET", &hash, &cached.to_string()])
+            .await
+            .unwrap();
+    }
+    let database = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let closed_port = database.local_addr().unwrap().port();
+    drop(database);
+    let config = Config::from_yaml(&format!(
+        "model_list:\n{}{}general_settings:\n  master_key: gateway-key\n  database_url: postgresql://app@127.0.0.1:{closed_port}/proxy\n  database_connection_timeout: 0.5\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}\nlitellm_settings:\n{litellm_settings}",
+        deployment("claude", "claude-a", upstream),
+        deployment("claude-down", "claude-down", upstream),
+        redis.port()
+    ))
+    .unwrap();
+    let state = AppState::over(
+        &config,
+        &litellm_config::Environment::default(),
+        &Resources::build(&config).unwrap(),
+    )
+    .await
+    .unwrap();
+    let request = Request::post("/v1/messages")
+        .header("authorization", format!("Bearer {VIRTUAL_KEY}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
+                .to_string(),
+        ))
+        .unwrap();
+    global(litellm_gateway::router(state, &config))
+        .oneshot(request)
+        .await
+        .unwrap()
+}
+
+#[rstest]
+#[case::plain(python_cached_key(), 200)]
+#[case::blocked(json!({"blocked": true}), 401)]
+#[case::with_a_budget(json!({"max_budget": 5.0}), 403)]
+#[case::with_a_user_limit(json!({"user_id": "u", "user_rpm_limit": 3}), 403)]
+#[case::with_an_end_user_limit(json!({"end_user_id": "e", "end_user_tpm_limit": 3}), 403)]
+#[tokio::test]
+async fn a_virtual_key_python_cached_is_judged_without_the_database(
+    #[case] change: Value,
+    #[case] status: u16,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&upstream)
+        .await;
+    let mut cached = python_cached_key();
+    cached
+        .as_object_mut()
+        .unwrap()
+        .extend(change.as_object().unwrap().clone());
+
+    let response =
+        behind_the_auth_cache(Some(cached), "  enable_redis_auth_cache: true\n", &upstream).await;
+
+    assert_eq!(response.status().as_u16(), status);
+}
+
+#[rstest]
+#[case::cache_off(Some(python_cached_key()), "  enable_redis_auth_cache: false\n")]
+#[case::not_cached(None, "  enable_redis_auth_cache: true\n")]
+#[case::a_field_the_gateway_does_not_know(
+    Some({
+        let mut cached = python_cached_key();
+        cached["future_limit"] = json!(1);
+        cached
+    }),
+    "  enable_redis_auth_cache: true\n"
+)]
+#[tokio::test]
+async fn a_key_the_auth_cache_does_not_answer_is_read_from_the_database(
+    #[case] cached: Option<Value>,
+    #[case] litellm_settings: &str,
+) {
+    let upstream = MockServer::start().await;
+
+    let response = behind_the_auth_cache(cached, litellm_settings, &upstream).await;
+
+    assert_eq!(response.status().as_u16(), 503);
+}
+
+#[rstest]
+#[case::a_model_on_its_list("claude", 200, 1)]
+#[case::a_model_off_its_list("claude-down", 403, 0)]
+#[tokio::test]
+async fn a_virtual_key_with_a_model_list_reaches_only_the_models_it_lists(
+    #[case] asked: &str,
+    #[case] status: u16,
+    #[case] sent: u64,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .expect(sent)
+        .mount(&upstream)
+        .await;
+    let mut cached = python_cached_key();
+    cached["models"] = json!(["claude"]);
+
+    let response = asking_behind_the_auth_cache(
+        Some(cached),
+        "  enable_redis_auth_cache: true\n",
+        &upstream,
+        asked,
+    )
+    .await;
+
+    assert_eq!(response.status().as_u16(), status);
 }

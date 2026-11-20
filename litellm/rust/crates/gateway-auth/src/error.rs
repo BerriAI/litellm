@@ -18,6 +18,10 @@ pub enum Error {
     #[error("operation is not permitted")]
     #[strum(serialize = "forbidden")]
     Forbidden,
+    /// The credential is held, with something this server does not serve.
+    #[error("credential is not served by this server")]
+    #[strum(serialize = "not_native")]
+    NotNative,
     #[error("authentication service unavailable")]
     #[strum(serialize = "unavailable")]
     Unavailable(#[source] Source),
@@ -33,7 +37,7 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::InvalidToken | Self::InvalidApiKey | Self::Expired => StatusCode::UNAUTHORIZED,
-            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::NotNative => StatusCode::FORBIDDEN,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Unconfigured | Self::MissingIdentity => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -41,7 +45,11 @@ impl Error {
 
     pub fn is_denied(&self) -> bool {
         match self {
-            Self::InvalidToken | Self::InvalidApiKey | Self::Expired | Self::Forbidden => true,
+            Self::InvalidToken
+            | Self::InvalidApiKey
+            | Self::Expired
+            | Self::Forbidden
+            | Self::NotNative => true,
             Self::Unavailable(_) | Self::Unconfigured | Self::MissingIdentity => false,
         }
     }

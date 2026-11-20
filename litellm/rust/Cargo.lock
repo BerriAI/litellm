@@ -4040,11 +4040,13 @@ name = "litellm-gateway"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "envy",
  "flate2",
  "futures-util",
  "http-body-util",
  "hyper-util",
+ "jiff",
  "litellm-callbacks",
  "litellm-circuit-breaker",
  "litellm-config",
@@ -4055,6 +4057,7 @@ dependencies = [
  "litellm-env",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-gateway-auth-core",
  "litellm-gateway-forward",
  "litellm-gateway-inference",
  "litellm-http",
@@ -4071,6 +4074,7 @@ dependencies = [
  "litellm-redis-store",
  "litellm-redis-testing",
  "litellm-redis-types",
+ "litellm-repositories",
  "litellm-router-core",
  "litellm-secret-value",
  "litellm-secrets",
@@ -4099,8 +4103,10 @@ name = "litellm-gateway-auth"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "jiff",
  "litellm-config",
  "litellm-error",
+ "litellm-gateway-auth-core",
  "litellm-secret-value",
  "rstest",
  "serde",

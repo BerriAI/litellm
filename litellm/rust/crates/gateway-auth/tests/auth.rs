@@ -200,6 +200,8 @@ fn pipeline(
 fn model(name: &str) -> AccessRequest {
     AccessRequest::Model {
         name: name.into(),
+        group: name.into(),
+        access_groups: Arc::from([]),
         deployment: name.into(),
     }
 }

@@ -7,7 +7,7 @@ use super::{Admit, Authenticated, Reason, Refused};
 pub(super) fn caller(_: &Admit, authenticated: &Authenticated) -> Option<Reason> {
     let over: &'static str = match authenticated {
         Ok(request) => match request.caller().authentication().method {
-            AuthenticationMethod::MasterKey => return None,
+            AuthenticationMethod::MasterKey | AuthenticationMethod::VirtualKey => return None,
             AuthenticationMethod::External(_) => "external",
         },
         Err(error) => error.into(),

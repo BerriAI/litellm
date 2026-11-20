@@ -1,3 +1,5 @@
+mod keys;
+
 use std::{fmt, io::Write, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
@@ -11,6 +13,7 @@ use flate2::{Compression, write::GzEncoder};
 use http_body_util::BodyExt;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use litellm_config::{Config, Environment};
+use litellm_gateway::host::auth::{KeyRows, RowFuture, authenticator};
 use litellm_gateway::middleware;
 use litellm_gateway_forward::ANSWERED_BY_HEADER;
 use litellm_license::Entitlements;
@@ -85,6 +88,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 .unwrap(),
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
+                keys: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
             },
@@ -217,6 +221,15 @@ const MASTER_KEY: &str = "Bearer gateway-key";
 /// The native gateway built from `config` the way `main` builds it in front of `python`, with the
 /// real `Admit` and no variable in its environment.
 async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
+    holding_keys(python, config, None).await
+}
+
+/// [`configured_gateway`] whose database holds `keys`.
+async fn holding_keys(
+    python: SocketAddr,
+    config: &str,
+    keys: Option<Arc<dyn KeyRows>>,
+) -> SocketAddr {
     litellm_gateway::install_crypto_provider();
     let config = Config::from_yaml(config).unwrap();
     let resources =
@@ -224,6 +237,12 @@ async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
+    let state = litellm_gateway::AppState {
+        keys: keys
+            .map(|rows| authenticator(&config, rows, None))
+            .or(state.keys.clone()),
+        ..state
+    };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
         &Environment::default(),
@@ -579,4 +598,41 @@ async fn the_milestone_shuffle_follows_the_deployments_weights() {
         (250..=350).contains(&by_the_heavier),
         "claude-a holds 3 of the 4 parts of the weight and answered {by_the_heavier} of 400"
     );
+}
+
+/// A database holding a plain row under every hash, counting how often it is read.
+#[derive(Default)]
+struct Counted(std::sync::atomic::AtomicUsize);
+
+impl KeyRows for Counted {
+    fn find<'a>(&'a self, hash: &'a str) -> RowFuture<'a> {
+        Box::pin(async move {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Some(litellm_repositories::KeyView {
+                token: hash.to_owned(),
+                ..keys::plain("")
+            }))
+        })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_admitted_virtual_key_is_looked_up_once() {
+    let (python, mut received) = python().await;
+    let provider = provider().await;
+    let keys = Arc::new(Counted::default());
+    let gateway = holding_keys(python, &serving(&provider, ""), Some(keys.clone())).await;
+
+    let response = post_as(gateway, "/v1/messages", "Bearer sk-virtual").await;
+
+    assert_eq!(
+        (
+            response.status(),
+            response.headers()[ANSWERED_BY_HEADER].to_str().unwrap()
+        ),
+        (StatusCode::OK, "rust")
+    );
+    assert_eq!(keys.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(received.try_recv().is_err());
 }

@@ -3,6 +3,7 @@
 //! deployment build at boot, and [`NativeHost`] one inference call: router-core's hostcalls
 //! through [`NativeRouterHost`], and the callback hooks through the [`Callbacks`] it holds.
 
+pub mod auth;
 mod boot;
 mod router;
 

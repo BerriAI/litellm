@@ -90,13 +90,22 @@ fn token(value: &str) -> Option<SecretValue> {
         .map(SecretValue::new)
 }
 
+/// A caller the server already authenticated for this request with the same [`Auth`] the route
+/// layer holds, which [`authenticate`] takes instead of reading the credential again. Only server
+/// code can put it on a request, since clients never set extensions.
+#[derive(Clone)]
+pub struct Preauthenticated(pub AuthenticatedRequest);
+
 pub async fn authenticate(
     State(auth): State<Auth>,
     request: Request,
     next: Next,
 ) -> Result<Response, Error> {
     let (mut parts, body) = request.into_parts();
-    let identity = auth.authenticate_parts(&parts).await?;
+    let identity = match parts.extensions.remove::<Preauthenticated>() {
+        Some(Preauthenticated(identity)) => identity,
+        None => auth.authenticate_parts(&parts).await?,
+    };
     let route = AccessRequest::Route {
         method: parts.method.to_string(),
         path: parts
