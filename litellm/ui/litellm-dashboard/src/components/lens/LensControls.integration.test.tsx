@@ -43,6 +43,60 @@ afterEach(() => {
 });
 
 describe("Lens controls", () => {
+  it.each(["team", "key"] as const)(
+    "shows an unknown inherited %s policy when the global status is unavailable",
+    async (kind) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "Unavailable" }, 503)));
+      const onChange = vi.fn<(policy: LensPolicy) => Promise<void>>();
+      renderWithProviders(<LensControls kind={kind} policy={null} canEdit href="/ui/lens" onPolicyChange={onChange} />);
+      expect(await screen.findByText("Unknown")).toBeInTheDocument();
+      expect(screen.queryByText("Off", { exact: true })).not.toBeInTheDocument();
+      expect(screen.getByText("Lens connection status is unavailable")).toBeInTheDocument();
+      const toggle = screen.getByRole("switch", { name: "Lens" });
+      expect(toggle).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(toggle);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(screen.getByRole("link", { name: "Open Lens" })).toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    ["team", true],
+    ["team", false],
+    ["key", true],
+    ["key", false],
+  ] as const)("keeps an explicit %s policy of %s visible during a connection-status error", async (kind, policy) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "Unavailable" }, 503)));
+    renderWithProviders(<LensControls kind={kind} policy={policy} canEdit href={null} onPolicyChange={vi.fn()} />);
+    await screen.findByText("Lens connection status is unavailable");
+    expect(screen.getByText(policy ? "On" : "Off", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Unknown")).not.toBeInTheDocument();
+  });
+
+  it.each([true, false])(
+    "keeps the known inherited team setting of %s during a connection-status error",
+    async (teamPolicy) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "Unavailable" }, 503)));
+      renderWithProviders(
+        <LensControls kind="key" policy={null} teamPolicy={teamPolicy} canEdit href={null} onPolicyChange={vi.fn()} />,
+      );
+      await screen.findByText("Lens connection status is unavailable");
+      expect(screen.getByText(teamPolicy ? "On" : "Off", { exact: true })).toBeInTheDocument();
+      expect(screen.queryByText("Unknown")).not.toBeInTheDocument();
+    },
+  );
+
+  it("shows an unknown inherited key policy when the team lookup fails", async () => {
+    renderWithProviders(
+      <LensControls kind="key" policy={null} teamPolicyStatus="error" canEdit href={null} onPolicyChange={vi.fn()} />,
+    );
+    const toggle = screen.getByRole("switch", { name: "Lens" });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-busy", "false"));
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
+    expect(screen.queryByText("On", { exact: true })).not.toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("lets a key override a disabled team and reset to its team setting", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn<(policy: LensPolicy) => Promise<void>>().mockResolvedValue(undefined);

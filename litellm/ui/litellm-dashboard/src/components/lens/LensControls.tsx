@@ -60,6 +60,14 @@ function helperKey(kind: LensControlsProps["kind"], inherited: boolean) {
   return "lensControls.keyCustom";
 }
 
+type LensStatusKey = "lensControls.on" | "lensControls.off" | "lensControls.loading" | "lensControls.unknown";
+
+function statusKey(enabled: boolean, loading: boolean, unknown: boolean): LensStatusKey {
+  if (unknown) return "lensControls.unknown";
+  if (loading) return "lensControls.loading";
+  return enabled ? "lensControls.on" : "lensControls.off";
+}
+
 function useLensControlState({
   kind,
   policy,
@@ -79,6 +87,9 @@ function useLensControlState({
   const unavailable = saving || connectionUnavailable || inheritedUnavailable;
   const disabled = !canEdit || unavailable;
   const loadingPolicy = isPending || (inherited && teamPolicyStatus === "loading");
+  const unknownTeamPolicy = inherited && teamPolicyStatus === "error";
+  const unknownGlobalPolicy = policy === null && teamPolicy === null && isError;
+  const status = statusKey(enabled, loadingPolicy, unknownTeamPolicy || unknownGlobalPolicy);
   const updatePolicy = async (next: LensPolicy): Promise<void> => {
     if (!canEdit || saving) return;
     setSaving(true);
@@ -91,13 +102,13 @@ function useLensControlState({
     }
   };
 
-  return { service, isError, enabled, inherited, canReset, disabled, loadingPolicy, saving, updatePolicy };
+  return { service, isError, enabled, inherited, canReset, disabled, loadingPolicy, status, saving, updatePolicy };
 }
 
 export function LensControls(props: LensControlsProps) {
   const { kind, href, teamPolicyStatus = "ready" } = props;
   const { t } = useTranslation();
-  const { service, isError, enabled, inherited, canReset, disabled, loadingPolicy, saving, updatePolicy } =
+  const { service, isError, enabled, inherited, canReset, disabled, loadingPolicy, status, saving, updatePolicy } =
     useLensControlState(props);
   const openLensContent = (
     <>
@@ -112,9 +123,7 @@ export function LensControls(props: LensControlsProps) {
         <LensSymbol size={28} />
         <h2 className="text-lg font-semibold">{t("lensControls.title")}</h2>
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">
-            {loadingPolicy ? t("lensControls.loading") : t(enabled ? "lensControls.on" : "lensControls.off")}
-          </span>
+          <span className="text-sm text-muted-foreground">{t(status)}</span>
           <Switch
             aria-label={t("lensControls.title")}
             aria-busy={loadingPolicy || saving}
@@ -170,11 +179,7 @@ export function LensCreateField({
   const { t } = useTranslation();
   const { data: service, isPending, isError } = $api.useQuery("get", "/lens/service", undefined, { staleTime: 30_000 });
   const enabled = effectiveLensEnabled(policy, teamPolicy, service?.configured ?? false);
-  let status: "lensControls.on" | "lensControls.off" | "lensControls.loading" | "lensControls.unknown" = enabled
-    ? "lensControls.on"
-    : "lensControls.off";
-  if (isPending) status = "lensControls.loading";
-  if (isError) status = "lensControls.unknown";
+  const status = statusKey(enabled, isPending, isError);
   return (
     <div className="mb-6 flex items-center gap-3 rounded-md border border-border p-3">
       <LensSymbol />
