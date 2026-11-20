@@ -1717,6 +1717,79 @@ async def test_aborted_stream_raises_instead_of_finishing_successfully(
 
 @pytest.mark.parametrize("async_stream", [False, True])
 @pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+async def test_streamed_n_choices_each_open_with_one_assistant_role(
+    async_stream: bool, transport: str, logging_obj: Logging
+) -> None:
+    upstream_choices: Final = (
+        {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+        {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+        {"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},
+        {"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},
+        {"index": 0, "delta": {}, "finish_reason": "stop"},
+        {"index": 1, "delta": {}, "finish_reason": "stop"},
+    )
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-n2",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": [choice],
+                }
+            )
+            + "\n\n"
+            for choice in upstream_choices
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+
+    try:
+        received: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    emitted_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in received))
+    role_indexes: Final = sorted(choice.index for choice in emitted_choices if choice.delta.role == "assistant")
+    opening_roles: Final = {
+        index: next(choice for choice in emitted_choices if choice.index == index).delta.role for index in (0, 1)
+    }
+    assert role_indexes == [0, 1]
+    assert opening_roles == {0: "assistant", 1: "assistant"}
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
 async def test_stream_with_null_choices_chunk_finishes_normally(
     async_stream: bool, transport: str, logging_obj: Logging
 ) -> None:
@@ -9068,6 +9141,10 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
             function_id="1245",
         ),
     )
+    opening_chunk_positions: Final = frozenset(
+        next(position for position, upstream in enumerate(chunks) if upstream["choices"][0]["index"] == index)
+        for index in {upstream["choices"][0]["index"] for upstream in chunks}
+    )
 
     for idx, chunk in enumerate(response):
         chunk_dict = {}
@@ -9080,10 +9157,9 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         chunks[idx].pop("created")
         if chunks[idx]["system_fingerprint"] is None:
             chunks[idx].pop("system_fingerprint", None)
-        if idx == 0:
+        if idx in opening_chunk_positions:
             for choice in chunk_dict["choices"]:
-                if "role" in choice["delta"]:
-                    choice["delta"].pop("role")
+                assert choice["delta"].pop("role") == "assistant"
 
         for choice in chunks[idx]["choices"]:
             # ignore finish reason None - since our pydantic object is set to exclude_none = true
