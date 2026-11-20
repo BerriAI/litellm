@@ -854,10 +854,31 @@ def test_expired_customer_elapsed_schedule_keeps_its_saved_anchor(days_after_res
     start: Final = saved_reset + timedelta(days=days_after_reset)
     counter: Final = customer_window_counters(
         "customer_team", "daily-team",
-        (BudgetLimit(budget_duration="24h", max_budget=1, reset_at=saved_reset),),
+        (BudgetLimit(budget_duration="12h", max_budget=1, reset_at=saved_reset),),
         now=start + timedelta(minutes=1),
         reset_settings=BudgetResetSettings(timezone="America/New_York"),
     )[0]
 
     assert counter.window_start == start
-    assert counter.reset_at == start + timedelta(hours=24)
+    assert counter.reset_at == start + timedelta(hours=12)
+
+
+@pytest.mark.parametrize("duration", ("24h", "daily"))
+@pytest.mark.parametrize(
+    "now,start,end",
+    (
+        ("2026-11-01T04:01:00Z", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z"),
+        ("2026-11-01T12:00:00Z", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z"),
+        ("2026-11-02T05:01:00Z", "2026-11-02T05:00:00Z", "2026-11-03T05:00:00Z"),
+    ),
+)
+def test_expired_customer_daily_window_follows_local_midnight(duration: str, now: str, start: str, end: str) -> None:
+    counter: Final = customer_window_counters(
+        "customer_team", "daily-team",
+        (BudgetLimit(budget_duration=duration, max_budget=1, reset_at=datetime(2026, 11, 1, 4, tzinfo=timezone.utc)),),
+        now=datetime.fromisoformat(now),
+        reset_settings=BudgetResetSettings(timezone="America/New_York"),
+    )[0]
+
+    assert counter.window_start == datetime.fromisoformat(start)
+    assert counter.reset_at == datetime.fromisoformat(end)

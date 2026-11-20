@@ -112,7 +112,8 @@ def get_next_standardized_reset_time(
 
     All durations will reset at predictable intervals, aligned from the current time:
     - Nd: If N=1, reset at the next `reset_time_of_day`; if N>1, reset every N days from now
-    - Nh/Nm/Ns: Fixed elapsed intervals, initially aligned to local day/hour/minute boundaries
+    - Nh where N is a multiple of 24 (including `daily`): local midnight, N/24 days after today
+    - Other Nh/Nm/Ns: Fixed elapsed intervals, initially aligned to local day/hour/minute boundaries
 
     Parameters:
     - duration: Duration string (e.g. "30s", "30m", "30h", "30d")
@@ -149,6 +150,9 @@ def get_next_standardized_reset_time(
     elif unit == "w":
         return _handle_day_reset(current_time, base_midnight, value * 7, reset_time_of_day)
     elif unit == "h":
+        whole_days: Final = _whole_days_in_hours(value)
+        if whole_days is not None:
+            return _apply_time_of_day(base_midnight + timedelta(days=whole_days), time(0, 0))
         return _next_elapsed_reset(current_time, timedelta(hours=value), elapsed_anchor or base_midnight)
     elif unit == "m":
         hour_start: Final = current_time.replace(minute=0, second=0, microsecond=0)
@@ -203,11 +207,15 @@ def get_budget_window_end(
 
 def _shift_budget_window(duration: str, moment: datetime, direction: int) -> datetime:
     value, unit = _parse_duration(normalize_duration(duration))
+    whole_days: Final = _whole_days_in_hours(value) if value is not None and unit == "h" else None
+    elapsed: Final = unit in ("h", "m", "s") and whole_days is None
     boundary: Final = normalize_budget_window_start(
-        moment.astimezone(timezone.utc) if moment.tzinfo is not None and unit in ("h", "m", "s") else moment
+        moment.astimezone(timezone.utc) if moment.tzinfo is not None and elapsed else moment
     )
     if value is None:
         return boundary + timedelta(days=direction)
+    if whole_days is not None:
+        return boundary + timedelta(days=direction * whole_days)
     match unit:
         case "mo":
             return _shift_months(boundary, direction * value)
@@ -314,6 +322,10 @@ def _handle_day_reset(
         return _handle_month_reset(current_time, base_midnight, 1, reset_time_of_day)
     else:  # Custom day value - next interval is value days from the start of today
         return _apply_time_of_day(base_midnight + timedelta(days=value), reset_time_of_day)
+
+
+def _whole_days_in_hours(hours: int) -> int | None:
+    return hours // 24 if hours > 0 and hours % 24 == 0 else None
 
 
 def _next_elapsed_reset(current_time: datetime, interval: timedelta, anchor: datetime) -> datetime:

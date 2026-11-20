@@ -584,7 +584,7 @@ def test_scheduled_elapsed_window_contains_now_through_both_dst_transitions(dura
     assert end.astimezone(timezone.utc) - start.astimezone(timezone.utc) == timedelta(hours=1)
 
 
-@pytest.mark.parametrize("duration", ("24h", "daily", "5h", "90m", "45s"))
+@pytest.mark.parametrize("duration", ("12h", "5h", "90m", "45s"))
 @pytest.mark.parametrize(
     "now,zone",
     (
@@ -647,3 +647,49 @@ def test_saved_elapsed_schedules_do_not_shorten_at_local_unit_rollover(
     assert get_next_standardized_reset_time(
         duration, saved_reset, "UTC", elapsed_anchor=saved_reset
     ) == datetime.fromisoformat(expected)
+
+
+@pytest.mark.parametrize("duration", ("24h", "daily"))
+@pytest.mark.parametrize(
+    "zone,now,expected",
+    (
+        ("Asia/Tokyo", "2026-07-15T10:17:00Z", "2026-07-16T00:00:00+09:00"),
+        ("Asia/Kolkata", "2026-07-15T10:17:00Z", "2026-07-16T00:00:00+05:30"),
+        ("America/New_York", "2026-07-15T10:17:00Z", "2026-07-16T00:00:00-04:00"),
+        ("UTC", "2026-07-15T10:17:00Z", "2026-07-16T00:00:00+00:00"),
+        ("America/New_York", "2026-11-01T05:30:00Z", "2026-11-02T00:00:00-05:00"),
+        ("America/New_York", "2026-11-01T06:30:00Z", "2026-11-02T00:00:00-05:00"),
+        ("America/New_York", "2026-03-08T06:30:00Z", "2026-03-09T00:00:00-04:00"),
+    ),
+)
+def test_whole_day_hour_durations_reset_at_local_midnight(duration: str, zone: str, now: str, expected: str) -> None:
+    current: Final = datetime.fromisoformat(now)
+    reset: Final = get_next_standardized_reset_time(
+        duration, current, zone, time(1, 30), elapsed_anchor=datetime(2020, 1, 1, 7, 13, tzinfo=timezone.utc)
+    )
+    start: Final = get_budget_window_start(duration, reset)
+    previous_midnight: Final = datetime(
+        current.astimezone(ZoneInfo(zone)).year, current.astimezone(ZoneInfo(zone)).month,
+        current.astimezone(ZoneInfo(zone)).day, tzinfo=ZoneInfo(zone),
+    )
+
+    assert reset == datetime.fromisoformat(expected)
+    assert start.astimezone(timezone.utc) == previous_midnight.astimezone(timezone.utc)
+    assert start.astimezone(timezone.utc) <= current < reset.astimezone(timezone.utc)
+    assert get_budget_window_end(duration, start, zone) == reset.astimezone(timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "duration,expected",
+    (("48h", "2026-07-17T00:00:00+09:00"), ("168h", "2026-07-22T00:00:00+09:00"), ("720h", "2026-08-14T00:00:00+09:00")),
+)
+def test_multi_day_hour_durations_count_local_days_from_today(duration: str, expected: str) -> None:
+    reset: Final = get_next_standardized_reset_time(duration, datetime(2026, 7, 15, 10, 17, tzinfo=timezone.utc), "Asia/Tokyo")
+
+    assert reset == datetime.fromisoformat(expected)
+
+
+def test_zero_hours_still_expires_immediately() -> None:
+    now: Final = datetime(2026, 7, 15, 10, 17, tzinfo=timezone.utc)
+
+    assert get_next_standardized_reset_time("0h", now, "Asia/Tokyo") == now
