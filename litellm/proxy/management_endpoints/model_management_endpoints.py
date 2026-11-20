@@ -1556,32 +1556,6 @@ def _param_keys_to_remove(patch: updateDeployment) -> tuple[str, ...]:
     return patch.litellm_params_to_remove if isinstance(patch, PatchModelRequest) else ()
 
 
-def _typed_model_info_pricing(
-    incoming_model_info: Mapping[str, object],
-    echoed_fields: tuple[str, ...],
-    stored_litellm_params: Mapping[str, object],
-    patched_litellm_params: Mapping[str, object],
-) -> Mapping[str, object]:
-    """Pricing an operator typed into ``model_info``, as the ``litellm_params`` overrides it stands for.
-
-    ``model_info`` never stores pricing, so a rate edited inside a `/model/info` echo, which no
-    longer equals any cost map entry, is saved where a deployment's own pricing lives. A rate the
-    same request changes on ``litellm_params`` wins.
-    """
-    return MappingProxyType(
-        {
-            k: v
-            for k, v in incoming_model_info.items()
-            if COST_MAP_LOOKUP_KEY in incoming_model_info
-            and is_server_derived_pricing_key(k)
-            and k not in echoed_fields
-            and isinstance(v, (int, float))
-            and not isinstance(v, bool)
-            and patched_litellm_params.get(k) == stored_litellm_params.get(k)
-        }
-    )
-
-
 def update_db_model(
     db_model: Deployment,
     updated_patch: updateDeployment,
@@ -1629,9 +1603,6 @@ def update_db_model(
         for k in echoed_fields:
             if k in merged_model_info and merged_model_info[k] != incoming_model_info[k]:
                 del merged_model_info[k]
-        merged_litellm_params.update(
-            _typed_model_info_pricing(incoming_model_info, echoed_fields, stored_litellm_params, merged_litellm_params)
-        )
 
     # Honor explicit-null clears LAST, after both merges, so a model_info blob a client
     # passes through cannot silently undo a litellm_params clear via .update().

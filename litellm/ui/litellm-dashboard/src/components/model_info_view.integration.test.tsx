@@ -923,6 +923,33 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params).not.toHaveProperty("vector_store_ids");
   });
 
+  it("saves a rate edited in the Model Info JSON as a litellm_params override and leaves displayed rates alone", async () => {
+    const displayedModel = {
+      ...defaultModelData,
+      model_info: {
+        ...defaultModelData.model_info,
+        key: "azure/gpt-5.4",
+        input_cost_per_token_above_272k_tokens: 2,
+        output_cost_per_token_above_272k_tokens: 3,
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({ data: { data: [displayedModel] }, isLoading: false });
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Model Info" }), {
+      target: {
+        value: JSON.stringify({ ...displayedModel.model_info, input_cost_per_token_above_272k_tokens: 20 }),
+      },
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledOnce());
+
+    const payload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(payload.litellm_params.input_cost_per_token_above_272k_tokens).toBe(20);
+    expect(payload.litellm_params).not.toHaveProperty("output_cost_per_token_above_272k_tokens");
+  });
+
   describe("PTU cost attribution gate", () => {
     const ptuModelData = {
       ...defaultModelData,

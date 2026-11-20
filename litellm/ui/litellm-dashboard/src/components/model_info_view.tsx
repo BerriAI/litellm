@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
-import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
+import { editableModelExtraParams, editedModelInfoPricing, parseModelExtraParams } from "../utils/modelEditParams";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
@@ -272,8 +272,15 @@ export default function ModelInfoView({
         return;
       }
 
+      const typedModelInfo = parseModelExtraParams(values.model_info);
       const updatedLitellmParams: Record<string, unknown> = {
         ...editableModelExtraParams(parsedExtraParams),
+        ...editedModelInfoPricing(
+          typedModelInfo ?? {},
+          modelData?.model_info ?? {},
+          parsedExtraParams,
+          localModelData?.litellm_params ?? {},
+        ),
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,

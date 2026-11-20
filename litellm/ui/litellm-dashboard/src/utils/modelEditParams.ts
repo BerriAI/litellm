@@ -35,3 +35,29 @@ export const parseModelExtraParams = (value: string | undefined): Record<string,
     return null;
   }
 };
+
+const PRICING_KEY = /_cost|_above_\d+k?_tokens(_batches)?$/;
+
+/**
+ * Rates the operator changed in the Model Info JSON, as the litellm_params overrides they stand for.
+ * The proxy never stores pricing on model_info, since most of what the form shows there is the
+ * cost map filled in for display, so only a rate that differs from what the form loaded is an edit.
+ * A rate the same save changes in the LiteLLM Params box wins.
+ */
+const isRate = (key: string, value: unknown): value is number =>
+  PRICING_KEY.test(key) && typeof value === "number" && Number.isFinite(value);
+
+export const editedModelInfoPricing = (
+  editedModelInfo: Record<string, unknown>,
+  loadedModelInfo: Record<string, unknown>,
+  editedParams: Record<string, unknown>,
+  loadedParams: Record<string, unknown>,
+): Record<string, number> =>
+  Object.fromEntries(
+    Object.entries(editedModelInfo).filter(
+      (entry): entry is [string, number] =>
+        isRate(entry[0], entry[1]) &&
+        entry[1] !== loadedModelInfo[entry[0]] &&
+        editedParams[entry[0]] === loadedParams[entry[0]],
+    ),
+  );

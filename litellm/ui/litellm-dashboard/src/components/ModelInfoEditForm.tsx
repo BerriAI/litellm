@@ -811,6 +811,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                   {({ value, ...control }) => (
                     <Textarea
                       {...control}
+                      aria-label={t("modelInfoEditForm.fields.modelInfo.label")}
                       rows={4}
                       placeholder={codeSamples.models.perModelLimitsJson}
                       defaultValue={JSON.stringify(modelData.model_info, null, 2)}
