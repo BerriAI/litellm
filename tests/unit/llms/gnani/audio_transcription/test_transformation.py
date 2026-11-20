@@ -220,7 +220,7 @@ def test_provider_failure_keeps_its_reason(respx_mock: MockRouter, status: int, 
     ],
 )
 def test_unsupported_openai_options_are_rejected(options: dict[str, object], respx_mock: MockRouter) -> None:
-    with pytest.raises(litellm.UnsupportedParamsError):
+    with pytest.raises(litellm.UnsupportedParamsError, match=next(iter(options))):
         litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, **options)
     assert not respx_mock.calls
 
@@ -304,8 +304,6 @@ def test_global_drop_params_drops_unsupported_options(respx_mock: MockRouter, mo
         response_format="srt",
         temperature=0,
         stream=True,
-        languages=["en"],
-        keywords=["x"],
         timestamp_granularities=["word"],
         chunking_strategy="auto",
         include=["logprobs"],
@@ -319,6 +317,66 @@ def test_global_drop_params_drops_unsupported_options(respx_mock: MockRouter, mo
     }
 
 
+@pytest.mark.parametrize(
+    ("model", "options", "expected"),
+    [
+        (
+            "gnani/prisma-v3.0",
+            {"keywords": ["Lincoln", "Gettysburg"], "languages": ["hi", "en"]},
+            {"keyterms": b'["Lincoln", "Gettysburg"]', "language_code": b"hi-IN,en-IN"},
+        ),
+        (
+            "gnani/prisma-v2.5",
+            {"keywords": ["Lincoln"], "languages": ["hi"]},
+            {"bias_list": b'["Lincoln"]', "language_code": b"hi-IN"},
+        ),
+        ("gnani/prisma-v3.0", {"keywords": "Lincoln"}, {"keyterms": b'["Lincoln"]', "language_code": b"indic-auto"}),
+        (
+            "gnani/prisma-v3.0",
+            {"keywords": ["Lincoln"], "keyterms": ["Gettysburg"], "language": "ta", "languages": ["hi"]},
+            {"keyterms": b'["Gettysburg"]', "language_code": b"hi-IN"},
+        ),
+        (
+            "gnani/prisma-v2.5",
+            {"keywords": "Lincoln", "bias_list": ["Gettysburg"], "language_code": "en-IN", "languages": ["hi"]},
+            {"bias_list": b'["Gettysburg"]', "language_code": b"en-IN"},
+        ),
+    ],
+)
+def test_openai_keywords_and_languages_reach_gnani_native_fields(
+    model: str, options: dict[str, object], expected: dict[str, bytes], respx_mock: MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=model, file=_AUDIO, api_key="test", api_base=_BASE, **options)
+    sent: Final = _form(route.calls.last.request)
+    assert {key: sent.get(key) for key in expected} == expected
+    assert "keywords" not in sent and "languages" not in sent
+
+
+def test_prisma_v25_rejects_more_than_one_openai_language(respx_mock: MockRouter) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="one explicit language"):
+        litellm.transcription(
+            model="gnani/prisma-v2.5", file=_AUDIO, api_key="test", api_base=_BASE, languages=["hi", "en"]
+        )
+    assert not respx_mock.calls
+
+
+def test_cached_transcription_keeps_gnani_request_id_and_truncation(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "cache", litellm.Cache())
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(
+        json={"success": True, "transcript": "partial", "request_id": "req-1", "truncated": True}
+    )
+    responses: Final = tuple(
+        litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, caching=True) for _ in range(2)
+    )
+    assert route.call_count == 1
+    assert [response.model_dump(exclude_none=True) for response in responses] == [
+        {"text": "partial", "request_id": "req-1", "truncated": True}
+    ] * 2
+
+
 def test_missing_key_fails_before_upload(respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GNANI_API_KEY", raising=False)
     with pytest.raises(litellm.AuthenticationError, match="GNANI_API_KEY") as failure:
@@ -329,7 +387,10 @@ def test_missing_key_fails_before_upload(respx_mock: MockRouter, monkeypatch: py
 
 @pytest.mark.parametrize(
     ("model", "params"),
-    [(_MODEL, ["language", "response_format", "prompt"]), ("gnani/prisma-v2.5", ["language", "response_format"])],
+    [
+        (_MODEL, ["language", "languages", "keywords", "response_format", "prompt"]),
+        ("gnani/prisma-v2.5", ["language", "languages", "keywords", "response_format"]),
+    ],
 )
 def test_discovery_lists_transcription_for_gnani(
     model: str, params: list[str], monkeypatch: pytest.MonkeyPatch
