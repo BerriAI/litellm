@@ -24,7 +24,6 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from typing_extensions import override
 
 import litellm
-from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.lens.remote import LensConnection
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
@@ -261,9 +260,6 @@ class _LensTraceLogger(OpenTelemetryV2):
         end_time: datetime | float | None,
     ) -> Span | None:
         call: Final = LLMCallEvent.from_dict(kwargs)
-        if is_lens_analysis():
-            self._release_carrier(self._open_llm_calls.pop(call.call_id, None) if call.call_id else None)
-            return None
         made_by: Final = agent_call(call.payload)
         carrier: Final = self._open_llm_calls.get(call.call_id) if call.call_id else None
         if made_by.agent and carrier is not None and carrier.span is not None:
