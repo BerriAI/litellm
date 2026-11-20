@@ -6,6 +6,7 @@ from typing import Final, Literal, Protocol, TypeAlias
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.models.team import BudgetLimitEntry
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
 BudgetLimitsTable: TypeAlias = Literal[
     "LiteLLM_VerificationToken", "LiteLLM_TeamTable", "LiteLLM_UserTable", "LiteLLM_BudgetTable"
@@ -72,11 +73,17 @@ def _rebase_window(
         after: Final = BudgetLimitEntry.model_validate(current_window)
     except ValidationError:
         return window
-    if after.reset_at is None or before.reset_at == after.reset_at:
+    if after.reset_at is None or (before.reset_at == after.reset_at and before.window_start == after.window_start):
         return window
-    if before.model_dump(exclude={"reset_at"}) != after.model_dump(exclude={"reset_at"}):
+    if before.model_dump(exclude={"reset_at", "window_start"}) != after.model_dump(
+        exclude={"reset_at", "window_start"}
+    ):
         return window
-    return {**window, "reset_at": after.reset_at.isoformat()}
+    return {
+        **{key: value for key, value in window.items() if key not in ("reset_at", "window_start")},
+        "reset_at": after.reset_at.isoformat(),
+        **({"window_start": after.window_start.isoformat()} if after.window_start is not None else {}),
+    }
 
 
 async def rebase_budget_limits_update(
@@ -87,13 +94,14 @@ async def rebase_budget_limits_update(
     data: Mapping[str, object],
 ) -> Mapping[str, object]:
     """Lock and rebase the payload before the caller writes it in this same transaction."""
-    if "budget_limits" not in data:
-        return data
+    scheduled: Final = await _rebase_budget_duration_update(transaction, table, row_id, data)
+    if "budget_limits" not in scheduled:
+        return scheduled
     current: Final = await lock_budget_limits(transaction, table, row_id)
-    raw: Final = data["budget_limits"]
+    raw: Final = scheduled["budget_limits"]
     requested: Final = _WINDOWS.validate_json(raw) if isinstance(raw, str) else _WINDOWS.validate_python(raw)
     if not requested or current is None:
-        return data
+        return scheduled
     before: Final = MappingProxyType(
         {
             original_duration: window
@@ -111,5 +119,31 @@ async def rebase_budget_limits_update(
     )
     rebased: Final = tuple(_rebase_window(window, before, after) for window in requested)
     if rebased == requested:
+        return scheduled
+    return {**scheduled, "budget_limits": json.dumps(rebased)}
+
+
+async def _rebase_budget_duration_update(
+    transaction: BudgetLimitsTransaction,
+    table: BudgetLimitsTable,
+    row_id: str,
+    data: Mapping[str, object],
+) -> Mapping[str, object]:
+    if "budget_duration" not in data:
         return data
-    return {**data, "budget_limits": json.dumps(rebased)}
+    rows: Final = await transaction.query_raw(
+        f'SELECT budget_duration, budget_reset_at FROM "{table}" WHERE "{_ID_COLUMNS[table]}" = $1::text FOR UPDATE',
+        row_id,
+    )
+    current: Final[Mapping[str, object]] = rows[0] if rows else {}
+    duration: Final = data["budget_duration"]
+    if (
+        isinstance(duration, str)
+        and duration == current.get("budget_duration")
+        and current.get("budget_reset_at") is not None
+    ):
+        return {key: value for key, value in data.items() if key != "budget_reset_at"}
+    return {
+        **data,
+        "budget_reset_at": get_budget_reset_time(duration) if isinstance(duration, str) else None,
+    }

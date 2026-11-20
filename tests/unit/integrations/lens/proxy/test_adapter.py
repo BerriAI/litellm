@@ -13,6 +13,9 @@ from litellm.integrations.lens.proxy.adapter import (
     delegated_identity,
     forward,
     lens_request,
+    login_redirect,
+    login_user_name,
+    password_change_redirect,
     request_body,
     service_connection,
     service_status,
@@ -351,3 +354,159 @@ async def test_failed_forward_reports_service_unavailability(connection: Connect
             await forward(request, identity, "", connection, client, 1000)
     assert error.value.status_code == 503
     assert error.value.detail == "Lens service is unavailable"
+
+
+SIGN_IN_URL: Final = "http://gateway.test/ui/login?redirect_to=%2Flens%2Flogin"
+
+
+def test_lens_login_redirects_a_signed_in_user_to_lens_with_a_sign_in_only_token(
+    connection: Connection, identity: Identity
+) -> None:
+    response: Final = login_redirect(connection, "https://lens.test", identity, None, SIGN_IN_URL, 1000)
+    assert response.status_code == 303
+    location: Final = response.headers["location"]
+    prefix: Final = "https://lens.test/ui/#token="
+    assert location.startswith(prefix)
+    decoded: Final = jwt.decode(
+        location[len(prefix) :],
+        SECRET,
+        algorithms=["HS256"],
+        audience="litellm-lens-login",
+        issuer="litellm",
+        options={"verify_exp": False},
+    )
+    assert decoded == {
+        "iss": "litellm",
+        "aud": "litellm-lens-login",
+        "sub": "user",
+        "iat": 1000,
+        "exp": 1060,
+        "identity": identity.model_dump(mode="json"),
+    }
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_lens_login_token_names_the_signed_in_user_and_request_tokens_never_do(
+    connection: Connection, identity: Identity
+) -> None:
+    named: Final = connection.login_token(identity, "kerry@example.com", 1000)
+    forwarded: Final = connection.identity_token(identity, 1000)
+    assert named is not None
+    assert forwarded is not None
+    options: Final = {"verify_exp": False}
+    assert jwt.decode(named, SECRET, algorithms=["HS256"], audience="litellm-lens-login", options=options)[
+        "identity"
+    ] == identity.model_dump(mode="json") | {"user_name": "kerry@example.com"}
+    assert jwt.decode(forwarded, SECRET, algorithms=["HS256"], audience="litellm-lens", options=options)[
+        "identity"
+    ] == identity.model_dump(mode="json")
+
+
+@pytest.mark.parametrize(
+    ("user_id", "user_email", "expected"),
+    (
+        ("dev-user", "dev@example.com", "dev@example.com"),
+        ("default_user_id", None, "root"),
+        ("default_user_id", "owner@example.com", "owner@example.com"),
+        ("dev-user", None, None),
+    ),
+    ids=("user_email", "built_in_admin_username", "admin_email_wins", "no_name_known"),
+)
+def test_lens_login_names_a_user_by_email_and_the_built_in_admin_by_its_username(
+    user_id: str, user_email: str | None, expected: str | None
+) -> None:
+    assert login_user_name(UserAPIKeyAuth(user_id=user_id, user_email=user_email), "root") == expected
+
+
+def test_lens_login_token_cannot_be_used_as_a_forwarded_request_identity(
+    connection: Connection, identity: Identity
+) -> None:
+    token: Final = connection.login_token(identity, None, 1000)
+    assert token is not None
+    with pytest.raises(jwt.InvalidAudienceError):
+        jwt.decode(token, SECRET, algorithms=["HS256"], audience="litellm-lens", options={"verify_exp": False})
+
+
+def test_lens_login_sends_a_browser_without_a_dashboard_session_to_gateway_sign_in(connection: Connection) -> None:
+    response: Final = login_redirect(connection, "https://lens.test", None, None, SIGN_IN_URL, 1000)
+    assert (response.status_code, response.headers["location"]) == (303, SIGN_IN_URL)
+
+
+@pytest.mark.parametrize(
+    ("sign_in_url", "ui_cookie_path"),
+    (
+        ("http://gateway.test/ui/login?redirect_to=%2Flens%2Flogin", "/ui"),
+        ("http://gateway.test/litellm/ui/login?redirect_to=%2Flitellm%2Flens%2Flogin", "/litellm/ui"),
+    ),
+    ids=("no_root_path", "server_root_path"),
+)
+def test_lens_login_drops_a_refused_dashboard_session_so_the_login_page_does_not_send_it_back(
+    connection: Connection, sign_in_url: str, ui_cookie_path: str
+) -> None:
+    response: Final = login_redirect(connection, "https://lens.test", None, None, sign_in_url, 1000)
+    cleared: Final = sorted(header for header in response.headers.getlist("set-cookie"))
+    assert [
+        (header.split(";")[0], "Max-Age=0" in header, f"Path={path}" in header.split("; "))
+        for header, path in zip(cleared, sorted(("/", ui_cookie_path)), strict=True)
+    ] == [
+        ('token=""', True, True),
+        ('token=""', True, True),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("configured", "lens_url"),
+    ((False, "https://lens.test"), (True, "")),
+    ids=("no_lens_connection", "no_public_lens_url"),
+)
+def test_lens_login_is_unavailable_until_lens_is_fully_configured(
+    connection: Connection, identity: Identity, configured: bool, lens_url: str
+) -> None:
+    with pytest.raises(HTTPException) as error:
+        login_redirect(connection if configured else None, lens_url, identity, None, SIGN_IN_URL, 1000)
+    assert error.value.status_code == 503
+
+
+def test_lens_login_refuses_an_identity_with_no_user_or_key(connection: Connection, identity: Identity) -> None:
+    anonymous: Final = identity.model_copy(update={"user_id": None, "token": None})
+    with pytest.raises(HTTPException) as error:
+        login_redirect(connection, "https://lens.test", anonymous, None, SIGN_IN_URL, 1000)
+    assert error.value.status_code == 403
+
+
+def test_lens_login_sends_a_session_that_must_change_its_password_to_the_password_page() -> None:
+    restricted: Final = UserAPIKeyAuth(
+        user_id="user-1",
+        allowed_routes=["/user/password/change", "/session/logout"],
+        metadata={"password_reset_required": True},
+    )
+    response: Final = password_change_redirect(restricted, "/lens/login", "http://gateway.test")
+    assert response is not None
+    assert response.status_code == 303
+    assert response.headers["location"] == "http://gateway.test/ui/change-password"
+
+
+def test_lens_login_refuses_a_session_whose_key_may_not_call_it() -> None:
+    restricted: Final = UserAPIKeyAuth(user_id="user-1", allowed_routes=["/key/info"])
+    with pytest.raises(HTTPException) as error:
+        password_change_redirect(restricted, "/lens/login", "http://gateway.test")
+    assert error.value.status_code == 403
+
+
+def test_lens_login_lets_an_unrestricted_session_and_a_missing_session_through() -> None:
+    assert password_change_redirect(UserAPIKeyAuth(user_id="user-1"), "/lens/login", "http://gateway.test") is None
+    assert password_change_redirect(None, "/lens/login", "http://gateway.test") is None
+
+
+def test_lens_login_honours_admin_only_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"admin_only_routes": ["/lens/login"]})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    member: Final = UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
+    admin: Final = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as error:
+        password_change_redirect(member, "/lens/login", "http://gateway.test")
+    assert error.value.status_code == 403
+    assert password_change_redirect(admin, "/lens/login", "http://gateway.test") is None

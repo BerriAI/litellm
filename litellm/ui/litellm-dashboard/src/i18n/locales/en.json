@@ -19474,14 +19474,6 @@
       "saveChanges": "Save Changes"
     }
   },
-  "decisionModelsBanner": {
-    "title": "Decision models are now supported",
-    "callInstructions": "Call them at <decisions>/v1/decisions</decisions> or <systemOne>/v1/systemone</systemOne>, or try them in the Decisions playground.",
-    "howToCall": "How to call them",
-    "supportedProviders": "Supported providers",
-    "tryDecisionModels": "Try decision models",
-    "dismiss": "Dismiss banner"
-  },
   "modelsAndEndpoints": {
     "autoRouterRows": {
       "types": {

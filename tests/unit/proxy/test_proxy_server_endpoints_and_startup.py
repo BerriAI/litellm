@@ -23,9 +23,9 @@ from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open
 import fastapi.routing
 import httpx
 import pytest
-import yaml
 import redis
 import redis.asyncio
+import yaml
 from fakeredis import FakeRedis, FakeServer
 from fakeredis.aioredis import FakeConnection
 from fastapi import FastAPI, HTTPException, Request
@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     ModelCostMapReloadResult,
     install_model_cost_map,
 )
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
     LitellmUserRoles,
@@ -62,15 +63,14 @@ from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendUpdateQueue
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
-from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.rust_bridge._native import NativeRedisStoreError
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
-from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
 
@@ -619,16 +619,6 @@ def test_login_v3_returns_json_on_proxy_exception(monkeypatch):
     assert data["error"]["type"] == "auth_error"
 
 
-def test_fallback_login_has_no_deprecation_banner(client_no_auth):
-    response = client_no_auth.get("/fallback/login")
-
-    assert response.status_code == 200
-    html = response.text
-    assert '<div class="deprecation-banner">' not in html
-    assert "Deprecated:" not in html
-    assert "<form" in html
-
-
 def test_text_completion_without_a_prompt_returns_400_naming_prompt(client_no_auth):
     response = client_no_auth.post("/v1/completions", json={"model": "vllm_embed_model"})
 
@@ -687,37 +677,49 @@ def test_get_logo_url_returns_empty_when_unset(client_no_auth, monkeypatch):
     assert response.json() == {"logo_url": ""}
 
 
-def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
-    # Ensure the route returns the HTML form instead of redirecting
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_redirect_url_for_sso",
-        lambda *args, **kwargs: "http://test/redirect",
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
-        lambda *args, **kwargs: False,
-    )
-    # Mock premium_user to bypass enterprise check (prevents 403 Forbidden)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.premium_user",
-        True,
-    )
-    monkeypatch.setenv("UI_USERNAME", "admin")
+def _without_sso(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env", lambda: None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
+    for name in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+        monkeypatch.delenv(name, raising=False)
 
-    response = client_no_auth.get("/sso/key/generate")
 
-    assert response.status_code == 200
-    html = response.text
-    assert '<div class="deprecation-banner">' in html
-    assert "Deprecated:" in html
+def test_sso_key_generate_without_sso_opens_the_dashboard_login_page_and_keeps_return_to(client_no_auth, monkeypatch):
+    _without_sso(monkeypatch)
+    client_no_auth.cookies.clear()
+
+    response = client_no_auth.get(
+        "/sso/key/generate", params={"return_to": "/mcp/authorize?client_id=abc"}, follow_redirects=False
+    )
+    client_no_auth.cookies.clear()
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/ui/login")
+    assert "litellm_cp_return_to=" in response.headers["set-cookie"]
+
+
+def test_sso_key_generate_without_sso_resumes_a_signed_in_browser_without_a_login_page(client_no_auth, monkeypatch):
+    import jwt
+
+    _without_sso(monkeypatch)
+    session = jwt.encode(
+        {"user_id": "u-1", "key": "sk-ui-key", "login_method": "username_password", "exp": 4102444800},
+        "sk-test-master",
+        algorithm="HS256",
+    )
+    client_no_auth.cookies.clear()
+
+    response = client_no_auth.get(
+        "/sso/key/generate",
+        params={"return_to": "/mcp/authorize?client_id=abc"},
+        headers={"cookie": f"token={session}"},
+        follow_redirects=False,
+    )
+    client_no_auth.cookies.clear()
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/login/resume")
+    assert "litellm_cp_return_to=" in response.headers["set-cookie"]
 
 
 def test_restructure_ui_html_files_handles_nested_routes(tmp_path):

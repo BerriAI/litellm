@@ -19426,14 +19426,6 @@
       "saveChanges": "保存更改"
     }
   },
-  "decisionModelsBanner": {
-    "title": "现已支持决策模型",
-    "callInstructions": "您可以通过 <decisions>/v1/decisions</decisions> 或 <systemOne>/v1/systemone</systemOne> 调用这些模型，也可以在 Decisions Playground 中试用。",
-    "howToCall": "调用方式",
-    "supportedProviders": "支持的提供商",
-    "tryDecisionModels": "试用决策模型",
-    "dismiss": "关闭横幅"
-  },
   "modelsAndEndpoints": {
     "autoRouterRows": {
       "types": {

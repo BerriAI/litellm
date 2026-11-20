@@ -49,7 +49,7 @@ class _Harness:
 
 _HARNESSES: Final = (
     _Harness(name="claude-code", integration="claude-code", user_agent_markers=("claude-cli", "claude-code")),
-    _Harness(name="codex", integration="openai-codex", user_agent_markers=("codex",)),
+    _Harness(name="codex-cli", integration="openai-codex", user_agent_markers=("codex",)),
     _Harness(name="opencode", integration="opencode"),
     _Harness(name="pi", integration="pi"),
 )

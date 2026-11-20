@@ -92,8 +92,8 @@ async def test_first_passthrough_call_exports_only_when_enabled_and_lifespan_unr
     ("user_agent", "expected"),
     [
         ("claude-cli/2.1.329 (external, sdk-cli)", "claude-code"),
-        ("codex_exec/0.171.0 (Ubuntu 22.04; x86_64)", "codex"),
-        ("Codex Desktop/1.0", "codex"),
+        ("codex_exec/0.171.0 (Ubuntu 22.04; x86_64)", "codex-cli"),
+        ("Codex Desktop/1.0", "codex-cli"),
         ("opencode/1.19.6 ai-sdk/provider-utils/4.0.46 runtime/bun/1.4.4", "opencode"),
         ("pi (linux 6.8.0; x64)", "pi"),
         ("OpenAI/Python 1.99.0", "openai"),
@@ -389,7 +389,7 @@ def _recorded_payload(agent: str) -> dict[str, object]:
     ("recording", "agent", "integration", "task"),
     [
         ("claude_code", "claude-code", "claude-code", "Count the words in notes.txt and report the number"),
-        ("codex", "codex", "openai-codex", "Count the words in notes.txt and report the number"),
+        ("codex", "codex-cli", "openai-codex", "Count the words in notes.txt and report the number"),
         ("opencode", "opencode", "opencode", '"Count the words in notes.txt and report the number"'),
         ("pi", "pi", "pi", "Count the words in notes.txt and report the number"),
     ],
