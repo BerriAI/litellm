@@ -7467,10 +7467,14 @@ def embedding(
             api_base = api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
 
             # set API KEY
-            if custom_llm_provider == "nousresearch":
-                api_key = resolve_nousresearch_api_key(api_key, model)
-            elif api_key is None and not JSONProviderRegistry.supports_embeddings(custom_llm_provider):
-                api_key = litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
+            if custom_llm_provider == "nousresearch" or (
+                api_key is None and not JSONProviderRegistry.supports_embeddings(custom_llm_provider)
+            ):
+                api_key = (
+                    resolve_nousresearch_api_key(api_key, model)
+                    if custom_llm_provider == "nousresearch"
+                    else litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
+                )
 
             if headers:
                 optional_params["extra_headers"] = headers
