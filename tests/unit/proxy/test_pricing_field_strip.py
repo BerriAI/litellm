@@ -207,6 +207,7 @@ async def test_add_litellm_data_to_request_strips_root_pricing_fields():
         "messages": [{"role": "user", "content": "hi"}],
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
+        "model_info": {"id": "cheap-deployment"},
     }
 
     updated = await add_litellm_data_to_request(
@@ -220,6 +221,7 @@ async def test_add_litellm_data_to_request_strips_root_pricing_fields():
 
     assert "input_cost_per_token" not in updated
     assert "output_cost_per_token" not in updated
+    assert "model_info" not in updated
 
 
 @pytest.mark.asyncio
@@ -297,6 +299,7 @@ async def test_add_litellm_data_to_request_skips_strip_with_key_opt_in():
         "messages": [{"role": "user", "content": "hi"}],
         "input_cost_per_token": 0.0001,
         "base_model": "gpt-4o-mini",
+        "model_info": {"id": "priced-deployment"},
         "metadata": {"model_info": {"output_cost_per_token": 0.0002}},
     }
 
@@ -313,6 +316,7 @@ async def test_add_litellm_data_to_request_skips_strip_with_key_opt_in():
     assert updated["input_cost_per_token"] == 0.0001
     assert updated["metadata"]["model_info"] == {"output_cost_per_token": 0.0002}
     assert updated["base_model"] == "gpt-4o-mini"
+    assert updated["model_info"] == {"id": "priced-deployment"}
 
 
 @pytest.mark.asyncio

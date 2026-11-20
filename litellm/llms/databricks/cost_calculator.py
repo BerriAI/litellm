@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelInfo, Usage
 
 _LEGACY_ENDPOINT_NAMES: Final = MappingProxyType(
     {
@@ -30,7 +30,9 @@ def _registry_key(model: str) -> str:
     )
 
 
-def cost_per_token(model: str, usage: Usage, service_tier: str | None = None) -> tuple[float, float]:
+def cost_per_token(
+    model: str, usage: Usage, service_tier: str | None = None, model_info: ModelInfo | None = None
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -46,4 +48,5 @@ def cost_per_token(model: str, usage: Usage, service_tier: str | None = None) ->
         usage=usage,
         custom_llm_provider="databricks",
         service_tier=service_tier,
+        model_info=model_info,
     )

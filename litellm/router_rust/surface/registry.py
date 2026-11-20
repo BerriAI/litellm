@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     resolve_model_and_provider_for_metadata,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -424,7 +425,7 @@ def cost_map_backend_model(deployment: Deployment) -> str:
     return model
 
 
-def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) -> Mapping[str, object]:
+def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) -> AliasedCostEntry:
     """The ``model_info`` a deployment contributes to ``litellm.model_cost``
     (``_deployment_model_cost_payload``): its model_info, its custom pricing, then the inherited rates."""
     declared: Final = dict(_MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True)))
@@ -452,7 +453,11 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
         else off_peak
     )
     tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, backend_model, provider)}
-    return {**tiers, **_inherited_tiered_output_rate(host, tiers, backend_model, provider)}
+    return AliasedCostEntry(
+        {**tiers, **_inherited_tiered_output_rate(host, tiers, backend_model, provider)},
+        (),
+        frozenset(name for name, value in priced.items() if value is not None),
+    )
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:
@@ -525,17 +530,23 @@ def register_deployment_in_model_cost(
     host: "PythonHost",
     *,
     model_id: str | None,
-    model_info: Mapping[str, object],
+    model_info: AliasedCostEntry,
     model: str,
     custom_llm_provider: str | None,
     pricing_provider: str | None = None,
 ) -> None:
     """Write a deployment's metadata into ``litellm.model_cost`` (``_register_deployment_in_model_cost``):
-    the whole entry under its id, the schema fields under its backend model key(s)."""
+    the whole entry under its id, the schema fields under its backend model key(s).
+    Keep declared prices distinguishable from rates inherited for display or legacy lookups.
+    """
     registered: Final = (
-        without(model_info, *CustomPricingLiteLLMParams.model_fields)
+        AliasedCostEntry(
+            without(model_info, *CustomPricingLiteLLMParams.model_fields),
+            (),
+            model_info.registered_fields.difference(CustomPricingLiteLLMParams.model_fields),
+        )
         if classify_strategy_router_model(model) is not None
-        else dict(model_info)
+        else model_info
     )
     register_model: Final = host.invoke("register_model")
     if model_id is not None:

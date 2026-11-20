@@ -4321,14 +4321,19 @@ class _PricingModelInfo(ModelInfo):
 _PRICING_MODEL_INFO: Final = TypeAdapter(_PricingModelInfo)
 
 
-def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mapping[str, object]) -> ModelInfo:
+def model_info_with_pricing_overrides(
+    model_info: Mapping[str, object], registration: Mapping[str, object]
+) -> ModelInfo:
     from litellm.types.utils import is_server_derived_pricing_key
 
     overrides: Final = {
         name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
     }
     return _PRICING_MODEL_INFO.validate_python(
-        update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
+        {
+            **update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides),
+            **dict.fromkeys(base_fields_replaced_by(registration)),
+        }
     )
 
 
@@ -4569,8 +4574,10 @@ def model_cost_registration_write(
     previous_fields: Final[frozenset[str]] = (
         current.registered_fields if isinstance(current, AliasedCostEntry) else frozenset()
     )
-    registered_fields: Final = previous_fields | frozenset(
-        name for name, value in registration.items() if value is not None
+    registered_fields: Final = (
+        registration.registered_fields
+        if isinstance(registration, AliasedCostEntry)
+        else previous_fields | frozenset(name for name, value in registration.items() if value is not None)
     )
     return AliasedCostEntry({**(current or {}), **entry}, names, registered_fields)
 
@@ -4749,7 +4756,11 @@ def register_model(
         model_cost if isinstance(model_cost, dict) else (fetch_registration_document(model_cost) or {})
     )
     entries: Final = {
-        str(key): dict(_RATE_TABLE.validate_python(value) if persist_across_reloads else value)
+        str(key): (
+            value
+            if not persist_across_reloads and isinstance(value, AliasedCostEntry)
+            else dict(_RATE_TABLE.validate_python(value) if persist_across_reloads else value)
+        )
         for key, value in loaded_model_cost.items()
     }
     unmatched: Final = _register_on_current_map(entries, persist_across_reloads, custom_llm_provider)
@@ -7184,6 +7195,11 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
             return False
 
     return True
+
+
+def model_cost_provider_matches(provider: str | None, custom_llm_provider: str | None) -> bool:
+    """Apply cost-map provider compatibility to a resolved pricing source."""
+    return _check_provider_match({"litellm_provider": provider}, custom_llm_provider)
 
 
 from typing_extensions import ReadOnly, TypedDict
