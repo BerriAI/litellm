@@ -14,6 +14,33 @@ const fields = () => ({
 });
 
 describe("buildCustomerOrganizationBody", () => {
+  it.each(["5", ""])("keeps custom template windows when creating calendar cap %s", (amount) => {
+    const input = fields();
+    const custom = { budget_duration: "7d", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
+    expect(
+      buildCustomerOrganizationBody({
+        ...input,
+        defaultGroupId: "group",
+        groups: [
+          {
+            id: "group",
+            name: "Group",
+            monthlyBudget: amount,
+            yearlyBudget: "",
+            tpm: "",
+            rpm: "",
+            capPolicy: defaultCustomerCapPolicy,
+            budgetLimits: [custom],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      body: {
+        default_budgets: [{ budget_limits: [...(amount ? [{ budget_duration: "1mo", max_budget: 5 }] : []), custom] }],
+      },
+    });
+  });
+
   it("leaves the server default in control until limits are explicitly selected", () => {
     const input = {
       ...fields(),

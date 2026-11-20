@@ -30470,9 +30470,9 @@ export interface components {
         BudgetLimit: {
             /**
              * Budget Duration
-             * @enum {string}
+             * @description Positive duration such as '1h', '7d', '1mo' or '12mo'.
              */
-            budget_duration: "1mo" | "12mo";
+            budget_duration: string;
             /** Max Budget */
             max_budget: number;
             /** Reset At */
