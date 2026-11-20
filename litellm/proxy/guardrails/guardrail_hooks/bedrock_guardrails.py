@@ -290,17 +290,28 @@ def _tool_call_arguments_as_text(arguments: object) -> str | None:
 
     Arguments are decoded first so JSON escapes cannot hide text from the guardrail;
     a key or string value that still needs escaping is appended in its raw form.
+    A value a repeated key shadows is scanned too, since the arguments are forwarded as sent.
     """
     if not arguments:
         return ""
+    shadowed: Final[list[object]] = []  # mutable-ok: filled by the JSON decoder hook below
+
+    def keep_shadowed_values(pairs: list[tuple[str, object]]) -> dict[str, object]:  # mutable-ok: json hook types
+        kept: Final = dict(pairs)
+        shadowed.extend(value for key, value in pairs if value is not kept[key])
+        return kept
+
     try:
-        decoded: Final[object] = json.loads(arguments) if isinstance(arguments, str) else arguments
+        parsed: Final[object] = (
+            json.loads(arguments, object_pairs_hook=keep_shadowed_values) if isinstance(arguments, str) else arguments
+        )
     except RecursionError:
         return None
     except ValueError:
         return str(arguments)
-    if isinstance(decoded, str):
-        return decoded
+    if isinstance(parsed, str):
+        return parsed
+    decoded: Final[object] = [parsed, *shadowed] if shadowed else parsed
     leaves: Final = json_string_leaves(decoded)
     if leaves is None:
         return None

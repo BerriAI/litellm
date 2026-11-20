@@ -169,6 +169,32 @@ async def test_masked_tool_call_scan_blocks_instead_of_forwarding_the_arguments(
     assert blocked.value.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        '{"note": "4111 1111 1111 1111", "note": "ok"}',
+        '{"outer": {"note": "4111 1111 1111 1111", "note": "ok"}}',
+        '{"note": {"card": "4111 1111 1111 1111"}, "note": "ok"}',
+    ],
+)
+async def test_value_shadowed_by_a_repeated_key_is_scanned(arguments):
+    bedrock: Final = _Bedrock()
+    guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock)
+
+    await guardrail.apply_guardrail(
+        inputs={
+            "texts": [],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "add_note", "arguments": arguments}}
+            ],
+        },
+        request_data={},
+        input_type="request",
+    )
+
+    assert "4111 1111 1111 1111" in bedrock.scanned("INPUT")
+
+
 def _tool_call_only_response() -> ModelResponse:
     return ModelResponse(
         model="gpt-4o",
