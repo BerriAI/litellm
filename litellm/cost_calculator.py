@@ -1882,7 +1882,11 @@ def completion_cost(
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = _speech_billed_characters(
-                        completion_response if isinstance(completion_response, HttpxBinaryResponseContent) else None,
+                        (
+                            completion_response.hidden_params.get("billed_characters")
+                            if isinstance(completion_response, HttpxBinaryResponseContent)
+                            else None
+                        ),
                         prompt,
                     )
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
@@ -2318,8 +2322,7 @@ def response_cost_calculator(
         raise e
 
 
-def _speech_billed_characters(speech_response: HttpxBinaryResponseContent | None, prompt: str) -> int:
-    reported: Final = speech_response.hidden_params.get("billed_characters") if speech_response is not None else None
+def _speech_billed_characters(reported: object, prompt: str) -> int:
     return reported if isinstance(reported, int) else litellm.utils.count_characters(text=prompt)
 
 
