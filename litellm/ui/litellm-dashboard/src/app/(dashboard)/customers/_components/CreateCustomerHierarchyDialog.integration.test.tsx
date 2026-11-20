@@ -28,7 +28,7 @@ const onCreated = vi.fn();
 const json = (body: unknown, status = 201) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const requestBody = async () => {
-  const request = fetchMock.mock.calls[0]?.[0];
+  const request = fetchMock.mock.calls.find(([input]) => input instanceof Request && input.method === "POST")?.[0];
   if (!(request instanceof Request)) throw new Error("Expected shared-client request");
   return { method: request.method, path: new URL(request.url).pathname, body: await request.clone().json() };
 };
@@ -39,7 +39,12 @@ describe("CreateCustomerHierarchyDialog", () => {
     fetchMock.mockReset();
     onOpenChange.mockReset();
     onCreated.mockReset();
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      return request.method === "GET" && new URL(request.url).pathname.endsWith("/models")
+        ? Promise.resolve(json({ data: [] }, 200))
+        : fetchMock(request);
+    });
   });
   afterEach(() => vi.unstubAllGlobals());
 

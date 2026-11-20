@@ -3,7 +3,11 @@ import { customerBudgetPeriod, type CustomerBudgetUsage } from "../../customers/
 import type { AppMember, AppOrganization, Budget } from "./appForms";
 import type { CustomerUsageEntity } from "../../customers/_components/customerUsageApi";
 
-export function appUsageEntity(id: string, label: string, row: AppOrganization | AppMember): CustomerUsageEntity {
+export function appUsageEntity(
+  id: string,
+  label: string,
+  row: Pick<AppOrganization | AppMember, "spend" | "effective_budget" | "budget_usage">,
+): CustomerUsageEntity {
   const budget = row.effective_budget;
   return {
     id,

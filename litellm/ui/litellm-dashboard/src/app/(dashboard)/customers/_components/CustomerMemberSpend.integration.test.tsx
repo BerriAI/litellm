@@ -44,6 +44,26 @@ const names = (highest: number, count: number) =>
   Array.from({ length: count }, (_, index) => `Member ${highest - index}`);
 
 describe("CustomerMemberSpend pagination", () => {
+  it("shows custom-only caps without describing the customer as uncapped", () => {
+    const custom = {
+      ...members[0],
+      budgetLimits: [
+        { budget_duration: "7d", max_budget: 10 },
+        { budget_duration: "48h", max_budget: 2 },
+      ],
+    };
+    renderWithProviders(
+      <CustomerMemberSpend
+        data={{ ...data, memberBudgets: [custom], monthlyMembers: [{ ...custom, tokens: 100, requests: 1 }] }}
+        onMemberClick={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("cell", { name: "$10.00" })).toBeInTheDocument();
+    expect(screen.queryByText("No limit")).not.toBeInTheDocument();
+    expect(screen.getByText(/\(7d\)/)).toBeInTheDocument();
+    expect(screen.getByText(/\(48h\)/)).toBeInTheDocument();
+  });
+
   it("shows the five highest spenders by default and changes page size without losing customer filters", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();

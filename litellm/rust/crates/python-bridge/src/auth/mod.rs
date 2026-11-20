@@ -1,5 +1,5 @@
 mod call;
-mod convert;
+pub(crate) mod convert;
 mod host;
 mod jwt;
 mod passthrough;
