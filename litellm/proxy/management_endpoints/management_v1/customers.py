@@ -168,11 +168,11 @@ def customer_actor(auth: Annotated[UserAPIKeyAuth, Depends(require_customer_admi
 
 
 def get_customer_hierarchy() -> CustomerHierarchy:
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise_public(Failure(ErrorCode.DATABASE_UNAVAILABLE))
-    return CustomerHierarchy(prisma_client, premium_user=premium_user)
+    return CustomerHierarchy(prisma_client, premium_user=premium_user, cache=user_api_key_cache)
 
 
 def resolve(result: T | Failure) -> T:

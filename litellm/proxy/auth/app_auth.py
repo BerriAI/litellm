@@ -81,6 +81,26 @@ async def authenticated_resource_id(
             return authenticated.key_id or await store.key_resource_id(authenticated.token)
 
 
+def authenticated_resource_alias(
+    resource_type: AppResourceType, resource_id: str, authenticated: UserAPIKeyAuth
+) -> str | None:
+    match resource_type:
+        case AppResourceType.TEAM:
+            return (authenticated.team_alias or resource_id) if "team_alias" in authenticated.model_fields_set else None
+        case AppResourceType.PROJECT:
+            return (
+                (authenticated.project_alias or resource_id)
+                if "project_alias" in authenticated.model_fields_set
+                else None
+            )
+        case AppResourceType.VIRTUAL_KEY:
+            return (
+                (authenticated.key_alias or resource_id)
+                if authenticated.key_id is not None or "key_alias" in authenticated.model_fields_set
+                else None
+            )
+
+
 class _AppAuthRecords(BaseModel, frozen=True):
     app: App
     organization: AppOrganization | None = None
@@ -93,8 +113,10 @@ async def _load_app_records(
     resource_id: str,
     assertion: str | None,
     hierarchy: CustomerHierarchyAuth | None,
+    *,
+    resource_alias: str | None = None,
 ) -> _AppAuthRecords | None:
-    app: Final = await store.by_resource(resource_type, resource_id)
+    app: Final = await store.by_resource(resource_type, resource_id, resource_alias)
     if app is None:
         if assertion is not None and assertion != resource_id:
             resource: Final = await store.resource(resource_type, resource_id)
@@ -151,17 +173,27 @@ async def _read_app_records(
     cache: "AuthCacheStore | None",
     authenticated: UserAPIKeyAuth,
 ) -> _AppAuthRecords | None:
-    if cache is None or hierarchy is None or hierarchy.customer_org_id is None:
-        return await _load_app_records(store, resource_type, resource_id, assertion, hierarchy)
+    resource_alias: Final = authenticated_resource_alias(resource_type, resource_id, authenticated)
+    if (
+        cache is None
+        or hierarchy is None
+        or hierarchy.customer_org_id is None
+        or not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+    ):
+        return await _load_app_records(
+            store, resource_type, resource_id, assertion, hierarchy, resource_alias=resource_alias
+        )
 
+    # An outage snapshot must not renew the lifetime of previously cached policy.
+    database_store: Final = AppStore(store.db, now=store.now, cache_reads=False)
     generation: Final = await _app_policy_generation(cache)
     if generation is None:
-        return await _load_app_records(store, resource_type, resource_id, assertion, hierarchy)
+        return await _load_app_records(database_store, resource_type, resource_id, assertion, hierarchy)
     key: Final = _app_records_key(
         generation, resource_type, resource_id, hierarchy.customer_org_id, hierarchy.customer_member_id
     )
     try:
-        records: Final = await _load_app_records(store, resource_type, resource_id, assertion, hierarchy)
+        records: Final = await _load_app_records(database_store, resource_type, resource_id, assertion, hierarchy)
     except Exception as error:
         fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(error)
         if fault is None:
@@ -300,7 +332,7 @@ async def resolve_app_hierarchy(
         CustomerHierarchyAuth(scopes=checked_scopes),
         partial(get_current_spend, require_verified_spend=True)
         if authenticated.customer_auth_db_unavailable
-        else get_current_spend,
+        else partial(get_current_spend, recheck_recorded_spend=True),
     )
     combined: Final = base.model_copy(
         update={

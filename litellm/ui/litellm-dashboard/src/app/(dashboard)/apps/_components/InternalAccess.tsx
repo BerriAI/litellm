@@ -14,7 +14,7 @@ import OrganizationDropdown from "@/components/common_components/OrganizationDro
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import AppAccessSelector from "./AppAccessSelector";
-import { appAccessChanged, GRANTEE_KINDS, loadGranteeApps, saveGranteeApps, type GranteeKind } from "./internalAccess";
+import { appAccessChanged, GRANTEE_KINDS, loadGranteeApps, saveGranteeApps, type GranteeKind } from "./appAccessApi";
 import { grantedAppsKey, readsEveryApp } from "./useGrantedApps";
 
 interface Grantee {

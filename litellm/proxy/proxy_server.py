@@ -3588,6 +3588,7 @@ async def get_current_spend(
     *,
     require_authoritative_window: bool = False,
     require_verified_spend: bool = False,
+    recheck_recorded_spend: bool = False,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3640,8 +3641,8 @@ async def get_current_spend(
     # (fail_closed_budget_enforcement) always re-checks against the authoritative
     # source too, so a counter that is stale-low at the same time as the caller's
     # cached spend cannot slip through; the 5s cache keeps that bounded.
-    is_window: Final = window_start is not None
-    if fallback_spend > current or is_window or _fail_closed_budget_enforcement():
+    needs_recorded_floor: Final = window_start is not None or recheck_recorded_spend
+    if fallback_spend > current or needs_recorded_floor or _fail_closed_budget_enforcement():
         authoritative: Final = await _authoritative_floor_spend(
             counter_key=counter_key,
             window_entity_type=window_entity_type,
@@ -13201,6 +13202,27 @@ async def _key_model_listing(
         entries=entries,
         labels=label_entries(listed_entries, entries),
     )
+
+
+async def accessible_model_names(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+
+    listing: Final = await _key_model_listing(
+        auth,
+        await request_caller_aliases(auth),
+        await _listing_hidden_names(None),
+        include_wildcard_routes=True,
+        offered_model_names=llm_router.registry().names(team_id=auth.team_id) if llm_router else (),
+    )
+
+    async def allowed(model: str) -> bool:
+        try:
+            await can_key_call_resolved_model(model, None, auth, llm_router)
+        except ModelAccessDeniedProxyException:
+            return False
+        return True
+
+    return tuple([row["id"] for row in listing.rows if await allowed(row["id"])])
 
 
 async def codex_catalog_rows_for_key(user_api_key_dict: UserAPIKeyAuth) -> tuple[CodexCatalogRow, ...]:

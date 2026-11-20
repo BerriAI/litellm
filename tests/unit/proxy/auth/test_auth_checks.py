@@ -2698,7 +2698,10 @@ async def test_evicting_more_keys_than_the_publisher_holds_pending_broadcasts_ev
         )
         await _drain_publishes()
 
-    assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+    assert {json.loads(message)["cache_key"] for message in client.published} == {
+        *hashed_tokens,
+        *(f"customer_app_key_resource:{token}" for token in hashed_tokens),
+    }
 
 
 @pytest.mark.asyncio
@@ -2833,7 +2836,10 @@ async def test_bulk_eviction_broadcasts_while_the_usage_cache_redis_is_wedged(
         await _drain_publishes()
 
     assert usage_redis.finished
-    assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+    assert {json.loads(message)["cache_key"] for message in client.published} == {
+        *hashed_tokens,
+        *(f"customer_app_key_resource:{token}" for token in hashed_tokens),
+    }
 
 
 @pytest.mark.parametrize("route", ("/v1/chat/completions", "/queue/chat/completions"))

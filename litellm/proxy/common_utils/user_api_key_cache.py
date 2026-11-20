@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ from litellm.constants import AUTH_OBJECTS_TARGET as AUTH_OBJECTS_TARGET  # noqa
 
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
 _CACHED_VALUE: Final = TypeAdapter(object)
-_CUSTOMER_AUTH_PREFIXES: Final = ("customer_member_id:", "customer_org_alias:", "customer_app_")
+_CUSTOMER_AUTH_PREFIXES: Final = ("customer_member_id:", "customer_org_alias:", "customer_app:", "customer_app_")
 
 AuthCacheFactory: TypeAlias = Callable[[RedisCache, AuthCacheSettings], AuthCacheStore]
 
@@ -653,6 +654,26 @@ END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_r
 def end_user_cache_key(end_user_id: str) -> str:
     """Cache key one end-user row is stored under; shared so auth and spend tracking cannot drift."""
     return f"end_user_id:{end_user_id}"
+
+
+def app_cache_key(resource_type: str, resource_id: str) -> str:
+    return f"customer_app:{json.dumps((resource_type, resource_id))}"
+
+
+def app_customer_cache_key(scope: str, app_id: str, customer_id: str) -> str:
+    return f"customer_app_association:{json.dumps((scope, app_id, customer_id))}"
+
+
+def app_budget_cache_key(budget_id: str) -> str:
+    return f"customer_app_budget:{budget_id}"
+
+
+def app_key_resource_cache_key(token_hash: str) -> str:
+    return f"customer_app_key_resource:{token_hash}"
+
+
+def app_shared_profiles_cache_key() -> str:
+    return "customer_app_shared_profiles"
 
 
 def end_user_restricted_registry_cache_key() -> str:
