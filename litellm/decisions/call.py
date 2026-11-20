@@ -61,6 +61,7 @@ from litellm.types.decisions import (
     DecisionsIRResponse,
     DecisionsIRState,
     DecisionsJSON,
+    DecisionsJsonInput,
     DecisionsRequestBody,
     DecisionsResponse,
     DecisionsVideo,
@@ -420,17 +421,20 @@ def deployment_refuses_media(
     *,
     audio: bool,
     videos: bool,
-    json_input: bool,
+    json_input: DecisionsJsonInput,
 ) -> bool:
-    if _drops_params(call_kwargs):
+    drops_params: Final = _drops_params(call_kwargs)
+    if drops_params and json_input != "only":
         return False
     provider_config: Final = get_decisions_provider_config(model, custom_llm_provider)
+    if drops_params:
+        return not provider_config.supports_json_input
     canonical_model: Final = provider_config.canonical_model(model)
     deployment: Final = _DeploymentCapabilities.model_validate(model_info)
     return (
         (audio and not _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment))
         or (videos and not _takes_videos(provider_config, canonical_model, custom_llm_provider, deployment))
-        or (json_input and not provider_config.supports_json_input)
+        or (json_input != "none" and not provider_config.supports_json_input)
     )
 
 

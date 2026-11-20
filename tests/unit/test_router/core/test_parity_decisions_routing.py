@@ -234,6 +234,7 @@ def _json_group() -> list[dict[str, object]]:  # mutable-ok: a fresh model_list
         deployment("j", "json", model="openai/gpt-4o", weight=0),
     ]
 
+
 _EVIDENCE: Final = {"type": "input_json", "data": {"order_id": "A1", "charges": [49, 49]}}
 _TICKET: Final = {"type": "input_text", "text": "Refund the duplicate charge."}
 
@@ -266,6 +267,28 @@ def test_a_tuple_input_carrying_json_input_skips_the_deployment_refusing_it(
         _call(core, op, model="j", **{**QUESTION, "input": (message,)})
 
     assert host.deployments_called(op) == ["json"] * 3
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [([_EVIDENCE], ["json"] * 3), ([_TICKET, _EVIDENCE], ["no-json"] * 3)],
+    ids=["only-json", "json-and-text"],
+)
+def test_drop_params_skips_the_deployment_refusing_json_input_only_when_dropping_it_leaves_no_input(
+    make_core: MakeCore, host: EndpointHost, content: list[object], expected: list[str]
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+
+    for _ in range(3):
+        _call(
+            core,
+            "adecisions",
+            model="j",
+            drop_params=True,
+            **{**QUESTION, "input": [{"role": "user", "content": content}]},
+        )
+
+    assert host.deployments_called("adecisions") == expected
 
 
 @pytest.mark.parametrize("op", ["adecisions", "decisions"])

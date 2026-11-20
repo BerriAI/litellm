@@ -152,6 +152,7 @@ from litellm.router_rust.steps.precall import (
     refuses_decisions_media,
     request_carries_image,
     request_carries_json_input,
+    request_json_input,
     serves_route_capability,
 )
 from litellm.router_rust.steps.prerouting import PreRouter, PreRoutingStrategies, picks_async
@@ -3488,7 +3489,7 @@ class RustCore(
         sent: Final = {**defaults, **request}
         audio: Final = bool(request.get("audio"))
         videos: Final = bool(request.get("videos"))
-        json_input: Final = request_carries_json_input(request.get("input"))
+        json_input: Final = request_json_input(request.get("input"))
         return [
             str(id)
             for id in _as_list(step.get("candidates"))

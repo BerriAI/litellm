@@ -34,7 +34,7 @@ from litellm.litellm_core_utils.token_counter import (
 from litellm.router_attempt import for_requested_model
 from litellm.router_python_host import python_host
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
-from litellm.types.decisions import OpenAIDecisionInputJSON, OpenAIDecisionInputMessage
+from litellm.types.decisions import DecisionsJsonInput, OpenAIDecisionInputJSON, OpenAIDecisionInputMessage
 from litellm.types.router import LiteLLM_Params
 
 if TYPE_CHECKING:
@@ -629,6 +629,21 @@ def request_carries_json_input(request_input: object) -> bool:
     return any(map(_is_json_input_part, chain.from_iterable(map(_content_parts, messages))))
 
 
+def _keeps_input_without_json(message: object) -> bool:
+    content: Final = (
+        message.content
+        if isinstance(message, OpenAIDecisionInputMessage)
+        else (as_str_mapping(message) or {}).get("content")
+    )
+    return isinstance(content, str) or not all(map(_is_json_input_part, parts_of(content)))
+
+
+def request_json_input(request_input: object) -> DecisionsJsonInput:
+    if not request_carries_json_input(request_input):
+        return "none"
+    return "with_other_input" if any(map(_keeps_input_without_json, parts_of(request_input))) else "only"
+
+
 def refuses_decisions_media(
     deployment: Mapping[str, object],
     group: str,
@@ -636,7 +651,7 @@ def refuses_decisions_media(
     *,
     audio: bool,
     videos: bool,
-    json_input: bool,
+    json_input: DecisionsJsonInput,
 ) -> bool:
     """``_decisions_deployment_refuses_media``, JSON input parts included."""
     from litellm.decisions.call import deployment_refuses_media
