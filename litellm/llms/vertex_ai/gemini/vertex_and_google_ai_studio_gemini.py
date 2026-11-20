@@ -184,6 +184,7 @@ OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
 SENT_SERVICE_TIERS: Final = frozenset({"priority", "flex", "standard"})
 PROVIDER_DEFAULT_SERVICE_TIERS: Final = frozenset({"auto", "default", "scale", "unspecified"})
 VERTEX_SHARED_REQUEST_TIERS: Final = frozenset({"priority", "flex"})
+SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"standard_only": "standard"})
 
 
 def _unsupported_service_tier(service_tier: str) -> UnsupportedParamsError:
@@ -559,7 +560,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_service_tier_param(self, value: str, optional_params: dict, drop_params: bool) -> None:
         from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 
-        normalized: Final = value.lower().removeprefix("service_tier_")
+        unprefixed: Final = value.lower().removeprefix("service_tier_")
+        normalized: Final = SERVICE_TIER_ALIASES.get(unprefixed, unprefixed)
         if normalized in SENT_SERVICE_TIERS:
             optional_params["service_tier"] = normalized
             return
@@ -2845,15 +2847,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         optional_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], optional_params)  # cast-ok: bare dict
         litellm_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_params)  # cast-ok: bare dict
+        caller_headers: Final[Mapping[str, str]] = cast(Mapping[str, str], headers or {})  # cast-ok: bare dict
         service_tier: Final = optional_fields.get("service_tier")
         is_vertex: Final = litellm_fields.get("custom_llm_provider") != litellm.LlmProviders.GEMINI
         if is_vertex and isinstance(service_tier, str) and service_tier in VERTEX_SHARED_REQUEST_TIERS:
-            default_headers["X-Vertex-AI-LLM-Request-Type"] = "shared"
-            default_headers["X-Vertex-AI-LLM-Shared-Request-Type"] = service_tier
+            caller_header_names: Final = frozenset(name.lower() for name in caller_headers)
+            tier_headers: Final = {
+                "X-Vertex-AI-LLM-Request-Type": "shared",
+                "X-Vertex-AI-LLM-Shared-Request-Type": service_tier,
+            }
+            default_headers.update(
+                {name: value for name, value in tier_headers.items() if name.lower() not in caller_header_names}
+            )
 
-        if headers is not None:
-            default_headers.update(cast(Mapping[str, str], headers))  # cast-ok: bare dict
-
+        default_headers.update(caller_headers)
         return default_headers
 
 
