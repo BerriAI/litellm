@@ -64,7 +64,11 @@ def get_budget_reset_settings() -> BudgetResetSettings:
 
 
 def compute_budget_reset_at(
-    budget_duration: str, settings: BudgetResetSettings, now: datetime | None = None
+    budget_duration: str,
+    settings: BudgetResetSettings,
+    now: datetime | None = None,
+    *,
+    previous_reset: datetime | None = None,
 ) -> datetime:
     """Compute the next reset time for a budget duration using injected settings."""
     return get_next_standardized_reset_time(
@@ -72,6 +76,7 @@ def compute_budget_reset_at(
         current_time=now if now is not None else datetime.now(timezone.utc),
         timezone_str=settings.timezone,
         reset_time_of_day=settings.reset_time_of_day,
+        elapsed_anchor=previous_reset,
     )
 
 
@@ -84,13 +89,8 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
 
 
-def keeps_due_budget_reset(
-    requested_duration: str, stored_duration: str | None, stored_reset_at: datetime | None
-) -> bool:
-    if stored_reset_at is None or requested_duration != stored_duration:
-        return False
-    stored_utc: Final = stored_reset_at if stored_reset_at.tzinfo else stored_reset_at.replace(tzinfo=timezone.utc)
-    return stored_utc <= datetime.now(timezone.utc)
+def keeps_budget_reset(requested_duration: str, stored_duration: str | None, stored_reset_at: datetime | None) -> bool:
+    return stored_reset_at is not None and requested_duration == stored_duration
 
 
 def _is_persistable_budget_duration(budget_duration: str) -> bool:

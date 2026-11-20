@@ -14,7 +14,14 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    ModelAccessDeniedProxyException,
+    ProxyException,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks import common_checks
 from litellm.proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
@@ -39,6 +46,8 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
     pre_db_read_auth_checks,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
@@ -1305,6 +1314,37 @@ def test_get_model_from_request_no_request_extracts_model():
         )
         == "gpt-4o"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compliance_route", ["/compliance/gdpr", "/compliance/eu-ai-act"])
+async def test_compliance_check_of_a_log_ignores_the_logged_model_for_model_access(compliance_route: str) -> None:
+    user: Final = LiteLLM_UserTable(
+        user_id="restricted-user", models=["allowed-model"], user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    token: Final = UserAPIKeyAuth(user_id="restricted-user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    async def run_common_checks(route: str, request_body: dict[str, object]) -> bool:
+        return await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            valid_token=token,
+            request=Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}),
+        )
+
+    assert await run_common_checks(compliance_route, {"request_id": "log-1", "model": "openai/some-deployment"})
+    with pytest.raises(ModelAccessDeniedProxyException):
+        await run_common_checks(
+            "/chat/completions",
+            {"model": "openai/some-deployment", "messages": [{"role": "user", "content": "hi"}]},
+        )
 
 
 @pytest.mark.parametrize(

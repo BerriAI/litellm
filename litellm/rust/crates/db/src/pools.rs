@@ -1,5 +1,4 @@
 use std::{
-    future::pending,
     io,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
@@ -37,19 +36,39 @@ impl Recycled {
     }
 }
 
-#[derive(Default)]
-struct RefusalProbe(AsyncMutex<Option<(Instant, bool)>>);
+struct RefusalWatch {
+    host: String,
+    port: u16,
+    last: AsyncMutex<Option<(Instant, bool)>>,
+}
 
-impl RefusalProbe {
-    async fn refuses(&self, host: &str, port: u16) -> bool {
-        let mut last = self.0.lock().await;
+impl RefusalWatch {
+    fn of(endpoint: &Endpoint) -> Option<Self> {
+        endpoint.socket.is_none().then(|| Self {
+            host: endpoint.host.clone(),
+            port: endpoint.port,
+            last: AsyncMutex::default(),
+        })
+    }
+
+    async fn refused(&self) -> io::Error {
+        loop {
+            tokio::time::sleep(REFUSAL_CHECK_AFTER).await;
+            if self.refuses().await {
+                return io::ErrorKind::ConnectionRefused.into();
+            }
+        }
+    }
+
+    async fn refuses(&self) -> bool {
+        let mut last = self.last.lock().await;
         if let Some((probed_at, refused)) = *last
             && probed_at.elapsed() < REFUSAL_PROBE_REUSE
         {
             return refused;
         }
         let refused = matches!(
-            TcpStream::connect((host, port)).await,
+            TcpStream::connect((self.host.as_str(), self.port)).await,
             Err(error) if error.kind() == io::ErrorKind::ConnectionRefused
         );
         *last = Some((Instant::now(), refused));
@@ -58,12 +77,29 @@ impl RefusalProbe {
 }
 
 #[derive(Clone)]
-struct Side {
+struct FailFastPool {
     pool: PgPool,
+    watch: Option<Arc<RefusalWatch>>,
+}
+
+impl FailFastPool {
+    async fn acquire(&self) -> Result<Connection, sqlx::Error> {
+        let Some(watch) = &self.watch else {
+            return self.pool.acquire().await;
+        };
+        tokio::select! {
+            biased;
+            acquired = self.pool.acquire() => acquired,
+            refused = watch.refused() => Err(sqlx::Error::Io(refused)),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Side {
+    pool: FailFastPool,
     breaker: Breaker,
     recycled: Arc<Recycled>,
-    address: Option<(String, u16)>,
-    probe: Arc<RefusalProbe>,
 }
 
 impl Side {
@@ -80,13 +116,11 @@ impl Side {
             })
             .connect_lazy_with(endpoint.connect_options());
         Ok(Self {
-            pool,
+            pool: FailFastPool {
+                pool,
+                watch: RefusalWatch::of(endpoint).map(Arc::new),
+            },
             recycled,
-            address: endpoint
-                .socket
-                .is_none()
-                .then(|| (endpoint.host.clone(), endpoint.port)),
-            probe: Arc::default(),
             breaker: Breaker::new(
                 Config {
                     failure_threshold: 1,
@@ -100,7 +134,7 @@ impl Side {
 
     async fn acquire_unless_skipped(&self) -> Option<Connection> {
         let admission = self.breaker.admit(Instant::now()).ok()?;
-        match self.acquire_unless_refused().await {
+        match self.pool.acquire().await {
             Ok(connection) => {
                 admission.succeeded();
                 Some(connection)
@@ -113,31 +147,11 @@ impl Side {
     }
 
     async fn acquire(&self) -> Result<Connection, Error> {
-        let result = self.acquire_unless_refused().await;
+        let result = self.pool.acquire().await;
         if result.is_err() {
             self.breaker.failed(Failure::Hard, Instant::now());
         }
         Ok(result?)
-    }
-
-    async fn acquire_unless_refused(&self) -> Result<Connection, sqlx::Error> {
-        tokio::select! {
-            biased;
-            acquired = self.pool.acquire() => acquired,
-            refused = self.refused() => Err(sqlx::Error::Io(refused)),
-        }
-    }
-
-    async fn refused(&self) -> io::Error {
-        let Some((host, port)) = &self.address else {
-            return pending().await;
-        };
-        loop {
-            tokio::time::sleep(REFUSAL_CHECK_AFTER).await;
-            if self.probe.refuses(host, *port).await {
-                return io::ErrorKind::ConnectionRefused.into();
-            }
-        }
     }
 }
 
@@ -169,11 +183,11 @@ impl Pools {
     }
 
     pub fn writer(&self) -> &PgPool {
-        &self.writer.pool
+        &self.writer.pool.pool
     }
 
     pub fn reader_pool(&self) -> Option<&PgPool> {
-        self.reader.as_ref().map(|reader| &reader.pool)
+        self.reader.as_ref().map(|reader| &reader.pool.pool)
     }
 
     pub async fn read(&self) -> Result<Connection, Error> {
@@ -206,9 +220,9 @@ impl Pools {
     }
 
     pub async fn close(&self) {
-        self.writer.pool.close().await;
+        self.writer.pool.pool.close().await;
         if let Some(reader) = &self.reader {
-            reader.pool.close().await;
+            reader.pool.pool.close().await;
         }
     }
 }
@@ -223,7 +237,7 @@ mod tests {
     use rstest::rstest;
     use sqlx::{Connection as _, PgConnection};
 
-    use super::{Pools, Recycled, RefusalProbe, Side};
+    use super::{Pools, Recycled, RefusalWatch};
     use crate::{Endpoint, Error, ErrorKind, PoolLimits, SslMode, test_support::database_endpoint};
 
     #[rstest]
@@ -484,10 +498,9 @@ mod tests {
                 counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
         });
-        let probe = RefusalProbe::default();
+        let watch = RefusalWatch::of(&local_endpoint(port)).ok_or("a TCP endpoint has a watch")?;
 
-        let verdicts =
-            futures_util::future::join_all((0..20).map(|_| probe.refuses("127.0.0.1", port))).await;
+        let verdicts = futures_util::future::join_all((0..20).map(|_| watch.refuses())).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         server.abort();
 
@@ -524,9 +537,9 @@ mod tests {
     async fn a_waiter_fails_once_the_server_starts_refusing() -> Result<(), Box<dyn StdError>> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
-        let side = Side::new(&local_endpoint(port))?;
+        let watch = RefusalWatch::of(&local_endpoint(port)).ok_or("a TCP endpoint has a watch")?;
         let started = Instant::now();
-        let waiter = tokio::spawn(async move { side.refused().await });
+        let waiter = tokio::spawn(async move { watch.refused().await });
 
         tokio::time::sleep(Duration::from_millis(300)).await;
         drop(listener);

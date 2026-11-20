@@ -320,12 +320,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     ? solverModels.find((model) => model.name === solverOverrides.hard)
     : recommended?.hard;
   const simpleConfig = everyday && hard ? solverPairConfig(everyday.name, hard.name) : null;
-  const complexityRouterConfig = advanced
+  const detailedSetup = advanced || isForecastClassifier(advancedConfig.classifier_type);
+  const complexityRouterConfig = detailedSetup
     ? advancedConfig
-    : simpleConfig ?? {
-        classifier_type: "heuristic" as const,
-        classification_mode: "user_turn" as const,
-        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+    : {
+        ...advancedConfig,
+        tiers: simpleConfig?.tiers ?? advancedConfig.tiers,
       };
   const openAdvanced = () => {
     setComplexityRouterConfig(complexityRouterConfig);
@@ -427,21 +427,32 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     },
     !requiresTeamScope || Boolean(watchedTeamId),
   );
-  const simpleBlockedReason = advanced ? null : simpleSetupError(modelsLoading, inventoryUnavailable, everyday, hard);
+  const simpleBlockedReason = detailedSetup
+    ? null
+    : simpleSetupError(modelsLoading, inventoryUnavailable, everyday, hard);
   const saveBlockedReason =
-    !advanced && requiresTeamScope && !watchedTeamId
+    !detailedSetup && requiresTeamScope && !watchedTeamId
       ? t("addModel.addAutoRouterTab.selectTeamToSeeModels")
       : simpleBlockedReason ?? submitBlockedReason ?? routerAvailability.saveBlockedReason;
   const handleClassifierChange = (config: ComplexityRouterConfigValue) => {
     switchyard.deselect();
-    if (advanced || effectiveClassifierType(config) === effectiveClassifierType(complexityRouterConfig)) {
-      setSelectedPreset(undefined);
-      setComplexityRouterConfig(config);
-      return;
+    setSelectedPreset(undefined);
+    if (!advanced && detailedSetup && !isForecastClassifier(config.classifier_type)) {
+      setPrefillAttempted(true);
+      const { SIMPLE, REASONING } = config.tiers;
+      if (
+        Object.entries(config.tiers).every(
+          ([tier, models]) => models.length === (tier === "SIMPLE" || tier === "REASONING" ? 1 : 0),
+        )
+      ) {
+        if (SIMPLE[0] !== everyday?.name || REASONING[0] !== hard?.name) {
+          setSolverOverrides({ everyday: SIMPLE[0], hard: REASONING[0] });
+        }
+      } else {
+        setAdvanced(true);
+      }
     }
     setComplexityRouterConfig(config);
-    setPrefillAttempted(simpleConfig !== null);
-    setAdvanced(true);
   };
   const jevRequestParams =
     effectiveClassifierType(complexityRouterConfig) === "jev"
@@ -640,8 +651,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   )}
                 </FormField>
               </div>
-              <div className={advanced ? "mb-6 border-b pb-6" : ""}>
-                {isAdmin && advanced && (
+              <div className={detailedSetup ? "mb-6 border-b pb-6" : ""}>
+                {isAdmin && detailedSetup && (
                   <div>
                     <FormField
                       control={form.control}
@@ -709,7 +720,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   />
                 }
               >
-                {advanced ? (
+                {detailedSetup ? (
                   <FieldGroup>
                     {modelsUnverifiable && (
                       <p className="text-sm text-destructive">

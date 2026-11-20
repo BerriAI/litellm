@@ -19,7 +19,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
-from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
 from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload, SpendLogRecord
 from litellm.litellm_core_utils.core_helpers import require_attributes
@@ -229,7 +228,6 @@ def spend_log_row_from_payload(
                 {
                     **request_metadata,
                     **metadata,
-                    "litellm_lens_internal": is_lens_analysis(),
                     **({} if track_end_user else {"user_api_key_end_user_id": None}),
                 }
             )
