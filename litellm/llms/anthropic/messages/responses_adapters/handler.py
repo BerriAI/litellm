@@ -12,6 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import CALLER_SENT_RESPONSES_FIELDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     routed_model_info,
@@ -225,10 +226,18 @@ _INSTRUCTIONS_UNSUPPORTED: Final = (
 )
 
 
-def unsupported_responses_field_error(request_params: Mapping[str, object]) -> str | None:
-    sent: Final = _sent_responses_fields(request_params, ("previous_response_id", "instructions"))
-    if sent["previous_response_id"] is not None:
-        return _PREVIOUS_RESPONSE_ID_UNSUPPORTED
+def previous_response_id_error(request_params: Mapping[str, object]) -> str | None:
+    sent: Final = _sent_responses_fields(request_params, ("previous_response_id",))
+    return _PREVIOUS_RESPONSE_ID_UNSUPPORTED if sent["previous_response_id"] is not None else None
+
+
+def _caller_instructions_error(request_params: Mapping[str, object]) -> str | None:
+    """The router records what the request carried, so `instructions` its deployment sets is not rejected."""
+    metadata: Final = as_str_mapping(request_params.get("litellm_metadata")) or {}
+    caller_sent: Final = metadata.get(CALLER_SENT_RESPONSES_FIELDS_METADATA_KEY)
+    if isinstance(caller_sent, Sequence) and "instructions" not in caller_sent:
+        return None
+    sent: Final = _sent_responses_fields(request_params, ("instructions",))
     return _INSTRUCTIONS_UNSUPPORTED if sent["instructions"] is not None else None
 
 
@@ -341,7 +350,9 @@ def _build_responses_kwargs(
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    unsupported_param_error: Final = unsupported_responses_field_error(forwarded_kwargs)
+    unsupported_param_error: Final = previous_response_id_error(forwarded_kwargs) or _caller_instructions_error(
+        forwarded_kwargs
+    )
     if unsupported_param_error is not None:
         raise litellm.UnsupportedParamsError(
             message=unsupported_param_error,

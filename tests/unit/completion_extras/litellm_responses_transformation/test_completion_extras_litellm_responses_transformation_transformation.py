@@ -6882,6 +6882,42 @@ def test_responses_only_fields_are_rejected_with_their_chat_equivalent(
     assert equivalent in str(rejected.value)
 
 
+@pytest.mark.parametrize("in_extra_body", [False, True])
+def test_responses_only_field_set_on_the_deployment_is_not_rejected(in_extra_body: bool) -> None:
+    def routed(caller_sent: tuple[str, ...]) -> dict[str, object]:
+        return _bridged_transform_request(
+            "gpt-6.2-sol",
+            [{"role": "user", "content": "hi"}],
+            {"custom_llm_provider": "openai", "metadata": {"_caller_sent_responses_fields": caller_sent}},
+            {"extra_body": {"max_output_tokens": 64}} if in_extra_body else {"max_output_tokens": 64},
+        )
+
+    assert routed(())["max_output_tokens"] == 64
+    with pytest.raises(litellm.UnsupportedParamsError, match="`max_output_tokens` is only supported"):
+        routed(("max_output_tokens",))
+
+
+@pytest.mark.parametrize(
+    ("deployment_params", "request_params", "caller_sent"),
+    [
+        ({"max_output_tokens": 64, "instructions": "Be brief."}, {}, ()),
+        ({"max_output_tokens": 64}, {"reasoning": {"effort": "low"}}, ("reasoning",)),
+        ({"instructions": "Be brief."}, {"extra_body": {"instructions": "Be long."}}, ("instructions",)),
+    ],
+)
+def test_router_records_the_responses_only_fields_the_caller_sent(
+    deployment_params: dict[str, object], request_params: dict[str, object], caller_sent: tuple[str, ...]
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "bridged", "litellm_params": {"model": "openai/responses/gpt-6.2-sol", **deployment_params}}
+        ]
+    )
+    with patch("litellm.completion", return_value=litellm.ModelResponse()) as completion:
+        router.completion(model="bridged", messages=[{"role": "user", "content": "hi"}], **request_params)
+    assert completion.call_args.kwargs["metadata"]["_caller_sent_responses_fields"] == caller_sent
+
+
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 

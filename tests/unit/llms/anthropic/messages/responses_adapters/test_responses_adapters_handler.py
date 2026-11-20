@@ -109,6 +109,29 @@ def test_caller_instructions_are_rejected_with_the_messages_equivalent(
     assert "`system`" in str(rejected.value)
 
 
+@pytest.mark.parametrize("nested", [False, True])
+def test_instructions_set_on_the_deployment_are_not_rejected(nested: bool) -> None:
+    deployment_set: Final = {"instructions": "Deployment instructions"}
+
+    def routed(caller_sent: tuple[str, ...]) -> dict[str, object]:
+        return _build_responses_kwargs(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-6.2-sol",
+            extra_kwargs={
+                "custom_llm_provider": "openai",
+                "store": False,
+                "litellm_metadata": {"_caller_sent_responses_fields": caller_sent},
+                **({"extra_body": deployment_set} if nested else deployment_set),
+            },
+        )
+
+    forwarded: Final = routed(())
+    assert (forwarded["extra_body"] if nested else forwarded)["instructions"] == "Deployment instructions"
+    with pytest.raises(litellm.UnsupportedParamsError, match="`instructions` is not supported on the Messages API"):
+        routed(("instructions",))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_params,wire_controls,preserve_instructions",
