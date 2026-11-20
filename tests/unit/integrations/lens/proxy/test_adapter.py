@@ -420,6 +420,28 @@ def test_lens_login_sends_a_browser_without_a_dashboard_session_to_gateway_sign_
 
 
 @pytest.mark.parametrize(
+    ("sign_in_url", "ui_cookie_path"),
+    (
+        ("http://gateway.test/ui/login?redirect_to=%2Flens%2Flogin", "/ui"),
+        ("http://gateway.test/litellm/ui/login?redirect_to=%2Flitellm%2Flens%2Flogin", "/litellm/ui"),
+    ),
+    ids=("no_root_path", "server_root_path"),
+)
+def test_lens_login_drops_a_refused_dashboard_session_so_the_login_page_does_not_send_it_back(
+    connection: Connection, sign_in_url: str, ui_cookie_path: str
+) -> None:
+    response: Final = login_redirect(connection, "https://lens.test", None, None, sign_in_url, 1000)
+    cleared: Final = sorted(header for header in response.headers.getlist("set-cookie"))
+    assert [
+        (header.split(";")[0], "Max-Age=0" in header, f"Path={path}" in header.split("; "))
+        for header, path in zip(cleared, sorted(("/", ui_cookie_path)), strict=True)
+    ] == [
+        ('token=""', True, True),
+        ('token=""', True, True),
+    ]
+
+
+@pytest.mark.parametrize(
     ("configured", "lens_url"),
     ((False, "https://lens.test"), (True, "")),
     ids=("no_lens_connection", "no_public_lens_url"),
