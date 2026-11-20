@@ -82,8 +82,6 @@ _BLOCKS: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...]
 
 @dataclass(frozen=True, slots=True)
 class _Turn:
-    """One prompt item: the tool calls it makes, the tool results it carries, and whether the model wrote it."""
-
     calls: tuple[tuple[str, str, str], ...] = ()
     results: tuple[tuple[str, str], ...] = ()
     from_model: bool = False
@@ -192,8 +190,6 @@ class _Payload(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class AgentCall:
-    """What one model call says about the agent that made it."""
-
     agent: str | None = None
     tool_exchanges: tuple[ToolExchange, ...] = ()
 
