@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import httpx
 import pytest
 import respx
+from opentelemetry.trace import NonRecordingSpan, SpanContext
 from pydantic import BaseModel, ConfigDict
 
 import litellm
@@ -491,6 +492,30 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
     assert cache.get_cache_key(**request, _skip_mcp_handler=True) == base_key
     assert cache.get_cache_key(**request, fake_stream=True) == base_key
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
+
+
+def _request_span(trace_id: int) -> NonRecordingSpan:
+    return NonRecordingSpan(SpanContext(trace_id=trace_id, span_id=trace_id, is_remote=False))
+
+
+@pytest.mark.parametrize("provider_specific_params_keyed", [True, False])
+def test_cache_key_ignores_the_per_request_otel_span(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "openai/mock-model", "messages": [{"role": "user", "content": "hi"}]}
+    first_span: Final = _request_span(1)
+    second_span: Final = _request_span(2)
+    assert repr(first_span) != repr(second_span)
+
+    first_key: Final = cache.get_cache_key(**request, my_provider_param="a", parent_otel_span=first_span)
+
+    assert cache.get_cache_key(**request, my_provider_param="a", parent_otel_span=second_span) == first_key
+    assert cache.get_cache_key(**request, my_provider_param="a", parent_otel_span=None) == first_key
+    assert (cache.get_cache_key(**request, my_provider_param="b", parent_otel_span=first_span) != first_key) is (
+        provider_specific_params_keyed
+    )
 
 
 def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token() -> None:
@@ -1080,6 +1105,17 @@ _FILE_BLOCK_ITEM: Final = {"type": "file", "file": {"file_data": "data:video/mp4
         pytest.param({"input": "one prompt"}, True, id="string-input-is-one-message"),
         pytest.param({"input": ["a", "b", "c", "d", "e"]}, True, id="embedding-strings-are-not-messages"),
         pytest.param({"input": [_FILE_BLOCK_ITEM] * 5}, True, id="embedding-file-blocks-are-not-messages"),
+        pytest.param(
+            {"input": [{"type": "text", "text": "chunk"}] * 5}, True, id="embedding-text-blocks-are-not-messages"
+        ),
+        pytest.param(
+            {"input": [{"type": ["message"], "content": "hi"}] * 5}, False, id="unhashable-item-types-still-count"
+        ),
+        pytest.param(
+            {"input": [{"type": "message", "role": "user", "content": "hi"}] * 5},
+            False,
+            id="five-typed-responses-messages-skip-the-cache",
+        ),
     ],
 )
 def test_should_use_cache_stops_past_the_default_max_messages(kwargs: dict[str, object], expected: bool) -> None:

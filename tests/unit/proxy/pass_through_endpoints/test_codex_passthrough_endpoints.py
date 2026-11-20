@@ -1060,7 +1060,7 @@ def _team_jwt(monkeypatch: pytest.MonkeyPatch, team_allowed_routes: list[str]) -
         "alg": "RS256",
         "use": "sig",
     }
-    proxy_server.user_api_key_cache.set_cache(key=f"litellm_jwt_auth_keys_{_JWT_JWKS_URL}", value=[public_jwk])
+    proxy_server.jwks_cache.set_cache(key=f"litellm_jwt_auth_keys_{_JWT_JWKS_URL}", value=[public_jwk])
     monkeypatch.setattr(
         proxy_server,
         "litellm_jwtauth",

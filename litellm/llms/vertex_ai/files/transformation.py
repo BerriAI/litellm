@@ -852,7 +852,7 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
         else {
             **anthropic_request,
             **config.transform_extra_body(
-                extra_body=extra_body, request=anthropic_request, model=bare_model, litellm_params={}
+                extra_body=extra_body, request=anthropic_request, model=bare_model, litellm_params=request_state
             ),
         }
     )

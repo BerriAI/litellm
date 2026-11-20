@@ -1132,18 +1132,16 @@ def _count_on_claude(
 @pytest.mark.parametrize(
     ("params", "preserve_instructions"),
     [
-        ({}, True),
-        ({"store": True}, True),
+        ({}, False),
+        ({"store": True}, False),
         ({"store": False}, False),
         ({"extra_body": {"store": False}}, False),
-        ({"store": False, "extra_body": {"store": True}}, True),
+        ({"store": False, "extra_body": {"store": True}}, False),
         ({"store": True, "extra_body": {"store": False}}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, False),
         ({"store": False, "truncation": "auto"}, True),
-        ({"store": False, "previous_response_id": "resp_prior"}, True),
         ({"store": False, "conversation": "conv_prior"}, True),
         ({"store": False, "extra_body": {"truncation": "auto"}}, True),
-        ({"store": False, "extra_body": {"previous_response_id": "resp_prior"}}, True),
         ({"store": False, "extra_body": {"conversation": "conv_prior"}}, True),
     ],
 )
@@ -1180,7 +1178,7 @@ def test_messages_count_tokens_uses_the_system_shape_sent_by_inference(
         )
     assert response.status_code == 200, response.text
     body: Final = json.loads(count.calls[0].request.content)
-    assert not {"truncation", "previous_response_id", "conversation"} & body.keys()
+    assert not {"truncation", "conversation"} & body.keys()
     user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
     assert {key: body[key] for key in ("input", "instructions") if key in body} == (
         {"instructions": "Stable prefix", "input": [user_input]}
@@ -1192,6 +1190,46 @@ def test_messages_count_tokens_uses_the_system_shape_sent_by_inference(
             ]
         }
     )
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol"])
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"previous_response_id": "resp_prior"},
+        {"extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": "resp_prior", "drop_params": True},
+        {"extra_body": {"previous_response_id": "resp_prior"}, "additional_drop_params": ["previous_response_id"]},
+        {"previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": ""},
+    ],
+)
+def test_messages_count_tokens_rejects_previous_response_id_as_inference_does(
+    monkeypatch: pytest.MonkeyPatch, params: dict[str, object], model: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "count-sol", "litellm_params": {"model": model, "api_key": "sk-test"}}]),
+    )
+    app: Final = FastAPI()
+    app.include_router(messages_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    with respx.mock(assert_all_called=False) as upstream:
+        provider: Final = upstream.route().mock(return_value=httpx.Response(200, json={"input_tokens": 10}))
+        response: Final = TestClient(app).post(
+            "/v1/messages/count_tokens",
+            json={
+                "model": "count-sol",
+                "system": "Stable prefix",
+                "messages": [{"role": "user", "content": "hi"}],
+                **params,
+            },
+        )
+    assert response.status_code == 400, response.text
+    assert "/v1/responses" in response.text
+    assert not provider.called
 
 
 def test_count_tokens_logs_one_line_with_the_callers_call_id_model_and_count(
