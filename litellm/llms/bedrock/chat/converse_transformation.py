@@ -60,6 +60,8 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
+    SAFEGUARDS,
+    anthropic_body_betas,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_model_supports_regex_lookaround,
@@ -67,6 +69,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
     deployment_model_info,
+    drops_safeguards_bedrock_rejects,
     requests_output_config_format,
 )
 from litellm.llms.bedrock.request_metadata import (
@@ -75,7 +78,7 @@ from litellm.llms.bedrock.request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -2341,6 +2344,24 @@ class AmazonConverseConfig(BaseConfig):
             (config_name, config_class, inference_params.pop(config_name, None))
             for config_name, config_class in self.get_config_blocks().items()
         )
+
+        sent_betas: Final = anthropic_body_betas(
+            _JSON_OBJECT.validate_python(additional_request_params).get("anthropic_beta")
+        )
+        safeguards_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+        if SAFEGUARDS in additional_request_params and drops_safeguards_bedrock_rejects(
+            model,
+            deployment_model_info(litellm_params),
+            drop_params,
+            "bedrock_converse",
+            sends_beta=safeguards_beta in sent_betas,
+        ):
+            del additional_request_params[SAFEGUARDS]
+            kept_betas: Final = sorted(sent_betas - {safeguards_beta})
+            if kept_betas:
+                additional_request_params["anthropic_beta"] = kept_betas
+            elif "anthropic_beta" in additional_request_params:
+                del additional_request_params["anthropic_beta"]
 
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),

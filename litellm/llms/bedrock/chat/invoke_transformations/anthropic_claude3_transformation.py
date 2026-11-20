@@ -25,21 +25,27 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_TRACE_FIELD,
+    SAFEGUARDS,
     apply_bedrock_invoke_structured_output,
+    bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
     deployment_model_info,
+    drops_safeguards_bedrock_rejects,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     requests_opt_in_native_output,
+    strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
+    without_safeguards_beta,
 )
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
     AnthropicThinkingParam,
@@ -57,6 +63,7 @@ else:
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -200,10 +207,23 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
+        typed_litellm_params: Final = _LITELLM_PARAMS.validate_python(litellm_params)
+        drops_safeguards: Final = SAFEGUARDS in params and drops_safeguards_bedrock_rejects(
+            bedrock_capability_model(strip_bedrock_routing_prefix(model), typed_litellm_params.get("base_model")),
+            deployment_model_info(typed_litellm_params),
+            typed_litellm_params.get("drop_params"),
+            "bedrock_invoke",
+            sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+            in get_anthropic_beta_from_headers(headers),
+        )
+        upstream_params: Final = (
+            {key: value for key, value in params.items() if key != SAFEGUARDS} if drops_safeguards else params
+        )
         _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -212,15 +232,16 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         beta_list: Final = self._compute_bedrock_invoke_beta_headers(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             headers=headers,
             thinking=_anthropic_request.get("thinking"),
             history_holds_tool_search=replays_tool_search(
                 OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
             ),
         )
-        if beta_list:
-            _anthropic_request["anthropic_beta"] = beta_list
+        upstream_betas: Final = list(without_safeguards_beta(beta_list)) if drops_safeguards else beta_list
+        if upstream_betas:
+            _anthropic_request["anthropic_beta"] = upstream_betas
 
         return _anthropic_request
 

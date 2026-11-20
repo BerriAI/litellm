@@ -1680,6 +1680,62 @@ def test_bedrock_messages_does_not_add_dangerous_tool_use_beta_without_safeguard
     assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
 
 
+_OPUS_4_1: Final = "us.anthropic.claude-opus-4-1-20250805-v1:0"
+_SONNET_4_5: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+@pytest.mark.parametrize(
+    ("model", "params", "global_drop_params", "forwarded"),
+    [
+        (_OPUS_4_1, {"drop_params": True}, False, False),
+        (_OPUS_4_1, {}, True, False),
+        (_OPUS_4_1, {}, False, True),
+        (_OPUS_4_1, {"drop_params": True, "model_info": {"supports_safeguards": True}}, False, True),
+        (_SONNET_4_5, {"drop_params": True}, False, True),
+        (_SONNET_4_5, {"drop_params": True, "model_info": {"supports_safeguards": False}}, False, False),
+        ("us.anthropic.claude-opus-9-v1:0", {"drop_params": True}, False, True),
+        ("arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/qa", {"drop_params": True}, False, True),
+    ],
+    ids=[
+        "old_model_drop_params",
+        "old_model_global_drop_params",
+        "old_model_without_drop_params",
+        "old_model_deployment_opts_in",
+        "flagged_model_drop_params",
+        "flagged_model_deployment_opts_out",
+        "unlisted_new_model",
+        "unresolvable_profile_arn",
+    ],
+)
+def test_bedrock_messages_drops_safeguards_and_beta_under_drop_params_only_on_models_that_reject_them(
+    local_model_cost_map: None,
+    local_beta_headers_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    params: dict[str, object],
+    global_drop_params: bool,
+    forwarded: bool,
+) -> None:
+    """On 2026-11-20 Bedrock InvokeModel answered 400 to safeguards plus the dangerous-tool-use beta on Opus 4.1 and
+    200 with safeguard_results on Sonnet 4.5, so drop_params removes both only where the model map lacks the flag."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    safeguards: Final = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "safeguards": safeguards},
+        litellm_params=GenericLiteLLMParams(**params),
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+    )
+
+    assert (result.get("safeguards") == safeguards) is forwarded
+    assert ("dangerous-tool-use-2026-09-03" in result.get("anthropic_beta", [])) is forwarded
+    assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+
+
 def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     """Bedrock streams the classifier verdicts on message_start and on the final message_delta, exactly as api.anthropic.com does."""
     decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
