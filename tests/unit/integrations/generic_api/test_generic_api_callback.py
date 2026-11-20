@@ -1253,3 +1253,72 @@ async def test_generic_api_logger_post_blocks_redirect_to_private_ip() -> None:
     with pytest.raises(SSRFError):
         await logger._send_single_post("https://owned-logger.invalid", "{}")
     await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_strips_credentials_on_cross_origin_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requests: list[httpx.Request] = []  # mutable-ok: records mock requests
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        if request.url.host == "192.0.2.1":
+            return httpx.Response(307, headers={"Location": "https://198.51.100.1/logs"})
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["192.0.2.1", "198.51.100.1"])
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    logger: Final = GenericAPILogger(
+        endpoint="https://192.0.2.1/logs",
+        headers={
+            "Authorization": "Bearer secret-token",
+            "Cookie": "session=123",
+            "X-Tracking-ID": "audit-456",
+        },
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    response: Final = await logger._send_single_post("https://192.0.2.1/logs", "{}")
+    assert response.status_code == 200
+    assert len(captured_requests) == 2
+    first_req: Final = captured_requests[0]
+    second_req: Final = captured_requests[1]
+    assert first_req.headers.get("Authorization") == "Bearer secret-token"
+    assert first_req.headers.get("Cookie") == "session=123"
+    assert second_req.headers.get("Authorization") is None
+    assert second_req.headers.get("Cookie") is None
+    assert second_req.headers.get("X-Tracking-ID") == "audit-456"
+    await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_preserves_credentials_on_same_origin_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requests: list[httpx.Request] = []  # mutable-ok: records mock requests
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        if request.url.path == "/v1/logs":
+            return httpx.Response(307, headers={"Location": "https://192.0.2.1/v2/logs"})
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["192.0.2.1"])
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    logger: Final = GenericAPILogger(
+        endpoint="https://192.0.2.1/v1/logs",
+        headers={
+            "Authorization": "Bearer secret-token",
+            "Cookie": "session=123",
+        },
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    response: Final = await logger._send_single_post("https://192.0.2.1/v1/logs", "{}")
+    assert response.status_code == 200
+    assert len(captured_requests) == 2
+    second_req: Final = captured_requests[1]
+    assert second_req.headers.get("Authorization") == "Bearer secret-token"
+    assert second_req.headers.get("Cookie") == "session=123"
+    await handler.close()

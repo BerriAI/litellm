@@ -13,8 +13,10 @@ import re
 import time
 import traceback
 from collections.abc import Coroutine, Mapping
+from types import MappingProxyType
 from typing import Final, Literal, get_args
 from unittest.mock import AsyncMock
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -33,6 +35,41 @@ from litellm.types.utils import StandardLoggingPayload
 
 API_EVENT_TYPES = Literal["llm_api_success", "llm_api_failure"]
 LOG_FORMAT_TYPES = Literal["json_array", "ndjson", "single"]
+
+
+_SENSITIVE_REDIRECT_HEADERS: Final[frozenset[str]] = frozenset(
+    {"authorization", "proxy-authorization", "cookie"}
+)
+
+
+def _is_same_origin(source_url: str, target_url: str) -> bool:
+    source: Final = urlsplit(source_url)
+    target: Final = urlsplit(target_url)
+    source_scheme: Final = source.scheme.lower()
+    target_scheme: Final = target.scheme.lower()
+    source_host: Final = source.hostname.lower() if source.hostname else None
+    target_host: Final = target.hostname.lower() if target.hostname else None
+    if source_host is None or target_host is None:
+        return False
+    source_port: Final = source.port or (443 if source_scheme == "https" else 80 if source_scheme == "http" else None)
+    target_port: Final = target.port or (443 if target_scheme == "https" else 80 if target_scheme == "http" else None)
+    return (
+        source_scheme == target_scheme
+        and source_host == target_host
+        and source_port == target_port
+    )
+
+
+def _strip_cross_origin_credentials(
+    headers: Mapping[str, str],
+    source_url: str,
+    target_url: str,
+) -> Mapping[str, str]:
+    if _is_same_origin(source_url, target_url):
+        return headers
+    return MappingProxyType(
+        {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE_REDIRECT_HEADERS}
+    )
 
 
 def load_compatible_callbacks() -> dict:
@@ -309,9 +346,10 @@ class GenericAPILogger(CustomBatchLogger):
         self,
         target_url: str,
         data: str,
+        hop_headers: Mapping[str, str],
     ) -> httpx.Response:
         validated_url, host_header = await asyncio.to_thread(validate_url, target_url)
-        headers_dict: dict[str, str] = {**self.headers, "Host": host_header}  # mutable-ok: headers for httpx post
+        headers_dict: dict[str, str] = {**hop_headers, "Host": host_header}  # mutable-ok: headers for httpx post
         raw_client: Final = getattr(self.async_httpx_client, "client", None)
         if isinstance(raw_client, httpx.AsyncClient) and not isinstance(
             getattr(self.async_httpx_client, "post", None), AsyncMock
@@ -341,11 +379,14 @@ class GenericAPILogger(CustomBatchLogger):
             )
 
         destination_url = current_url  # rebind-ok: updated across redirect hops
+        hop_headers: Mapping[str, str] = MappingProxyType(dict(self.headers))  # rebind-ok: stripped on cross-origin redirects
         for _ in range(5):
-            response = await self._dispatch_hop(destination_url, data)
+            response = await self._dispatch_hop(destination_url, data, hop_headers)
             if not response.is_redirect:
                 return response
-            destination_url = extract_redirect_url(response, destination_url)
+            (next_url,) = (extract_redirect_url(response, destination_url),)
+            hop_headers = _strip_cross_origin_credentials(hop_headers, destination_url, next_url)
+            destination_url = next_url
         raise SSRFError("Too many redirects")
 
     async def _post_with_retries(self, data: str) -> httpx.Response:
