@@ -4165,6 +4165,12 @@ class SSOAuthenticationHandler:
             user_api_key_cache=user_api_key_cache,
             request=request,
         )
+        from litellm.proxy.management_endpoints.session_endpoints import end_earlier_ui_sessions
+
+        await end_earlier_ui_sessions(
+            _require_sso_user_id(user_defined_values["user_id"]),
+            cast("dict[str, str | None]", response).get("token_id"),  # cast-ok: set on insert
+        )
         if return_to_redirect is not None:
             return return_to_redirect
 

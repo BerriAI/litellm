@@ -3,6 +3,7 @@ UI session revocation.
 
 POST /session/logout — revoke the UI session key this request authenticated with.
 revoke_ui_session_keys — revoke every UI session key a user holds (password writes).
+end_earlier_ui_sessions — a sign-in ends the user's older sessions (LITELLM_UI_ALLOW_MULTIPLE_SESSIONS keeps them).
 
 Logging out of the dashboard was purely client-side (cookies cleared, redirect);
 the DB-backed virtual key minted at login stayed valid until
@@ -14,6 +15,8 @@ ownership checks can reject low-privilege roles, and a self-revoke endpoint
 that takes no body cannot be aimed at other keys.
 """
 
+import os
+from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -30,6 +33,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     persist_deleted_verification_tokens,
@@ -37,6 +41,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -57,10 +62,16 @@ async def revoke_ui_session_keys(
     *,
     keep_hashed_token: str | None = None,
     litellm_changed_by: str | None = None,
+    only_older_than_kept: bool = False,
 ) -> int:
     """Revoke every UI session key belonging to ``user_id``, except
     ``keep_hashed_token`` (the caller's own session on a self-service password
     change; the other password-write paths revoke all).
+
+    ``only_older_than_kept`` spares sessions ranked after the kept one (by
+    creation time, then token), and revokes nothing once the kept one is gone,
+    so of two overlapping sign-ins exactly one survives. It reads the writer,
+    since the kept session was written moments ago.
 
     Best-effort: the password write this runs after has already committed, so a
     revocation failure is logged loudly rather than failing the request — the
@@ -74,15 +85,20 @@ async def revoke_ui_session_keys(
         return 0
 
     try:
+        session_reader: Final = WriterPinnedClient(prisma_client.db) if only_older_than_kept else prisma_client
         where_user_sessions: Final[prisma_types.LiteLLM_VerificationTokenWhereInput] = {
             "user_id": user_id,
             "team_id": UI_SESSION_TOKEN_TEAM_ID,
         }
         rows: Final = cast(  # cast-ok: find_many returns prisma rows shaped like the pydantic model
             "tuple[LiteLLM_VerificationToken, ...]",
-            tuple(await VerificationTokenRepository(prisma_client).table.find_many(where=where_user_sessions)),
+            tuple(await VerificationTokenRepository(session_reader).table.find_many(where=where_user_sessions)),
         )
-        revoked_rows: Final = tuple(row for row in rows if row.token is not None and row.token != keep_hashed_token)
+        kept_rank: Final = next((_rank(row) for row in rows if row.token == keep_hashed_token), None)
+        if only_older_than_kept and kept_rank is None:
+            return 0
+        cutoff: Final = kept_rank if only_older_than_kept else None
+        revoked_rows: Final = tuple(row for row in rows if _is_revoked(row, keep_hashed_token, cutoff))
         if not revoked_rows:
             return 0
         revoked_tokens: Final = _TOKEN_LIST.validate_python(tuple(row.token for row in revoked_rows))
@@ -101,7 +117,7 @@ async def revoke_ui_session_keys(
             proxy_logging_obj=proxy_logging_obj,
         )
         verbose_proxy_logger.info(
-            "Revoked %s UI session key(s) for user_id=%s after password change",
+            "Revoked %s UI session key(s) for user_id=%s",
             len(revoked_tokens),
             user_id,
         )
@@ -112,6 +128,29 @@ async def revoke_ui_session_keys(
             user_id,
         )
         return 0
+
+
+def _rank(row: LiteLLM_VerificationToken) -> tuple[datetime, str] | None:
+    return None if row.created_at is None or row.token is None else (row.created_at, row.token)
+
+
+def _is_revoked(
+    row: LiteLLM_VerificationToken, keep_hashed_token: str | None, cutoff: tuple[datetime, str] | None
+) -> bool:
+    if row.token is None or row.token == keep_hashed_token:
+        return False
+    if cutoff is None:
+        return True
+    rank: Final = _rank(row)
+    return rank is not None and rank < cutoff
+
+
+async def end_earlier_ui_sessions(user_id: str, new_token_id: str | None) -> None:
+    """One session per user: once a sign-in has succeeded, end the user's sessions older than ``new_token_id``."""
+    if new_token_id is not None and str_to_bool(os.getenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS")) is not True:
+        await revoke_ui_session_keys(
+            user_id, UserAPIKeyAuth(user_id=user_id), keep_hashed_token=new_token_id, only_older_than_kept=True
+        )
 
 
 @router.post(

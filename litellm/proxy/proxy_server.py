@@ -20267,7 +20267,12 @@ async def fallback_login(request: Request):
 @router.post("/login", include_in_schema=False)  # hidden since this is a helper for UI sso login
 async def login(request: Request):
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
+    from litellm.proxy.auth.login_utils import (
+        authenticate_user,
+        create_ui_token_object,
+        encode_ui_session_jwt,
+        end_earlier_sessions,
+    )
     from litellm.proxy.utils import get_custom_url
 
     form: Final = await request.form()
@@ -20306,6 +20311,7 @@ async def login(request: Request):
 
     # Generate JWT token
     jwt_token: Final = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
+    await end_earlier_sessions(login_result)
 
     # Build redirect URL
     litellm_dashboard_ui = get_custom_url(str(request.base_url))
@@ -20361,7 +20367,12 @@ async def login(request: Request):
 @router.post("/v2/login", include_in_schema=False)  # hidden helper for UI logins via API
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
+    from litellm.proxy.auth.login_utils import (
+        authenticate_user,
+        create_ui_token_object,
+        encode_ui_session_jwt,
+        end_earlier_sessions,
+    )
     from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
     from litellm.proxy.utils import get_custom_url
 
@@ -20386,6 +20397,7 @@ async def login_v2(request: Request):
         )
 
         jwt_token: Final = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
+        await end_earlier_sessions(login_result)
 
         litellm_dashboard_ui = get_custom_url(str(request.base_url))
         litellm_dashboard_ui = litellm_dashboard_ui.rstrip("/")
@@ -20426,7 +20438,12 @@ async def login_v2(request: Request):
 )  # control-plane login — always returns token in body for cross-origin use
 async def login_v3(request: Request):
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
+    from litellm.proxy.auth.login_utils import (
+        authenticate_user,
+        create_ui_token_object,
+        encode_ui_session_jwt,
+        end_earlier_sessions,
+    )
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -20471,6 +20488,7 @@ async def login_v3(request: Request):
             await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
         else:
             await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+        await end_earlier_sessions(login_result)
 
         return JSONResponse(
             content={"code": code, "expires_in": 60},
