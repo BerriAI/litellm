@@ -206,7 +206,8 @@ def _build_responses_kwargs(
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     _reject_background_mode(model, forwarded_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    explicitly_drops_mcp_servers: Final = "mcp_servers" in drop_policy(forwarded_kwargs).additional_drop_params
+    explicitly_dropped: Final = drop_policy(forwarded_kwargs).additional_drop_params
+    explicitly_drops_mcp_servers: Final = "mcp_servers" in explicitly_dropped
     sent_mcp_servers: Final = None if explicitly_drops_mcp_servers else mcp_servers
     request_tools: Final = (
         tools_without_mcp_servers(
@@ -263,11 +264,11 @@ def _build_responses_kwargs(
         request_data["top_p"] = top_p
     if output_format:
         request_data["output_format"] = output_format
-    if speed is not None:
+    if speed is not None and "speed" not in explicitly_dropped:
         request_data["speed"] = speed
     if sent_mcp_servers:
         request_data["mcp_servers"] = list(sent_mcp_servers)
-    if container is not None:
+    if container is not None and "container" not in explicitly_dropped:
         request_data["container"] = container if isinstance(container, str) else dict(container)
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
