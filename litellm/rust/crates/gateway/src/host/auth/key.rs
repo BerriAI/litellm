@@ -102,6 +102,9 @@ pub struct Key {
     models: Arc<[String]>,
     /// The key's own rate limits, which the limiter enforces.
     limits: KeyLimits,
+    /// The priority class the key's `metadata.priority` names, which reserves it a share of a
+    /// model group's capacity.
+    priority: Option<Arc<str>>,
     /// The first budget column the row holds, which `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
@@ -122,10 +125,15 @@ impl Key {
     pub(crate) fn limits(&self) -> &KeyLimits {
         &self.limits
     }
+
+    pub(crate) fn priority(&self) -> Option<&Arc<str>> {
+        self.priority.as_ref()
+    }
 }
 
 /// The `metadata` the native app honors: the key's own limit for each model it names one for,
-/// which `/key/generate` stores from `model_rpm_limit` and `model_tpm_limit`.
+/// which `/key/generate` stores from `model_rpm_limit` and `model_tpm_limit`, and the priority
+/// class `dynamic_rate_limiter_v3` counts the key under, when it is written as text.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Metadata {
@@ -133,6 +141,7 @@ struct Metadata {
     model_rpm_limit: BTreeMap<String, i64>,
     #[serde(default)]
     model_tpm_limit: BTreeMap<String, i64>,
+    priority: Option<String>,
 }
 
 impl Metadata {
@@ -385,6 +394,7 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
                 model_rpm: ModelLimits::new(metadata.model_rpm_limit),
                 model_tpm: ModelLimits::new(metadata.model_tpm_limit),
             },
+            priority: metadata.priority.map(Arc::from),
             budget,
             aliased,
         },
@@ -460,6 +470,7 @@ mod tests {
                 key.record.expires,
                 key.row.models.clone(),
                 key.row.limits.clone(),
+                key.row.priority.clone(),
                 key.row.budget,
                 key.row.aliased,
             ),
@@ -470,6 +481,7 @@ mod tests {
                 None,
                 Arc::from([]),
                 KeyLimits::default(),
+                None,
                 None,
                 false,
             )

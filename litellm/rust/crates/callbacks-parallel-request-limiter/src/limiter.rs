@@ -423,7 +423,9 @@ pub(crate) fn auth_members(
     Ok(members)
 }
 
-fn prior_response(input: &HookInput) -> Result<Option<PriorResponse>, CallbackError> {
+/// The statuses a callback that ran earlier published, as the answer this limiter starts its own
+/// from: a member that is `None` is left out.
+pub fn prior_response(input: &HookInput) -> Result<Option<PriorResponse>, CallbackError> {
     let Some(Value::Object(mut statuses)) = input.fields.raw(Field::RateLimitStatuses)?.cloned()
     else {
         return Ok(None);

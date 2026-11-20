@@ -1,38 +1,29 @@
 mod keys;
+mod support;
 
 use std::{future::Future, sync::Arc, time::Duration};
 
 use axum::{
-    Extension, Router,
-    body::{Body, to_bytes},
-    http::{Request, StatusCode, header},
+    Router,
+    body::to_bytes,
+    http::{StatusCode, header},
     response::Response,
 };
-use litellm_config::{Config, Environment};
 use litellm_gateway::{
-    AppState, KeyLimiter,
-    host::auth::AuthStore,
+    KeyLimiter,
     parallel_request_limiter::{KeyLimits, ModelLimits},
 };
 use litellm_gateway_auth_core::Token;
 use rstest::rstest;
 use serde_json::{Value, json};
-use tower::ServiceExt;
-use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{body_partial_json, method},
-};
-
-const MASTER_KEY: &str = "sk-master";
+use support::{MASTER_KEY, Served, asking, send_as};
 
 /// The hash a key's row is stored under, which names the key in every counter.
 fn hash_token(token: &str) -> String {
     Token::new(token).hash().to_string()
 }
-const KEY: &str = "sk-limited";
-/// 8 input, 14 output, 100 read from cache and 5 written to it, which Python charges as 27.
-const USAGE: &str = r#"{"input_tokens":8,"output_tokens":14,"cache_read_input_tokens":100,"cache_creation_input_tokens":5}"#;
 
+const KEY: &str = "sk-limited";
 /// What the database holds for [`KEY`]: a plain row with these limits, and the owner the native
 /// app does not serve a key for.
 struct Holding {
@@ -60,102 +51,6 @@ impl Holding {
     }
 }
 
-/// The provider every deployment but `broken` calls: it answers a stream when asked for one,
-/// and a complete message otherwise, each with [`USAGE`].
-async fn provider() -> MockServer {
-    let upstream = MockServer::start().await;
-    let stream = concat!(
-        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-test\",\"content\":[],\"usage\":{\"input_tokens\":8,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":5}}}\n\n",
-        "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":14}}\n\n",
-        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
-    );
-    Mock::given(method("POST"))
-        .and(body_partial_json(json!({"stream": true})))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(stream, "text/event-stream"))
-        .mount(&upstream)
-        .await;
-    Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            format!(
-                r#"{{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[{{"type":"text","text":"hi"}}],"stop_reason":"end_turn","usage":{USAGE}}}"#
-            ),
-            "application/json",
-        ))
-        .mount(&upstream)
-        .await;
-    upstream
-}
-
-/// The inference routes as the gateway mounts them, for a key holding `limits`: the groups
-/// `claude` (also asked for as `sonnet`) and `gpt` answer, and `broken` is refused upstream.
-struct Served {
-    app: Router,
-    limiter: Arc<KeyLimiter>,
-    upstream: MockServer,
-    _refusing: MockServer,
-}
-
-async fn served(limits: KeyLimits) -> Served {
-    configured(limits, "").await
-}
-
-async fn configured(limits: KeyLimits, general_settings: &str) -> Served {
-    held(
-        Holding {
-            limits,
-            owner: None,
-        },
-        general_settings,
-    )
-    .await
-}
-
-async fn held(holding: Holding, general_settings: &str) -> Served {
-    let upstream = provider().await;
-    let refusing = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(
-            ResponseTemplate::new(400).set_body_json(json!({"type": "error",
-            "error": {"type": "invalid_request_error", "message": "refused upstream"}})),
-        )
-        .mount(&refusing)
-        .await;
-    let deployment = |name: &str, base: &str| {
-        format!(
-            "  - model_name: {name}\n    litellm_params: {{model: anthropic/{name}-test, api_base: \"{base}\", api_key: sk-upstream}}\n"
-        )
-    };
-    let config = Config::from_yaml(&format!(
-        "model_list:\n{}{}{}router_settings:\n  model_group_alias: {{sonnet: claude}}\ngeneral_settings:\n  master_key: {MASTER_KEY}\n{general_settings}",
-        deployment("claude", &upstream.uri()),
-        deployment("gpt", &upstream.uri()),
-        deployment("broken", &refusing.uri()),
-    ))
-    .unwrap();
-    let database = holding.stored().await;
-    let state = AppState {
-        keys: Some(Arc::new(AuthStore::new(
-            keys::memory_cache(),
-            database.database(),
-        ))),
-        ..AppState::build(&config, &Environment::default())
-            .await
-            .unwrap()
-    };
-    let limiter = state.key_limiter.clone();
-    Served {
-        // The database lives as long as the routes that read it, whichever fields a test binds.
-        app: litellm_gateway::router(state, &config).layer(Extension(Arc::new(database))),
-        limiter,
-        upstream,
-        _refusing: refusing,
-    }
-}
-
-fn charged_to(limiter: &KeyLimiter, descriptor: &str, value: &str) -> Option<f64> {
-    limiter.counted("tokens", descriptor, value)
-}
-
 /// What `descriptor`'s token counter holds once it reads `expected`, or what it last held.
 async fn settled(
     limiter: &KeyLimiter,
@@ -172,18 +67,6 @@ async fn settled(
     charged_to(limiter, descriptor, value)
 }
 
-/// A body asking `model` for at most `max_tokens`, whose prompt is estimated at one token.
-fn asking(model: &str, max_tokens: Option<u64>) -> Value {
-    let body = json!({"model": model, "messages": [{"role": "user", "content": "hi"}]});
-    match (body, max_tokens) {
-        (Value::Object(mut body), Some(max_tokens)) => {
-            body.insert("max_tokens".to_owned(), json!(max_tokens));
-            Value::Object(body)
-        }
-        (body, _) => body,
-    }
-}
-
 fn complete() -> Value {
     asking("claude", Some(16))
 }
@@ -197,19 +80,6 @@ fn failing() -> Value {
     asking("broken", Some(16))
 }
 
-async fn send_as(app: &Router, token: &str, body: Value) -> Response {
-    app.clone()
-        .oneshot(
-            Request::post("/v1/messages")
-                .header("authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap()
-}
-
 async fn send(app: &Router, body: Value) -> Response {
     send_as(app, KEY, body).await
 }
@@ -221,6 +91,23 @@ fn by_model(limits: &[(&str, i64)]) -> ModelLimits {
             .map(|(model, limit)| ((*model).to_owned(), *limit))
             .collect(),
     )
+}
+
+async fn served(limits: KeyLimits) -> Served {
+    configured(limits, "").await
+}
+
+/// The gateway for a key holding `limits`, with `general_settings` set besides its master key.
+async fn configured(limits: KeyLimits, general_settings: &str) -> Served {
+    let holding = Holding {
+        limits,
+        owner: None,
+    };
+    support::served(holding.stored().await, general_settings, "").await
+}
+
+fn charged_to(limiter: &KeyLimiter, descriptor: &str, value: &str) -> Option<f64> {
+    limiter.counted("tokens", descriptor, value)
 }
 
 async fn json_body(response: Response) -> Value {
@@ -248,23 +135,20 @@ fn headers(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
 /// A request that goes to Python over its key is counted there, so it must count nothing here.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_key_the_native_app_does_not_serve_counts_nothing_against_its_limits() {
+    let holding = Holding {
+        limits: KeyLimits {
+            rpm: Some(1),
+            tpm: Some(100),
+            ..KeyLimits::default()
+        },
+        owner: Some("owner"),
+    };
     let Served {
         app,
         limiter,
         upstream,
         ..
-    } = held(
-        Holding {
-            limits: KeyLimits {
-                rpm: Some(1),
-                tpm: Some(100),
-                ..KeyLimits::default()
-            },
-            owner: Some("owner"),
-        },
-        "",
-    )
-    .await;
+    } = support::served(holding.stored().await, "", "").await;
 
     let first = send(&app, complete()).await;
     let second = send(&app, complete()).await;

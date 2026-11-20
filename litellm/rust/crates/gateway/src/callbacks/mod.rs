@@ -5,6 +5,7 @@
 //! yet is never told.
 
 mod fields;
+pub mod model_capacity;
 pub mod parallel_request_limiter;
 
 use std::sync::Arc;

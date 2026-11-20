@@ -1,12 +1,13 @@
 use litellm_python_compat::lenient::{IsTrue, LaxBool, StrBool, Truthy};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
-use serde_with::serde_as;
+use serde_with::{Map, serde_as};
 use veil::Redact;
 
 use crate::{
     AdditionalFields, CacheSettings, JwtAuthSettings, LitellmRole, Object, PassThroughEndpoint,
-    RedisSettings, RolePermissions, RouteList, Spelled, Value, value::one_or_many,
+    PriorityReservation, PriorityReservationSettings, RedisSettings, RolePermissions, RouteList,
+    Spelled, Value, value::one_or_many,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -250,6 +251,10 @@ pub struct LiteLlmSettings {
     pub failure_callback: Option<Vec<Value>>,
     pub json_logs: Option<bool>,
     pub set_verbose: Option<bool>,
+    /// In the order written, which the proxy's dict keeps.
+    #[serde_as(as = "Option<Map<_, _>>")]
+    pub priority_reservation: Option<Vec<(String, PriorityReservation)>>,
+    pub priority_reservation_settings: Option<PriorityReservationSettings>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
