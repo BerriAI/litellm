@@ -60,15 +60,15 @@ const INTERACTIVE_SELECTOR = "button, a, input, select, textarea, [role=checkbox
 
 const noop = () => {};
 
-const dataTableRoot = cva("w-full", {
+const dataTableRoot = cva("min-w-0 w-full", {
   variants: { fill: { true: "flex h-full min-h-0 flex-1 flex-col", false: null } },
 });
 
-const dataTableFrame = cva("overflow-hidden rounded-lg border border-border", {
+const dataTableFrame = cva("min-w-0 overflow-hidden rounded-lg border border-border", {
   variants: { fill: { true: "flex min-h-0 flex-1 flex-col", false: null } },
 });
 
-const dataTableScroller = cva("", {
+const dataTableScroller = cva("[container-type:inline-size] [&_[data-slot=table-container]]:overflow-visible", {
   variants: {
     sticky: { true: "overflow-auto [&_[data-slot=table-container]]:overflow-visible", false: "overflow-x-auto" },
     fill: { true: "min-h-0 flex-1", false: null },
@@ -91,7 +91,7 @@ const dataTableBody = cva("", {
   variants: { stretchEmpty: { true: "h-full", false: null } },
 });
 
-const messageCell = cva("h-24 text-center align-middle text-sm whitespace-normal text-muted-foreground", {
+const messageCell = cva("h-24 p-0 text-center align-middle text-sm whitespace-normal text-muted-foreground", {
   variants: { stretch: { true: "p-0", false: null } },
 });
 
@@ -343,11 +343,9 @@ function MessageRow({
   return (
     <TableRow className="hover:bg-transparent">
       <TableCell colSpan={colSpan} className={messageCell({ stretch })}>
-        {stretch ? (
-          <div className="sticky left-0 flex h-full w-[100cqw] items-center justify-center">{children}</div>
-        ) : (
-          children
-        )}
+        <div className={cn("sticky left-0 flex w-[100cqw] items-center justify-center px-4 py-6", stretch && "h-full")}>
+          {children}
+        </div>
       </TableCell>
     </TableRow>
   );

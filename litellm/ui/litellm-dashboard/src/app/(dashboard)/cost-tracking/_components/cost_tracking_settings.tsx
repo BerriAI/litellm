@@ -59,8 +59,10 @@ const SECTION_HEADER_CLASS = "group/section flex w-full items-center justify-bet
 const SectionHeader: React.FC<{ title: string; description: string }> = ({ title, description }) => (
   <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
     <div className="flex flex-col items-start w-full">
-      <span className="block text-lg font-semibold text-foreground">{title}</span>
-      <span className="block text-sm text-muted-foreground mt-1">{description}</span>
+      <span className="block text-base font-semibold text-foreground">{title}</span>
+      <span className="block text-sm mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+        {description}
+      </span>
     </div>
     <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
   </CollapsibleTrigger>
@@ -196,20 +198,24 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   }
 
   return (
-    <div className="w-full p-8">
+    <div className="min-w-0 w-full p-4 sm:p-6">
       {/* Header Section - Outside the card */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
+      <div className="flex flex-col items-start justify-between gap-4 mb-6 md:flex-row md:items-center">
         <div>
           <div className="flex items-center gap-2">
-            <p className="text-xl font-medium text-foreground">{t("costTracking.settings.title")}</p>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              {t("costTracking.settings.title")}
+            </h1>
             <DocsMenu items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))} />
           </div>
-          <p className="text-muted-foreground mt-1">{t("costTracking.settings.description")}</p>
+          <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            {t("costTracking.settings.description")}
+          </p>
         </div>
       </div>
 
       {/* Main Content Card with Accordions */}
-      <div className="bg-card rounded-lg shadow-sm w-full max-w-full space-y-4">
+      <div className="w-full max-w-6xl space-y-4">
         {/* Accordion 1: Provider Discounts - Only for proxy admins */}
         {isProxyAdmin && (
           <Collapsible className="rounded-lg border">
@@ -228,7 +234,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent value="discounts" keepMounted>
-                  <div className="p-6">
+                  <div className="p-4 sm:p-6">
                     <div className="flex justify-end mb-4">
                       <Button onClick={() => setIsModalVisible(true)}>
                         {t("costTracking.settings.discounts.addButton")}
@@ -287,7 +293,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
               description={t("costTracking.settings.margins.description")}
             />
             <CollapsibleContent className="px-0">
-              <div className="p-6">
+              <div className="p-4 sm:p-6">
                 <div className="flex justify-end mb-4">
                   <Button onClick={() => setIsMarginModalVisible(true)}>
                     {t("costTracking.settings.margins.addButton")}
@@ -335,13 +341,13 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
               description={t("costTracking.settings.blockUnpriced.description")}
             />
             <CollapsibleContent className="px-0">
-              <div className="p-6">
+              <div className="p-4 sm:p-6">
                 <div className="flex items-center justify-between">
                   <div className="pr-6">
                     <p className="text-foreground font-medium">
                       {t("costTracking.settings.blockUnpriced.toggleTitle")}
                     </p>
-                    <p className="text-sm text-muted-foreground mt-1">
+                    <p className="text-sm mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
                       {t("costTracking.settings.blockUnpriced.toggleDescription")}
                     </p>
                   </div>
@@ -363,7 +369,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             description={t("costTracking.settings.pricingCalculator.description")}
           />
           <CollapsibleContent className="px-0">
-            <div className="p-6">
+            <div className="p-4 sm:p-6">
               <PricingCalculator accessToken={accessToken} models={models} />
             </div>
           </CollapsibleContent>

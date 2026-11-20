@@ -1,3 +1,4 @@
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import type { TFunction } from "i18next";
 import React, { useEffect, useState } from "react";
@@ -168,24 +169,43 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   ];
 
   return (
-    <Tabs defaultValue="analytics" className="mt-2 mb-8 w-full gap-2 p-8">
-      <div className="mt-2 flex w-full items-center justify-between border-b">
-        <TabsList variant="line" className="h-auto rounded-none p-0">
-          <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
+    <Tabs defaultValue="analytics" className="min-w-0 w-full gap-6 p-4 sm:p-6">
+      <PageHeader>
+        <PageHeaderTitle>{t("shell.nav.items.responseCache")}</PageHeaderTitle>
+        <PageHeaderDescription>{t("shell.pageDescriptions.caching")}</PageHeaderDescription>
+      </PageHeader>
+      <div className="flex min-w-0 w-full flex-wrap items-center justify-between gap-3 border-b">
+        <TabsList
+          variant="line"
+          className="min-w-0 max-w-full justify-start gap-6 overflow-x-auto rounded-none p-0 group-data-horizontal/tabs:h-10"
+        >
+          <TabsTrigger
+            value="analytics"
+            className="flex-none rounded-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0"
+          >
             {t("caching.dashboard.tabs.analytics")}
           </TabsTrigger>
-          <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger
+            value="health"
+            className="flex-none rounded-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0"
+          >
             {t("caching.dashboard.tabs.health")}
           </TabsTrigger>
-          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger
+            value="settings"
+            className="flex-none rounded-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0"
+          >
             {t("caching.dashboard.tabs.settings")}
           </TabsTrigger>
-          <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger
+            value="coordination"
+            className="flex-none rounded-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0"
+          >
             {t("caching.dashboard.tabs.coordination")}
           </TabsTrigger>
         </TabsList>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
           {lastRefreshed && (
             <p className="text-sm text-muted-foreground">
               {t("caching.dashboard.lastRefreshed")}

@@ -7,7 +7,8 @@ import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils
 import { KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { UserReference } from "@/components/shared/UserReference";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
@@ -534,18 +535,18 @@ export default function ModelInfoView({
       .map((model: any) => ({ value: model.model_group, label: model.model_group })) || [];
 
   return (
-    <div className="p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
+    <div className="min-w-0">
+      <div className="mb-6 flex min-w-0 flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1 basis-full 2xl:basis-96">
           <Button variant="ghost" onClick={onClose} className="mb-4">
             <ArrowLeft className="size-4" />
             {t("modelInfoView.backToModels")}
           </Button>
-          <h2 className="text-xl font-semibold">
+          <h2 className="break-words text-2xl font-semibold tracking-tight">
             {t("modelInfoView.header.publicModelName", { name: getDisplayModelName(modelData) })}
           </h2>
-          <div className="flex items-center cursor-pointer">
-            <span className="text-sm text-muted-foreground font-mono">{modelData.model_info.id}</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 break-all font-mono text-sm text-muted-foreground">{modelData.model_info.id}</span>
             <Button
               variant="ghost"
               size="icon-xs"
@@ -561,7 +562,7 @@ export default function ModelInfoView({
             </Button>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {(!isAnyAutoRouter || isComplexityRouterModel) && (
             <Button
               variant="outline"
@@ -613,16 +614,10 @@ export default function ModelInfoView({
       </div>
 
       <Tabs defaultValue="overview">
-        <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
-          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
-            {t("modelInfoView.tabs.overview")}
-          </TabsTrigger>
-          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
-            {t("shared.resourceActivity.title")}
-          </TabsTrigger>
-          <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
-            {t("modelInfoView.tabs.rawJson")}
-          </TabsTrigger>
+        <TabsList className="mb-6">
+          <TabsTrigger value="overview">{t("modelInfoView.tabs.overview")}</TabsTrigger>
+          <TabsTrigger value="activity">{t("shared.resourceActivity.title")}</TabsTrigger>
+          <TabsTrigger value="raw">{t("modelInfoView.tabs.rawJson")}</TabsTrigger>
         </TabsList>
 
         <div>
@@ -662,7 +657,7 @@ export default function ModelInfoView({
             </div>
 
             {/* Audit info shown as a subtle banner below the overview */}
-            <div className="mb-6 text-sm text-muted-foreground flex items-center gap-x-6">
+            <div className="mb-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
               <div className="flex items-center gap-x-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path

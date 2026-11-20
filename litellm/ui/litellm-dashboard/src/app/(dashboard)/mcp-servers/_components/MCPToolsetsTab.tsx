@@ -637,9 +637,9 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
 
   return (
     <div className="mt-4">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="text-lg font-medium text-foreground">{t("mcpServers.toolsetsTab.header.title")}</h3>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 basis-72 flex-1">
+          <h3 className="text-lg font-semibold text-foreground">{t("mcpServers.toolsetsTab.header.title")}</h3>
           <p className="text-muted-foreground text-sm">{t("mcpServers.toolsetsTab.header.description")}</p>
         </div>
         {isAdmin && (

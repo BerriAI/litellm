@@ -1,3 +1,4 @@
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
@@ -99,7 +100,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
 
   if (!premiumUser) {
     return (
-      <div className="mx-4 mt-4">
+      <div className="p-4 sm:p-6">
         <p className="text-sm text-muted-foreground">
           <Trans
             i18nKey="organizations.panel.enterpriseNotice"
@@ -120,7 +121,11 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
   }
 
   return (
-    <div className="mx-4 mt-4 flex flex-col gap-4">
+    <div className="flex min-w-0 w-full flex-col gap-4 p-4 sm:p-6">
+      <PageHeader className="mb-6">
+        <PageHeaderTitle>{t("shell.nav.items.organizations")}</PageHeaderTitle>
+        <PageHeaderDescription>{t("shell.pageDescriptions.organizations")}</PageHeaderDescription>
+      </PageHeader>
       {(userRole === "Admin" || userRole === "Org Admin") && (
         <Button className="w-fit" onClick={() => setIsOrgModalVisible(true)}>
           {t("organizations.panel.createButton")}

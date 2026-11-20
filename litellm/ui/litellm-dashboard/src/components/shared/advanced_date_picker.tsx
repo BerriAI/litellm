@@ -260,10 +260,14 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
   return (
     <div
-      className={cn("flex items-center gap-3", compact && "w-full min-w-0 flex-col items-stretch gap-1.5", className)}
+      className={cn(
+        "flex min-w-0 max-w-full flex-wrap items-center gap-3",
+        compact && "w-full min-w-0 flex-col items-stretch gap-1.5",
+        className,
+      )}
     >
       {label && <p className="text-sm font-medium text-foreground whitespace-nowrap">{label}</p>}
-      <div className={cn("relative", compact && "w-full min-w-0")} ref={dropdownRef}>
+      <div className={cn("relative min-w-0 max-w-full", compact && "w-full min-w-0")} ref={dropdownRef}>
         {/* Main input display */}
         <button
           type="button"
@@ -271,7 +275,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
           aria-expanded={isOpen}
           className={cn(
             "px-3 py-2 text-sm text-left border border-border rounded-md bg-card cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring",
-            compact ? "w-full min-w-0" : "w-[300px]",
+            compact ? "w-full min-w-0" : "w-[300px] max-w-full",
           )}
           onClick={() => setIsOpen(!isOpen)}
         >
@@ -299,20 +303,30 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
             data-slot="advanced-date-picker-panel"
             data-align={align}
             className={cn(
-              "absolute top-full z-floating mt-1 bg-card border border-border rounded-lg shadow-xl",
-              compact ? "min-w-0 w-full" : "min-w-[600px]",
+              "absolute top-full z-floating mt-1 bg-card border border-border rounded-lg shadow-xl max-xl:fixed max-xl:left-auto max-xl:right-4 max-xl:top-20 max-xl:mt-0 max-xl:max-h-[calc(100dvh-6rem)] max-xl:overflow-y-auto",
+              compact ? "min-w-0 w-full max-w-[calc(100vw-2rem)]" : "w-[600px] max-w-[calc(100vw-2rem)]",
               align === "left" ? "left-0" : "right-0",
             )}
           >
-            <div className={cn("flex", compact && "flex-col")}>
+            <div className={cn("flex max-sm:flex-col", compact && "flex-col")}>
               {/* Left side - Relative time options */}
-              <div className={cn("border-border", compact ? "w-full border-b" : "w-1/2 border-r")}>
+              <div
+                className={cn(
+                  "border-border",
+                  compact ? "w-full border-b" : "w-1/2 border-r max-sm:w-full max-sm:border-r-0 max-sm:border-b",
+                )}
+              >
                 <div className="p-3 border-b border-border">
                   <span className="text-sm font-semibold text-foreground">
                     {t("shared.advancedDatePicker.relativeTime")}
                   </span>
                 </div>
-                <div className={cn("overflow-y-auto", compact ? "grid h-auto grid-cols-2" : "h-[350px]")}>
+                <div
+                  className={cn(
+                    "overflow-y-auto",
+                    compact ? "grid h-auto grid-cols-2" : "h-[350px] max-sm:grid max-sm:h-auto max-sm:grid-cols-2",
+                  )}
+                >
                   {presets.map((option) => {
                     const isSelected = selectedOption === option.shortLabel;
                     return (
@@ -345,7 +359,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               </div>
 
               {/* Right side - Custom date selection */}
-              <div className={cn("relative", compact ? "w-full min-w-0" : "w-1/2")}>
+              <div className={cn("relative min-w-0 max-w-full", compact ? "w-full min-w-0" : "w-1/2 max-sm:w-full")}>
                 <div className="p-3.5 border-b border-border">
                   <div className="flex items-center gap-2">
                     <Calendar className="size-4 text-muted-foreground" />
@@ -355,7 +369,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   </div>
                 </div>
 
-                <div className={compact ? "grid grid-cols-2 gap-3 p-3" : "p-6 space-y-6 pb-20"}>
+                <div className={compact ? "grid grid-cols-2 gap-3 p-3" : "p-6 space-y-6 pb-20 max-sm:p-4 max-sm:pb-20"}>
                   {/* Start date */}
                   <div className={compact ? "min-w-0" : undefined}>
                     <label htmlFor={`${inputId}-start`} className="text-sm text-foreground mb-1 block">

@@ -242,7 +242,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   );
 
   return (
-    <Card className="mb-6 px-6">
+    <Card className="mb-6 gap-4 border-0 px-0 py-0 shadow-none ring-0">
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex flex-col">
           <CardTitle className="mb-0">{t("modelGroupAliasSettings.title")}</CardTitle>
@@ -264,7 +264,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
               <p className="mb-2 text-sm text-muted-foreground">{t("modelGroupAliasSettings.managedByConfig")}</p>
             )}
             <p className="text-sm font-medium text-foreground mb-2">{t("modelGroupAliasSettings.add.title")}</p>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1fr_auto]">
               <div>
                 <label className="block text-xs text-muted-foreground mb-1">
                   {t("modelGroupAliasSettings.add.aliasName")}
@@ -322,7 +322,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
               </label>
               <Input
                 id="alias-last-prefix"
-                className="w-64"
+                className="w-64 max-w-full"
                 placeholder={t("modelGroupAliasSettings.manage.lastPrefixPlaceholder")}
                 value={preferences.lastPrefix}
                 disabled={preferenceScope === null}
@@ -532,7 +532,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
           </div>
 
           {/* Configuration Example */}
-          <Card className="px-6">
+          <Card className="px-4 sm:px-6">
             <CardTitle className="mb-4">{t("modelGroupAliasSettings.configExample.title")}</CardTitle>
             <p className="text-muted-foreground mb-4">{t("modelGroupAliasSettings.configExample.description")}</p>
             <div className="bg-muted rounded-lg p-4 font-mono text-sm">

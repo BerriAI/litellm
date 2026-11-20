@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import {
@@ -483,7 +484,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
 
   return (
     <TooltipProvider>
-      <div className="h-full w-full p-6">
+      <div className="min-w-0 w-full p-4 sm:p-6">
         <DeleteServerDialog
           open={isDeleteModalOpen}
           onOpenChange={(open) => !open && cancelDelete()}
@@ -508,15 +509,17 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             setDiscoveryVisible(true);
           }}
         />
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0 basis-80 flex-1">
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-semibold">{t("mcpServers.servers.header.title")}</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">{t("mcpServers.servers.header.title")}</h1>
               {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">{t("mcpServers.servers.header.subtitle")}</p>
+            <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+              {t("mcpServers.servers.header.subtitle")}
+            </p>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
               <Plug />
               {t("mcpServers.servers.header.myConnections")}
@@ -565,40 +568,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           }}
           accessToken={accessToken}
         />
-        <Tabs defaultValue="servers" className="mt-2 w-full">
-          <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
-            <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
-              {t("mcpServers.servers.tabs.allServers")}
-            </TabsTrigger>
-            <TabsTrigger value="toolsets" className="flex-none rounded-none px-4 py-2">
-              {t("mcpServers.servers.tabs.toolsets")}
-            </TabsTrigger>
-            <TabsTrigger value="connect" className="flex-none rounded-none px-4 py-2">
-              {t("mcpServers.servers.tabs.connect")}
-            </TabsTrigger>
+        <Tabs defaultValue="servers" className="mt-6 min-w-0 w-full">
+          <TabsList>
+            <TabsTrigger value="servers">{t("mcpServers.servers.tabs.allServers")}</TabsTrigger>
+            <TabsTrigger value="toolsets">{t("mcpServers.servers.tabs.toolsets")}</TabsTrigger>
+            <TabsTrigger value="connect">{t("mcpServers.servers.tabs.connect")}</TabsTrigger>
             {isAdminRole(userRole) && (
               <>
-                <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
-                  {t("mcpServers.servers.tabs.semanticFilter")}
-                </TabsTrigger>
+                <TabsTrigger value="semantic-filter">{t("mcpServers.servers.tabs.semanticFilter")}</TabsTrigger>
 
-                <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
-                  {t("mcpServers.servers.tabs.toolSearch")}
-                </TabsTrigger>
+                <TabsTrigger value="tool-search">{t("mcpServers.servers.tabs.toolSearch")}</TabsTrigger>
 
-                <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
-                  {t("mcpServers.servers.tabs.networkSettings")}
-                </TabsTrigger>
+                <TabsTrigger value="network-settings">{t("mcpServers.servers.tabs.networkSettings")}</TabsTrigger>
 
-                <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
-                  {t("mcpServers.servers.tabs.submitted")}
-                </TabsTrigger>
+                <TabsTrigger value="submitted">{t("mcpServers.servers.tabs.submitted")}</TabsTrigger>
               </>
             )}
             {isProxyAdminTierRole(userRole) && (
-              <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
-                {t("mcpServers.servers.tabs.liveConnections")}
-              </TabsTrigger>
+              <TabsTrigger value="connections">{t("mcpServers.servers.tabs.liveConnections")}</TabsTrigger>
             )}
           </TabsList>
           <TabsContent value="servers" keepMounted>
@@ -622,7 +609,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
               <div className="w-full h-full">
                 <div className="w-full">
                   <div className="flex flex-col space-y-4">
-                    <div className="flex items-center gap-6 rounded-lg border border-border bg-card px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border bg-card px-4 py-3">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-medium whitespace-nowrap text-muted-foreground">
                           {t("mcpServers.servers.filters.team.label")}

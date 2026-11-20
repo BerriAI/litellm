@@ -23,11 +23,11 @@ const DecisionModelsBanner: React.FC = () => {
   }
 
   return (
-    <div className="mb-4 flex items-center gap-4 rounded-lg border bg-muted/40 px-4 py-3">
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-full border bg-background">
+    <div className="relative flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 p-4">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-background">
         <Sparkles className="size-4 text-muted-foreground" />
       </div>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 basis-48 flex-1 pr-6">
         <h4 className="m-0 text-sm font-semibold text-foreground">{t("decisionModelsBanner.title")}</h4>
         <p className="m-0 mt-0.5 text-xs text-muted-foreground">
           <Trans
@@ -39,24 +39,28 @@ const DecisionModelsBanner: React.FC = () => {
           </a>
         </p>
       </div>
-      <Button
-        variant="outline"
-        className="shrink-0"
-        nativeButton={false}
-        role="link"
-        render={<a href={DECISIONS_PROVIDERS_DOCS_URL} target="_blank" rel="noopener noreferrer" />}
-      >
-        {t("decisionModelsBanner.supportedProviders")}
-      </Button>
-      <Button
-        className="shrink-0"
-        nativeButton={false}
-        role="link"
-        render={<a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} />}
-      >
-        {t("decisionModelsBanner.tryDecisionModels")}
-        <ArrowRight />
-      </Button>
+      <div className="flex max-w-full flex-wrap items-center gap-2 pr-4">
+        <Button
+          size="sm"
+          variant="outline"
+          className="shrink-0"
+          nativeButton={false}
+          role="link"
+          render={<a href={DECISIONS_PROVIDERS_DOCS_URL} target="_blank" rel="noopener noreferrer" />}
+        >
+          {t("decisionModelsBanner.supportedProviders")}
+        </Button>
+        <Button
+          size="sm"
+          className="shrink-0"
+          nativeButton={false}
+          role="link"
+          render={<a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} />}
+        >
+          {t("decisionModelsBanner.tryDecisionModels")}
+          <ArrowRight />
+        </Button>
+      </div>
       <Button
         type="button"
         variant="ghost"
@@ -65,7 +69,7 @@ const DecisionModelsBanner: React.FC = () => {
           setDismissed(true);
           localStorage.setItem(STORAGE_KEY, "true");
         }}
-        className="shrink-0"
+        className="absolute top-3 right-3 shrink-0"
         aria-label={t("decisionModelsBanner.dismiss")}
       >
         <X />

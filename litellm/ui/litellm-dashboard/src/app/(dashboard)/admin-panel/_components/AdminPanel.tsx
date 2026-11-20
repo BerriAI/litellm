@@ -7,7 +7,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 import { Info, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -430,13 +431,15 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   ];
 
   return (
-    <div className="w-full m-2 mt-2 p-8">
-      <h2 className="mb-2 text-base font-semibold text-foreground">{t("adminPanel.page.title")}</h2>
-      <p className="mb-4 text-sm text-foreground">{t("adminPanel.page.subtitle")}</p>
+    <div className="min-w-0 w-full p-4 sm:p-6">
+      <h1 className="text-2xl font-semibold tracking-tight text-foreground">{t("adminPanel.page.title")}</h1>
+      <p className="mt-1.5 mb-6 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+        {t("adminPanel.page.subtitle")}
+      </p>
       <Tabs defaultValue={tabItems[0].key}>
-        <TabsList variant="line" className="mb-4 h-auto flex-wrap">
+        <TabsList className="mb-4">
           {tabItems.map((item) => (
-            <TabsTrigger key={item.key} value={item.key} className="flex-none">
+            <TabsTrigger key={item.key} value={item.key}>
               {item.label}
             </TabsTrigger>
           ))}

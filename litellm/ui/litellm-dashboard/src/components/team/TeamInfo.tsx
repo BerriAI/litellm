@@ -46,7 +46,8 @@ import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { toast } from "@/lib/toast";
 import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Info, Pencil, Plus, Save } from "lucide-react";
@@ -2773,16 +2774,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   ].filter((tab) => visibleTabs.includes(tab.key));
 
   return (
-    <div className="p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
+    <div className="min-w-0">
+      <div className="mb-6 flex min-w-0 flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
           <Button variant="ghost" onClick={onClose} className="mb-4">
             <ArrowLeftIcon className="h-4 w-4" />
             {t("teams.teamInfo.backToTeams")}
           </Button>
-          <h1 className="text-2xl font-semibold">{info.team_alias}</h1>
-          <div className="flex items-center">
-            <p className="text-sm text-muted-foreground font-mono">{info.team_id}</p>
+          <h1 className="break-words text-2xl font-semibold tracking-tight">{info.team_alias}</h1>
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="min-w-0 break-all font-mono text-sm text-muted-foreground">{info.team_id}</p>
             <Button
               variant="ghost"
               size="icon-xs"
@@ -2807,9 +2808,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           onTabChange(value);
         }}
       >
-        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+        <TabsList className="mb-4">
           {tabItems.map(({ key, label }) => (
-            <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
+            <TabsTrigger key={key} value={key}>
               {label}
             </TabsTrigger>
           ))}

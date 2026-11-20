@@ -16,7 +16,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 import { EntityLink } from "@/components/shared/EntityLink";
 import { modelOrAccessGroupHref, teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
@@ -601,7 +602,7 @@ export default function KeyInfoView({
   const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at);
 
   return (
-    <div className="w-full h-full overflow-y-auto p-4">
+    <div className="min-w-0 w-full">
       <KeyInfoHeader
         data={{
           keyName: currentKeyData.key_alias || t("keyDetail.keyInfoView.header.defaultKeyName"),
@@ -760,24 +761,14 @@ export default function KeyInfoView({
       </Dialog>
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(String(value) as typeof activeTab)}>
-        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
-            {t("keyDetail.keyInfoView.tabs.overview")}
-          </TabsTrigger>
-          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
-            {t("shared.resourceActivity.title")}
-          </TabsTrigger>
-          <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
-            {t("keyDetail.keyInfoView.tabs.savings")}
-          </TabsTrigger>
+        <TabsList className="mb-4">
+          <TabsTrigger value="overview">{t("keyDetail.keyInfoView.tabs.overview")}</TabsTrigger>
+          <TabsTrigger value="activity">{t("shared.resourceActivity.title")}</TabsTrigger>
+          <TabsTrigger value="savings">{t("keyDetail.keyInfoView.tabs.savings")}</TabsTrigger>
           {hasProxyWideSpendView(userRole) && (
-            <TabsTrigger value="auto-router-usage" className="flex-none rounded-none px-4 py-2">
-              {t("keyDetail.keyInfoView.tabs.autoRouterUsage")}
-            </TabsTrigger>
+            <TabsTrigger value="auto-router-usage">{t("keyDetail.keyInfoView.tabs.autoRouterUsage")}</TabsTrigger>
           )}
-          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
-            {t("keyDetail.keyInfoView.tabs.settings")}
-          </TabsTrigger>
+          <TabsTrigger value="settings">{t("keyDetail.keyInfoView.tabs.settings")}</TabsTrigger>
         </TabsList>
 
         <div>

@@ -740,10 +740,10 @@ export default function ComplianceUI({
   })();
 
   return (
-    <div className="w-full h-full p-4 bg-card">
-      <div className="rounded-2xl border border-border bg-card shadow-xs min-h-[calc(100vh-160px)] flex flex-col overflow-hidden">
+    <div className="@container/compliance flex h-full min-h-0 min-w-0 w-full flex-col overflow-y-auto bg-card pb-4">
+      <div className="flex min-h-full shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card @min-[42rem]/compliance:min-h-0 @min-[42rem]/compliance:flex-1">
         {/* Top config */}
-        <div className="shrink-0 border-b border-border px-6 py-4">
+        <div className="shrink-0 border-b border-border p-4">
           <div className="mb-3">
             <h3 className="text-sm font-semibold text-foreground">{t("playground.compliance.config.title")}</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -756,7 +756,7 @@ export default function ComplianceUI({
           <div className="flex items-start gap-3 flex-wrap">
             {canViewPolicies && (
               <>
-                <div className="flex-1 min-w-[200px]">
+                <div className="min-w-0 basis-60 flex-1">
                   <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5 block">
                     {t("playground.compliance.config.policies")}
                   </label>
@@ -770,17 +770,17 @@ export default function ComplianceUI({
                   )}
                 </div>
 
-                <div className="flex flex-col items-center pt-6 shrink-0">
-                  <div className="w-px h-4 bg-border" />
+                <div className="flex w-full shrink-0 items-center gap-2 self-center text-xs @min-[42rem]/compliance:w-auto @min-[42rem]/compliance:flex-col @min-[42rem]/compliance:gap-0 @min-[42rem]/compliance:pt-6">
+                  <div className="h-px flex-1 bg-border @min-[42rem]/compliance:h-4 @min-[42rem]/compliance:w-px @min-[42rem]/compliance:flex-none" />
                   <span className="text-[10px] font-medium text-muted-foreground my-1">
                     {t("playground.compliance.config.or")}
                   </span>
-                  <div className="w-px h-4 bg-border" />
+                  <div className="h-px flex-1 bg-border @min-[42rem]/compliance:h-4 @min-[42rem]/compliance:w-px @min-[42rem]/compliance:flex-none" />
                 </div>
               </>
             )}
 
-            <div className="flex-1 min-w-[200px]">
+            <div className="min-w-0 basis-60 flex-1">
               <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5 block">
                 {t("playground.compliance.config.guardrails")}
               </label>
@@ -851,7 +851,7 @@ export default function ComplianceUI({
               )}
             </div>
 
-            <div className="flex flex-col gap-1.5 pt-6 shrink-0">
+            <div className="flex shrink-0 flex-wrap items-center gap-2 @min-[42rem]/compliance:flex-col @min-[42rem]/compliance:pt-6">
               {isRunning ? (
                 <button
                   type="button"
@@ -893,9 +893,9 @@ export default function ComplianceUI({
         </div>
 
         {/* Panels */}
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col @min-[42rem]/compliance:flex-row @min-[42rem]/compliance:overflow-hidden">
           {/* Left: Prompt library */}
-          <div className="w-[400px] shrink-0 border-r border-border flex flex-col bg-card overflow-hidden">
+          <div className="flex max-h-80 w-full shrink-0 flex-col overflow-hidden border-b border-border bg-card @min-[42rem]/compliance:max-h-none @min-[42rem]/compliance:w-72 @min-[42rem]/compliance:border-r @min-[42rem]/compliance:border-b-0 @min-[64rem]/compliance:w-80 @min-[80rem]/compliance:w-96">
             <div className="flex-1 overflow-y-auto min-h-0">
               <div className="px-4 pt-4 pb-2">
                 <div className="flex items-center justify-between mb-2.5">
@@ -1239,7 +1239,7 @@ export default function ComplianceUI({
           </div>
 
           {/* Right panel */}
-          <div className="flex-1 flex flex-col bg-muted overflow-hidden min-w-0">
+          <div className="flex min-h-[28rem] min-w-0 flex-1 flex-col overflow-hidden bg-muted @min-[42rem]/compliance:min-h-0">
             <div className="shrink-0 bg-card border-b border-border px-4">
               <div className="flex items-center gap-0">
                 <button

@@ -226,10 +226,10 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
   };
 
   return (
-    <Card className="mb-6 px-6">
+    <Card className="mb-6 px-4 sm:px-6">
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex flex-col">
-          <h3 className="mb-0 text-lg font-semibold">{t("aiHub.usefulLinks.title")}</h3>
+          <h3 className="mb-0 text-base font-semibold">{t("aiHub.usefulLinks.title")}</h3>
           <p className="text-sm text-muted-foreground">{t("aiHub.usefulLinks.description")}</p>
         </div>
         <div className="flex items-center">
@@ -245,7 +245,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
         <div className="mt-4">
           <div className="mb-6">
             <p className="text-sm font-medium text-foreground mb-2">{t("aiHub.usefulLinks.addForm.title")}</p>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1fr_auto]">
               <div>
                 <label className="block text-xs text-muted-foreground mb-1">
                   {t("aiHub.usefulLinks.addForm.displayName")}
@@ -290,9 +290,9 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
               </div>
             </div>
           </div>
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
             <p className="text-sm font-medium text-foreground">{t("aiHub.usefulLinks.manageExisting")}</p>
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Link
                 href={getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}
                 target="_blank"

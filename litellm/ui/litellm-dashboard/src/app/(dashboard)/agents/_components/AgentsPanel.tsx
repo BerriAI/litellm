@@ -140,17 +140,17 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+    <div className="min-w-0 w-full flex-auto p-4 sm:p-6">
       <div className="flex flex-col gap-2 mb-4">
-        <h1 className="text-2xl font-bold">{t("agents.panel.title")}</h1>
-        <p className="text-sm text-muted-foreground">{term(t("agents.panel.description"))}</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("agents.panel.title")}</h1>
+        <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">{term(t("agents.panel.description"))}</p>
         <Alert className="mb-3">
           <Info />
           <AlertTitle>{t("agents.panel.authAlert.title")}</AlertTitle>
           <AlertDescription>{t("agents.panel.authAlert.description")}</AlertDescription>
         </Alert>
         {isAdmin && (
-          <div className="mt-2 flex items-center gap-4">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button onClick={handleAddAgent} disabled={!accessToken}>
               <Plus />
               {t("agents.panel.addAgent")}

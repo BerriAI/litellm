@@ -397,7 +397,7 @@ const SettingsCard = ({ action, children }: { action?: React.ReactNode; children
   const { t } = useTranslation();
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="max-sm:flex max-sm:flex-col max-sm:items-start">
         <CardTitle>{t("users.defaultSettings.card.title")}</CardTitle>
         <CardDescription>{t("users.defaultSettings.card.description")}</CardDescription>
         {action !== undefined && <CardAction>{action}</CardAction>}

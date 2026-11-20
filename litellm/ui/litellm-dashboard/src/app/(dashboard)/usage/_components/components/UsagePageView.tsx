@@ -468,8 +468,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
         />
         <div className="flex flex-wrap items-center gap-2">
           {isAdmin && usageView === "global" && (
-            <div className="flex items-center gap-2">
-              <div className="w-64">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <div className="w-64 max-w-full">
                 <UserDropdown value={urlParams.user} onChange={(user) => void setUrlParams({ user })} />
               </div>
               {urlParams.user && <UserRecordLink userId={urlParams.user} />}
@@ -480,7 +480,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
               <ClientUsageSelect value={selectedClient} onChange={openClientPanel} />
             </div>
           )}
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <AdvancedDatePicker
               value={dateValue}
               onValueChange={handleDateChange}
@@ -510,7 +510,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                 className="gap-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <TabsList variant="line">
+                  <TabsList variant="line" className="min-w-0 max-w-full justify-start overflow-x-auto">
                     <TabsTrigger value="cost" className="flex-none px-3">
                       {t("usage.pageView.tabs.overview")}
                     </TabsTrigger>
@@ -535,7 +535,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                       </TabsTrigger>
                     )}
                   </TabsList>
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <AriaUsageTrigger />
                     <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
                       <Download />

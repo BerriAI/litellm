@@ -137,15 +137,11 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       <SavingsTiles results={results} isLoading={loading} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          {/* CardHeader's own slots rather than hand-rolled rows: the action column is
-              sized to its content and the title column takes the rest, so the subtitle
-              never competes with the controls for width and neither moves when it grows.
-              The controls wrap within their column instead of pushing past the card */}
-          <CardHeader>
+        <Card className="@container/savings lg:col-span-2">
+          <CardHeader className="@max-[48rem]/savings:flex @max-[48rem]/savings:flex-col @max-[48rem]/savings:gap-3">
             <CardTitle>{t("costOptimization.usage.savings.title")}</CardTitle>
             <CardDescription>{savingsSubtitle}</CardDescription>
-            <CardAction className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+            <CardAction className="flex min-w-0 flex-wrap items-center justify-end gap-x-4 gap-y-2 @max-[48rem]/savings:justify-start">
               <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
               <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
                 <TabsList>

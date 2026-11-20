@@ -2,6 +2,8 @@
 
 The LiteLLM UI is currently being refactored/rewritten to reduce development friction. Please read this document to understand what's expected for new contributions.
 
+For visual layout and responsive behavior, follow the [dashboard UI guide](./design.md). It includes shared component examples and the required viewport checks.
+
 The project follows strict NextJS file structure. All pages on the site (determined by the sidebar) are contained in their own folder, and routing is automatically handled by NextJS based on the file structure.
 
 For example, NextJS will automatically render the admin settings page when the user visits `/settings/admin-settings`

@@ -1,8 +1,10 @@
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import React, { useState, useEffect, useCallback } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Alert, AlertDescription, AlertTitle, AlertAction } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 
 import { toast } from "@/lib/toast";
 import { Info, TriangleAlert, X } from "lucide-react";
@@ -448,21 +450,17 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
   }
 
   return (
-    <div className="m-8 mx-auto w-full flex-auto overflow-y-auto p-2">
+    <div className="min-w-0 w-full flex-auto p-4 sm:p-6">
+      <PageHeader className="mb-6">
+        <PageHeaderTitle>{t("shell.nav.items.policies")}</PageHeaderTitle>
+        <PageHeaderDescription>{t("shell.pageDescriptions.policies")}</PageHeaderDescription>
+      </PageHeader>
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-          <TabsTrigger value="templates" className="flex-none rounded-none px-4 py-2">
-            {t("policies.panel.tabs.templates")}
-          </TabsTrigger>
-          <TabsTrigger value="policies" className="flex-none rounded-none px-4 py-2">
-            {t("policies.panel.tabs.policies")}
-          </TabsTrigger>
-          <TabsTrigger value="attachments" className="flex-none rounded-none px-4 py-2">
-            {t("policies.panel.tabs.attachments")}
-          </TabsTrigger>
-          <TabsTrigger value="simulator" className="flex-none rounded-none px-4 py-2">
-            {t("policies.panel.tabs.simulator")}
-          </TabsTrigger>
+        <TabsList className="mb-4">
+          <TabsTrigger value="templates">{t("policies.panel.tabs.templates")}</TabsTrigger>
+          <TabsTrigger value="policies">{t("policies.panel.tabs.policies")}</TabsTrigger>
+          <TabsTrigger value="attachments">{t("policies.panel.tabs.attachments")}</TabsTrigger>
+          <TabsTrigger value="simulator">{t("policies.panel.tabs.simulator")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="templates" keepMounted>

@@ -204,7 +204,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
 
   return (
     <Card className="gap-0">
-      <CardHeader className="gap-4 border-b border-border pb-6">
+      <CardHeader className="gap-4 border-b border-border pb-6 max-sm:flex max-sm:flex-col max-sm:items-start">
         <div>
           <CardTitle>
             <h3 className="text-lg font-semibold text-foreground">{t("teams.ssoSettings.title")}</h3>

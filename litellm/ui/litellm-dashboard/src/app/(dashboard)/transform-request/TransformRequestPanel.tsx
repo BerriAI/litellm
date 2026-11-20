@@ -127,14 +127,18 @@ ${formattedBody}
   };
 
   return (
-    <div className="p-2">
-      <h1 className="text-lg font-medium text-foreground">{t("transformRequest.transformRequestPanel.title")}</h1>
-      <p className="text-sm text-muted-foreground">{t("transformRequest.transformRequestPanel.description")}</p>
+    <div className="min-w-0 w-full p-4 sm:p-6">
+      <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+        {t("transformRequest.transformRequestPanel.title")}
+      </h1>
+      <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+        {t("transformRequest.transformRequestPanel.description")}
+      </p>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Original Request Panel */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-2xl font-bold">
+            <CardTitle className="text-base font-semibold">
               {t("transformRequest.transformRequestPanel.original.title")}
             </CardTitle>
             <CardDescription>{t("transformRequest.transformRequestPanel.original.description")}</CardDescription>
@@ -161,7 +165,7 @@ ${formattedBody}
         {/* Transformed Request Panel */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-2xl font-bold">
+            <CardTitle className="text-base font-semibold">
               {t("transformRequest.transformRequestPanel.transformed.title")}
             </CardTitle>
             <CardDescription>{t("transformRequest.transformRequestPanel.transformed.description")}</CardDescription>
@@ -207,7 +211,7 @@ ${formattedBody}
         </Card>
       </div>
       <div className="mt-4 text-right">
-        <p className="text-sm text-muted-foreground">
+        <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           <Trans
             i18nKey="transformRequest.transformRequestPanel.fileIssue"
             components={{

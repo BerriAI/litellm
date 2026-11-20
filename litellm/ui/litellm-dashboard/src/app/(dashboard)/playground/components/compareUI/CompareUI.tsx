@@ -694,11 +694,11 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
   const isUploadedFilePdf = Boolean(uploadedFile?.name.toLowerCase().endsWith(".pdf"));
   const showSuggestedPrompts = !hasMessages && !isAnyComparisonLoading && !hasAttachment;
   return (
-    <div className="w-full h-full p-4 bg-card">
-      <div className="rounded-2xl border border-border bg-card shadow-xs min-h-[calc(100vh-160px)] flex flex-col">
+    <div className="flex min-h-full min-w-0 w-full flex-col bg-card pb-4">
+      <div className="flex min-h-[32rem] flex-1 flex-col rounded-lg border border-border bg-card">
         <div className="border-b px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-muted-foreground">
                 {t("playground.compare.header.keySource")}
               </span>
@@ -731,7 +731,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                 />
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-muted-foreground">
                 {t("playground.compare.header.endpoint")}
               </span>
@@ -770,12 +770,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
           </div>
         </div>
 
-        <div
-          className="grid flex-1 min-h-0 auto-rows-fr"
-          style={{
-            gridTemplateColumns: `repeat(${comparisons.length}, minmax(0, 1fr))`,
-          }}
-        >
+        <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))]">
           {comparisons.map((comparison) => (
             <ComparisonPanel
               key={comparison.id}
@@ -792,8 +787,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         </div>
         <div className="flex justify-center pb-4">
           <div className="w-full max-w-3xl px-4">
-            <div className="border border-border shadow-lg rounded-xl bg-card p-4">
-              <div className="flex items-center justify-between gap-4 mb-3 min-h-8">
+            <div className="rounded-lg border border-border bg-card p-3 sm:p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3 min-h-8">
                 {hasAttachment ? (
                   <span className="text-sm text-muted-foreground">{t("playground.compare.attachment.ready")}</span>
                 ) : showSuggestedPrompts ? (

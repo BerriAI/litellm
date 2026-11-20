@@ -6,7 +6,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { TableCell, TableRow } from "@/components/ui/table";
 
 interface AlertingSetting {
   field_name: string;
@@ -88,25 +87,25 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   };
 
   return (
-    <form onSubmit={form.handleSubmit(onFinish)} noValidate>
+    <form className="max-w-5xl space-y-4" onSubmit={form.handleSubmit(onFinish)} noValidate>
       {alertingSettings.map((value, index) => (
-        <TableRow key={index}>
-          <TableCell>
-            <p className="text-sm">{value.field_name}</p>
-            <p className="mt-1 text-[0.65rem] italic text-muted-foreground">{value.field_description}</p>
-          </TableCell>
+        <div key={index} className="flex flex-wrap items-center gap-3 border-b border-border pb-4">
+          <div className="min-w-0 basis-full sm:basis-64 sm:flex-1">
+            <p className="break-words text-sm font-medium">{value.field_name}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{value.field_description}</p>
+          </div>
           {value.premium_field && !premiumUser ? (
-            <TableCell>
+            <div className="shrink-0">
               <Button className="flex items-center justify-center">
                 <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
                   {t("loggingAndAlerts.alerting.enterpriseFeature")}
                 </a>
               </Button>
-            </TableCell>
+            </div>
           ) : (
-            <TableCell>{renderControl(value)}</TableCell>
+            <div className="min-w-0 basis-40 flex-1 sm:max-w-64">{renderControl(value)}</div>
           )}
-          <TableCell>
+          <div className="shrink-0">
             {value.stored_in_db == true ? (
               <Badge variant="secondary">
                 <CircleCheck />
@@ -117,8 +116,8 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
             ) : (
               <Badge variant="outline">{t("loggingAndAlerts.alerting.storage.notSet")}</Badge>
             )}
-          </TableCell>
-          <TableCell>
+          </div>
+          <div className="shrink-0">
             <Button
               type="button"
               variant="ghost"
@@ -129,8 +128,8 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
             >
               <Trash2 className="size-5" />
             </Button>
-          </TableCell>
-        </TableRow>
+          </div>
+        </div>
       ))}
       <div>
         <Button type="submit">{t("loggingAndAlerts.alerting.submit")}</Button>

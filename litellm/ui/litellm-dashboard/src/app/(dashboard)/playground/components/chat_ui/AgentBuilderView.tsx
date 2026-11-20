@@ -463,9 +463,9 @@ export default function AgentBuilderView({
   }
 
   return (
-    <div className="flex h-full flex-col bg-card text-foreground">
+    <div className="flex min-h-full min-w-0 flex-col bg-card text-foreground lg:h-full">
       <div className="flex shrink-0 flex-col border-b border-border">
-        <div className="flex h-12 items-center justify-between px-4">
+        <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 px-4 py-2">
           <span className="text-sm font-medium text-foreground">{t("playground.chatUi.agentBuilderView.title")}</span>
           {isNewAgent ? (
             <Button onClick={handleSaveAgent} disabled={saving || !draftName?.trim() || !draftUnderlyingModel}>
@@ -494,9 +494,9 @@ export default function AgentBuilderView({
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
         {/* Roster */}
-        <div className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
+        <div className="flex max-h-44 w-full shrink-0 flex-col border-b border-border bg-card lg:max-h-none lg:w-52 lg:border-r lg:border-b-0 xl:w-60">
           <div className="flex items-center justify-between border-b border-border p-3">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("playground.chatUi.agentBuilderView.agents")}
@@ -546,7 +546,7 @@ export default function AgentBuilderView({
         </div>
 
         {/* Main content */}
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-[32rem] min-w-0 flex-1 flex-col overflow-hidden lg:min-h-0">
           {selectedId === null && !isNewAgent && agentModels.length === 0 && !loadingAgents && (
             <div className="flex flex-1 items-center justify-center p-8 text-muted-foreground">
               {t("playground.chatUi.agentBuilderView.noAgents")}
@@ -557,9 +557,12 @@ export default function AgentBuilderView({
               <Tabs
                 value={activeTab}
                 onValueChange={(value) => goToTab(value as AgentTab)}
-                className="flex flex-1 flex-col overflow-hidden"
+                className="flex min-h-[32rem] min-w-0 flex-1 flex-col overflow-hidden lg:min-h-0"
               >
-                <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0 pl-4">
+                <TabsList
+                  variant="line"
+                  className="h-10 min-w-0 w-full shrink-0 justify-start overflow-x-auto rounded-none border-b p-0 px-2 group-data-horizontal/tabs:h-10"
+                >
                   <TabsTrigger value="configure" className="flex-none rounded-none px-4 py-2">
                     <Bot />
                     {t("playground.chatUi.agentBuilderView.tabs.configure")}
@@ -583,7 +586,7 @@ export default function AgentBuilderView({
                   keepMounted={hasVisited("configure")}
                   className="min-h-0 overflow-hidden"
                 >
-                  <div className="h-full overflow-y-auto p-6">
+                  <div className="h-full overflow-y-auto p-4 sm:p-6">
                     {isNewAgent || selectedAgent ? (
                       <div className="mx-auto max-w-xl space-y-4">
                         {!selectedAgentModelId && selectedAgent && (
@@ -636,7 +639,7 @@ export default function AgentBuilderView({
                             </SelectContent>
                           </Select>
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                           <div>
                             <label className="mb-1 block text-sm font-medium text-foreground">
                               {t("playground.chatUi.agentBuilderView.temperature")}
@@ -753,7 +756,7 @@ export default function AgentBuilderView({
                   </div>
                 </TabsContent>
                 <TabsContent value="connect" keepMounted={hasVisited("connect")} className="min-h-0 overflow-hidden">
-                  <div className="h-full overflow-y-auto p-6">
+                  <div className="h-full overflow-y-auto p-4 sm:p-6">
                     {selectedAgent ? (
                       <ConnectTabContent
                         agentName={selectedAgent.model_name}

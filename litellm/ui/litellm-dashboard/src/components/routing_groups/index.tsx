@@ -3,7 +3,6 @@
 import React, { useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Plus, RefreshCw, Search, X } from "lucide-react";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
@@ -111,59 +110,57 @@ const RoutingGroups: React.FC = () => {
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <Card size="sm">
-        <CardContent>
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <InputGroup className="max-w-sm">
-              <InputGroupAddon>
-                <Search className="size-4 text-muted-foreground" />
+      <div className="min-w-0">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <InputGroup className="min-w-0 basis-64 flex-1 sm:max-w-sm">
+            <InputGroupAddon>
+              <Search className="size-4 text-muted-foreground" />
+            </InputGroupAddon>
+            <InputGroupInput
+              placeholder={t("routingGroups.page.searchPlaceholder")}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label={t("routingGroups.page.clearSearch")}
+                  onClick={() => setSearchQuery("")}
+                >
+                  <X />
+                </InputGroupButton>
               </InputGroupAddon>
-              <InputGroupInput
-                placeholder={t("routingGroups.page.searchPlaceholder")}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              {searchQuery && (
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton
-                    size="icon-xs"
-                    aria-label={t("routingGroups.page.clearSearch")}
-                    onClick={() => setSearchQuery("")}
-                  >
-                    <X />
-                  </InputGroupButton>
-                </InputGroupAddon>
-              )}
-            </InputGroup>
-            <div className="flex items-center gap-3">
-              <Button
-                variant="outline"
-                onClick={() => refetch()}
-                disabled={isFetching && !isLoading}
-                aria-busy={isFetching && !isLoading}
-              >
-                <RefreshCw />
-                {t("routingGroups.page.refresh")}
-              </Button>
-              <Button onClick={openCreate}>
-                <Plus />
-                {t("routingGroups.page.createGroup")}
-              </Button>
-              <span className="text-sm whitespace-nowrap text-muted-foreground">
-                {t("routingGroups.page.showingResults", { count: filteredGroups.length })}
-              </span>
-            </div>
+            )}
+          </InputGroup>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant="outline"
+              onClick={() => refetch()}
+              disabled={isFetching && !isLoading}
+              aria-busy={isFetching && !isLoading}
+            >
+              <RefreshCw />
+              {t("routingGroups.page.refresh")}
+            </Button>
+            <Button onClick={openCreate}>
+              <Plus />
+              {t("routingGroups.page.createGroup")}
+            </Button>
+            <span className="text-sm whitespace-nowrap text-muted-foreground">
+              {t("routingGroups.page.showingResults", { count: filteredGroups.length })}
+            </span>
           </div>
+        </div>
 
-          <RoutingGroupsTable
-            groups={filteredGroups}
-            isLoading={isLoading}
-            onEdit={openEdit}
-            onDelete={(g) => setDeletingGroup(g)}
-            proxyBaseUrl={proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() || proxySettings.PROXY_BASE_URL || ""}
-          />
-        </CardContent>
-      </Card>
+        <RoutingGroupsTable
+          groups={filteredGroups}
+          isLoading={isLoading}
+          onEdit={openEdit}
+          onDelete={(g) => setDeletingGroup(g)}
+          proxyBaseUrl={proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() || proxySettings.PROXY_BASE_URL || ""}
+        />
+      </div>
 
       <RoutingGroupModal
         open={drawerOpen}

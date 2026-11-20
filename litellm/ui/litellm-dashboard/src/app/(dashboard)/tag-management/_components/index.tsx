@@ -130,7 +130,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
   }, [accessToken]);
 
   return (
-    <div className="mx-4 h-full">
+    <div className="min-w-0 h-full">
       {selectedTagId ? (
         <TagInfoView
           tagId={selectedTagId}
@@ -143,9 +143,9 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
           editTag={editTag}
         />
       ) : (
-        <div className="flex h-full w-full flex-col p-8 pt-10">
-          <div className="mt-2 mb-4 flex w-full items-center justify-between">
-            <h1>{t("tagManagement.page.title")}</h1>
+        <div className="flex min-h-0 min-w-0 h-full w-full flex-col p-4 sm:p-6">
+          <div className="mb-1.5 flex w-full flex-wrap items-center justify-between gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">{t("tagManagement.page.title")}</h1>
             <div className="flex items-center space-x-2">
               {lastRefreshed && (
                 <p className="text-sm">
@@ -164,7 +164,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
             </div>
           </div>
 
-          <div className="mb-4 text-sm">
+          <div className="mb-6 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             {t("tagManagement.page.intro")}
             <p>
               <Trans

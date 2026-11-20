@@ -9,7 +9,7 @@ function ConnectPageContent() {
   const [selectedServers, setSelectedServers] = useState<string[]>([]);
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-8 py-8">
+    <div className="mx-auto w-full max-w-5xl p-4 sm:p-6">
       <ConnectFlowSurface
         accessToken={accessToken ?? ""}
         selectedServers={selectedServers}

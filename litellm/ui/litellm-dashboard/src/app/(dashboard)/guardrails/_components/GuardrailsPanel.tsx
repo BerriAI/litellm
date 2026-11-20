@@ -1,7 +1,9 @@
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 import { ChevronDown, Code, Plus } from "lucide-react";
 import { getGuardrailsList } from "@/components/networking";
 import { buttonVariants } from "@/components/ui/button";
@@ -100,25 +102,23 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+    <div className="min-w-0 w-full flex-auto p-4 sm:p-6">
+      <PageHeader className="mb-6">
+        <PageHeaderTitle>{t("shell.nav.items.guardrails")}</PageHeaderTitle>
+        <PageHeaderDescription>{t("shell.pageDescriptions.guardrails")}</PageHeaderDescription>
+      </PageHeader>
       <Tabs defaultValue="guardrails">
-        <TabsList variant="line">
+        <TabsList className="mb-4">
           {isAdmin && (
             <>
-              <TabsTrigger value="garden" className="flex-none">
-                {t("guardrails.panel.tabs.garden")}
-              </TabsTrigger>
-              <TabsTrigger value="guardrails" className="flex-none">
-                {t("guardrails.panel.tabs.guardrails")}
-              </TabsTrigger>
-              <TabsTrigger value="playground" className="flex-none" disabled={!accessToken}>
+              <TabsTrigger value="garden">{t("guardrails.panel.tabs.garden")}</TabsTrigger>
+              <TabsTrigger value="guardrails">{t("guardrails.panel.tabs.guardrails")}</TabsTrigger>
+              <TabsTrigger value="playground" disabled={!accessToken}>
                 {t("guardrails.panel.tabs.playground")}
               </TabsTrigger>
             </>
           )}
-          <TabsTrigger value="submitted" className="flex-none">
-            {t("guardrails.panel.tabs.submitted")}
-          </TabsTrigger>
+          <TabsTrigger value="submitted">{t("guardrails.panel.tabs.submitted")}</TabsTrigger>
         </TabsList>
 
         {isAdmin && (
@@ -128,7 +128,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
             </TabsContent>
 
             <TabsContent value="guardrails" keepMounted>
-              <div className="flex justify-between items-center mb-4">
+              <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
                 <DropdownMenu>
                   <DropdownMenuTrigger disabled={!accessToken} className={cn(buttonVariants({ variant: "default" }))}>
                     <Plus />

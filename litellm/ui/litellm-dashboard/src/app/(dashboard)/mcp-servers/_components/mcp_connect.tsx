@@ -214,7 +214,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           {step}
         </div>
       </div>
-      <div className="flex-1">
+      <div className="min-w-0 flex-1">
         <strong className="mb-2 block font-semibold text-foreground">{title}</strong>
         {children}
       </div>
@@ -516,32 +516,39 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     <div>
       <div className="flex w-full flex-col gap-6">
         <div>
-          <h2 className="text-3xl font-bold text-foreground mb-3">{t("mcpServers.connect.title")}</h2>
-          <p className="text-lg text-muted-foreground">{term(t("mcpServers.connect.description"))}</p>
+          <h2 className="text-lg font-semibold tracking-tight text-foreground mb-1.5">
+            {t("mcpServers.connect.title")}
+          </h2>
+          <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            {term(t("mcpServers.connect.description"))}
+          </p>
         </div>
 
         <Tabs defaultValue="openai" className="w-full">
-          <TabsList variant="line" className="mt-8 mb-6 h-auto w-full justify-start rounded-none border-b p-0">
-            <div className="flex rounded-lg bg-muted p-1">
-              <TabsTrigger value="openai" className="flex-none px-6 py-3">
+          <TabsList
+            variant="line"
+            className="mb-4 min-w-0 w-full justify-start overflow-x-auto rounded-none border-b p-0 group-data-horizontal/tabs:h-10"
+          >
+            <div className="flex gap-6">
+              <TabsTrigger value="openai" className="flex-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0">
                 <span className="flex items-center gap-2 font-medium">
                   <Code size={18} />
                   {productNames.openAIApi}
                 </span>
               </TabsTrigger>
-              <TabsTrigger value="litellm" className="flex-none px-6 py-3">
+              <TabsTrigger value="litellm" className="flex-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0">
                 <span className="flex items-center gap-2 font-medium">
                   <Zap size={18} />
                   {productNames.liteLLMProxy}
                 </span>
               </TabsTrigger>
-              <TabsTrigger value="cursor" className="flex-none px-6 py-3">
+              <TabsTrigger value="cursor" className="flex-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0">
                 <span className="flex items-center gap-2 font-medium">
                   <Terminal size={18} />
                   {productNames.cursor}
                 </span>
               </TabsTrigger>
-              <TabsTrigger value="http" className="flex-none px-6 py-3">
+              <TabsTrigger value="http" className="flex-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0">
                 <span className="flex items-center gap-2 font-medium">
                   <Globe size={18} />
                   {productNames.streamableHttp}
@@ -549,16 +556,16 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
               </TabsTrigger>
             </div>
           </TabsList>
-          <TabsContent value="openai" keepMounted className="mt-6">
+          <TabsContent value="openai" keepMounted className="mt-0 min-w-0">
             <OpenAITab />
           </TabsContent>
-          <TabsContent value="litellm" keepMounted className="mt-6">
+          <TabsContent value="litellm" keepMounted className="mt-0 min-w-0">
             <LiteLLMProxyTab />
           </TabsContent>
-          <TabsContent value="cursor" keepMounted className="mt-6">
+          <TabsContent value="cursor" keepMounted className="mt-0 min-w-0">
             <CursorTab />
           </TabsContent>
-          <TabsContent value="http" keepMounted className="mt-6">
+          <TabsContent value="http" keepMounted className="mt-0 min-w-0">
             <StreamableHTTPTab />
           </TabsContent>
         </Tabs>

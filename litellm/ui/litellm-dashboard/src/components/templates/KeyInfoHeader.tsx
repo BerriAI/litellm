@@ -28,7 +28,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import CopyButton from "@/components/shared/CopyButton";
 import { EntityLink } from "@/components/shared/EntityLink";
@@ -210,10 +209,10 @@ export function KeyInfoHeader({
         </Button>
       </div>
 
-      <div className="flex items-start justify-between" style={{ marginBottom: 20 }}>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="m-0 flex items-center gap-1 text-2xl font-semibold">
+      <div className="mb-6 flex min-w-0 flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1 basis-80">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <h3 className="m-0 min-w-0 break-words text-2xl font-semibold tracking-tight">
               {data.keyName}
               <CopyButton
                 value={data.keyName}
@@ -283,7 +282,7 @@ export function KeyInfoHeader({
         )}
       </div>
 
-      <div className="flex items-stretch gap-10" style={{ marginBottom: 40 }}>
+      <div className="mb-6 grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
         <div className="flex min-w-0 flex-col gap-4">
           <UserField userAlias={data.userAlias} userEmail={data.userEmail} userId={data.userId} />
           <LabeledField
@@ -292,8 +291,6 @@ export function KeyInfoHeader({
             icon={<Timer className="size-3.5" />}
           />
         </div>
-
-        <Separator orientation="vertical" />
 
         <div className="flex min-w-0 flex-col gap-4">
           <LabeledField
@@ -312,8 +309,6 @@ export function KeyInfoHeader({
           />
         </div>
 
-        <Separator orientation="vertical" />
-
         <div className="flex min-w-0 flex-col gap-4">
           <LabeledField
             label={t("keyDetail.keyInfoHeader.fields.lastUpdated")}
@@ -326,8 +321,6 @@ export function KeyInfoHeader({
             icon={<Zap className="size-3.5" />}
           />
         </div>
-
-        <Separator orientation="vertical" />
 
         <div className="flex min-w-0 flex-col gap-4">
           <LabeledField

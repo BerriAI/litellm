@@ -12,7 +12,7 @@ const PriceDataManagementTab = () => {
 
   return (
     <div>
-      <div className="p-6">
+      <div className="min-w-0 max-w-4xl">
         <div className="mb-6">
           <h2 className="text-lg font-semibold">{t("modelsAndEndpoints.priceDataManagementTab.title")}</h2>
           <p className="text-sm text-muted-foreground">{t("modelsAndEndpoints.priceDataManagementTab.description")}</p>

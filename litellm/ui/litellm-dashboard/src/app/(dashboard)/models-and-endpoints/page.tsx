@@ -190,15 +190,19 @@ export default function ModelsAndEndpointsPage() {
   }
 
   return (
-    <div className="mx-4">
-      <div className="mt-2 flex w-full flex-col gap-2 p-8">
-        <div className="mb-4 flex items-center justify-between">
+    <div className="min-w-0 w-full">
+      <div className="flex min-w-0 w-full flex-col gap-6 p-4 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold">{t("modelsAndEndpoints.page.title")}</h2>
+            <h1 className="text-2xl font-semibold tracking-tight">{t("modelsAndEndpoints.page.title")}</h1>
             {isAdmin ? (
-              <p className="text-sm text-muted-foreground">{t("modelsAndEndpoints.page.adminDescription")}</p>
+              <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                {t("modelsAndEndpoints.page.adminDescription")}
+              </p>
             ) : (
-              <p className="text-sm text-muted-foreground">{t("modelsAndEndpoints.page.userDescription")}</p>
+              <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                {t("modelsAndEndpoints.page.userDescription")}
+              </p>
             )}
           </div>
         </div>
@@ -218,13 +222,13 @@ export default function ModelsAndEndpointsPage() {
           />
         ) : (
           <Tabs value={activeKey} onValueChange={handleTabChange}>
-            <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
-              <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
-                <TabsList variant="line" className="w-max justify-start">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-b">
+              <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 basis-72 flex-1 overflow-x-auto pb-1.5">
+                <TabsList variant="line" className="w-max justify-start gap-6">
                   {visibleSlugs.map((slug) => {
                     const key = slug || BASE_TAB_KEY;
                     return (
-                      <TabsTrigger key={key} value={key} className="flex-none">
+                      <TabsTrigger key={key} value={key} className="flex-none px-0">
                         {tabLabel(slug)}
                       </TabsTrigger>
                     );

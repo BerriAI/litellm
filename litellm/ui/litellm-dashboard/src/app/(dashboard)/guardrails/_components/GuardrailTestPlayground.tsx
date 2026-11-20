@@ -117,12 +117,12 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
   };
 
   return (
-    <div className="w-full h-[calc(100vh-200px)]">
+    <div className="min-h-0 min-w-0 w-full lg:h-[max(32rem,calc(100dvh-20rem))]">
       <Card className="h-full overflow-hidden py-0">
         <CardContent className="h-full p-0">
-          <div className="flex h-full">
+          <div className="flex h-full min-w-0 flex-col lg:flex-row">
             {/* Left Sidebar - Guardrails List */}
-            <div className="flex w-1/4 flex-col overflow-hidden border-r border-border">
+            <div className="flex max-h-80 w-full shrink-0 flex-col overflow-hidden border-b border-border lg:max-h-none lg:w-64 lg:border-r lg:border-b-0 xl:w-72">
               <div className="border-b border-border p-4">
                 <div className="mb-3">
                   <h3 className="mb-3 text-lg font-semibold">{t("guardrails.testPlayground.sidebarTitle")}</h3>
@@ -168,7 +168,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
                       >
                         <div className="flex items-center space-x-2">
                           <FlaskConical className="size-4 text-muted-foreground" />
-                          <span className="font-medium">{guardrail.guardrail_name}</span>
+                          <span className="min-w-0 break-words font-medium">{guardrail.guardrail_name}</span>
                         </div>
                         <div className="mt-1 space-y-1 text-xs">
                           <div>
@@ -202,12 +202,12 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
             </div>
 
             {/* Right Panel - Test Area */}
-            <div className="flex w-3/4 flex-col">
+            <div className="flex min-h-96 min-w-0 flex-1 flex-col lg:min-h-0">
               <div className="flex items-center justify-between border-b border-border p-4">
-                <h2 className="mb-0 text-xl font-semibold">{t("guardrails.testPlayground.title")}</h2>
+                <h2 className="mb-0 text-lg font-semibold">{t("guardrails.testPlayground.title")}</h2>
               </div>
 
-              <div className="flex-1 overflow-auto p-4">
+              <div className="min-h-0 flex-1 overflow-auto p-4">
                 {selectedGuardrails.size === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
                     <FlaskConical className="mb-4 size-12" />

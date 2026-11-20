@@ -185,7 +185,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+    <div className="min-w-0 w-full flex-auto p-4 sm:p-6">
       {selectedSkill ? (
         <CatalogSkillDetail
           userRole={userRole}
@@ -201,9 +201,9 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
       ) : (
         <>
           <div className="flex flex-col gap-2 mb-4">
-            <h1 className="text-2xl font-bold">{t("skills.panel.title")}</h1>
-            <p className="text-sm text-muted-foreground">{t("skills.panel.intro")}</p>
-            <div className="mt-2 flex gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">{t("skills.panel.title")}</h1>
+            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">{t("skills.panel.intro")}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
               <Button onClick={() => setIsAddModalVisible(true)} disabled={!canWrite}>
                 {t("skills.panel.addButton")}
               </Button>
@@ -211,7 +211,10 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
           </div>
 
           <Tabs value={tab} onValueChange={(value) => setTab(value === "submissions" ? "submissions" : "skills")}>
-            <TabsList variant="line">
+            <TabsList
+              variant="line"
+              className="mb-4 min-w-0 w-full justify-start gap-6 overflow-x-auto border-b p-0 group-data-horizontal/tabs:h-10"
+            >
               <TabsTrigger value="skills">{t("skills.panel.tabs.skills")}</TabsTrigger>
               <TabsTrigger value="submissions">
                 {t(adminView ? "skills.panel.tabs.submissions" : "skills.panel.tabs.mySubmissions")}
@@ -307,7 +310,9 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
                   components={{ name: <strong>{pluginToDelete.displayName}</strong> }}
                 />
               </AlertDialogDescription>
-              <p className="text-sm text-muted-foreground">{t("skills.panel.deleteDialog.irreversible")}</p>
+              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                {t("skills.panel.deleteDialog.irreversible")}
+              </p>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>{t("skills.panel.deleteDialog.cancel")}</AlertDialogCancel>

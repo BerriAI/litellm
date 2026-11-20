@@ -185,9 +185,9 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-end">
-        <div>
-          <h2 className="text-lg font-medium">{t("policies.templates.title")}</h2>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0 basis-72 flex-1">
+          <h2 className="text-lg font-semibold">{t("policies.templates.title")}</h2>
           <p className="mt-1 text-sm text-muted-foreground">{t("policies.templates.description")}</p>
         </div>
         <Button variant="outline" onClick={onOpenAiSuggestion}>
@@ -198,10 +198,10 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
         </Button>
       </div>
 
-      <div className="flex gap-6">
+      <div className="flex min-w-0 flex-col gap-6 lg:flex-row">
         {/* Left sidebar - tag filters */}
         {tagCounts.length > 0 && (
-          <div className="w-52 shrink-0">
+          <div className="w-full shrink-0 lg:w-52">
             <div className="sticky top-4">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-sm font-semibold">{t("policies.templates.categories")}</span>
@@ -232,13 +232,13 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
         )}
 
         {/* Right content - template cards */}
-        <div className="flex-1">
+        <div className="min-w-0 flex-1">
           {selectedTags.size > 0 && (
             <div className="mb-4 text-sm text-muted-foreground">
               {t("policies.templates.showing", { shown: filteredTemplates.length, total: templates.length })}
             </div>
           )}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-6">
             {filteredTemplates.map((template, index) => (
               <PolicyTemplateCard
                 key={template.id || index}

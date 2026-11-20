@@ -227,9 +227,9 @@ export function ComparisonPanel({
   );
 
   return (
-    <div className="bg-card first:border-l-0 border-l border-border flex flex-col min-h-0">
-      <div className="border-b flex items-center justify-between gap-3 px-4 py-3">
-        <div className="flex items-center gap-3 flex-1">
+    <div className="flex min-h-64 min-w-0 flex-col border-b border-border bg-card sm:border-l sm:first:border-l-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <UnifiedSelector
             value={currentSelection}
             options={selectorOptions}
@@ -278,7 +278,7 @@ export function ComparisonPanel({
         )}
       </div>
       <div className="relative flex-1 flex flex-col min-h-0">
-        <div className="flex-1 max-h-[calc(100vh-385px)] overflow-auto rounded-b-2xl">
+        <div className="min-h-48 flex-1 overflow-auto">
           <MessageDisplay messages={comparison.messages} isLoading={comparison.isLoading} />
         </div>
       </div>

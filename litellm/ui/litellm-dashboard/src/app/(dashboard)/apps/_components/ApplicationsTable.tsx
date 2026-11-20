@@ -28,95 +28,101 @@ export default function ApplicationsTable({
 }) {
   const { t } = useTranslation();
   return (
-    <Table aria-label={t("apps.title")}>
-      <TableHeader>
-        <TableRow>
-          {COLUMNS.map(({ id, label }) => (
-            <TableHead
-              key={id}
-              className={cn("px-4 text-sm", id === "spend" && "min-w-60", id === "status" && "text-right")}
-            >
-              {t(label)}
-            </TableHead>
-          ))}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {loading && (
+    <div className="min-w-0 [&>[data-slot=table-container]]:[container-type:inline-size]">
+      <Table aria-label={t("apps.title")}>
+        <TableHeader>
           <TableRow>
-            <TableCell colSpan={COLUMNS.length} className="py-8 text-center text-muted-foreground">
-              {t("apps.list.loading")}
-            </TableCell>
+            {COLUMNS.map(({ id, label }) => (
+              <TableHead
+                key={id}
+                className={cn("px-4 text-sm", id === "spend" && "min-w-60", id === "status" && "text-right")}
+              >
+                {t(label)}
+              </TableHead>
+            ))}
           </TableRow>
-        )}
-        {!loading && rows.length === 0 && (
-          <TableRow>
-            <TableCell colSpan={COLUMNS.length} className="py-8 text-center text-muted-foreground">
-              {t(searching ? "apps.list.noMatches" : "apps.noResources")}
-            </TableCell>
-          </TableRow>
-        )}
-        {!loading &&
-          rows.map(({ resource, app }) => (
-            <TableRow key={resource.resource_id}>
-              <TableCell className="px-4 py-5">
-                <div className="flex items-center gap-3">
-                  <span
-                    aria-hidden="true"
-                    className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium"
-                  >
-                    {applicationInitials(resource.alias)}
-                  </span>
-                  <div className="min-w-0">
-                    {onOpen ? (
-                      <button
-                        type="button"
-                        className="block max-w-52 truncate text-left font-medium hover:text-primary hover:underline"
-                        title={resource.alias}
-                        onClick={() => onOpen(resource.resource_id)}
-                      >
-                        {resource.alias}
-                      </button>
-                    ) : (
-                      <p className="max-w-52 truncate font-medium" title={resource.alias}>
-                        {resource.alias}
-                      </p>
-                    )}
-                    <p
-                      className="max-w-52 truncate font-mono text-[11px] text-muted-foreground"
-                      title={resource.resource_id}
-                    >
-                      {resource.resource_id}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {t(APP_RESOURCE_LABELS[resource.resource_type])}
-                    </p>
-                  </div>
-                </div>
-              </TableCell>
-              <TableCell className="px-4">
-                <AppBudgetLimits budget={app?.budget} usage={app?.budget_usage} cumulativeSpend={app?.spend ?? 0} />
-              </TableCell>
-              <TableCell className="px-4 tabular-nums">
-                {app?.customer_margin === null || app?.customer_margin === undefined
-                  ? t("apps.list.gatewaySurcharge")
-                  : t("format.number", { val: app.customer_margin, style: "percent", maximumFractionDigits: 2 })}
-              </TableCell>
-              <TableCell className="px-4">
-                <span
-                  className={cn(badge, app?.auto_create_customers === false && "bg-destructive/10 text-destructive")}
-                >
-                  {t(
-                    app?.auto_create_customers === false ? "apps.list.customersBlocked" : "apps.list.customersAllowed",
-                  )}
-                </span>
-              </TableCell>
-              <TableCell className="px-4 text-right">
-                <span className={badge}>{t(app ? "apps.list.configured" : "apps.list.notConfigured")}</span>
+        </TableHeader>
+        <TableBody>
+          {loading && (
+            <TableRow>
+              <TableCell colSpan={COLUMNS.length} className="p-0 text-center text-muted-foreground">
+                <div className="sticky left-0 w-[100cqw] px-4 py-8 whitespace-normal">{t("apps.list.loading")}</div>
               </TableCell>
             </TableRow>
-          ))}
-      </TableBody>
-    </Table>
+          )}
+          {!loading && rows.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={COLUMNS.length} className="p-0 text-center text-muted-foreground">
+                <div className="sticky left-0 w-[100cqw] px-4 py-8 whitespace-normal">
+                  {t(searching ? "apps.list.noMatches" : "apps.noResources")}
+                </div>
+              </TableCell>
+            </TableRow>
+          )}
+          {!loading &&
+            rows.map(({ resource, app }) => (
+              <TableRow key={resource.resource_id}>
+                <TableCell className="px-4 py-5">
+                  <div className="flex items-center gap-3">
+                    <span
+                      aria-hidden="true"
+                      className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium"
+                    >
+                      {applicationInitials(resource.alias)}
+                    </span>
+                    <div className="min-w-0">
+                      {onOpen ? (
+                        <button
+                          type="button"
+                          className="block max-w-52 truncate text-left font-medium hover:text-primary hover:underline"
+                          title={resource.alias}
+                          onClick={() => onOpen(resource.resource_id)}
+                        >
+                          {resource.alias}
+                        </button>
+                      ) : (
+                        <p className="max-w-52 truncate font-medium" title={resource.alias}>
+                          {resource.alias}
+                        </p>
+                      )}
+                      <p
+                        className="max-w-52 truncate font-mono text-[11px] text-muted-foreground"
+                        title={resource.resource_id}
+                      >
+                        {resource.resource_id}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t(APP_RESOURCE_LABELS[resource.resource_type])}
+                      </p>
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell className="px-4">
+                  <AppBudgetLimits budget={app?.budget} usage={app?.budget_usage} cumulativeSpend={app?.spend ?? 0} />
+                </TableCell>
+                <TableCell className="px-4 tabular-nums">
+                  {app?.customer_margin === null || app?.customer_margin === undefined
+                    ? t("apps.list.gatewaySurcharge")
+                    : t("format.number", { val: app.customer_margin, style: "percent", maximumFractionDigits: 2 })}
+                </TableCell>
+                <TableCell className="px-4">
+                  <span
+                    className={cn(badge, app?.auto_create_customers === false && "bg-destructive/10 text-destructive")}
+                  >
+                    {t(
+                      app?.auto_create_customers === false
+                        ? "apps.list.customersBlocked"
+                        : "apps.list.customersAllowed",
+                    )}
+                  </span>
+                </TableCell>
+                <TableCell className="px-4 text-right">
+                  <span className={badge}>{t(app ? "apps.list.configured" : "apps.list.notConfigured")}</span>
+                </TableCell>
+              </TableRow>
+            ))}
+        </TableBody>
+      </Table>
+    </div>
   );
 }

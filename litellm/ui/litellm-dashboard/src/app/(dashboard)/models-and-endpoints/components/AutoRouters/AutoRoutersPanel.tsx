@@ -75,8 +75,8 @@ export function AutoRoutersPanel({
 
   return (
     <div className="w-full space-y-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 basis-72 flex-1">
           <h2 className="text-base font-semibold text-foreground">{t("modelsAndEndpoints.autoRoutersPanel.title")}</h2>
           <p className="mt-1 text-sm text-muted-foreground">{t("modelsAndEndpoints.autoRoutersPanel.description")}</p>
         </div>

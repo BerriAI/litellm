@@ -1,3 +1,4 @@
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { parseAsString, useQueryState } from "nuqs";
 import { useResetDetailState } from "@/hooks/useUrlTab";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -8,7 +9,8 @@ import BulkCreateUsersButton from "@/components/bulk_create_users_button";
 import { CreateUserButton } from "@/components/CreateUserButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 import {
   getPossibleUserRoles,
   getProxyBaseUrl,
@@ -323,9 +325,13 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   );
 
   return (
-    <div className="w-full overflow-hidden p-8">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex space-x-3">
+    <div className="min-w-0 w-full p-4 sm:p-6">
+      <PageHeader className="mb-6">
+        <PageHeaderTitle>{t("shell.nav.items.internalUsers")}</PageHeaderTitle>
+        <PageHeaderDescription>{t("shell.pageDescriptions.users")}</PageHeaderDescription>
+      </PageHeader>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
           {userListQuery.isLoading && (
             <>
               <Skeleton className="h-9 w-28" />
@@ -371,13 +377,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
       {isProxyAdmin ? (
         <Tabs defaultValue="users" className="gap-0">
-          <TabsList variant="line" className="mb-4">
-            <TabsTrigger value="users" className="flex-none data-active:text-primary after:bg-primary">
-              {t("users.page.tabs.users")}
-            </TabsTrigger>
-            <TabsTrigger value="default-settings" className="flex-none data-active:text-primary after:bg-primary">
-              {t("users.page.tabs.defaultSettings")}
-            </TabsTrigger>
+          <TabsList className="mb-4">
+            <TabsTrigger value="users">{t("users.page.tabs.users")}</TabsTrigger>
+            <TabsTrigger value="default-settings">{t("users.page.tabs.defaultSettings")}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="users" keepMounted>

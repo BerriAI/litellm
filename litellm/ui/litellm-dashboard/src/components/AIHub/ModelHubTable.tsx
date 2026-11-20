@@ -462,24 +462,24 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   }
 
   return (
-    <div data-slot="model-hub" className={isChat ? "chat-model-hub-catalog" : "mx-4"}>
+    <div data-slot="model-hub" className={isChat ? "chat-model-hub-catalog" : "min-w-0 w-full"}>
       {publicPage == false ? (
-        <div className={isChat ? "chat-model-hub-content" : "w-full m-2 mt-2 p-8"}>
+        <div className={isChat ? "chat-model-hub-content" : "min-w-0 w-full p-4 sm:p-6"}>
           {/* Header with Title, Description and URL */}
           {!isChat && (
-            <div className="flex justify-between items-center mb-6">
-              <div className="flex flex-col items-start">
-                <h2 className="text-center text-xl font-semibold">{term(t("aiHub.modelHubTable.title"))}</h2>
+            <div className="flex flex-wrap justify-between items-start gap-4 mb-6">
+              <div className="flex min-w-0 basis-72 flex-1 flex-col items-start">
+                <h2 className="text-2xl font-semibold tracking-tight">{term(t("aiHub.modelHubTable.title"))}</h2>
                 {isAdminRole(userRole || "") ? (
                   <p className="text-sm text-muted-foreground">{t("aiHub.modelHubTable.adminDescription")}</p>
                 ) : (
                   <p className="text-sm text-muted-foreground">{t("aiHub.modelHubTable.userDescription")}</p>
                 )}
               </div>
-              <div className="flex items-center space-x-4">
+              <div className="flex max-w-full items-center gap-3">
                 <p>{t("aiHub.modelHubTable.hubUrlLabel")}</p>
-                <div className="flex items-center bg-border px-2 py-1 rounded-sm">
-                  <p className="mr-2">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
+                <div className="flex min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs">
+                  <p className="min-w-0 break-all">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
                   <button
                     onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
                     className="p-1 hover:bg-accent rounded-sm transition-colors"
@@ -502,17 +502,32 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
           <Tabs defaultValue="models">
             {!isChat && (
-              <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-                <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
+              <TabsList
+                variant="line"
+                className="mb-4 min-w-0 w-full justify-start gap-6 overflow-x-auto rounded-none border-b p-0 group-data-horizontal/tabs:h-10"
+              >
+                <TabsTrigger
+                  value="models"
+                  className="flex-none rounded-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0"
+                >
                   {t("aiHub.modelHubTable.tabs.models")}
                 </TabsTrigger>
-                <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
+                <TabsTrigger
+                  value="agents"
+                  className="flex-none rounded-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0"
+                >
                   {t("aiHub.modelHubTable.tabs.agents")}
                 </TabsTrigger>
-                <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
+                <TabsTrigger
+                  value="mcp"
+                  className="flex-none rounded-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0"
+                >
                   {t("aiHub.modelHubTable.tabs.mcp")}
                 </TabsTrigger>
-                <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
+                <TabsTrigger
+                  value="skills"
+                  className="flex-none rounded-none px-0 py-2 group-data-horizontal/tabs:after:bottom-0"
+                >
                   {t("aiHub.modelHubTable.tabs.skills")}
                 </TabsTrigger>
               </TabsList>
@@ -522,7 +537,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               {/* Model Hub Tab */}
               <TabsContent value="models" keepMounted>
                 {/* Model Filters and Table */}
-                <Card className={isChat ? "chat-model-hub-card" : "px-6"}>
+                <Card className={isChat ? "chat-model-hub-card" : "gap-4 border-0 px-0 py-0 shadow-none ring-0"}>
                   {isChat && (
                     <div className="chat-model-section-heading">
                       <h2>{t("aiHub.modelHubTable.models.chatTitle")}</h2>
@@ -590,7 +605,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
               {/* Agent Hub Tab */}
               <TabsContent value="agents" keepMounted>
-                <Card className="px-6">
+                <Card className="gap-4 border-0 px-0 py-0 shadow-none ring-0">
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
@@ -666,7 +681,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
               {/* MCP Hub Tab */}
               <TabsContent value="mcp" keepMounted>
-                <Card className="px-6">
+                <Card className="gap-4 border-0 px-0 py-0 shadow-none ring-0">
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">

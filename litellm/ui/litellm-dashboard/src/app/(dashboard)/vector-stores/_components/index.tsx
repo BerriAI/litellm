@@ -18,7 +18,8 @@ import IndexesTab from "./IndexesTab";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 
 interface VectorStoreProps {
@@ -142,10 +143,10 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
       />
     </div>
   ) : (
-    <div className="mx-4">
-      <div className="gap-2 p-8 w-full mt-2">
-        <div className="flex justify-between mt-2 w-full items-center mb-4">
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">{t("vectorStores.page.title")}</h1>
+    <div className="min-w-0 w-full">
+      <div className="min-w-0 w-full p-4 sm:p-6">
+        <div className="flex flex-wrap justify-between w-full items-start gap-3 mb-1.5">
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">{t("vectorStores.page.title")}</h1>
           <div className="flex items-center space-x-2">
             {lastRefreshed && (
               <p className="text-sm text-muted-foreground">
@@ -166,22 +167,12 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
         <p className="mb-4 text-sm text-muted-foreground">{t("vectorStores.page.description")}</p>
 
         <Tabs defaultValue={defaultTab} onValueChange={onTabChange}>
-          <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
-            {canCreateVectorStores && (
-              <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
-                {t("vectorStores.page.tabs.create")}
-              </TabsTrigger>
-            )}
-            <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
-              {t("vectorStores.page.tabs.manage")}
-            </TabsTrigger>
-            <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
-              {t("vectorStores.page.tabs.test")}
-            </TabsTrigger>
+          <TabsList className="mb-6">
+            {canCreateVectorStores && <TabsTrigger value="create">{t("vectorStores.page.tabs.create")}</TabsTrigger>}
+            <TabsTrigger value="manage">{t("vectorStores.page.tabs.manage")}</TabsTrigger>
+            <TabsTrigger value="test">{t("vectorStores.page.tabs.test")}</TabsTrigger>
             {isProxyAdminRole(userRole || "") && (
-              <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
-                {t("vectorStores.page.tabs.indexes")}
-              </TabsTrigger>
+              <TabsTrigger value="indexes">{t("vectorStores.page.tabs.indexes")}</TabsTrigger>
             )}
           </TabsList>
 

@@ -745,7 +745,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
             </DialogHeader>
             <TooltipProvider>
               <form onSubmit={form.handleSubmit(onCreateSubmit)}>
-                <FieldGroup>
+                <FieldGroup className="gap-6">
                   <FormField control={form.control} name="team_alias" label={t("teams.page.create.fields.teamName")}>
                     {({ ref, value, ...field }) => (
                       <UIInput {...field} ref={ref} value={value ?? ""} data-testid="team-name-input" />
@@ -761,7 +761,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                         <FormField
                           control={form.control}
                           name="organization_id"
-                          className="mt-8"
                           label={labelWithDocsHint(
                             t("teams.page.create.fields.organization.label"),
                             t("teams.page.create.fields.organization.hint"),
@@ -839,7 +838,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                   <FormField
                     control={form.control}
                     name="budget_duration"
-                    className="mt-8"
                     label={t("teams.page.create.fields.budgetDuration.label")}
                   >
                     {({ id, value, onChange }) => (
@@ -912,14 +910,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                   <Collapsible
                     open={additionalSettingsOpen}
                     onOpenChange={setAdditionalSettingsOpen}
-                    className="mt-20 mb-8 overflow-hidden rounded-lg border"
+                    className="overflow-hidden rounded-lg border"
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>{t("teams.page.create.sections.additional")}</b>
                       <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
-                      <FieldGroup>
+                      <FieldGroup className="gap-6">
                         <FormField
                           control={form.control}
                           name="team_id"
@@ -1024,7 +1022,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                         <FormField
                           control={form.control}
                           name="guardrails"
-                          className="mt-8"
                           label={labelWithDocsHint(
                             t("teams.page.create.fields.guardrails.label"),
                             t("teams.page.create.fields.guardrails.hint"),
@@ -1086,7 +1083,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                           <FormField
                             control={form.control}
                             name="policies"
-                            className="mt-8"
                             label={labelWithDocsHint(
                               t("teams.page.create.fields.policies.label"),
                               t("teams.page.create.fields.policies.hint"),
@@ -1108,7 +1104,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                         <FormField
                           control={form.control}
                           name="access_group_ids"
-                          className="mt-8"
                           label={labelWithHint(
                             t("teams.page.create.fields.accessGroups.label"),
                             t("teams.page.create.fields.accessGroups.hint"),
@@ -1126,7 +1121,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                         <FormField
                           control={form.control}
                           name="allowed_vector_store_ids"
-                          className="mt-8"
                           label={labelWithHint(
                             t("teams.page.create.fields.vectorStores.label"),
                             t("teams.page.create.fields.vectorStores.hint"),
@@ -1145,7 +1139,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                         <FormField
                           control={form.control}
                           name="allowed_passthrough_routes"
-                          className="mt-8"
                           label={
                             !premiumUser
                               ? labelWithHint(
@@ -1177,7 +1170,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                   <Collapsible
                     open={mcpSettingsOpen}
                     onOpenChange={setMcpSettingsOpen}
-                    className="mt-8 mb-8 overflow-hidden rounded-lg border"
+                    className="overflow-hidden rounded-lg border"
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>{t("teams.page.create.sections.mcp")}</b>
@@ -1221,7 +1214,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                   <Collapsible
                     open={agentSettingsOpen}
                     onOpenChange={setAgentSettingsOpen}
-                    className="mt-8 mb-8 overflow-hidden rounded-lg border"
+                    className="overflow-hidden rounded-lg border"
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>{t("teams.page.create.sections.agent")}</b>
@@ -1253,7 +1246,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                   <Collapsible
                     open={searchToolSettingsOpen}
                     onOpenChange={setSearchToolSettingsOpen}
-                    className="mt-8 mb-8 overflow-hidden rounded-lg border"
+                    className="overflow-hidden rounded-lg border"
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>{t("teams.page.create.sections.searchTool")}</b>
@@ -1285,7 +1278,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                   <Collapsible
                     open={skillSettingsOpen}
                     onOpenChange={setSkillSettingsOpen}
-                    className="mt-8 mb-8 overflow-hidden rounded-lg border"
+                    className="overflow-hidden rounded-lg border"
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>{t("teams.page.create.sections.skill")}</b>
@@ -1314,7 +1307,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                     </CollapsibleContent>
                   </Collapsible>
 
-                  <Collapsible className="mt-8 mb-8 overflow-hidden rounded-lg border">
+                  <Collapsible className="overflow-hidden rounded-lg border">
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>{t("teams.page.create.sections.logging")}</b>
                       <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
@@ -1332,7 +1325,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
 
                   <Collapsible
                     key={`router-settings-accordion-${routerSettingsKey}`}
-                    className="mt-8 mb-8 overflow-hidden rounded-lg border"
+                    className="overflow-hidden rounded-lg border"
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>{t("teams.page.create.sections.router")}</b>
@@ -1355,7 +1348,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                     </CollapsibleContent>
                   </Collapsible>
 
-                  <Collapsible className="mt-8 mb-8 overflow-hidden rounded-lg border">
+                  <Collapsible className="overflow-hidden rounded-lg border">
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>{t("teams.page.create.sections.modelAliases")}</b>
                       <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />

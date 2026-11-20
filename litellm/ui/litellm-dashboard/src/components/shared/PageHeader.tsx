@@ -6,14 +6,14 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cva.config";
 
 export function PageHeader({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("shrink-0", className)} {...props} />;
+  return <div className={cn("min-w-0 shrink-0", className)} {...props} />;
 }
 
 export function PageHeaderTitle({ className, ...props }: ComponentProps<"h1">) {
   return (
     <h1
       className={cn(
-        "flex items-center gap-2.5 text-2xl font-semibold tracking-tight text-foreground [&_svg]:size-5 [&_svg]:flex-none [&_svg]:stroke-[1.75]",
+        "flex flex-wrap items-center gap-2.5 text-2xl leading-tight font-semibold tracking-tight text-foreground [&_svg]:size-5 [&_svg]:flex-none [&_svg]:stroke-[1.75]",
         className,
       )}
       {...props}
@@ -22,7 +22,7 @@ export function PageHeaderTitle({ className, ...props }: ComponentProps<"h1">) {
 }
 
 export function PageHeaderDescription({ className, ...props }: ComponentProps<"p">) {
-  return <p className={cn("mt-1.5 text-sm text-muted-foreground", className)} {...props} />;
+  return <p className={cn("mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground", className)} {...props} />;
 }
 
 export function PageHeaderControls({ className, ...props }: ComponentProps<"div">) {
@@ -31,7 +31,7 @@ export function PageHeaderControls({ className, ...props }: ComponentProps<"div"
     <div
       role="group"
       aria-label={t("shell.pageHeader.controls")}
-      className={cn("mt-5 flex min-h-9 items-center gap-2", className)}
+      className={cn("mt-4 flex min-h-9 min-w-0 flex-wrap items-center gap-2", className)}
       {...props}
     />
   );

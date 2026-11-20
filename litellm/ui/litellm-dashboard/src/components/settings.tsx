@@ -1,3 +1,4 @@
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
 import React, { useEffect, useState } from "react";
 import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
@@ -19,7 +20,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList as TabsList, PageTabsTrigger as TabsTrigger } from "@/components/shared/Page";
 import EmailSettings from "./email_settings";
 import MSTeamsSettings from "./MSTeamsSettings";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -610,10 +612,14 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   }
 
   return (
-    <div className="mx-4">
-      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
+    <div className="min-w-0 w-full">
+      <div className="grid min-w-0 w-full grid-cols-1 gap-6 p-4 sm:p-6">
+        <PageHeader>
+          <PageHeaderTitle>{t("shell.nav.items.loggingAndAlerts")}</PageHeaderTitle>
+          <PageHeaderDescription>{t("shell.pageDescriptions.loggingAndAlerts")}</PageHeaderDescription>
+        </PageHeader>
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTab)}>
-          <TabsList variant="line">
+          <TabsList className="mb-4">
             <TabsTrigger value="logging-callbacks">{t("loggingAndAlerts.page.tabs.loggingCallbacks")}</TabsTrigger>
             <TabsTrigger value="cloudzero-cost-tracking">{t("loggingAndAlerts.page.tabs.cloudZero")}</TabsTrigger>
             <TabsTrigger value="alerting-types">{t("loggingAndAlerts.page.tabs.alertingTypes")}</TabsTrigger>
@@ -643,12 +649,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             />
           </TabsContent>
           <TabsContent value="cloudzero-cost-tracking" keepMounted>
-            <div className="p-8">
+            <div className="max-w-6xl">
               <CloudZeroCostTracking />
             </div>
           </TabsContent>
           <TabsContent value="alerting-types" keepMounted>
-            <Card className="p-6">
+            <Card className="p-4 sm:p-6">
               <p className="my-2">
                 <Trans
                   i18nKey="loggingAndAlerts.alertTypes.intro"

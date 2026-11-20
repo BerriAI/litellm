@@ -1,3 +1,4 @@
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import React, { useState, useEffect } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -144,7 +145,11 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+    <div className="min-w-0 w-full flex-auto p-4 sm:p-6">
+      <PageHeader className="mb-6">
+        <PageHeaderTitle>{t("shell.nav.items.prompts")}</PageHeaderTitle>
+        <PageHeaderDescription>{t("shell.pageDescriptions.prompts")}</PageHeaderDescription>
+      </PageHeader>
       {showEditorView ? (
         <PromptEditorView
           onClose={handleCloseEditor}
@@ -164,8 +169,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         />
       ) : (
         <>
-          <div className="flex justify-between items-center mb-4">
-            <div className="flex gap-2">
+          <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
+            <div className="flex flex-wrap gap-2">
               {canModify && (
                 <>
                   <Button onClick={handleAddPrompt} disabled={!accessToken}>

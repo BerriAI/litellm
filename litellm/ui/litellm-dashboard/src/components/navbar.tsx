@@ -67,7 +67,12 @@ const Navbar: React.FC<NavbarProps> = ({
   return (
     <nav className="sticky top-0 z-chrome border-b border-border bg-card">
       <div className="w-full">
-        <div className={cn("flex h-14 items-center px-4", isPublicPage && "gap-4 sm:px-6")}>
+        <div
+          className={cn(
+            "flex min-h-14 flex-wrap items-center gap-y-2 px-4 py-2 sm:h-14 sm:flex-nowrap sm:py-0",
+            isPublicPage && "gap-4 sm:px-6",
+          )}
+        >
           <div className="flex shrink-0 items-center">
             {onToggleSidebar && (
               <button
@@ -90,7 +95,7 @@ const Navbar: React.FC<NavbarProps> = ({
                 <div className="relative">
                   <div
                     className={cn(
-                      "flex h-10 max-w-48 items-center justify-center overflow-hidden",
+                      "flex h-8 max-w-36 items-center justify-center overflow-hidden sm:h-10 sm:max-w-48",
                       isPublicPage && "h-8 max-w-36 sm:h-10 sm:max-w-48",
                     )}
                   >
@@ -142,7 +147,7 @@ const Navbar: React.FC<NavbarProps> = ({
             </div>
           )}
 
-          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-4">
+          <div className="ml-auto flex min-w-0 basis-full flex-wrap items-center justify-end gap-2 sm:basis-auto sm:flex-1 sm:flex-nowrap sm:gap-4">
             {showWorkerSwitch && (
               <div className="flex shrink-0 items-center">
                 <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />

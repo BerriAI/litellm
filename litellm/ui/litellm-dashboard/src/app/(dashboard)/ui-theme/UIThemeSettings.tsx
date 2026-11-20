@@ -125,9 +125,9 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   }
 
   return (
-    <div className="w-full mx-auto max-w-4xl px-6 py-8">
-      <div className="mb-8">
-        <h1 className="mb-2 text-2xl font-bold">{t("uiTheme.settings.title")}</h1>
+    <div className="min-w-0 w-full max-w-4xl p-4 sm:p-6">
+      <div className="mb-6">
+        <h1 className="mb-1.5 text-2xl font-semibold tracking-tight">{t("uiTheme.settings.title")}</h1>
         <p className="text-sm text-muted-foreground">{t("uiTheme.settings.description")}</p>
       </div>
       <Card>
@@ -177,7 +177,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
             />
             <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.faviconUrl.hint")}</p>
           </div>
-          <div className="flex gap-3 pt-4">
+          <div className="flex flex-wrap gap-3 pt-4">
             <Button onClick={handleSave} disabled={loading}>
               {loading && <UiLoadingSpinner className="size-4" />}
               {t("uiTheme.settings.saveButton")}

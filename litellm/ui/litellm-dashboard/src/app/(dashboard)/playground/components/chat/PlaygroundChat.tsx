@@ -478,7 +478,7 @@ export function PlaygroundChat({
             onPickSuggestion={draft.setText}
           />
         )}
-        <div className="mx-auto w-full max-w-3xl px-6 pb-6">{composer}</div>
+        <div className="mx-auto w-full max-w-3xl px-1 pb-4 sm:px-4 sm:pb-6">{composer}</div>
       </div>
       {isWide ? (
         <aside
@@ -489,8 +489,10 @@ export function PlaygroundChat({
         </aside>
       ) : (
         <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-          <SheetContent side="right" className="w-96 gap-0 p-0" showCloseButton={false}>
-            <SheetTitle className="sr-only">{t("playground.chat.page.inspector")}</SheetTitle>
+          <SheetContent side="right" className="max-w-[calc(100vw-2rem)] gap-0 p-0 data-[side=right]:w-96">
+            <SheetTitle className="shrink-0 border-b border-border px-4 py-3 pr-14">
+              {t("playground.chat.page.inspector")}
+            </SheetTitle>
             {inspector}
           </SheetContent>
         </Sheet>
