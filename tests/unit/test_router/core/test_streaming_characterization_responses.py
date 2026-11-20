@@ -273,6 +273,21 @@ async def test_non_text_output_prevents_a_fresh_response_on_retry_or_fallback(
     assert host.deployments_called() == ["a"]
 
 
+async def test_lifecycle_events_after_output_are_forwarded_before_the_stream_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(OUTPUT_ITEM_ADDED), Event(IN_PROGRESS), error=cut()))
+    host.answer("openai/b", fallback_ok())
+    stream: Final = await open_stream(build(make_core, num_retries=2))
+    assert isinstance(stream, BaseResponsesAPIStreamingIterator)
+    assert getattr(await anext(stream), "type", None) == CREATED
+    assert getattr(await anext(stream), "type", None) == OUTPUT_ITEM_ADDED
+    assert getattr(await anext(stream), "type", None) == IN_PROGRESS
+    with pytest.raises(litellm.RateLimitError, match="stream cut"):
+        await anext(stream)
+    assert host.deployments_called() == ["a"]
+
+
 async def test_after_text_the_fallback_receives_the_partial_output_and_a_request_to_continue(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:

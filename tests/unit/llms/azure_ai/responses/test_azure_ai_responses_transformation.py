@@ -729,7 +729,10 @@ async def test_a_model_router_keeps_the_namespace_of_custom_tool_history():
 
     await litellm.aresponses(
         model="azure_ai/model_router/model-router",
-        input=[{**item, "namespace": "editor"} if item["type"] == "custom_tool_call" else item for item in CUSTOM_TOOL_HISTORY],
+        input=[
+            {**item, "namespace": "editor"} if item["type"] == "custom_tool_call" else item
+            for item in CUSTOM_TOOL_HISTORY
+        ],
         api_base=FOUNDRY_PROJECT_BASE,
         api_key="fake-key",
     )
@@ -1656,5 +1659,5 @@ async def test_acompletion_reaches_the_agent_through_the_project_responses_api()
     assert body["agent_reference"] == {"type": "agent_reference", "name": "support-agent"}
     assert "model" not in body
     assert "instructions" not in body
-    assert body["input"][0] == SYSTEM_PROMPT
+    assert body["input"][0] == {**SYSTEM_PROMPT, "content": [{"type": "input_text", "text": "Answer in French"}]}
     assert response.choices[0].message.content == "4"
