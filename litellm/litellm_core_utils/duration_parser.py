@@ -327,7 +327,12 @@ def _handle_hour_reset(current_time: datetime, base_midnight: datetime, value: i
     else:
         next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
 
-    # Handle overnight case
+    # Handle overnight case. Carry past midnight with real date arithmetic instead
+    # of wrapping mod 24: for durations of a day or more (e.g. "48h") the wrap
+    # collapses the reset onto the next midnight, so the budget window comes out
+    # far shorter than configured on every reset. Anchoring at today's midnight
+    # keeps sub-day grids wall-clock identical and gives day-plus durations the
+    # same "from the start of today" convention the day handler uses for Nd.
     if next_hour >= 24:
         return base_midnight + timedelta(hours=next_hour)
 
