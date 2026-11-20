@@ -96,10 +96,13 @@ def get_budget_window_reset_fields(
     *,
     reset_at: datetime | None = None,
     settings: BudgetResetSettings | None = None,
+    now: datetime | None = None,
 ) -> Mapping[str, str]:
     configured: Final = settings or get_budget_reset_settings()
-    end: Final = reset_at if reset_at is not None else compute_budget_reset_at(budget_duration, configured)
-    start: Final = get_budget_window_start(budget_duration, end, configured.timezone, configured.reset_time_of_day)
+    current: Final = now if now is not None else datetime.now(timezone.utc)
+    end: Final = reset_at if reset_at is not None else compute_budget_reset_at(budget_duration, configured, current)
+    scheduled: Final = get_budget_window_start(budget_duration, end, configured.timezone, configured.reset_time_of_day)
+    start: Final = scheduled if reset_at is not None else min(scheduled, current)
     return MappingProxyType(
         {
             "reset_at": end.astimezone(timezone.utc).isoformat(),
