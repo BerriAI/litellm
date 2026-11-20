@@ -88,6 +88,8 @@ mod _native {
     #[pymodule_export]
     use crate::redis::client::NativeRedisClient;
     #[pymodule_export]
+    use crate::redis::store::active_teams::{NativeActiveTeams, PyActiveMember};
+    #[pymodule_export]
     use crate::redis::store::auth_cache::{NativeAuthCache, PyLocalSizes};
     #[pymodule_export]
     use crate::redis::store::deployment_health::NativeDeploymentHealth;
@@ -218,6 +220,8 @@ mod tests {
                 "NativeRouterUsage",
                 "NativeUsageRead",
                 "NativeSensitiveRoutePins",
+                "NativeActiveTeams",
+                "ActiveMember",
                 "NativeRedisStoreError",
                 "NativeSpendCounters",
                 "PostCallSettlement",

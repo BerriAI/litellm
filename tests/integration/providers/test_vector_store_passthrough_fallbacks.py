@@ -1,6 +1,8 @@
 import json
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
+from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Final
@@ -10,8 +12,9 @@ import yaml
 from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, gateway_from_environment
-from tests.integration._support.process import owned_proxy
 from tests.integration._support.forward_proxy import tunnelling_forward_proxy
+from tests.integration._support.process import owned_proxy
+from tests.integration._support.redis_process import owned_redis
 from tests.integration._support.tls import server_context, write_self_signed_cert
 from tests.integration._support.vertex import service_account_json
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
@@ -19,8 +22,39 @@ from tests.integration._support.wire import Reply, Request, Wire, wire_server
 PROVIDERS: Final = ("azure_ai", "milvus", "opensearch")
 
 
+@contextmanager
+def _native_search_gateway(
+    gateway: Gateway,
+    wire: Wire,
+    config: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[tuple[Gateway, Wire]]:
+    directory: Final = tmp_path_factory.mktemp("native-search-isolated")
+    with (
+        owned_redis(directory) as cache,
+        owned_proxy(
+            gateway,
+            directory,
+            {"DATABASE_URL": os.environ["DATABASE_URL"], "REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)},
+            config=config,
+            workers=2,
+        ) as proxy,
+    ):
+        yield proxy, wire
+
+
+@pytest.fixture
+def native_search_gateway(
+    native_search_gateway_factory: Callable[[], AbstractContextManager[tuple[Gateway, Wire]]],
+) -> Iterator[tuple[Gateway, Wire]]:
+    with native_search_gateway_factory() as isolated:
+        yield isolated
+
+
 @pytest.fixture(scope="module")
-def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, Wire]]:
+def native_search_gateway_factory(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[Callable[[], AbstractContextManager[tuple[Gateway, Wire]]]]:
     directory: Final = tmp_path_factory.mktemp("native-search-fallbacks")
 
     def upstream(request: Request) -> Reply:
@@ -134,10 +168,7 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
         }
         config: Final = directory / "config.yaml"
         config.write_text(yaml.safe_dump(configuration))
-        with owned_proxy(
-            gateway, directory, {"DATABASE_URL": os.environ["DATABASE_URL"]}, config=config, workers=2
-        ) as proxy:
-            yield proxy, wire
+        yield partial(_native_search_gateway, gateway, wire, config, tmp_path_factory)
 
 
 @pytest.mark.parametrize(

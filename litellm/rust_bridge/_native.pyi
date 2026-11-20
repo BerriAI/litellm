@@ -285,6 +285,24 @@ class NativeDeploymentHealth:
     def set_sync(self, states: Mapping[str, object], ttl_seconds: float) -> None: ...
 
 @final
+@final
+class ActiveMember:
+    @property
+    def member(self) -> str: ...
+    @property
+    def priority_class(self) -> str: ...
+
+class NativeActiveTeams:
+    def __new__(
+        cls, client: NativeRedisClient | None, clock: Callable[[], float] | None = None
+    ) -> NativeActiveTeams: ...
+    @property
+    def has_redis(self) -> bool: ...
+    def touch(
+        self, model: str, member: str, priority_class: str, window_seconds: int
+    ) -> Future[list[ActiveMember]]: ...
+    def touch_local(self, model: str, member: str, priority_class: str, window_seconds: int) -> list[ActiveMember]: ...
+
 class NativeSensitiveRoutePins:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSensitiveRoutePins: ...
     def get(self, tenant: str, session_id: str, default_ttl_seconds: float) -> Future[str | None]: ...
@@ -2197,6 +2215,7 @@ def reserve_process_for_forking() -> None: ...
 
 __all__ = [
     "JWT_ID_JAG_TYP",
+    "ActiveMember",
     "AtomicApplied",
     "AtomicOverLimit",
     "AttemptShape",
@@ -2207,6 +2226,7 @@ __all__ = [
     "GuardedReply",
     "HuggingFaceEncoding",
     "LocalSizes",
+    "NativeActiveTeams",
     "NativeAdmission",
     "NativeAuthCache",
     "NativeBudgets",
