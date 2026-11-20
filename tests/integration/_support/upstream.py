@@ -323,6 +323,7 @@ class Provider:
         return JSONResponse(
             {
                 "access_token": "scripted-token",
+                "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
                 "token_type": "Bearer",
                 "expires_in": 3600,
             }
@@ -609,7 +610,9 @@ class Provider:
                     .replace("$REQUEST_ID", scenario_id)
                     .replace("$UNIQUE_ID", unique_id)
                 )
-                return Response(content=stream_body.encode(), media_type=response.content_type, headers=response.headers)
+                return Response(
+                    content=stream_body.encode(), media_type=response.content_type, headers=response.headers
+                )
             case EventStreamResponse():
                 events: Final = (
                     tuple(

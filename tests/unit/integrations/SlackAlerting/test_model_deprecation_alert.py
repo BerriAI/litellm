@@ -2,10 +2,10 @@
 
 import asyncio
 from itertools import chain, repeat
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 import litellm
 from litellm.constants import SLACK_MODEL_DEPRECATION_LOCK_ID
@@ -29,7 +29,7 @@ DEAD_ALIAS_DEPLOYMENT = {
 
 def _make_router(deployments):
     router = MagicMock()
-    router.get_model_list.return_value = deployments
+    router.registry.return_value.deployments.return_value = deployments
     return router
 
 
@@ -51,6 +51,21 @@ async def test_should_skip_when_no_alerting_configured():
     )
     sent = await alerting.send_model_deprecation_alert(llm_router=MagicMock())
     assert sent is False
+
+
+@pytest.mark.asyncio
+async def test_gateway_opt_out_stops_deprecation_checks() -> None:
+    async def disabled() -> bool:
+        return False
+
+    alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        alert_types=[AlertType.model_deprecation_warnings],
+        model_deprecations_enabled=disabled,
+    )
+    router: Final = MagicMock()
+    assert not await alerting.send_model_deprecation_alert(llm_router=router)
+    router.registry.assert_not_called()
 
 
 @pytest.mark.asyncio

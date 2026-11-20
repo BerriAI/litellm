@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 
 import httpx
 from pydantic import TypeAdapter
@@ -16,6 +16,8 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX: Final = "/oauth/token"
@@ -31,6 +33,21 @@ SERVICE_KEY_ENV_VAR: Final = "AICORE_SERVICE_KEY"
 DEFAULT_HOME_PATH: Final = os.path.join(os.path.expanduser("~"), ".aicore")
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class AICoreDeployment(TypedDict):
+    configurationId: ReadOnly[str]
+    scenarioId: ReadOnly[str]
+    deploymentUrl: ReadOnly[str]
+    createdAt: ReadOnly[str]
+
+
+class AICoreDeploymentList(TypedDict, total=False):
+    resources: ReadOnly[Sequence[AICoreDeployment]]
+
+
+class AICoreConfiguration(TypedDict):
+    executableId: ReadOnly[str]
 
 
 def _get_home() -> str:
@@ -58,12 +75,12 @@ def _get_nested(d: object, path: Sequence[str]) -> object:
     return cur
 
 
-def _load_json_env(var_name: str) -> dict[str, object] | None:
+def _load_json_env(var_name: str) -> object:
     raw: Final = os.environ.get(var_name)
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        return _DECODED_JSON.validate_python(json.loads(raw))
     except json.JSONDecodeError:
         return None
 
@@ -75,15 +92,23 @@ def _str_or_none(value: object) -> str | None:
         return None
 
 
-def _load_vcap() -> dict[str, Any]:
+def _load_vcap() -> object:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
 
 
+def _vcap_service_groups(vcap: object) -> Iterable[object]:
+    services_by_name: Final = as_str_mapping(vcap)
+    if services_by_name is not None:
+        return services_by_name.values()
+    raise AttributeError(f"'{type(vcap).__name__}' object has no attribute 'values'", name="values", obj=vcap)
+
+
 def _get_vcap_service(label: str) -> Mapping[str, object] | None:
-    for services in _load_vcap().values():
-        for svc in services:
-            if svc.get("label") == label:
-                return svc
+    for services in _vcap_service_groups(_load_vcap()):
+        for svc in iter_items(services):
+            service = decoded_json_object(svc)
+            if service.get("label") == label:
+                return service
     return None
 
 
@@ -112,7 +137,7 @@ CREDENTIAL_VALUES: Final[list[CredentialsValue]] = [
     CredentialsValue(
         "base_url",
         ("serviceurls", "AI_API_URL"),
-        transform_fn=lambda url: url.rstrip("/") + ("" if url.endswith("/v2") else "/v2"),
+        transform_fn=lambda url: ensure_api_route(url, "v2"),
     ),
     CredentialsValue(
         "cert_url",
@@ -195,7 +220,7 @@ def resolve_resource_group(sources: list[Source]) -> str | None:
 
 def _parse_service_key_once(
     service_key: str | dict | None,
-) -> dict[str, object] | None:
+) -> object:
     """
     Pre-parse service_key if it's a string to avoid repeated JSON parsing.
 
@@ -207,7 +232,7 @@ def _parse_service_key_once(
         return service_key
     if isinstance(service_key, str):
         try:
-            return json.loads(service_key)
+            return _DECODED_JSON.validate_python(json.loads(service_key))
         except json.JSONDecodeError:
             verbose_logger.warning("SAP service key is a string but not valid JSON. Skipping this source.")
             return None
@@ -217,7 +242,7 @@ def _parse_service_key_once(
     return None
 
 
-def _resolve_credential_from_service_key(service_key: str | dict | None, cv: CredentialsValue) -> str | None:
+def _resolve_credential_from_service_key(service_key: object, cv: CredentialsValue) -> str | None:
     if service_key is None:
         return None
     val: Final = _str_or_none(_get_nested(service_key, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,)))
@@ -252,14 +277,16 @@ def fetch_credentials(
     """
     config: Final = init_conf(profile)
 
-    service_key = _parse_service_key_once(service_key or litellm.sap_service_key or os.environ.get(SERVICE_KEY_ENV_VAR))
+    parsed_service_key: Final = _parse_service_key_once(
+        service_key or litellm.sap_service_key or os.environ.get(SERVICE_KEY_ENV_VAR)
+    )
     vcap_service: Final = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
     sources: Final = [
         Source("kwargs", lambda cv: _str_or_none(kwargs.get(cv.name))),
         Source(
             "service key",
-            lambda cv: _resolve_credential_from_service_key(service_key, cv),
+            lambda cv: _resolve_credential_from_service_key(parsed_service_key, cv),
         ),
         Source(
             "environment variables",

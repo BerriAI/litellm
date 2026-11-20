@@ -2,7 +2,7 @@
 Shared sanitization for ``output_config`` / ``output_format`` on Vertex AI
 Claude. Lives in its own module so both the chat-completion transformation
 (``transformation.py``) and the Messages pass-through transformation
-(``experimental_pass_through/transformation.py``) can import it without
+(``messages/transformation.py``) can import it without
 forming a cycle through the parent module's heavier imports.
 
 CodeQL flagged the ``..transformation`` import path as a potential cyclic
