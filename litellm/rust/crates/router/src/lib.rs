@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use litellm_config::{Config, Spelled};
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
-use litellm_llms::anthropic::model_capabilities::anthropic_model_capabilities;
+use litellm_llms::anthropic::model_capabilities::messages_route_capabilities;
 use litellm_model_catalog::Catalog;
 use litellm_python_compat::flags::lax_bool;
 use litellm_router_types::ExtraParams;
@@ -23,9 +23,9 @@ fn is_on(flag: Option<&Spelled<bool>>) -> bool {
     }
 }
 
-fn additional_drop_params(extra: &ExtraParams) -> Vec<String> {
+fn string_list(extra: &ExtraParams, key: &str) -> Vec<String> {
     extra
-        .get("additional_drop_params")
+        .get(key)
         .and_then(Value::as_array)
         .map(|names| {
             names
@@ -39,7 +39,7 @@ fn additional_drop_params(extra: &ExtraParams) -> Vec<String> {
 
 impl Router {
     pub fn from_config(config: &Config, catalog: &Catalog) -> Self {
-        let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref());
+        let drops_params_globally = config.litellm_settings.drop_params == Some(true);
         config
             .model_list
             .iter()
@@ -62,8 +62,9 @@ impl Router {
                             settings: MessagesSettings {
                                 drop_params,
                                 drops_unsupported_params: drop_params,
-                                additional_drop_params: additional_drop_params(
+                                additional_drop_params: string_list(
                                     &litellm_params.extra,
+                                    "additional_drop_params",
                                 ),
                                 base_model: litellm_params
                                     .extra
@@ -72,7 +73,7 @@ impl Router {
                                     .map(str::to_owned),
                                 ..MessagesSettings::default()
                             },
-                            capabilities: anthropic_model_capabilities(
+                            capabilities: messages_route_capabilities(
                                 catalog,
                                 &model.litellm_params.model,
                                 model.litellm_params.custom_llm_provider.as_deref(),
@@ -87,7 +88,13 @@ impl Router {
                                         .and_then(|value| value.as_bool())
                                 },
                             ),
+                            ..MessagesShaping::default()
                         },
+                        configurable_clientside_auth_params: string_list(
+                            &litellm_params.extra,
+                            "configurable_clientside_auth_params",
+                        )
+                        .into_boxed_slice(),
                         litellm_params,
                         ..Deployment::default()
                     },

@@ -87,7 +87,7 @@ export async function customerOrganizationsUsageCall({
 export const customerOrganizationRows = (organizations: readonly CustomerOrganization[], monthlyUsage: Activity) => {
   const totals = customerUsageTotals(monthlyUsage.results);
   return organizations.map((organization) => {
-    const monthlySpend = totals[organization.customer_org_id]?.spend ?? 0;
+    const monthlySpend = totals.get(organization.customer_org_id)?.spend ?? 0;
     const budgetEntity = {
       id: organization.customer_org_id,
       label: organization.alias || organization.customer_org_id,
@@ -113,6 +113,17 @@ export const customerOrganizationRows = (organizations: readonly CustomerOrganiz
 };
 
 export type CustomerOrganizationRow = ReturnType<typeof customerOrganizationRows>[number];
+
+export function customerOrganizationBudgetSource(
+  organization: CustomerOrganization,
+  groups?: readonly components["schemas"]["OrganizationBudget"][],
+): { kind: "group"; name: string | null } | { kind: "custom" } | null {
+  if (!organization.budget_id) return organization.budget ? { kind: "custom" } : null;
+  const group = groups?.find((entry) => entry.budget_id === organization.budget_id);
+  const shared = organization.budget_is_shared ?? (groups ? Boolean(group) : null);
+  if (shared) return { kind: "group", name: group?.name ?? null };
+  return shared === false ? { kind: "custom" } : null;
+}
 
 const STATUS_ORDER = {
   "customerPortal.analytics.noLimit": 0,
