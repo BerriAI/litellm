@@ -3039,3 +3039,160 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     assert signatures == [get_dummy_thought_signature()]
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
     assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == get_dummy_thought_signature()
+
+
+def _generated_image(data: str, thought_signature: str | None = None) -> dict[str, object]:
+    signature_fields: Final = {} if thought_signature is None else {"thought_signature": thought_signature}
+    return {
+        "image_url": {"url": f"data:image/png;base64,{data}", "detail": "auto"},
+        "index": 0,
+        "type": "image_url",
+        **({"provider_specific_fields": signature_fields} if signature_fields else {}),
+    }
+
+
+def _part_label(part: PartType) -> str:
+    if "text" in part:
+        return part["text"]
+    if "inline_data" in part:
+        return part["inline_data"]["data"]
+    return part["function_call"]["name"]
+
+
+def _model_turn_signatures(assistant_message: Mapping[str, object]) -> list[tuple[str, str | None]]:
+    contents: Final = gemini_convert_messages_with_history(
+        messages=[{"role": "user", "content": "Draw a cat"}, assistant_message],
+        model="gemini-3.1-flash-image",
+    )
+    return [(_part_label(part), part.get("thoughtSignature")) for part in contents[1]["parts"]]
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            [("Y2F0", "sig-cat")],
+            id="image-only",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            [("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat")],
+            id="signed-text-and-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            [("Here is your cat.", None), ("Y2F0", "sig-cat")],
+            id="unsigned-text-signed-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Here is your cat."}],
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            [("Here is your cat.", None), ("Y2F0", "sig-cat")],
+            id="list-content",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "images": [_generated_image("ZHJhZnQ="), _generated_image("ZmluYWw=", "sig-final")],
+                "provider_specific_fields": {"thought_signatures": ["sig-thought", "sig-final"]},
+            },
+            [("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final")],
+            id="unsigned-draft-before-signed-final",
+        ),
+    ],
+)
+def test_assistant_image_replays_its_own_thought_signature(
+    assistant_message: Mapping[str, object], expected: list[tuple[str, str | None]]
+) -> None:
+    assert _model_turn_signatures(assistant_message) == expected
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            [("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat")],
+            id="signed-text-and-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            [("Here is your cat.", None), ("Y2F0", "sig-cat")],
+            id="unsigned-text-signed-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "images": [_generated_image("ZHJhZnQ="), _generated_image("ZmluYWw=")],
+                "provider_specific_fields": {"thought_signatures": ["sig-final"]},
+            },
+            [("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final")],
+            id="image-only-right-aligned",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Drawing it now.",
+                "images": [_generated_image("Y2F0")],
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "save_image", "arguments": "{}"},
+                        "provider_specific_fields": {"thought_signature": "sig-tool"},
+                    }
+                ],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat", "sig-tool"]},
+            },
+            [("Drawing it now.", "sig-text"), ("Y2F0", "sig-cat"), ("save_image", "sig-tool")],
+            id="tool-call-signature-stays-on-tool-call",
+        ),
+    ],
+)
+def test_assistant_image_history_without_per_image_signature_uses_message_signatures(
+    assistant_message: Mapping[str, object], expected: list[tuple[str, str | None]]
+) -> None:
+    assert _model_turn_signatures(assistant_message) == expected
+
+
+def test_assistant_image_item_without_url_takes_no_history_signature() -> None:
+    assistant_message: Final = {
+        "role": "assistant",
+        "content": None,
+        "images": [_generated_image("Y2F0"), {"image_url": {"url": ""}, "index": 1, "type": "image_url"}],
+        "provider_specific_fields": {"thought_signatures": ["sig-earlier", "sig-cat"]},
+    }
+
+    assert _model_turn_signatures(assistant_message) == [("Y2F0", "sig-cat")]

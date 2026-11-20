@@ -18,7 +18,12 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+    has_attributes,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import (
     GeminiMediaSource,
@@ -722,6 +727,103 @@ def _collect_tool_call_thought_signatures(
     return frozenset(signatures)
 
 
+def _message_thought_signatures(assistant_msg: ChatCompletionAssistantMessage) -> Sequence[object]:
+    fields: Final = as_str_mapping(assistant_msg.get("provider_specific_fields"))
+    return (as_object_list(fields.get("thought_signatures")) if fields is not None else None) or ()
+
+
+def _own_image_thought_signature(image_item: Mapping[str, object]) -> str | None:
+    fields: Final = as_str_mapping(image_item.get("provider_specific_fields"))
+    signature: Final = fields.get("thought_signature") if fields is not None else None
+    return signature if isinstance(signature, str) and signature else None
+
+
+def _assistant_image_source(image_item: Mapping[str, object]) -> GeminiMediaSource | None:
+    image_url: Final = as_str_mapping(image_item.get("image_url"))
+    url: Final = image_url.get("url") if image_url is not None else None
+    if image_url is None or not isinstance(url, str) or not url:
+        return None
+    format_hint: Final = image_url.get("format") or image_url.get("mime_type") or image_url.get("content_type")
+    detail: Final = image_url.get("detail")
+    return GeminiMediaSource(
+        url=url,
+        format=format_hint if isinstance(format_hint, str) else None,
+        detail=detail if isinstance(detail, str) else None,
+    )
+
+
+def _right_aligned(signatures: Sequence[str], count: int) -> tuple[str | None, ...]:
+    claimed: Final = min(count, len(signatures))
+    return (None,) * (count - claimed) + tuple(signatures[len(signatures) - claimed :])
+
+
+def _signed_assistant_images(
+    images: object,
+    message_signatures: Sequence[object],
+    tool_call_signatures: frozenset[str],
+) -> tuple[tuple[GeminiMediaSource, str | None], ...]:
+    items: Final = tuple(filter(None, map(as_str_mapping, as_object_list(images) or ())))
+    sourced: Final = tuple(
+        (source, _own_image_thought_signature(item))
+        for item in items
+        if (source := _assistant_image_source(item)) is not None
+    )
+    if any(signature for _, signature in sourced):
+        return sourced
+    pool: Final = tuple(
+        signature
+        for signature in message_signatures
+        if isinstance(signature, str) and signature not in tool_call_signatures
+    )
+    return tuple(zip((source for source, _ in sourced), _right_aligned(pool, len(sourced)), strict=True))
+
+
+def _assistant_text_thought_signature(
+    message_signatures: Sequence[object],
+    signed_images: Sequence[tuple[GeminiMediaSource, str | None]],
+    tool_call_signatures: frozenset[str],
+) -> str | None:
+    claimed: Final = tuple(signature for _, signature in signed_images if signature is not None)
+    first: Final = next((signature for signature in message_signatures if signature not in claimed), None)
+    return first if isinstance(first, str) and first not in tool_call_signatures else None
+
+
+def _assistant_image_part(
+    source: GeminiMediaSource,
+    thought_signature: str | None,
+    model: str | None,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+) -> PartType:
+    part: Final = encode_gemini_media_source(source, model, vertex_project, vertex_credentials)
+    return part if thought_signature is None else {**part, "thoughtSignature": thought_signature}
+
+
+def _signed_text_and_image_parts(
+    assistant_msg: ChatCompletionAssistantMessage,
+    model: str | None,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+) -> tuple[PartType, ...]:
+    tool_call_signatures: Final = _collect_tool_call_thought_signatures(assistant_msg)
+    message_signatures: Final = _message_thought_signatures(assistant_msg)
+    signed_images: Final = _signed_assistant_images(
+        assistant_msg.get("images"), message_signatures, tool_call_signatures
+    )
+    image_parts: Final = tuple(
+        _assistant_image_part(source, signature, model, vertex_project, vertex_credentials)
+        for source, signature in signed_images
+    )
+    content: Final = assistant_msg.get("content")
+    if not isinstance(content, str):
+        return image_parts
+    text_signature: Final = _assistant_text_thought_signature(message_signatures, signed_images, tool_call_signatures)
+    text_part: Final = (
+        PartType(text=content) if text_signature is None else PartType(text=content, thoughtSignature=text_signature)
+    )
+    return (text_part, *image_parts)
+
+
 def _gemini_history_media_part(
     content: Mapping[str, object],
     model: str | None,
@@ -887,62 +989,10 @@ def gemini_convert_messages_with_history(
                                 _parts.append(media_part)
 
                     assistant_content.extend(_parts)
-                elif _message_content is not None and isinstance(_message_content, str):
-                    assistant_text = _message_content
-                    # Check if message has thought_signatures in provider_specific_fields
-                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
-                    thought_signatures = None
-                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
-                        thought_signatures = provider_specific_fields.get("thought_signatures")
 
-                    # A signature that is already carried by one of this message's
-                    # tool-call parts must not be attached to the text part too:
-                    # Gemini bills every replayed copy as the previous turn's full
-                    # reasoning token count on gemini-3 and newer models
-                    tool_call_signatures = _collect_tool_call_thought_signatures(assistant_msg)
-
-                    if (
-                        thought_signatures
-                        and isinstance(thought_signatures, list)
-                        and len(thought_signatures) > 0
-                        and thought_signatures[0] not in tool_call_signatures
-                    ):
-                        # Use the first signature for the text part (Gemini expects one signature per part)
-                        assistant_content.append(
-                            PartType(
-                                text=assistant_text,
-                                thoughtSignature=thought_signatures[0],
-                            )
-                        )
-                    else:
-                        assistant_content.append(PartType(text=assistant_text))
-
-                ## HANDLE ASSISTANT IMAGES FIELD
-                # Process images field if present (for generated images from assistant)
-                assistant_images = assistant_msg.get("images")
-                if assistant_images is not None and isinstance(assistant_images, list):
-                    for image_item in assistant_images:
-                        if isinstance(image_item, dict):
-                            image_url_obj = image_item.get("image_url")
-                            if isinstance(image_url_obj, dict):
-                                assistant_image_url = image_url_obj.get("url")
-                                format = (
-                                    image_url_obj.get("format")
-                                    or image_url_obj.get("mime_type")
-                                    or image_url_obj.get("content_type")
-                                )
-                                detail = image_url_obj.get("detail")
-                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
-                                if assistant_image_url:
-                                    _part = _process_gemini_media(
-                                        image_url=assistant_image_url,
-                                        format=format,
-                                        media_resolution_enum=media_resolution_enum,
-                                        model=model,
-                                        vertex_project=vertex_project,
-                                        vertex_credentials=vertex_credentials,
-                                    )
-                                    assistant_content.append(_part)
+                assistant_content.extend(
+                    _signed_text_and_image_parts(assistant_msg, model, vertex_project, vertex_credentials)
+                )
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (

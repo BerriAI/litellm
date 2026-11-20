@@ -290,10 +290,15 @@ class ImageURLObject(TypedDict, total=False):
     detail: str | None
 
 
+class ImageProviderSpecificFields(TypedDict):
+    thought_signature: ReadOnly[str]
+
+
 class ImageURLListItem(TypedDict):
     image_url: ImageURLObject
     index: int
     type: Literal["image_url"]
+    provider_specific_fields: ReadOnly[NotRequired[ImageProviderSpecificFields]]
 
 
 class MessageContentTextObject(TypedDict):
