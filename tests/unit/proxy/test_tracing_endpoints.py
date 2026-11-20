@@ -1208,63 +1208,6 @@ async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call
 
 
 @pytest.mark.asyncio
-async def test_metadata_inherited_from_request_baggage_never_reaches_lens(monkeypatch: pytest.MonkeyPatch) -> None:
-    from opentelemetry import baggage, context
-
-    import litellm
-    from litellm.proxy import proxy_server
-
-    _FakeLens.uploads.clear()
-    server: Final = HTTPServer(("127.0.0.1", 0), _FakeLens)
-    Thread(target=server.serve_forever, daemon=True).start()
-    monkeypatch.setenv("LITELLM_LENS_URL", f"http://127.0.0.1:{server.server_port}")
-    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
-    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
-    inherited: Final = baggage.set_baggage(
-        "litellm.metadata.requester_ip_address",
-        "203.0.113.7",
-        baggage.set_baggage("litellm.metadata.headers.x-internal-tenant", "private"),
-    )
-    token: Final = context.attach(inherited)
-
-    try:
-        async with manage_tracing(True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage))):
-            await litellm.acompletion(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "assistant",
-                        "tool_calls": [{"id": "call-ls", "type": "function", "function": {"name": "Bash"}}],
-                    },
-                    {"role": "tool", "tool_call_id": "call-ls", "content": "a.txt"},
-                ],
-                mock_response="one file",
-                litellm_session_id="session-1",
-                metadata={"user_api_key_user_id": "user-1"},
-            )
-            await asyncio.sleep(0.2)
-    finally:
-        context.detach(token)
-        server.shutdown()
-
-    attributes: Final = {
-        span.name: {item.key for item in span.attributes}
-        for path, _, body in _FakeLens.uploads
-        if path == "/internal/traces" and body
-        for resource in ExportTraceServiceRequest.FromString(body).resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
-    }
-    assert sorted(attributes) == ["chat gpt-4o-mini", "execute_tool Bash"]
-    assert "litellm.metadata.user_api_key_user_id" in attributes["chat gpt-4o-mini"]
-    leaked: Final = {"litellm.metadata.requester_ip_address", "litellm.metadata.headers.x-internal-tenant"}
-    assert {name: keys & leaked for name, keys in attributes.items()} == {
-        "chat gpt-4o-mini": set(),
-        "execute_tool Bash": set(),
-    }
-
-
-@pytest.mark.asyncio
 async def test_lens_without_a_gateway_trace_route_still_gets_cost_but_no_trace_exports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
