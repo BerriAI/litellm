@@ -417,10 +417,38 @@ class CustomOpenAPISpec:
             return openapi_schema
 
     @staticmethod
-    def add_config_yaml_schema(openapi_schema: JsonObject, description: str) -> None:
-        from litellm.proxy._types import ConfigYAML
+    def _without_required(def_schema: JsonValue, filled: frozenset[str]) -> JsonValue:
+        obj: Final = CustomOpenAPISpec._as_object(def_schema)
+        required: Final = [name for name in CustomOpenAPISpec._as_array(obj.get("required")) if name not in filled]
+        rest: Final = {key: value for key, value in obj.items() if key != "required"}
+        return {**rest, "required": required} if required else rest
 
-        _ = CustomOpenAPISpec.add_request_schema(openapi_schema, ConfigYAML, "ConfigYAML", (), "config.yaml")
+    @staticmethod
+    def _config_yaml_input_schema(schema: JsonObject, filled_by_def: Mapping[str, frozenset[str]]) -> JsonObject:
+        defs: Final = CustomOpenAPISpec._as_object(schema.get("$defs"))
+        return {
+            **schema,
+            "$defs": {
+                name: CustomOpenAPISpec._without_required(d, filled_by_def[name]) if name in filled_by_def else d
+                for name, d in defs.items()
+            },
+        }
+
+    @staticmethod
+    def add_config_yaml_schema(openapi_schema: JsonObject, description: str) -> None:
+        from litellm.proxy._types import ConfigYAML, ModelInfo, ModelParams
+
+        # Fields the models' before-validators fill in at load, so a config may omit them.
+        filled_at_load: Final = MappingProxyType(
+            {
+                ModelParams.__name__: frozenset({"model_info"}),
+                ModelInfo.__name__: frozenset({"id", "mode", "base_model"}),
+            }
+        )
+        schema: Final = CustomOpenAPISpec.get_pydantic_schema(ConfigYAML) or {}
+        CustomOpenAPISpec.add_schema_to_components(
+            openapi_schema, "ConfigYAML", CustomOpenAPISpec._config_yaml_input_schema(schema, filled_at_load)
+        )
         paths: Final = CustomOpenAPISpec._as_object(openapi_schema.setdefault("paths", {}))
         path_item: Final = CustomOpenAPISpec._as_object(paths.setdefault("/config/yaml", {}))
         _ = path_item.setdefault(

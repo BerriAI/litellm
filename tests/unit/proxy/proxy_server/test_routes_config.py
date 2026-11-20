@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import json
 import re
 from collections.abc import Callable
@@ -22,8 +23,11 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import jsonschema
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from .conftest import VOLATILE_KEYS, normalize
 
@@ -1986,7 +1990,9 @@ def test_config_yaml_invalid_method(client):
     assert response.content != b'{"hello":"world"}'
 
 
-def test_openapi_documents_config_yaml_schema_and_keeps_config_update_hidden(app, client, monkeypatch):
+def test_openapi_documents_config_yaml_schema_and_keeps_config_update_hidden(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy._types import ConfigYAML
 
     monkeypatch.setattr(app, "openapi_schema", None)
@@ -2012,7 +2018,9 @@ def test_openapi_documents_config_yaml_schema_and_keeps_config_update_hidden(app
     assert referenced <= set(schema["components"]["schemas"])
 
 
-def test_openapi_config_yaml_schema_keeps_router_model_info_component_name(app, client, monkeypatch):
+def test_openapi_config_yaml_schema_keeps_router_model_info_component_name(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy._types import ModelInfo as ProxyModelInfo
     from litellm.types.router import ModelInfo as RouterModelInfo
 
@@ -2033,3 +2041,65 @@ def test_openapi_config_yaml_schema_keeps_router_model_info_component_name(app, 
     config_model_info: Final = components[config_model_info_ref.removeprefix("#/components/schemas/")]
     assert set(config_model_info["properties"]) == set(ProxyModelInfo.model_fields)
     assert not {name for name in model_info_components if "__" in name}
+
+
+_OPENAPI_DOCUMENT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _proxy_accepts(config: dict[str, JsonValue]) -> bool:
+    from litellm.proxy._types import ConfigYAML
+
+    try:
+        _ = ConfigYAML.model_validate(copy.deepcopy(config))
+    except ValidationError:
+        return False
+    return True
+
+
+_LITELLM_PARAMS: Final = {"model": "openai/gpt-4o"}
+
+
+@pytest.fixture(scope="module")
+def config_yaml_validator(app: FastAPI, client: TestClient) -> jsonschema.Draft202012Validator:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(app, "openapi_schema", None)
+        response: Final = client.get("/openapi.json")
+    assert response.status_code == 200
+    document: Final = _OPENAPI_DOCUMENT.validate_python(response.json())
+    return jsonschema.Draft202012Validator(
+        {"$ref": "#/components/schemas/ConfigYAML", "components": document["components"]}
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_entry", "accepted"),
+    [
+        pytest.param({"model_name": "m", "litellm_params": _LITELLM_PARAMS}, True, id="model_info_omitted"),
+        pytest.param({"model_name": "m", "litellm_params": _LITELLM_PARAMS, "model_info": {}}, True, id="empty"),
+        pytest.param(
+            {"model_name": "m", "litellm_params": _LITELLM_PARAMS, "model_info": {"id": "a"}}, True, id="partial"
+        ),
+        pytest.param(
+            {
+                "model_name": "m",
+                "litellm_params": _LITELLM_PARAMS,
+                "model_info": {"id": "a", "mode": "embedding", "base_model": "gpt-4", "max_tokens": 10},
+            },
+            True,
+            id="explicit",
+        ),
+        pytest.param({"litellm_params": _LITELLM_PARAMS}, False, id="model_name_missing"),
+        pytest.param({"model_name": "m"}, False, id="litellm_params_missing"),
+        pytest.param({"model_name": "m", "litellm_params": "openai/gpt-4o"}, False, id="litellm_params_not_object"),
+        pytest.param(
+            {"model_name": "m", "litellm_params": _LITELLM_PARAMS, "model_info": {"mode": "bogus"}},
+            False,
+            id="unknown_mode",
+        ),
+    ],
+)
+def test_config_yaml_schema_accepts_the_model_entries_the_proxy_accepts(
+    config_yaml_validator: jsonschema.Draft202012Validator, model_entry: dict[str, JsonValue], accepted: bool
+) -> None:
+    config: Final[dict[str, JsonValue]] = {"model_list": [model_entry]}
+    assert (config_yaml_validator.is_valid(config), _proxy_accepts(config)) == (accepted, accepted)
