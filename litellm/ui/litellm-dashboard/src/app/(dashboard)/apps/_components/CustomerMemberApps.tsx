@@ -11,9 +11,8 @@ import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { loadApps, loadOrganizationApp, organizationAppKey } from "./appApi";
 import { appBaseBudget, type App, type AppMember } from "./appForms";
-import CustomerBudgetCompactFields from "../../customers/_components/CustomerBudgetCompactFields";
 import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
-import { CustomerBudgetDialog, CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
+import { CustomerBudgetDialog, CustomerBudgetFormDialog } from "../../customers/_components/CustomerBudgetDialog";
 import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
 import { customerBudgetPatch, hasLegacyCustomerBudget } from "../../customers/_components/customerBudgetForm";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -149,8 +148,21 @@ function MemberBudgetLoader(props: {
     queryFn: () => loadOrganizationApp(props.app.app_id, props.organizationId),
     enabled: needsInherited,
   });
-  if (needsInherited && inherited.isPending) return <p role="status">{t("apps.loading")}</p>;
-  if (needsInherited && inherited.isError) return <ErrorState onRetry={() => void inherited.refetch()} />;
+  if (needsInherited && (inherited.isPending || inherited.isError))
+    return (
+      <CustomerBudgetDialog
+        title={t("apps.editMemberBudget", { alias: props.app.alias })}
+        description={t("apps.memberOverrideHint")}
+        pending={false}
+        onClose={props.onCancel}
+      >
+        {inherited.isPending ? (
+          <p role="status">{t("apps.loading")}</p>
+        ) : (
+          <ErrorState onRetry={() => void inherited.refetch()} />
+        )}
+      </CustomerBudgetDialog>
+    );
   const original = appBaseBudget(
     props.row,
     inherited.data?.effective_customer_member_budget ?? props.app.default_customer_member_budget,
@@ -192,39 +204,25 @@ function MemberBudgetForm({
   });
   const { fields, setFields, update, pending, error, save } = form;
   return (
-    <CustomerBudgetDialog
+    <CustomerBudgetFormDialog
       title={t("apps.editMemberBudget", { alias: app.alias })}
       description={t("apps.memberOverrideHint")}
       pending={pending}
       onClose={onCancel}
+      form={{ error, onSubmit: save, saveLabel: t("apps.saveMemberBudget") }}
     >
-      <CustomerBudgetForm
-        pending={pending}
-        error={error}
-        onSubmit={save}
-        onClose={onCancel}
-        saveLabel={t("apps.saveMemberBudget")}
-      >
-        <CustomerBudgetEditor
-          id={`app-member-${app.app_id}`}
-          source={{
-            profiles: [],
-            value: fields.budgetEnabled ? "custom" : "inherit",
-            title: t("apps.source"),
-            disabled: pending,
-            inheritedOption: { label: t("apps.inheritedBudget"), summary: t("apps.inheritMemberHint") },
-            onChange: (value) => update("budgetEnabled", value === "custom"),
-          }}
-        >
-          <CustomerBudgetCompactFields
-            id={`app-member-${app.app_id}`}
-            fields={fields}
-            original={original}
-            disabled={pending}
-            onChange={setFields}
-          />
-        </CustomerBudgetEditor>
-      </CustomerBudgetForm>
-    </CustomerBudgetDialog>
+      <CustomerBudgetEditor
+        id={`app-member-${app.app_id}`}
+        budget={{ modelScope: app, fields, disabled: pending, onChange: setFields }}
+        source={{
+          profiles: [],
+          value: fields.budgetEnabled ? "custom" : "inherit",
+          title: t("apps.source"),
+          disabled: pending,
+          inheritedOption: { label: t("apps.inheritedBudget"), summary: t("apps.inheritMemberHint") },
+          onChange: (value) => update("budgetEnabled", value === "custom"),
+        }}
+      />
+    </CustomerBudgetFormDialog>
   );
 }

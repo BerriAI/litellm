@@ -2796,7 +2796,9 @@ class CommonBatchFilesUtils:
 
         aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(
-            AwsAuthParams.model_validate(optional_params), aws_region_name
+            AwsAuthParams.model_validate(optional_params),
+            aws_region_name,
+            _JSON_OBJECT.validate_python(optional_params),
         )
 
         # Prepare the request data

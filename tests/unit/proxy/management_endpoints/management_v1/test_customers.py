@@ -350,6 +350,8 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
         ("PATCH", "/app_customer_organization_budget_groups", {}),
         ("GET", "/app_budget_groups", None),
         ("PATCH", "/app_budget_groups", {}),
+        ("GET", "/app_customer_member_budget_groups", None),
+        ("PATCH", "/app_customer_member_budget_groups", {}),
         ("GET", "/customer_organizations/id", None),
         ("PATCH", "/customer_organizations/id", {}),
         ("DELETE", "/customer_organizations/id", None),
@@ -1096,6 +1098,7 @@ def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collec
         ("cheap", {"max_budget": 80, "budget_limits": [{"budget_duration": "1mo", "max_budget": 7}]}),
         ("same", {"max_budget": 7}),
         ("annual", {"budget_limits": [{"budget_duration": "12mo", "max_budget": 100}]}),
+        ("custom", {"budget_limits": [{"budget_duration": "7d", "max_budget": 9}]}),
         ("zero", {"max_budget": 0}),
     )
     id_field: Final = "customer_team_id" if collection == "customer_teams" else "customer_member_id"
@@ -1109,9 +1112,9 @@ def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collec
         assert created.status_code == 201, created.text
     scope: Final = {"parent_org_id": "sort-org"} if collection == "customer_teams" else {"parent_team_id": "parent"}
     budget_order: Final = (
-        ("zero", "cheap", "same", "expensive", "annual", "empty")
+        ("zero", "cheap", "same", "custom", "expensive", "annual", "empty")
         if sort == "budget_asc"
-        else ("annual", "expensive", "cheap", "same", "zero", "empty")
+        else ("annual", "expensive", "custom", "cheap", "same", "zero", "empty")
     )
     expected: Final = (*budget_order, "parent") if collection == "customer_teams" else budget_order
     for page in range(1, (len(expected) + 1) // 2 + 1):
@@ -2433,7 +2436,9 @@ def test_explicit_organization_budget_selection_overrides_the_default(selection:
         assert created.json()["budget_is_shared"] is False
 
 
-@pytest.mark.parametrize("catalog", ("app_budget_groups", "app_customer_organization_budget_groups"))
+@pytest.mark.parametrize(
+    "catalog", ("app_budget_groups", "app_customer_organization_budget_groups", "app_customer_member_budget_groups")
+)
 def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions(catalog: str) -> None:
     http: Final = client()
     organization: Final = organization_groups(http, {"name": "Standard", "tpm_limit": 1000})

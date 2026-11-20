@@ -91,6 +91,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.password_policy import MIN_ALLOWED_LENGTH
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.fips import fips_mode_active
+from litellm.proxy.common_utils.hook_cache import HookCache
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -2273,10 +2274,14 @@ class ProxyLogging:
         self,
         user_api_key_cache: UserApiKeyCache,
         premium_user: bool = False,
+        hook_cache: DualCache | None = None,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
+        self.hook_cache: Final = (
+            hook_cache if hook_cache is not None else HookCache(auth_cache=lambda: user_api_key_cache)
+        )
         self.internal_usage_cache: InternalUsageCache = InternalUsageCache(
             dual_cache=DualCache(default_in_memory_ttl=1)  # ping redis cache every 1s
         )
@@ -2972,7 +2977,7 @@ class ProxyLogging:
         if hook_type == "pre_call":
             return await target.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
-                cache=self.call_details["user_api_key_cache"],
+                cache=self.hook_cache,
                 data=data,
                 call_type=call_type,
             )
@@ -3727,7 +3732,7 @@ class ProxyLogging:
                     return None
                 response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(
                     user_api_key_dict=run.user_api_key_dict,
-                    cache=self.call_details["user_api_key_cache"],
+                    cache=self.hook_cache,
                     data=data,
                     call_type=run.call_type,
                 )

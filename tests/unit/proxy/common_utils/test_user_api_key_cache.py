@@ -14,7 +14,6 @@ from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    budget_windows_absent_cache_key,
     end_user_cache_key,
     get_management_object_ttl,
     is_user_key_cache_key,
@@ -405,29 +404,6 @@ class TestUserKeyObjectPartition:
         assert first_key.token == tokens[0]
         assert cache.get_cache(end_user_cache_key("u0")) == {"user_id": "u0"}
 
-    def test_update_in_memory_max_size_applies_to_no_window_notes(self):
-        cache = UserApiKeyCache()
-        cache.update_in_memory_max_size(1)
-
-        cache.budget_windows_absent_cache.set_cache(key=budget_windows_absent_cache_key("key", "first"), value=True)
-        cache.budget_windows_absent_cache.set_cache(key=budget_windows_absent_cache_key("key", "second"), value=True)
-
-        assert cache.budget_windows_absent_cache.get_cache(key=budget_windows_absent_cache_key("key", "first")) is None
-        assert cache.budget_windows_absent_cache.get_cache(key=budget_windows_absent_cache_key("key", "second")) is True
-
-    def test_update_cache_ttl_applies_to_no_window_notes(self):
-        clock: Final = _ManualClock()
-        cache: Final = UserApiKeyCache(
-            default_in_memory_ttl=60, budget_windows_absent_in_memory_cache=InMemoryCache(clock=clock)
-        )
-        cache.update_cache_ttl(default_in_memory_ttl=5, default_redis_ttl=5)
-        note: Final = budget_windows_absent_cache_key("key", "no-windows")
-
-        cache.budget_windows_absent_cache.set_cache(key=note, value=True)
-        clock.advance(6)
-
-        assert cache.budget_windows_absent_cache.get_cache(key=note) is None
-
     def test_update_in_memory_max_size_none_resets_key_object_partition_to_default(self):
         cache = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=1))
         cache.update_in_memory_max_size(None)
@@ -572,8 +548,10 @@ class _EvictedMidWrite(FakeAuthCache):
 
     cache: UserApiKeyCache | None = None
 
-    async def set_leased(self, key: str, lease: str | None, value: object, ttl_seconds: float | None = None) -> bool:
-        written: Final = await super().set_leased(key, lease, value, ttl_seconds)
+    async def set_leased(
+        self, key: str, lease: str | None, value: object, ttl_seconds: float | None, request: object
+    ) -> bool:
+        written: Final = await super().set_leased(key, lease, value, ttl_seconds, request)
         assert self.cache is not None
         await self.cache.async_delete_cache(key)
         return written
