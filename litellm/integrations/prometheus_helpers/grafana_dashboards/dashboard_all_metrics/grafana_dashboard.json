@@ -5660,7 +5660,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Spend-log disk usage, estimated live bytes and bytes above the cleanup target",
+      "description": "Disk used by the spend log tables, as last measured by the cleanup job. allocated is the total on disk, estimated_live is the share held by live rows, above_target is how far estimated_live exceeds the cleanup target (0 once reached)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -5683,7 +5683,7 @@
         "x": 12,
         "y": 405
       },
-      "id": 121,
+      "id": 117,
       "options": {
         "legend": {
           "calcs": [],

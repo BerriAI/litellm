@@ -1,4 +1,5 @@
 import type { components } from "@/lib/http/schema";
+import { CALENDAR_BUDGET_DURATIONS, mergeBudgetLimits } from "@/lib/forms/budgetWindows";
 export type BudgetGroups = components["schemas"]["BudgetGroups"];
 import {
   defaultCustomerCapPolicy,
@@ -37,11 +38,14 @@ export function planCustomerBudgetGroups(
     const previous = original
       ? [...limit(original.monthlyBudget, "1mo"), ...limit(original.yearlyBudget, "12mo")]
       : null;
+    const saved = organization.default_budgets.find((entry) => entry.budget_id === group.id)?.budget_limits;
     return {
       ...(original ? { budget_id: original.id } : {}),
       name: group.name.trim(),
       ...(memberGroups && group.capPolicy !== original?.capPolicy ? { cap_policy: group.capPolicy } : {}),
-      ...(JSON.stringify(limits) !== JSON.stringify(previous) ? { budget_limits: limits } : {}),
+      ...(JSON.stringify(limits) !== JSON.stringify(previous)
+        ? { budget_limits: mergeBudgetLimits(saved, limits, CALENDAR_BUDGET_DURATIONS) }
+        : {}),
       ...(group.tpm !== (original?.tpm ?? "") ? { tpm_limit: group.tpm.trim() ? Number(group.tpm) : null } : {}),
       ...(group.rpm !== (original?.rpm ?? "") ? { rpm_limit: group.rpm.trim() ? Number(group.rpm) : null } : {}),
     };

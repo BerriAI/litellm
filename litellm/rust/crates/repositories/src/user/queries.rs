@@ -8,6 +8,7 @@ use sqlx::{
 
 use litellm_db::Error;
 
+use super::repository::NewUserDefaults;
 use crate::{RawJson, utc_timestamp};
 
 /// One `LiteLLM_UserTable` row without its password hash, with its organization memberships
@@ -158,6 +159,67 @@ pub(super) async fn backfill_user_email(
     .await?)
 }
 
+/// A user to create. `email_may_be_shared` stores the email even when another user holds it
+pub(super) struct NewUser<'a> {
+    pub user_id: &'a str,
+    pub user_email: Option<&'a str>,
+    pub email_may_be_shared: bool,
+    pub sso_user_id: Option<&'a str>,
+    pub defaults: &'a NewUserDefaults,
+}
+
+/// Sets the role of `user_id`; the row as stored, or `None` when no row has that id
+pub(super) async fn set_user_role(
+    executor: impl PgExecutor<'_>,
+    user_id: &str,
+    user_role: &str,
+) -> Result<Option<User>, Error> {
+    Ok(sqlx::query_file_as!(
+        User,
+        "src/user/queries/set_user_role.sql",
+        user_id,
+        user_role
+    )
+    .fetch_optional(executor)
+    .await?)
+}
+
+/// Inserts `new_user`; the row as stored, or `None` when its id or SSO id is already taken
+pub(super) async fn insert_user(
+    executor: impl PgExecutor<'_>,
+    new_user: &NewUser<'_>,
+) -> Result<Option<User>, Error> {
+    let defaults = new_user.defaults;
+    Ok(sqlx::query_file_as!(
+        User,
+        "src/user/queries/insert_user.sql",
+        new_user.user_id,
+        new_user.user_email,
+        new_user.email_may_be_shared,
+        new_user.sso_user_id,
+        defaults.user_role.as_deref(),
+        defaults.max_budget,
+        defaults.budget_duration.as_deref(),
+        defaults.budget_reset_at.and_then(utc_timestamp::naive_utc),
+        defaults.models.as_deref(),
+        defaults.budget_limits.as_ref(),
+        defaults.tpm_limit,
+        defaults.rpm_limit,
+        defaults.max_parallel_requests,
+        defaults.user_alias.as_deref(),
+        defaults.team_id.as_deref(),
+        defaults.organization_id.as_deref(),
+        defaults.object_permission_id.as_deref(),
+        defaults.password_reset_required,
+        defaults.metadata.as_ref(),
+        defaults.allowed_cache_controls.as_deref(),
+        defaults.policies.as_deref(),
+        defaults.model_max_budget.as_ref()
+    )
+    .fetch_optional(executor)
+    .await?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error as StdError;
@@ -168,24 +230,11 @@ mod tests {
     use litellm_db::Statements;
     use sqlx::PgConnection;
 
+    use crate::Inserted;
     use crate::Side;
-    use crate::test_support::database_pool;
-    use crate::user::repository::{Connections, SignIn, resolve_once};
-
-    /// Every step of a resolve on one test transaction
-    struct OneTransaction<'t, 'c>(&'t mut Transaction<'c, Postgres>);
-
-    impl Connections for OneTransaction<'_, '_> {
-        async fn with<T>(
-            &mut self,
-            _side: Side,
-            step: impl for<'e> AsyncFnOnce(
-                Statements<&'e mut PgConnection>,
-            ) -> Result<T, litellm_db::Error>,
-        ) -> Result<T, litellm_db::Error> {
-            step(Statements::new(&mut **self.0, false)).await
-        }
-    }
+    use crate::database::Connections;
+    use crate::test_support::{OneTransaction, database_pool, insert_budget, leave_utc};
+    use crate::user::repository::{NewUserDefaults, SignIn, insert_once, resolve_once};
 
     async fn insert_user(
         tx: &mut Transaction<'_, Postgres>,
@@ -716,5 +765,352 @@ mod tests {
             savepoint.rollback().await?;
             result
         }
+    }
+
+    /// How many seconds the row's `created_at` and `updated_at` are from now in UTC
+    async fn seconds_from_utc_now(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: &str,
+    ) -> Result<(f64, f64), sqlx::Error> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Assertion reads are outside the compile-checked query set"
+        )]
+        sqlx::query_as(
+            r#"
+            SELECT abs(extract(epoch FROM created_at - (now() AT TIME ZONE 'UTC')))::float8,
+                   abs(extract(epoch FROM updated_at - (now() AT TIME ZONE 'UTC')))::float8
+            FROM "LiteLLM_UserTable"
+            WHERE user_id = $1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(&mut **tx)
+        .await
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn set_role_returns_the_stored_row_and_stamps_it_in_utc(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        insert_user(
+            &mut tx,
+            "user-repository-role",
+            Some("role@example.com"),
+            None,
+        )
+        .await?;
+        insert_user(&mut tx, "user-repository-bystander", None, None).await?;
+        insert_membership(&mut tx, "user-repository-role").await?;
+        leave_utc(&mut tx).await?;
+
+        let updated = super::set_user_role(&mut *tx, "user-repository-role", "proxy_admin")
+            .await?
+            .ok_or("no row came back")?;
+
+        let stored = super::find_user(&mut *tx, Some("user-repository-role"), None).await?;
+        let bystander = super::find_user(&mut *tx, Some("user-repository-bystander"), None)
+            .await?
+            .ok_or("bystander row missing")?;
+        let (_, updated_at_drift) = seconds_from_utc_now(&mut tx, "user-repository-role").await?;
+        assert_eq!(
+            (
+                updated.user_role.as_deref(),
+                updated.organization_memberships.len(),
+                bystander.user_role,
+            ),
+            (Some("proxy_admin"), 1, None)
+        );
+        assert_eq!(Some(updated), stored);
+        assert!(
+            updated_at_drift < 1.0,
+            "updated_at is {updated_at_drift}s from UTC now"
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn set_role_on_a_missing_user_writes_nothing(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        insert_user(&mut tx, "user-repository-bystander", None, None).await?;
+
+        let updated =
+            super::set_user_role(&mut *tx, "user-repository-missing", "proxy_admin").await?;
+
+        let bystander = super::find_user(&mut *tx, Some("user-repository-bystander"), None)
+            .await?
+            .ok_or("bystander row missing")?;
+        assert_eq!((updated, bystander.user_role), (None, None));
+        Ok(())
+    }
+
+    fn configured_defaults() -> Result<NewUserDefaults, jiff::Error> {
+        Ok(NewUserDefaults {
+            user_role: Some("internal_user_viewer".to_owned()),
+            max_budget: Some(12.5),
+            budget_duration: Some("30d".to_owned()),
+            budget_reset_at: Some("2026-12-01T00:00:00.250Z".parse()?),
+            models: Some(vec!["gpt-4o".to_owned()]),
+            budget_limits: Some(serde_json::json!([{"budget_duration": "1d", "max_budget": 1.0}])),
+            tpm_limit: Some(1000),
+            rpm_limit: Some(60),
+            max_parallel_requests: Some(4),
+            user_alias: Some("new hire".to_owned()),
+            team_id: Some("team-default".to_owned()),
+            organization_id: Some("org-default".to_owned()),
+            object_permission_id: Some("permission-default".to_owned()),
+            password_reset_required: Some(true),
+            metadata: Some(serde_json::json!({"source": "jwt"})),
+            allowed_cache_controls: Some(vec!["no-cache".to_owned()]),
+            policies: Some(vec!["policy-default".to_owned()]),
+            model_max_budget: Some(serde_json::json!({"gpt-4o": 5.0})),
+        })
+    }
+
+    async fn insert_rows_the_defaults_point_at(
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<(), sqlx::Error> {
+        insert_budget(tx, "budget-default").await?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture inserts are outside the compile-checked query set"
+        )]
+        sqlx::query(
+            r#"
+            WITH permission AS (
+                INSERT INTO "LiteLLM_ObjectPermissionTable" (object_permission_id) VALUES ('permission-default')
+            )
+            INSERT INTO "LiteLLM_OrganizationTable"
+                (organization_id, organization_alias, budget_id, created_by, updated_by)
+            VALUES ('org-default', 'default', 'budget-default', 'db-query-test', 'db-query-test')
+            "#,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    fn without_timestamps(user: &super::User) -> Result<serde_json::Value, serde_json::Error> {
+        let mut row = serde_json::to_value(user)?;
+        if let Some(columns) = row.as_object_mut() {
+            columns.remove("created_at");
+            columns.remove("updated_at");
+        }
+        Ok(row)
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn insert_stores_the_sign_in_and_the_defaults_stamped_in_utc(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        leave_utc(&mut tx).await?;
+        insert_rows_the_defaults_point_at(&mut tx).await?;
+        let sign_in = sign_in("new", Some("sso-new"), Some("New@Example.com"), None, false);
+
+        let inserted = insert_once(
+            &mut OneTransaction(&mut tx),
+            &sign_in,
+            &configured_defaults()?,
+        )
+        .await?;
+
+        let Inserted::Created(user) = inserted else {
+            return Err(format!("expected a created user, got {inserted:?}").into());
+        };
+        let (created_at_drift, updated_at_drift) = seconds_from_utc_now(&mut tx, "new").await?;
+        assert_eq!(
+            without_timestamps(&user)?,
+            serde_json::json!({
+                "user_id": "new",
+                "user_alias": "new hire",
+                "team_id": "team-default",
+                "sso_user_id": "sso-new",
+                "organization_id": "org-default",
+                "object_permission_id": "permission-default",
+                "password_reset_required": true,
+                "last_breach_check_at": null,
+                "teams": [],
+                "user_role": "internal_user_viewer",
+                "max_budget": 12.5,
+                "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}],
+                "spend": 0.0,
+                "user_email": "New@Example.com",
+                "models": ["gpt-4o"],
+                "metadata": {"source": "jwt"},
+                "max_parallel_requests": 4,
+                "tpm_limit": 1000,
+                "rpm_limit": 60,
+                "budget_duration": "30d",
+                "budget_reset_at": "2026-12-01T00:00:00.250+00:00",
+                "allowed_cache_controls": ["no-cache"],
+                "policies": ["policy-default"],
+                "model_spend": {},
+                "model_max_budget": {"gpt-4o": 5.0},
+                "organization_memberships": [],
+            })
+        );
+        assert_eq!(
+            Some(user),
+            super::find_user(&mut *tx, Some("new"), None).await?
+        );
+        assert!(
+            created_at_drift < 1.0 && updated_at_drift < 1.0,
+            "created_at is {created_at_drift}s and updated_at {updated_at_drift}s from UTC now"
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn insert_without_defaults_leaves_their_columns_unset(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        let sign_in = sign_in("bare", None, None, None, false);
+
+        insert_once(
+            &mut OneTransaction(&mut tx),
+            &sign_in,
+            &NewUserDefaults::default(),
+        )
+        .await?;
+
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Assertion reads are outside the compile-checked query set"
+        )]
+        let unset: bool = sqlx::query_scalar(
+            r#"
+            SELECT num_nulls(user_email, sso_user_id, user_role, max_budget, budget_duration, budget_reset_at,
+                             models, budget_limits, tpm_limit, rpm_limit, max_parallel_requests, user_alias,
+                             team_id, organization_id, object_permission_id, password_reset_required) = 16
+                   AND (metadata, allowed_cache_controls, policies, model_max_budget)
+                       = ('{}'::jsonb, '{}'::text[], '{}'::text[], '{}'::jsonb)
+            FROM "LiteLLM_UserTable"
+            WHERE user_id = 'bare'
+            "#,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        assert!(unset);
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::free("fresh@example.com", false, Some("fresh@example.com"))]
+    #[case::held_by_another_user_ignoring_case("OWNER@example.com", false, None)]
+    #[case::held_but_links_any_user("owner@example.com", true, Some("owner@example.com"))]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn insert_stores_an_email_only_while_no_other_user_holds_it(
+        #[case] user_email: &str,
+        #[case] links_any_user: bool,
+        #[case] expected: Option<&str>,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        insert_user(
+            &mut tx,
+            "user-repository-owner",
+            Some("Owner@Example.com"),
+            None,
+        )
+        .await?;
+        let sign_in = sign_in("new", None, Some(user_email), None, links_any_user);
+
+        insert_once(
+            &mut OneTransaction(&mut tx),
+            &sign_in,
+            &NewUserDefaults::default(),
+        )
+        .await?;
+
+        let stored = super::find_user(&mut *tx, Some("new"), None)
+            .await?
+            .ok_or("user row missing")?;
+        assert_eq!(stored.user_email.as_deref(), expected);
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::stored(false, Some("sso-new"))]
+    #[case::left_to_the_background_link_under_links_any_user(true, None)]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn insert_stores_the_sso_id_only_while_links_any_user_is_off(
+        #[case] links_any_user: bool,
+        #[case] expected: Option<&str>,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        let sign_in = sign_in("new", Some("sso-new"), None, None, links_any_user);
+
+        insert_once(
+            &mut OneTransaction(&mut tx),
+            &sign_in,
+            &NewUserDefaults::default(),
+        )
+        .await?;
+
+        let stored = super::find_user(&mut *tx, Some("new"), None)
+            .await?
+            .ok_or("user row missing")?;
+        assert_eq!(stored.sso_user_id.as_deref(), expected);
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::the_id_is_taken(sign_in("own", None, Some("own@example.com"), None, false), "own")]
+    #[case::the_sso_id_is_taken(sign_in("new", Some("sso-linked"), None, None, false), "linked")]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn insert_that_conflicts_returns_the_stored_user_and_writes_nothing(
+        #[case] sign_in: SignIn,
+        #[case] winner: &str,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        insert_sign_in_rows(&mut tx).await?;
+        let before = super::find_user(&mut *tx, Some(winner), None).await?;
+
+        let inserted = insert_once(
+            &mut OneTransaction(&mut tx),
+            &sign_in,
+            &configured_defaults()?,
+        )
+        .await?;
+
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Assertion reads are outside the compile-checked query set"
+        )]
+        let users: i64 = sqlx::query_scalar(
+            r#"SELECT count(*) FROM "LiteLLM_UserTable" WHERE user_id IN ('own', 'new')"#,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        assert_eq!(
+            (inserted, user_ids(before.clone()).as_deref(), users),
+            (Inserted::Conflict(before), Some(winner), 1)
+        );
+        Ok(())
     }
 }

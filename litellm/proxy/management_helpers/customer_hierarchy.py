@@ -9,7 +9,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from litellm.models.budget import BudgetLimit, BudgetLimits, LiteLLM_BudgetTable, initialize_budget_limits
+from litellm.models.budget import (
+    BudgetLimit,
+    BudgetLimits,
+    LiteLLM_BudgetTable,
+    carry_budget_limit_resets,
+    initialize_budget_limits,
+)
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     get_budget_reset_settings,
@@ -73,7 +79,7 @@ def customer_budget_limit(budget: Budget | None) -> float | None:
             for limit in limits
             if limit.budget_duration.strip().lower() in ("12mo", "12month", "12months")
         ),
-        None,
+        limits[0].max_budget if limits else None,
     )
 
 
@@ -229,6 +235,7 @@ class _StoredWindow(BaseModel):
 
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
+    budget_limits: BudgetLimits | None = None
 
 
 def budget_window_values(
@@ -253,14 +260,10 @@ def group_budget_patch(group: BudgetGroupChange, current: OrganizationBudget | N
     patch: Final = Budget.model_validate(group.model_dump(exclude_unset=True, exclude={"budget_id", "name"}))
     if patch.budget_limits is None:
         return patch
-    resets: Final = (
-        {limit.budget_duration: limit.reset_at for limit in (current.budget_limits or ())} if current else {}
-    )
     return patch.model_copy(
         update={
-            "budget_limits": tuple(
-                limit.model_copy(update={"reset_at": resets.get(limit.budget_duration, limit.reset_at)})
-                for limit in patch.budget_limits
+            "budget_limits": carry_budget_limit_resets(
+                patch.budget_limits, (current.budget_limits or ()) if current is not None else ()
             )
         }
     )
@@ -353,6 +356,7 @@ class BudgetGroupScope(str, Enum):
     ORGANIZATION = "customer_organization_budget_group_ids"
     APP_ORGANIZATION = "app_customer_organization_budget_group_ids"
     APP = "app_budget_group_ids"
+    APP_MEMBER = "app_customer_member_budget_group_ids"
 
 
 _BUDGET_IDS: Final = TypeAdapter(tuple[str, ...])
@@ -769,7 +773,9 @@ class CustomerHierarchyStore:
         )
         return responses[0]
 
-    async def create_budget(self, budget: Budget, actor: str, name: str | None = None) -> str:
+    async def create_budget(
+        self, budget: Budget, actor: str, name: str | None = None, *, previous: tuple[BudgetLimit, ...] = ()
+    ) -> str:
         budget_id: Final = str(uuid4())
         await create_budget_row(
             self.budgets,
@@ -778,7 +784,11 @@ class CustomerHierarchyStore:
                     **budget_values(budget),
                     **budget_window_values(budget, budget.model_fields_set),
                     **(
-                        {"budget_limits": initialize_budget_limits(budget.budget_limits, self.settings, self.now)}
+                        {
+                            "budget_limits": initialize_budget_limits(
+                                carry_budget_limit_resets(budget.budget_limits, previous), self.settings, self.now
+                            )
+                        }
                         if budget.budget_limits is not None
                         else {}
                     ),
@@ -809,7 +819,16 @@ class CustomerHierarchyStore:
                     **patch,
                     **budget_window_values(budget, patch, current),
                     **(
-                        {"budget_limits": initialize_budget_limits(budget.budget_limits, self.settings, self.now)}
+                        {
+                            "budget_limits": initialize_budget_limits(
+                                carry_budget_limit_resets(
+                                    budget.budget_limits,
+                                    (current.budget_limits or ()) if current is not None else (),
+                                ),
+                                self.settings,
+                                self.now,
+                            )
+                        }
                         if budget.budget_limits is not None
                         else {}
                     ),
@@ -1338,7 +1357,9 @@ class CustomerHierarchyStore:
         custom: Final = Budget.model_validate(
             {**(budget_values(source) if source is not None else {}), **patch.model_dump(exclude_unset=True)}
         )
-        budget_id: Final = await self.create_budget(custom, actor)
+        budget_id: Final = await self.create_budget(
+            custom, actor, previous=(source.budget_limits or ()) if source is not None else ()
+        )
         if original is not None and source is not None and custom.budget_duration == source.budget_duration:
             reset_at: Final = window_reset_at(original.model_dump())
             if reset_at is not None:

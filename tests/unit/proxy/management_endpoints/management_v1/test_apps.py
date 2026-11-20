@@ -59,6 +59,69 @@ def test_app_presets_reject_unrelated_or_conflicting_assignments(invalid: str) -
     assert http.get(f"/management/v1/apps/{app['app_id']}").json()["budget_id"] is None
 
 
+@pytest.mark.parametrize(
+    ("method", "suffix", "field"),
+    (
+        ("PATCH", "", "default_customer_member_budget"),
+        ("PUT", "/customer_organizations/org", "customer_member_budget"),
+        ("PUT", "/customer_members/member", "budget"),
+    ),
+)
+def test_member_presets_link_fork_and_inherit_without_changing_shared_policy(
+    method: str, suffix: str, field: str
+) -> None:
+    http, store = client()
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org"}))
+    asyncio.run(store.customers.members.create({"customer_member_id": "member", "parent_org_id": "org"}))
+    assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    group: Final = asyncio.run(profile(store, "Member Standard", 100, BudgetGroupScope.APP_MEMBER))
+    policy: Final = Budget(
+        max_budget=100, budget_duration="1mo", tpm_limit=1000, rpm_limit=10, soft_budget=80, allowed_models=("model-a",)
+    )
+    asyncio.run(store.customers.update_budget(group, policy, "admin"))
+    app: Final = http.post(
+        "/management/v1/apps", json={"resource_id": "chat", "default_customer_member_budget_id": group}
+    ).json()
+    path: Final = f"/management/v1/apps/{app['app_id']}{suffix}"
+    member_path: Final = f"/management/v1/apps/{app['app_id']}/customer_members/member"
+    private: Final = asyncio.run(store.customers.create_budget(Budget(max_budget=10), "admin"))
+    unrelated: Final = asyncio.run(profile(store, "Org group", 10))
+    for invalid in (private, unrelated, "missing"):
+        rejected: Final = http.request(method, path, json={f"{field}_id": invalid})
+        assert rejected.status_code == 422, rejected.text
+    assert http.request(method, path, json={f"{field}_id": group, field: {"max_budget": 5}}).status_code == 422
+    assigned: Final = http.request(method, path, json={f"{field}_id": group})
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()[f"{field}_id"] == group
+    assert http.request(method, path, json={}).json()[f"{field}_id"] == group
+    asyncio.run(store.customers.update_budget(group, Budget(max_budget=120), "admin"))
+    assert http.get(member_path).json()["effective_budget"]["max_budget"] == 120
+    customized: Final = http.request(method, path, json={field: {"max_budget": 200}}).json()
+    private_id: Final = customized[f"{field}_id"]
+    assert private_id is not None and private_id != group
+    expected: Final = policy.model_copy(update={"max_budget": 200})
+    assert asyncio.run(store.budget(private_id)) == expected
+    assert asyncio.run(store.budget(group)) == expected.model_copy(update={"max_budget": 120})
+    increased: Final = http.put(
+        member_path,
+        json={"budget_override": {"max_budget": 300}, "budget_override_expires_at": NOW.replace(year=2028).isoformat()},
+    ).json()
+    assert increased["effective_budget"]["max_budget"] == 300
+    http.request(method, path, json={field: {"max_budget": 250}})
+    assert http.get(member_path).json()["effective_budget"]["max_budget"] == 300
+    assert http.get(member_path).json()["budget_override_id"] == increased["budget_override_id"]
+    expired: Final = http.put(member_path, json={"budget_override_expires_at": NOW.replace(year=2020).isoformat()})
+    assert expired.json()["effective_budget"]["max_budget"] == 250
+    restored: Final = http.request(method, path, json={f"{field}_id": group})
+    assert restored.json()[f"{field}_id"] == group and asyncio.run(store.budget(private_id)) is None
+    cleared: Final = http.request(method, path, json={f"{field}_id": None})
+    assert cleared.json()[f"{field}_id"] is None
+    assert http.get(member_path).json()["effective_budget"] == (
+        None if not suffix else expected.model_copy(update={"max_budget": 120}).model_dump(mode="json")
+    )
+    assert asyncio.run(store.budget(group)) == expected.model_copy(update={"max_budget": 120})
+
+
 GRANT_ROUTES: Final = ("user", "team", "organization")
 
 

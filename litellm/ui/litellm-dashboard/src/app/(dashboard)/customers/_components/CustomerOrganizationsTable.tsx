@@ -10,6 +10,7 @@ import { $api } from "@/lib/http/api";
 import CustomerBudgetSpend, { CustomerBudgetWindow } from "./CustomerBudgetSpend";
 import { customerOrganizationBudgetSource, type CustomerOrganizationRow } from "./customerOrganizations";
 import { CustomerBudgetLimitCell } from "./CustomerBudgetColumn";
+import { customerBudgetPeriod } from "./customerBudgetUsage";
 import CustomerTokenTotal from "./CustomerTokenTotal";
 import { EMPTY_CUSTOMER_USAGE, type CustomerUsageTotals } from "./customerUsageTotals";
 
@@ -175,6 +176,11 @@ export default function CustomerOrganizationsTable({
                         spend={monthlySpend}
                         limit={null}
                         label={t("customerPortal.analytics.monthlySpend")}
+                        showLimit={
+                          !organization.budget?.budget_limits?.some(
+                            (window) => customerBudgetPeriod(window.budget_duration) === "other",
+                          )
+                        }
                       />
                     )}
                   </div>

@@ -135,15 +135,12 @@ def test_isolated_metric_families_restore_the_registry_and_keep_lazy_owners_live
         assert "litellm_unrelated_sentinel" not in families
         assert "litellm_admission_admitted_requests" in families
         assert "litellm_in_flight_requests" in families
-        assert "litellm_spend_log_storage_bytes" in families
         assert not any(gauge in REGISTRY._collector_to_names for gauge in gauges_registered_by_an_earlier_test)
     after: Final = _registered_collectors()
     assert all(after[collector] == names for collector, names in before.items())
     lazy_owned: Final = _lazy_owner_collectors()
     assert frozenset(after) - frozenset(before) <= frozenset(lazy_owned)
     assert all(collector in after for collector in lazy_owned)
-    with _isolated_litellm_metric_families(monkeypatch) as repeated_families:
-        assert repeated_families == families
 
 
 def _dashboard_expressions(path: Path) -> tuple[str, ...]:

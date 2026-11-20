@@ -1223,6 +1223,13 @@ def test_provider_file_id_spellings_unwraps_a_model_encoded_id_and_covers_the_st
         "https://example.invalid/batch-out1",
         "http://example.invalid/batch-out1?alt=media#download",
         "https%3A%2F%2Fexample.invalid%2Fbatch-out1",
+        "https://example.invalid/%23/files/batch-out1",
+        "https://example.invalid/%3F/files/batch-out1",
+        "https://generativelanguage.googleapis.com/%23/files/batch-out1",
+        "https://generativelanguage.googleapis.com/%3F/files/batch-out1",
+        "https://x%23/batch-out1",
+        "https://x%3F/batch-out1",
+        "https://x%2Ffiles%2F/batch-out1",
     ),
 )
 def test_provider_file_id_spellings_reduce_any_scheme_the_way_gemini_does(respelling: str):
