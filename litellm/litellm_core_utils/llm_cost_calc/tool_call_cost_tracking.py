@@ -96,7 +96,7 @@ class StandardBuiltInToolCostTracking:
         - Computer Use (Azure)
         - Code Interpreter (Azure)
         """
-        standard_built_in_tools_params = standard_built_in_tools_params or {}
+        tool_params: Final = standard_built_in_tools_params or StandardBuiltInToolsParams()
 
         google_maps_grounding_cost: Final = StandardBuiltInToolCostTracking._handle_google_maps_grounding_cost(
             model=model,
@@ -109,44 +109,40 @@ class StandardBuiltInToolCostTracking:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Handle web search
-        if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        has_web_search: Final = StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=response_object, usage=usage
-        ):
-            return (
-                google_maps_grounding_cost
-                + image_generation_cost
-                + StandardBuiltInToolCostTracking._handle_web_search_cost(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    usage=usage,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                    response_object=response_object,
-                )
-            )
-
-        # Handle file search
-        if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response_object=response_object):
-            return (
-                google_maps_grounding_cost
-                + image_generation_cost
-                + StandardBuiltInToolCostTracking._handle_file_search_cost(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                )
-            )
-
-        # Handle Azure assistant features
-        return (
-            google_maps_grounding_cost
-            + image_generation_cost
-            + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+        )
+        has_file_search: Final = StandardBuiltInToolCostTracking.response_object_includes_file_search_call(
+            response_object=response_object
+        )
+        base_cost: Final = google_maps_grounding_cost + image_generation_cost
+        if not has_web_search and not has_file_search:
+            return base_cost + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                standard_built_in_tools_params=standard_built_in_tools_params,
+                standard_built_in_tools_params=tool_params,
             )
+        web_search_cost: Final = (
+            StandardBuiltInToolCostTracking._handle_web_search_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                usage=usage,
+                standard_built_in_tools_params=tool_params,
+                response_object=response_object,
+            )
+            if has_web_search
+            else 0.0
         )
+        file_search_cost: Final = (
+            StandardBuiltInToolCostTracking._handle_file_search_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                standard_built_in_tools_params=tool_params,
+            )
+            if has_file_search
+            else 0.0
+        )
+        return base_cost + web_search_cost + file_search_cost
 
     @staticmethod
     def _resolve_model_info(model: str, custom_llm_provider: str | None) -> tuple[ModelInfo | None, str | None]:
@@ -224,7 +220,20 @@ class StandardBuiltInToolCostTracking:
             web_search_options=standard_built_in_tools_params.get("web_search_options", None),
             model_info=model_info,
         )
-        return per_call_cost * StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
+        return per_call_cost * StandardBuiltInToolCostTracking._billable_web_search_calls(
+            resolved_usage, response_object
+        )
+
+    @staticmethod
+    def _billable_web_search_calls(usage: Usage | None, response_object: object) -> int:
+        """
+        Providers without their own calculator but whose usage carries server_tool_use.web_search_requests
+        (OpenAI-compatible providers that report a per-tool count) are billed that many calls on the per-call path.
+        """
+        reported: Final = None if usage is None else get_web_search_requests_from_usage(usage)
+        if isinstance(reported, int) and not isinstance(reported, bool) and reported > 0:
+            return reported
+        return StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
 
     @staticmethod
     def _count_web_search_calls(response_object: object) -> int:

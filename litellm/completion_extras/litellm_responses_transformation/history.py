@@ -159,6 +159,11 @@ def _parsed_output_item(item: object) -> _OutputItem | None:
         return None
 
 
+def message_item_phase(item: object) -> Phase | None:
+    parsed: Final = _parsed_output_item(item)
+    return parsed.phase if isinstance(parsed, _OutputMessage) else None
+
+
 def _is_message(item: object) -> bool:
     try:
         _AnyMessage.model_validate(_as_json(item))
@@ -324,6 +329,25 @@ def _message_texts(entries: Sequence[_MessageEntry], content: str) -> tuple[tupl
     parts: Final = tuple(content[start:end] for start, end in pairwise(bounds))
     groups: Final = tuple(accumulate((len(entry.parts) for entry in entries), initial=0))
     return tuple(parts[start:end] for start, end in pairwise(groups))
+
+
+class _StoredReplay(_Frozen):
+    openai_responses_replay: _Replay
+
+
+def phased_message_texts(provider_specific_fields: object, content: str) -> tuple[tuple[str, Phase | None], ...]:
+    try:
+        replay: Final = _StoredReplay.model_validate(provider_specific_fields).openai_responses_replay
+    except ValidationError:
+        return ()
+    entries: Final = tuple(entry for entry in replay.items if isinstance(entry, _MessageEntry))
+    if sum(chain.from_iterable(entry.parts for entry in entries)) != len(content):
+        return ()
+    if all(entry.phase is None for entry in entries):
+        return ()
+    return tuple(
+        ("".join(texts), entry.phase) for texts, entry in zip(_message_texts(entries, content), entries, strict=True)
+    )
 
 
 def _message_item(texts: Sequence[str], phase: Phase | None) -> Mapping[str, object]:

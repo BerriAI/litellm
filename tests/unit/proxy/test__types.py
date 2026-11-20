@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     OrganizationMemberUpdateRequest,
     RegenerateKeyRequest,
     ResetSpendRequest,
+    UpdateCustomerRequest,
     UpdateKeyRequest,
     UpdateMCPServerRequest,
     UpdateTeamRequest,
@@ -520,6 +521,72 @@ def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
             model.model_validate(payload)
 
 
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", ["true", "false", 1, 0, None])
+def test_mcp_metadata_rejects_a_non_boolean_skip_tool_output_validation(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: object
+) -> None:
+    payload: Final = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"skip_tool_output_validation": value},
+    }
+
+    with pytest.raises(ValidationError):
+        request_model.model_validate(payload)
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [True, False])
+def test_mcp_metadata_accepts_a_boolean_skip_tool_output_validation(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: bool
+) -> None:
+    parsed: Final = request_model.model_validate(
+        {
+            "server_id": "test",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"skip_tool_output_validation": value},
+        }
+    )
+
+    assert parsed.mcp_info == {"skip_tool_output_validation": value}
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [-1, 1.5, "60", True, None, 31536001, 10**400])
+def test_mcp_metadata_rejects_a_tools_list_cache_ttl_that_is_not_whole_seconds_within_a_year(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: object
+) -> None:
+    payload: Final = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"tools_list_cache_ttl_seconds": value},
+    }
+
+    with pytest.raises(ValidationError):
+        request_model.model_validate(payload)
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [0, 60, 31536000])
+def test_mcp_metadata_accepts_a_tools_list_cache_ttl_in_whole_seconds(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: int
+) -> None:
+    parsed: Final = request_model.model_validate(
+        {
+            "server_id": "test",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"tools_list_cache_ttl_seconds": value},
+        }
+    )
+
+    assert parsed.mcp_info == {"tools_list_cache_ttl_seconds": value}
+
+
 MCP_SERVER_REQUESTS = (NewMCPServerRequest, UpdateMCPServerRequest)
 STDIO_SERVER_FIELDS = {"server_id": "stdio-1", "transport": "stdio", "command": "python", "args": ["server.py"]}
 
@@ -601,3 +668,52 @@ def test_batch_file_caps_accept_only_positive_limits(setting):
         with pytest.raises(ValidationError):
             ConfigGeneralSettings.model_validate({setting: invalid})
     assert getattr(ConfigGeneralSettings.model_validate({setting: 3}), setting) == 3
+
+
+@pytest.mark.parametrize(
+    ("request_type", "body", "message"),
+    [
+        pytest.param(
+            UpdateCustomerRequest,
+            {"user_id": "acme", "tpm_limit": 5, "quota": {"opus": 1}},
+            "Unknown fields: quota, tpm_limit. tpm_limit: these live on the customer's budget object, "
+            "update it with /budget/update.",
+            id="update_with_a_budget_field_and_a_made_up_one",
+        ),
+        pytest.param(
+            UpdateCustomerRequest,
+            {"user_id": "acme", "alias": "Acme", "quota": 1},
+            "Unknown fields: quota.",
+            id="update_with_a_made_up_field_has_no_budget_hint",
+        ),
+        pytest.param(
+            NewCustomerRequest,
+            {"user_id": "acme", "tpm_limti": 5},
+            "Unknown fields: tpm_limti.",
+            id="create_with_a_misspelled_budget_field",
+        ),
+    ],
+)
+def test_a_customer_request_with_unknown_fields_is_refused_naming_them(
+    request_type: type[BaseModel], body: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError) as exc:
+        request_type.model_validate(body)
+    assert [error["msg"] for error in exc.value.errors()] == [f"Value error, {message}"]
+
+
+@pytest.mark.parametrize(
+    ("request_type", "body"),
+    [
+        pytest.param(UpdateCustomerRequest, {"user_id": "acme", "alias": "Acme", "blocked": True}, id="update"),
+        pytest.param(
+            NewCustomerRequest,
+            {"user_id": "acme", "tpm_limit": 5, "model_tpm_limit": {"opus": 60}},
+            id="create_with_inline_budget_fields",
+        ),
+    ],
+)
+def test_a_customer_request_with_only_known_fields_is_accepted(
+    request_type: type[BaseModel], body: dict[str, object]
+) -> None:
+    assert request_type.model_validate(body).model_dump(exclude_unset=True) == body

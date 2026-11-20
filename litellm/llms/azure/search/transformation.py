@@ -36,7 +36,7 @@ import httpx
 from pydantic import ConfigDict, ValidationError
 
 from litellm.litellm_core_utils.url_utils import ensure_api_route
-from litellm.llms.azure.common_utils import cached_azure_ad_token_refresh_provider
+from litellm.llms.azure.common_utils import cached_azure_ad_token_refresh_provider, entra_rejection_as_auth_error
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.responses import (
     ResponsesSearchAnnotation,
@@ -270,6 +270,9 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         try:
             return minter()
         except Exception as e:
+            rejection: Final = entra_rejection_as_auth_error(e)
+            if rejection is not None:
+                raise rejection from e
             raise ValueError(
                 f"Grounding with Bing Search: no credential available. Pass api_key, set {TOKEN_ENV} "
                 f"to an Entra bearer token, or configure azure-identity (AZURE_CLIENT_ID / "

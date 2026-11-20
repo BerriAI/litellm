@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
@@ -28,6 +30,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
@@ -305,12 +310,15 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         completion_tokens: Final = json_resp["results"][0]["generated_token_count"]
         model_response.choices[0].message.content = generated_text
         model_response.choices[0].finish_reason = map_finish_reason(json_resp["results"][0]["stop_reason"])
-        if json_resp.get("created_at"):
+        created_at: Final = decoded_json_object(_DECODED_JSON.validate_python(json_resp)).get("created_at")
+        if created_at:
+            if not isinstance(created_at, str):
+                raise TypeError("fromisoformat: argument must be str")
             try:
-                created_datetime = datetime.fromisoformat(json_resp["created_at"])
+                created_datetime = datetime.fromisoformat(created_at)
             except ValueError:
                 # datetime.fromisoformat cannot handle 'Z' in Python 3.10
-                created_datetime = datetime.fromisoformat(f"{json_resp['created_at'].rstrip('Z')}+00:00")
+                created_datetime = datetime.fromisoformat(f"{created_at.rstrip('Z')}+00:00")
             model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())

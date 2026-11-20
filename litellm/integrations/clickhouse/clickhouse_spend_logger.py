@@ -7,18 +7,21 @@ so `response_id` is always the raw provider response id (cache-hit suffix stripp
 
 import json
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from math import isfinite
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
 from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
@@ -36,8 +39,27 @@ TRACE_INGEST_ROUTE: Final = "/v1/traces"
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _METADATA_VALUE: Final = TypeAdapter(JsonValue)
 _INTERNAL_METADATA_KEYS: Final = frozenset(
-    ("user_api_key", "user_api_key_auth", "user_api_key_budget_reservation", "proxy_server_request")
+    (
+        "user_api_key",
+        "user_api_key_auth",
+        "user_api_key_budget_reservation",
+        "proxy_server_request",
+        ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+        USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
+    )
 )
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+class _SupportsItems(Protocol):
+    def items(self) -> Iterable[tuple[object, object]]: ...
+
+
+class _SpendLogKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
 def _request_metadata_fields(value: object) -> Iterator[tuple[str, JsonValue]]:
@@ -85,22 +107,22 @@ def _json_mapping(value: Mapping[str, object]) -> str:
     return _json(dict(value))
 
 
-def _find_traceparent(metadata: Mapping[str, Any], kwargs: Mapping[str, Any]) -> tuple[str, str]:
+def _find_traceparent(metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> tuple[str, str]:
     custom_headers = metadata.get("requester_custom_headers") or MappingProxyType({})
-    proxy_request = (kwargs.get("litellm_params") or MappingProxyType({})).get(
+    proxy_request = require_attributes(kwargs.get("litellm_params") or MappingProxyType({}), _SupportsGet, "get").get(
         "proxy_server_request"
     ) or MappingProxyType({})
-    request_headers = proxy_request.get("headers") or MappingProxyType({})
+    request_headers = require_attributes(proxy_request, _SupportsGet, "get").get("headers") or MappingProxyType({})
     for headers in (custom_headers, request_headers):
-        for name, value in headers.items():
+        for name, value in require_attributes(headers, _SupportsItems, "items").items():
             if str(name).lower() == "traceparent":
                 return parse_traceparent(value)
     return "", ""
 
 
-def _cache_tokens(usage: Mapping[str, Any]) -> tuple[int, int]:
+def _cache_tokens(usage: Mapping[str, object]) -> tuple[int, int]:
     """(cache_read, cache_write) from a Usage dict: OpenAI prompt_tokens_details first, Anthropic fields as fallback."""
-    details = usage.get("prompt_tokens_details") or MappingProxyType({})
+    details = require_attributes(usage.get("prompt_tokens_details") or MappingProxyType({}), _SupportsGet, "get")
     cache_read = _int(details.get("cached_tokens")) or _int(usage.get("cache_read_input_tokens"))
     cache_write = (
         _int(details.get("cache_write_tokens"))
@@ -116,10 +138,17 @@ def _request_tags(value: object) -> list[str]:
     return [str(tag) for tag in value]
 
 
-def _session_id(payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, Any]) -> str:
+def _session_id(payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, object]) -> str:
     """Mirrors proxy `_get_session_id_for_spend_log`: explicit session id, else the payload trace id."""
-    request_metadata = (kwargs.get("litellm_params") or MappingProxyType({})).get("metadata") or MappingProxyType({})
-    return str(payload.get("session_id") or request_metadata.get("session_id") or payload.get("trace_id") or "")
+    request_metadata = require_attributes(
+        kwargs.get("litellm_params") or MappingProxyType({}), _SupportsGet, "get"
+    ).get("metadata") or MappingProxyType({})
+    return str(
+        payload.get("session_id")
+        or require_attributes(request_metadata, _SupportsGet, "get").get("session_id")
+        or payload.get("trace_id")
+        or ""
+    )
 
 
 def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
@@ -128,7 +157,7 @@ def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
 
 
 def spend_log_row_from_payload(
-    payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, Any]
+    payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, object]
 ) -> SpendLogRecord:
     metadata: Mapping[str, Any] = payload.get("metadata") or MappingProxyType({})
     hidden_params: Mapping[str, Any] = payload.get("hidden_params") or MappingProxyType({})
@@ -219,7 +248,7 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         self._log(kwargs)
 
-    def _log(self, kwargs: Mapping[str, Any]) -> None:
+    def _log(self, kwargs: _SpendLogKwargs) -> None:
         try:
             payload = kwargs.get("standard_logging_object")
             if payload is None or _is_trace_ingest(payload):

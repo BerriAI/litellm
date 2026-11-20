@@ -67,9 +67,9 @@ class _TokenDirs:
     def environment(self) -> Mapping[str, str]:
         return MappingProxyType({"CHATGPT_TOKEN_DIR": str(self.chatgpt), "GITHUB_COPILOT_TOKEN_DIR": str(self.copilot)})
 
-    def store_valid_tokens(self, api_url: str) -> None:
+    def store_valid_tokens(self) -> None:
         dl.write_chatgpt(self.chatgpt, dl.chatgpt_record(dl.CHATGPT_STORED))
-        dl.write_copilot_key(self.copilot, dl.COPILOT_STORED_KEY, api_url)
+        dl.write_copilot_access(self.copilot, dl.COPILOT_ACCESS)
 
 
 def _token_dirs(directory: Path) -> _TokenDirs:
@@ -242,16 +242,16 @@ def test_booting_without_tokens_lists_login_deployments_and_serves_only_after_to
                 assert peers.auth_connections() == ()
                 assert dl.bearer(peers.api.drain()[-1]) == dl.CONTROL_KEY
 
-                dirs.store_valid_tokens(peers.api.url)
+                dirs.store_valid_tokens()
                 _reload(owned)
                 _every_worker_lists(owned, workers)
                 for served_logins, name in enumerate(_LOGIN_NAMES, start=1):
                     served: Final = _chat(_base_url(owned), key, name, uuid.uuid4().hex)
                     assert served.status == 200, served.text
                     _successes_logged(key, at_least=_CONTROL_CALLS_BEFORE_THE_RELOAD + served_logins)
-                assert peers.auth_connections() == ()
+                peers.assert_only_copilot_discovery(dl.COPILOT_ACCESS)
                 forwarded: Final = peers.api.drain()
-                assert {dl.bearer(request) for request in forwarded} == {dl.CHATGPT_STORED, dl.COPILOT_STORED_KEY}
+                assert {dl.bearer(request) for request in forwarded} == {dl.CHATGPT_STORED, dl.COPILOT_ACCESS}
 
                 dl.write_chatgpt(dirs.chatgpt, dl.chatgpt_record(dl.CHATGPT_EXPIRED, refresh_token=dl.GOOD_REFRESH))
                 peers.switches.hold_connect.set()
@@ -287,7 +287,7 @@ def test_a_token_removed_after_boot_turns_every_request_into_the_refusal(
 ) -> None:
     dirs: Final = _token_dirs(tmp_path)
     with dl.device_login_peers(tmp_path) as peers:
-        dirs.store_valid_tokens(peers.api.url)
+        dirs.store_valid_tokens()
         with owned_proxy_process(
             gateway,
             tmp_path,
@@ -310,7 +310,7 @@ def test_a_token_removed_after_boot_turns_every_request_into_the_refusal(
                         refused: Final = _chat(_base_url(owned), key, name, uuid.uuid4().hex)
                         assert refused.status == 400, refused.text
                         assert refusal in refused.message(), refused.text
-                assert peers.auth_connections() == ()
+                peers.assert_only_copilot_discovery(dl.COPILOT_ACCESS)
                 tail: Final = owned.log.read_text()
                 assert dl.CHATGPT_USER_CODE not in tail and dl.COPILOT_USER_CODE not in tail, tail[-3000:]
                 control: Final = _chat(_base_url(owned), key, _CONTROL, uuid.uuid4().hex)

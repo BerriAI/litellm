@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
+from litellm.proxy.db.connection_budget import MIN_CONNECTION_LIMIT, RUST_RESERVED_CONNECTIONS, ConnectionBudget
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
 from tests.integration._support.client import GATEWAY_LIMITS, Gateway, gateway_from_environment
 from tests.integration._support.database import scratch_database
@@ -143,6 +144,11 @@ def signal_group(group: int, action: int) -> None:
         os.killpg(group, action)
     except ProcessLookupError:
         pass
+
+
+def send_signal(process: subprocess.Popen[bytes], signum: signal.Signals) -> None:
+    with suppress(ProcessLookupError):
+        process.send_signal(signum)
 
 
 def graceful_stop_seconds() -> float:
@@ -733,6 +739,17 @@ def private_configuration(config: Path, directory: Path) -> Path:
     return destination
 
 
+def pool_limit_for_prisma(connections: int) -> int:
+    """The smallest ``database_connection_pool_limit`` that leaves Prisma ``connections`` after the Rust pool's share."""
+    if connections < 1:
+        raise ValueError(f"Prisma needs at least one connection, not {connections}")
+    return next(
+        total
+        for total in range(MIN_CONNECTION_LIMIT, connections + RUST_RESERVED_CONNECTIONS + 1)
+        if ConnectionBudget.split(total).python == connections
+    )
+
+
 def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, str] = os.environ) -> Path:
     if inherited.get("INTEGRATION_WORKER_ISOLATION") != "1":
         return config
@@ -755,7 +772,10 @@ def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, 
         return destination
     configured: Final = {
         **settings,
-        "general_settings": {"database_connection_pool_limit": 2, **CONFIGURATION.validate_python(general)},
+        "general_settings": {
+            "database_connection_pool_limit": pool_limit_for_prisma(2),
+            **CONFIGURATION.validate_python(general),
+        },
     }
     destination.write_text(yaml.safe_dump(configured, sort_keys=False))
     return destination
@@ -789,6 +809,7 @@ def _proxy_environment(
             "STORE_MODEL_IN_DB": "True",
             "PYTHON_DOTENV_DISABLED": "1",
             **overrides,
+            "PYTHONFAULTHANDLER": "1",
             "LITELLM_WORKER_STARTUP_HOOKS": ",".join(
                 hook
                 for hook in (
@@ -941,19 +962,28 @@ def configless_proxy_process(
         _stop_launch(launch)
 
 
+def _gateway_environment(
+    gateway: Gateway, overrides: Mapping[str, str], source: Mapping[str, str] = os.environ
+) -> Mapping[str, str]:
+    root: Final = _proxy_root()
+    environment: Final = _proxy_environment(gateway, overrides, (), source)
+    paths: Final = (str(root / "litellm/runtime"), str(root / "tests"), str(root), environment.get("PYTHONPATH", ""))
+    return MappingProxyType({**environment, "PYTHONPATH": os.pathsep.join(path for path in paths if path)})
+
+
 @contextmanager
 def owned_gateway_image(
     gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path, workers: int
 ) -> Iterator[OwnedProxy]:
-    """The componentized gateway started the way its image starts it: `docker/component_entrypoint.sh` running
+    """The componentized gateway started the way its image starts it: `docker-entrypoint.sh` running
     `python -m gateway.launch`, with the config handed over as `CONFIG_FILE_PATH`. It serves the data plane only,
     so keys come from a proxy that shares its database."""
     root: Final = _proxy_root()
-    environment: Final = _proxy_environment(gateway, {**overrides, "CONFIG_FILE_PATH": str(config)}, ())
+    environment: Final = _gateway_environment(gateway, {**overrides, "CONFIG_FILE_PATH": str(config)})
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     command: Final = (
-        str(root / "docker" / "component_entrypoint.sh"),
+        str(root / "litellm/deploy/docker/docker-entrypoint.sh"),
         sys.executable,
         "-m",
         "gateway.launch",
