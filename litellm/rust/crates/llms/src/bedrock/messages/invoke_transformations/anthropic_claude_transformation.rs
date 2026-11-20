@@ -384,7 +384,15 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
                     env_lookup,
                 ),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(params, env_lookup)),
+                credentials: Box::new(
+                    AwsCredentialSource::from_params(params, env_lookup).with_session_attribution(
+                        litellm_params
+                            .extra
+                            .get(crate::bedrock::session_identity::REQUIRE_SESSION_ATTRIBUTION)
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                    ),
+                ),
                 caller_headers: CallerSigningHeaders::Botocore,
             },
         })

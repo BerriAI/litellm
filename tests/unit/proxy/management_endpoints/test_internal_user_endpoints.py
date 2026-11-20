@@ -2689,6 +2689,12 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
     prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    prisma_client.jsonify_object = PrismaClient.jsonify_object.__get__(prisma_client)
+    transaction: Final = prisma_client.tx.return_value.__aenter__.return_value
+    transaction.query_raw = mocker.AsyncMock(return_value=[{
+        "budget_limits": saved_user.model_dump(mode="json")["budget_limits"],
+    }])
+    transaction.litellm_usertable.upsert = mocker.AsyncMock(return_value=saved_user)
     mocker.patch(
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
@@ -2704,14 +2710,35 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
         user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
-    _assert_resent_windows_keep_their_resets(prisma_client.update_data.call_args.kwargs["data"]["budget_limits"])
+    _assert_resent_windows_keep_their_resets(transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]["budget_limits"])
+
+
+@pytest.mark.asyncio
+async def test_user_window_write_keeps_a_reset_committed_after_admin_read() -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _write_user_update
+
+    original: Final = {"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2030-01-02T00:00:00+00:00"}
+    reset: Final = "2030-01-03T00:00:00+00:00"
+    user: Final = LiteLLM_UserTable(user_id="window-user", budget_limits=[original])
+    database: Final = MagicMock()
+    database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": [{**original, "reset_at": reset}]}])
+    transaction.litellm_usertable.upsert = AsyncMock(return_value=user)
+    await _write_user_update(database, user.user_id, {
+        "user_id": user.user_id, "budget_limits": json.dumps([{**original, "max_budget": 50.0}]),
+    }, user)
+    assert json.loads(transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]["budget_limits"]) == [
+        {**original, "max_budget": 50.0, "reset_at": reset},
+    ]
 
 
 @pytest.mark.asyncio
 async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_transaction(
     mocker: MockerFixture,
 ) -> None:
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, budget_windows_absent_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import budget_windows_absent_cache, budget_windows_absent_cache_key
     from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
     from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
 
@@ -2737,7 +2764,7 @@ async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_tra
         budget_windows_absent_cache_key(Litellm_EntityType.USER.value, user_id) for user_id in saved_users
     )
     for marker in markers:
-        cache.budget_windows_absent_cache.set_cache(key=marker, value=True)
+        budget_windows_absent_cache.set_cache(key=marker, value=True)
     mocker.patch(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
@@ -2763,7 +2790,7 @@ async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_tra
     )
     for write in window_writes:
         _assert_resent_windows_keep_their_resets(write["data"]["budget_limits"])
-    assert all(cache.budget_windows_absent_cache.get_cache(key=marker) is None for marker in markers)
+    assert all(budget_windows_absent_cache.get_cache(key=marker) is None for marker in markers)
     written_windows: Final = dict(
         chain.from_iterable(
             ((user_id, json.loads(write["data"]["budget_limits"])) for user_id in write["where"]["user_id"]["in"])

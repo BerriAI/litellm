@@ -429,6 +429,47 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object, time_co
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tpm_limit,rpm_limit", ((50, 5), (500, 1)))
+async def test_zero_cost_subscription_request_still_consumes_tpm_and_rpm(monkeypatch, tpm_limit, rpm_limit):
+    _set_token_rate_limit_type(monkeypatch, "total")
+    now: Final = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
+    key: Final = hash_token("sk-subscription-rate-limit")
+    cache: Final = DualCache()
+    handler: Final = NativeLimiter(
+        internal_usage_cache=InternalUsageCache(cache),
+        time_provider=lambda: now,
+    )
+    auth: Final = UserAPIKeyAuth(api_key=key, tpm_limit=tpm_limit, rpm_limit=rpm_limit)
+    data: Final = {
+        "model": "subscription-test",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+    }
+    await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=data, call_type="acompletion")
+    await handler.async_log_success_event(
+        kwargs={
+            "model": "subscription-test",
+            "response_cost": 0.0,
+            "standard_logging_object": {
+                "response_cost": 0.0,
+                "metadata": {
+                    "user_api_key_hash": key,
+                    "used_client_oauth_token": True,
+                    "claude_subscription_usage": {"is_overage": False, "status": "allowed", "overage_status": None},
+                },
+            },
+        },
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=20, completion_tokens=30, total_tokens=50)),
+        start_time=now,
+        end_time=now,
+    )
+    assert _tokens(handler, "api_key", key) == 50
+    assert _local(handler, _counter("api_key", key, "requests")) == 1
+    with pytest.raises(ProxyRateLimitError):
+        await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=data, call_type="acompletion")
+
+
 @pytest.mark.parametrize(
     "token_rate_limit_type",
     ["input", "output", "total"],

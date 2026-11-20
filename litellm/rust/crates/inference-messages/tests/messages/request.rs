@@ -917,6 +917,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 api_key: Some("sk".into()),
                 api_base: Some(upstream.uri()),
                 shaping: MessagesShaping {
+                    vertex: Default::default(),
                     capabilities,
                     settings: MessagesSettings {
                         drop_params,
@@ -1011,6 +1012,7 @@ async fn additional_drop_params_clear_a_param_the_model_does_not_support(call: M
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         shaping: MessagesShaping {
+            vertex: Default::default(),
             capabilities: sampling_removed(),
             settings: MessagesSettings {
                 additional_drop_params: vec!["top_k".into()],
@@ -1044,6 +1046,7 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
+                vertex: Default::default(),
                 settings: MessagesSettings {
                     reasoning_auto_summary: true,
                     ..MessagesSettings::default()
@@ -1235,6 +1238,27 @@ async fn deepseek_sends_neither_billing_blocks_nor_the_custom_tool_discriminator
     );
 }
 
+async fn run_with_google_token(call: MessagesCall) -> Result<MessagesOutput, Error> {
+    let route = messages_route_with_auth(
+        Arc::new(RecordingSecrets::empty()),
+        litellm_auth::AuthServices {
+            vertex_login: litellm_auth_gcp::vertex::VertexLoginService::new(Arc::new(
+                litellm_auth_gcp::google::OnGce {
+                    project: "token-project",
+                    token: "google-token",
+                },
+            )),
+            ..litellm_auth::AuthServices::default()
+        },
+    );
+    let host = LocalMessagesHost::new(call);
+    litellm_host_native::in_process::run_hosted(
+        route.machine(host.request()?, None),
+        host.runtime(),
+    )
+    .await
+}
+
 #[rstest]
 #[case::not_streaming(false, ":rawPredict")]
 #[case::streaming(true, ":streamRawPredict?alt=sse")]
@@ -1250,7 +1274,7 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
     );
     let upstream = upstream([if stream { streamed } else { message_response() }]).await;
 
-    run(with_fields(
+    run_with_google_token(with_fields(
         MessagesCall {
             custom_llm_provider: Some("vertex_ai".into()),
             litellm_params: LitellmParams {
@@ -1277,7 +1301,7 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
             "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929{suffix}"
         )
     );
-    assert_eq!(request.header("authorization"), Some("Bearer caller-token"));
+    assert_eq!(request.header("authorization"), Some("Bearer google-token"));
     assert_eq!(request.header("anthropic-version"), None);
     let body = request.json();
     assert_eq!(body.get("model"), None);

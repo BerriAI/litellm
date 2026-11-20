@@ -23,6 +23,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy.deps.repositories import get_plugin_upload_repository, get_skill_submission_repository
 from litellm.proxy.discovery_endpoints.agent_skills_archive import (
     MAX_ARCHIVE_ENTRIES,
@@ -128,7 +129,7 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(proxy_server, "general_settings", {})
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(litellm, "public_skills_index", True)
     monkeypatch.setenv("PROXY_BASE_URL", "http://test")
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)

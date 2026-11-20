@@ -37,6 +37,7 @@ def rust_spec(platform: Platform, binary: str, upstream_port: int, server: Pytho
                 "LITELLM_FORWARD_SHUTDOWN_DRAIN": str(
                     server.graceful_timeout_seconds + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
                 ),
+                "LITELLM_FORWARD_CONFIG": server.config_path or "",
             }
         ),
         spawn=platform.spawn_options(()),

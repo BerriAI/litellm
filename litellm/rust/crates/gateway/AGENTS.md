@@ -4,14 +4,17 @@
 - Endpoint paths, request handling, model resolution, and response encoding belong to the mounted crates. Provider execution belongs to the `inference-<fmt>` crates and `llms`
 - Inject shared state and infrastructure. Avoid global runtimes, duplicate client pools, and abstractions for hypothetical endpoint groups
 - Test mounting and server lifecycle through public HTTP behavior. Test endpoint semantics in the owning crate
+- Standalone and in front of Python serve the same native app, built by `native` in `src/main.rs`. In front of Python the only addition is `admit` (`src/admit/mod.rs`) around all of it, so never give one mode a layer the other lacks
+- `admit` is the only thing that sends a request to Python. It sees each request before any layer, and every method and path it admits must have a native route, because a request it admits that no route takes gets the native 404 and is never forwarded to Python
+- `Admit` is built once from the config the native app is built from, and judges each request by its route and its caller, where only the master key is checked. A request that passes is answered natively. It does not judge the config's settings or the request's headers and body yet, so a setting or parameter only Python honors is served natively. Those judges, and a config Python can reload from its database, come in a later change, and forwarding must not be turned on for users before it
 
 ## Resources
 - `Resources::build` (`src/resources.rs`) makes what every part is built from, once per config: the environment (the config's `environment_variables` in front of the process environment), the `SecretResolver` over it, the HTTP client config and the inference `CoreResources` with the client pool. Inference, Redis and the database each take what they need from it. Never reach into one part for another part's pool, config or secrets, and never build a second environment overlay
 - A setting that can come from the environment, the secret manager or OIDC is read through `resources.secrets`. `resources.environment` is only for what Python reads straight from `os.environ`
 
 ## State
-- `AppState::build` (`src/state.rs`) builds `Resources` and then the stores once at boot: inference, the Redis clients and the database pools. `router` takes it and hands it to routes with `with_state`, and a handler or middleware takes the part it needs with `State<RedisClients>` or `State<Option<Pools>>`, which `FromRef` clones out of it. Never build a store inside a route
-- Forwarding mode in `src/main.rs` serves nothing natively, so it builds no state. Once it serves a native app it calls the same `AppState::build`, so the two modes never differ in their stores
+- `AppState::build` (`src/state.rs`) builds `Resources` and then what both modes share once at boot: inference, the Redis clients and the database pools. `router` takes it and hands it to routes with `with_state`, and a handler or middleware takes the part it needs with `State<RedisClients>` or `State<Option<Pools>>`, which `FromRef` clones out of it. Never build a store inside a route and never give one mode a store the other lacks
+- In front of Python the config is the local YAML file Python loads, which the supervisor names in `LITELLM_FORWARD_CONFIG`. When Python loads no local file, `load_config` cannot load the one it names, or the native app cannot be built from it, `native_state` in `src/main.rs` builds the state from `Config::default()`, so only the environment's `REDIS_*` and `DATABASE_*` are seen, and `Admit::unconfigured` leaves every request to Python. Never fail boot on that file or on what it sets, because the gateway exiting stops Python too. Config stored in the database is not read yet
 
 ## Redis
 - `redis::connect` builds the Redis clients once at boot (`src/redis.rs`). `State<RedisClients>` hands out clones of them, never a connection checked out per request. redis-rs multiplexes one connection per node, so there is no connection pool and pool settings like `max_connections` are accepted and ignored
@@ -27,6 +30,6 @@
 - `/health/readiness` pings the writer for up to 2s and reports `connected`, `disconnected`, or `Not connected` when no database is configured, and always answers 200. The proxy's 503 on `disconnected` without `allow_requests_on_db_unavailable` and its 15s cache of a good answer are not ported
 
 ## License
-- `build_license` verifies the license once at boot (`src/license.rs`) and the result never changes while serving. For now the standalone gateway only logs whether it is enterprise
-- The key comes from `LITELLM_LICENSE`, where config `environment_variables` replaces the process environment, and from `general_settings.litellm_license`, which wins unless only the environment's key is enterprise, as in `_use_config_license`
+- `AppState::build` verifies the license once at boot with `build_license` (`src/license.rs`) and keeps the result as `entitlements`, which never changes while serving. `middleware::global` hands it to every middleware and route as `Extension<Arc<Entitlements>>`
+- The key comes from `LITELLM_LICENSE`, read through `resources.environment` so config `environment_variables` replaces the process environment, and from `general_settings.litellm_license`, which wins unless only the environment's key is enterprise, as in `_use_config_license`. The license server is asked through the `resources` pool and HTTP config
 - Verification itself belongs to `litellm-license`. A key the bundled public key did not sign is asked of the license server, so boot can wait on that request for `NON_LLM_CONNECTION_TIMEOUT` seconds per attempt
