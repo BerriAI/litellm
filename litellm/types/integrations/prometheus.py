@@ -3,7 +3,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, ClassVar, Final, Literal, cast
+from typing import Any, ClassVar, Final, Literal, TypeAlias, cast
 
 
 def sanitize_prometheus_label_name(label: str) -> str:
@@ -195,6 +195,9 @@ BATCH_DURATION_BUCKETS: Final = (
 )
 
 
+ProxyRequestOutcome: TypeAlias = Literal["success", "error", "cancelled"]
+
+
 class UserAPIKeyLabelNames(Enum):
     END_USER = "end_user"
     USER = "user"
@@ -220,6 +223,7 @@ class UserAPIKeyLabelNames(Enum):
     REASON = "reason"
     PRIORITY = "priority"
     STATUS_CODE = "status_code"
+    OUTCOME = "outcome"
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
     MODEL_GROUP = "model_group"
@@ -247,6 +251,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_tokens_metric",
     "litellm_proxy_total_requests_metric",
     "litellm_proxy_failed_requests_metric",
+    "litellm_proxy_chat_request_outcomes_total",
     "litellm_deployment_latency_per_output_token",
     "litellm_requests_metric",
     "litellm_spend_metric",
@@ -430,6 +435,7 @@ def _resolve_deployment_and_latency_caller_identity_labels(
 
 
 class PrometheusMetricLabels:
+    litellm_proxy_chat_request_outcomes_total: ClassVar[tuple[str, ...]] = (UserAPIKeyLabelNames.OUTCOME.value,)
     litellm_llm_api_latency_metric = [
         UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
@@ -1124,6 +1130,7 @@ class UserAPIKeyLabelValues:
     reason: str | None = None
     priority: str | None = None
     status_code: str | None = None
+    outcome: str | None = None
     fallback_model: str | None = None
     route: str | None = None
     client_ip: str | None = None

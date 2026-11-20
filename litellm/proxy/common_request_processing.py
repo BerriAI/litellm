@@ -186,6 +186,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
+from litellm.proxy.middleware.prometheus_request_outcome_middleware import mark_request_stream_failed
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.openai_files_endpoints.common_utils import (
     ManagedResourceAccessChecker,
@@ -1996,6 +1997,7 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
+                mark_request_stream_failed()
                 for frame in late_framing.failure(await _sanitized_late_failure(late, on_late_failure)):
                     yield frame.encode()
                 return
