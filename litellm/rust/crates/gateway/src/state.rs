@@ -30,8 +30,8 @@ impl AppState {
         environment: &Environment,
         resources: &Resources,
     ) -> Result<Self, Error> {
-        let inference = crate::build_inference(config, resources).await?;
         let redis = crate::redis::connect(config, resources).await?;
+        let inference = crate::build_inference(config, resources, &redis).await?;
         let database = db::connect(config, &resources.secrets).await?;
         let entitlements = Arc::new(build_license(config, environment, resources).await);
         Ok(Self {

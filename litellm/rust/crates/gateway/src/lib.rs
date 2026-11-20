@@ -55,17 +55,21 @@ pub(crate) fn environment_secrets(
 pub async fn build_inference(
     config: &Config,
     resources: &Resources,
+    redis: &RedisClients,
 ) -> Result<Arc<Gateway>, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
-    Ok(Arc::new(Gateway::new(
-        resources.core.clone(),
-        resources.http.clone(),
-        resources.secrets.clone(),
-        router,
-        shaping,
-        host::NativeHost,
-    )?))
+    Ok(Arc::new(
+        Gateway::new(
+            resources.core.clone(),
+            resources.http.clone(),
+            resources.secrets.clone(),
+            router,
+            shaping,
+            host::NativeHost,
+        )?
+        .with_routing(redis::routing(redis, resources.environment.as_ref())?),
+    ))
 }
 
 pub fn install_crypto_provider() {

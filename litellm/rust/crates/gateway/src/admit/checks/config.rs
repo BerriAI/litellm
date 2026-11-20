@@ -259,6 +259,7 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
         max_retries,
         weights,
         tag_routing_prefix,
+        redis: _,
         additional_fields,
     } = settings;
     set!(
@@ -421,8 +422,8 @@ mod tests {
         "litellm_settings.modify_params"
     )]
     #[case::a_key_the_config_types_do_not_name(
-        "router_settings:\n  redis_host: localhost\n",
-        "router_settings.redis_host"
+        "router_settings:\n  provider_budget_config: {}\n",
+        "router_settings.provider_budget_config"
     )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
     fn a_setting_the_native_app_does_not_honor_is_named(#[case] yaml: &str, #[case] setting: &str) {
