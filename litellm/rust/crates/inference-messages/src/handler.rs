@@ -73,6 +73,7 @@ struct NativeOutputFallback {
     input: MessagesRequest,
     context: MessagesTransformContext,
     headers: Vec<(String, String)>,
+    url: String,
     tool_custom_field: litellm_llms::base_llm::messages::tools::ToolCustomField,
     drops_unsupported_params: bool,
     drop_params: bool,
@@ -86,6 +87,7 @@ impl NativeOutputFallback {
                 self.drops_unsupported_params,
             ),
             &self.headers,
+            &self.url,
             self.drop_params,
         )?;
         let (rebuilt, _) = config.finalize_request(rebuilt, self.headers.clone(), &self.context)?;
@@ -402,20 +404,22 @@ async fn provider_call(
     let fallback = config
         .native_output_fallback(&trimmed, &transform_context)
         .map(|fallback_context| (trimmed.clone(), fallback_context));
-    let body = config.request_body(
-        tool_custom_field.apply(
-            config.transform_anthropic_messages_request(trimmed, &transform_context)?,
-            shaping.settings.drops_unsupported_params,
-        ),
-        &validated.headers,
-        shaping.settings.drop_params,
-    )?;
+    let transformed = tool_custom_field.apply(
+        config.transform_anthropic_messages_request(trimmed, &transform_context)?,
+        shaping.settings.drops_unsupported_params,
+    );
     let url = config.get_complete_url(
         api_base.as_deref(),
-        &body.model,
+        &transformed.model,
         &connection_params,
-        body.params.streams(),
+        transformed.params.streams(),
         &env_lookup,
+    )?;
+    let body = config.request_body(
+        transformed,
+        &validated.headers,
+        &url,
+        shaping.settings.drop_params,
     )?;
     let headers = config.headers_for_url(
         config.request_headers(
@@ -428,6 +432,7 @@ async fn provider_call(
         input,
         context,
         headers: headers.clone(),
+        url: url.clone(),
         tool_custom_field,
         drops_unsupported_params: shaping.settings.drops_unsupported_params,
         drop_params: shaping.settings.drop_params,
@@ -1550,6 +1555,7 @@ mod tests {
     fn call_requesting_version(
         shaping: MessagesShaping,
         provider: &str,
+        api_base: Option<&str>,
         version: &str,
         drop_params: bool,
     ) -> MessagesCall {
@@ -1558,7 +1564,7 @@ mod tests {
                 json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "temperature": 1}),
             ),
             api_key: Some("sk-test".into()),
-            api_base: Some("https://upstream.test".into()),
+            api_base: api_base.map(Into::into),
             custom_llm_provider: Some(provider.into()),
             litellm_params: Default::default(),
             extra_headers: Some(Map::from_iter([(
@@ -1578,20 +1584,71 @@ mod tests {
     }
 
     #[rstest]
-    #[case::anthropic_under_sdk_2("anthropic", "2026-10-21", None)]
-    #[case::anthropic_under_sdk_1("anthropic", "2023-06-01", Some(json!(1)))]
-    #[case::non_anthropic_api_under_sdk_2("deepseek", "2026-10-21", Some(json!(1)))]
+    #[case::anthropic_under_sdk_2(
+        "anthropic",
+        Some("https://api.anthropic.com"),
+        "2026-10-21",
+        None
+    )]
+    #[case::anthropic_default_base_under_sdk_2("anthropic", None, "2026-10-21", None)]
+    #[case::anthropic_under_sdk_1(
+        "anthropic",
+        Some("https://api.anthropic.com"),
+        "2023-06-01",
+        Some(json!(1))
+    )]
+    #[case::non_anthropic_api_under_sdk_2(
+        "deepseek",
+        Some("https://upstream.test"),
+        "2026-10-21",
+        Some(json!(1))
+    )]
     #[tokio::test]
     async fn temperature_reaches_the_wire_only_under_an_api_version_that_has_it(
         shaping: MessagesShaping,
         #[case] provider: &str,
+        #[case] api_base: Option<&str>,
         #[case] version: &str,
         #[case] temperature: Option<Value>,
     ) {
-        let call = provider_call_for(call_requesting_version(shaping, provider, version, true))
-            .await
-            .unwrap();
+        let call = provider_call_for(call_requesting_version(
+            shaping, provider, api_base, version, true,
+        ))
+        .await
+        .unwrap();
         assert_eq!(call.wire.body.get("temperature").cloned(), temperature);
+    }
+
+    #[rstest]
+    #[case::deployment_api_base(Some("https://api.deepseek.com/anthropic"), &[])]
+    #[case::api_base_env(None, &[("ANTHROPIC_API_BASE", "https://api.deepseek.com/anthropic")])]
+    #[case::base_url_env(None, &[("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")])]
+    #[tokio::test]
+    async fn a_third_party_anthropic_api_receives_temperature_under_2026_10_21(
+        shaping: MessagesShaping,
+        #[case] api_base: Option<&str>,
+        #[case] secrets: &[(&str, &str)],
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let lookup = |name: &str| {
+            secrets
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        let call = provider_call_with_secrets(
+            call_requesting_version(shaping, "anthropic", api_base, "2026-10-21", drop_params),
+            &lookup,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (call.wire.url.as_str(), call.wire.body.get("temperature")),
+            (
+                "https://api.deepseek.com/anthropic/v1/messages",
+                Some(&json!(1))
+            )
+        );
     }
 
     #[rstest]
@@ -1599,10 +1656,15 @@ mod tests {
     async fn an_api_version_without_sampling_params_refuses_them_before_the_provider_call(
         shaping: MessagesShaping,
     ) {
-        let Err(Error::Llm(litellm_llms::Error::InvalidRequest(detail))) = provider_call_for(
-            call_requesting_version(shaping, "anthropic", "2026-10-21", false),
-        )
-        .await
+        let Err(Error::Llm(litellm_llms::Error::InvalidRequest(detail))) =
+            provider_call_for(call_requesting_version(
+                shaping,
+                "anthropic",
+                Some("https://api.anthropic.com"),
+                "2026-10-21",
+                false,
+            ))
+            .await
         else {
             panic!("expected an invalid request");
         };

@@ -1,13 +1,21 @@
 import re
 from collections.abc import Mapping
 from typing import Final
+from urllib.parse import urlparse
 
+from litellm.anthropic_beta_headers_manager import is_foundry_api_base
 from litellm.exceptions import UnsupportedParamsError
 
+_ANTHROPIC_API_HOST: Final = "api.anthropic.com"
 _VERSION_HEADER: Final = "anthropic-version"
 _SAMPLING_PARAMS: Final = ("temperature", "top_p", "top_k")
 _FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: Final = "2026-10-21"
 _DATED_VERSION: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def serves_anthropic_api_versions(api_base: str) -> bool:
+    host: Final = urlparse(api_base if "://" in api_base else f"https://{api_base}").hostname
+    return host == _ANTHROPIC_API_HOST or is_foundry_api_base(api_base)
 
 
 def requested_api_version(headers: Mapping[str, object]) -> str | None:

@@ -162,6 +162,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         &self,
         request: MessagesRequest,
         headers: &Headers,
+        _url: &str,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
         let version = vertex_version(
@@ -332,6 +333,7 @@ mod tests {
     }
 
     const PATH: &str = "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929";
+    const VERTEX_URL: &str = "https://us-east5-aiplatform.googleapis.com/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929:rawPredict";
 
     #[rstest]
     #[case::regional(
@@ -597,7 +599,7 @@ mod tests {
             .collect();
         let body = serde_json::to_value(
             VERTEX_ANTHROPIC_MESSAGES_CONFIG
-                .request_body(request, &headers, drop_params)
+                .request_body(request, &headers, VERTEX_URL, drop_params)
                 .unwrap(),
         )
         .unwrap();
@@ -616,7 +618,7 @@ mod tests {
         .unwrap();
         let headers: Headers = vec![("anthropic-version".to_string(), requested.to_string())];
         let Error::InvalidRequest(detail) = VERTEX_ANTHROPIC_MESSAGES_CONFIG
-            .request_body(request, &headers, false)
+            .request_body(request, &headers, VERTEX_URL, false)
             .unwrap_err()
         else {
             panic!("expected an invalid request");
@@ -644,9 +646,21 @@ mod tests {
 
     fn sampling_params(body: &MessagesRequest) -> (Option<f64>, Option<f64>, Option<i64>) {
         (
-            body.params.temperature.as_ref().and_then(Recognized::known).copied(),
-            body.params.top_p.as_ref().and_then(Recognized::known).copied(),
-            body.params.top_k.as_ref().and_then(Recognized::known).copied(),
+            body.params
+                .temperature
+                .as_ref()
+                .and_then(Recognized::known)
+                .copied(),
+            body.params
+                .top_p
+                .as_ref()
+                .and_then(Recognized::known)
+                .copied(),
+            body.params
+                .top_k
+                .as_ref()
+                .and_then(Recognized::known)
+                .copied(),
         )
     }
 
@@ -662,7 +676,7 @@ mod tests {
     ) {
         let headers: Headers = vec![("anthropic-version".to_string(), requested.to_string())];
         let body = VERTEX_ANTHROPIC_MESSAGES_CONFIG
-            .request_body(sampling_request(), &headers, drop_params)
+            .request_body(sampling_request(), &headers, VERTEX_URL, drop_params)
             .unwrap();
         assert_eq!(sampling_params(&body), expected);
     }
@@ -671,7 +685,7 @@ mod tests {
     fn sampling_params_are_refused_under_2026_10_21_without_drop_params() {
         let headers: Headers = vec![("anthropic-version".to_string(), "2026-10-21".to_string())];
         let Error::InvalidRequest(detail) = VERTEX_ANTHROPIC_MESSAGES_CONFIG
-            .request_body(sampling_request(), &headers, false)
+            .request_body(sampling_request(), &headers, VERTEX_URL, false)
             .unwrap_err()
         else {
             panic!("expected an invalid request");
@@ -702,6 +716,7 @@ mod tests {
                         )
                         .unwrap(),
                     &Vec::new(),
+                    VERTEX_URL,
                     false,
                 )
                 .unwrap(),

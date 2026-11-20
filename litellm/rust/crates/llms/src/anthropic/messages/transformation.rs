@@ -145,8 +145,12 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         &self,
         request: MessagesRequest,
         headers: &Headers,
+        url: &str,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
+        if !serves_anthropic_api_versions(url) {
+            return Ok(request);
+        }
         drop_sampling_params_removed_by_version(
             request,
             requested_api_version(headers),
@@ -205,7 +209,9 @@ const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "cognitiveservices.azure.com",
 ];
 
-fn is_foundry_url(url: &str) -> bool {
+const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+
+fn url_host(url: &str) -> Option<String> {
     let absolute = if url.contains("://") {
         url.to_string()
     } else {
@@ -214,11 +220,20 @@ fn is_foundry_url(url: &str) -> bool {
     url::Url::parse(&absolute)
         .ok()
         .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
-        .is_some_and(|host| {
-            FOUNDRY_HOST_SUFFIXES
-                .iter()
-                .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
-        })
+}
+
+fn is_foundry_host(host: &str) -> bool {
+    FOUNDRY_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn is_foundry_url(url: &str) -> bool {
+    url_host(url).is_some_and(|host| is_foundry_host(&host))
+}
+
+fn serves_anthropic_api_versions(url: &str) -> bool {
+    url_host(url).is_some_and(|host| host == ANTHROPIC_API_HOST || is_foundry_host(&host))
 }
 
 pub fn is_claude_model(model: &str) -> bool {
@@ -1217,13 +1232,16 @@ mod tests {
         assert_eq!(detail.to_string(), message);
     }
 
+    const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
+
     fn versioned_body(
+        url: &str,
         version: &[(&str, &str)],
         fields: Value,
         drop_params: bool,
     ) -> Result<Value, Error> {
         ANTHROPIC_MESSAGES_CONFIG
-            .request_body(request(fields), &headers(version), drop_params)
+            .request_body(request(fields), &headers(version), url, drop_params)
             .map(|body| serde_json::to_value(body).unwrap())
     }
 
@@ -1242,7 +1260,10 @@ mod tests {
         #[case] fields: Value,
         #[case] expected: Value,
     ) {
-        assert_eq!(versioned_body(version, fields, true), Ok(body(expected)));
+        assert_eq!(
+            versioned_body(ANTHROPIC_URL, version, fields, true),
+            Ok(body(expected))
+        );
     }
 
     #[rstest]
@@ -1256,7 +1277,7 @@ mod tests {
     ) {
         let fields = json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40});
         assert_eq!(
-            versioned_body(version, fields.clone(), drop_params),
+            versioned_body(ANTHROPIC_URL, version, fields.clone(), drop_params),
             Ok(body(fields))
         );
     }
@@ -1287,9 +1308,13 @@ mod tests {
         #[case] fields: Value,
         #[case] message: &str,
     ) {
-        let Error::InvalidRequest(detail) =
-            versioned_body(&[("anthropic-version", version)], fields, false).unwrap_err()
-        else {
+        let Error::InvalidRequest(detail) = versioned_body(
+            ANTHROPIC_URL,
+            &[("anthropic-version", version)],
+            fields,
+            false,
+        )
+        .unwrap_err() else {
             panic!("expected an invalid request");
         };
         assert_eq!(detail.to_string(), message);
@@ -1298,7 +1323,48 @@ mod tests {
     #[rstest]
     fn a_request_without_sampling_params_passes_an_api_version_that_removed_them() {
         assert_eq!(
-            versioned_body(&[("anthropic-version", "2026-10-21")], json!({}), false),
+            versioned_body(
+                ANTHROPIC_URL,
+                &[("anthropic-version", "2026-10-21")],
+                json!({}),
+                false
+            ),
+            Ok(body(json!({})))
+        );
+    }
+
+    #[rstest]
+    #[case::deepseek("https://api.deepseek.com/anthropic/v1/messages")]
+    #[case::minimax("https://api.minimax.io/anthropic/v1/messages")]
+    #[case::anthropic_lookalike("https://api.anthropic.com.example/v1/messages")]
+    fn sampling_params_reach_a_third_party_anthropic_api_under_2026_10_21(
+        #[case] url: &str,
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let fields = json!({"temperature": 0.2, "top_p": 0.9, "top_k": 40});
+        assert_eq!(
+            versioned_body(
+                url,
+                &[("anthropic-version", "2026-10-21")],
+                fields.clone(),
+                drop_params
+            ),
+            Ok(body(fields))
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic(ANTHROPIC_URL)]
+    #[case::anthropic_host_in_any_case("https://API.Anthropic.com/v1/messages")]
+    #[case::foundry(FOUNDRY)]
+    fn anthropic_and_foundry_hosts_drop_sampling_params_under_2026_10_21(#[case] url: &str) {
+        assert_eq!(
+            versioned_body(
+                url,
+                &[("anthropic-version", "2026-10-21")],
+                json!({"temperature": 0.2, "top_p": 0.9, "top_k": 40}),
+                true
+            ),
             Ok(body(json!({})))
         );
     }

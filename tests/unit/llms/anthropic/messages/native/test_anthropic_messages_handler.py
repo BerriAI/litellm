@@ -92,57 +92,81 @@ async def test_openai_messages_forwards_stop_sequences_to_chat_completions(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-async def test_anthropic_version_2026_10_21_never_sends_deployment_sampling_params_upstream(drop_params: bool) -> None:
+@pytest.mark.parametrize("base_from_env", [False, True], ids=["deployment_api_base", "anthropic_api_base_env"])
+async def test_anthropic_version_2026_10_21_sends_sampling_params_to_a_third_party_anthropic_api(
+    monkeypatch: pytest.MonkeyPatch, base_from_env: bool, drop_params: bool
+) -> None:
     with recording_service() as upstream:
-        upstream.expected_requests = 1 if drop_params else 0
+        upstream.expected_requests = 1
+        if base_from_env:
+            monkeypatch.setenv("ANTHROPIC_API_BASE", upstream.base_url)
         router: Final = Router(
             model_list=[
                 {
-                    "model_name": "claude",
+                    "model_name": "deepseek",
                     "litellm_params": {
-                        "model": "anthropic/claude-sonnet-4-6",
+                        "model": "anthropic/deepseek-v4-flash",
                         "api_key": "test-api-key",
-                        "api_base": upstream.base_url,
-                        "temperature": 1,
                         "drop_params": drop_params,
+                        **({} if base_from_env else {"api_base": upstream.base_url}),
                     },
                 }
             ]
         )
-        if drop_params:
-            upstream.enqueue(
-                ResponseSpec(
-                    body={
-                        "id": "msg_sampling",
-                        "type": "message",
-                        "role": "assistant",
-                        "model": "claude-sonnet-4-6",
-                        "content": [{"type": "text", "text": "hi"}],
-                        "stop_reason": "end_turn",
-                        "stop_sequence": None,
-                        "usage": {"input_tokens": 1, "output_tokens": 1},
-                    }
-                )
+        upstream.enqueue(
+            ResponseSpec(
+                body={
+                    "id": "msg_sampling",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "deepseek-v4-flash",
+                    "content": [{"type": "text", "text": "hi"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
             )
-        pending: Final = router.aanthropic_messages(
+        )
+        await router.aanthropic_messages(
+            model="deepseek",
+            max_tokens=16,
+            temperature=0.2,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_headers={"anthropic-version": "2026-10-21"},
+        )
+
+    sent: Final = upstream.requests[-1]
+    assert sent.headers["anthropic-version"] == "2026-10-21"
+    assert isinstance(sent.body, dict)
+    assert sent.body["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_version_2026_10_21_refuses_deployment_sampling_params_before_calling_anthropic() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-6",
+                    "api_key": "test-api-key",
+                    "api_base": "https://api.anthropic.com",
+                    "temperature": 1,
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(
+        litellm.UnsupportedParamsError,
+        match=r"does not support temperature=1\. anthropic-version 2026-10-21 removed temperature, top_p and top_k",
+    ):
+        await router.aanthropic_messages(
             model="claude",
             max_tokens=16,
             messages=[{"role": "user", "content": "hi"}],
             extra_headers={"anthropic-version": "2026-10-21"},
         )
-        if not drop_params:
-            with pytest.raises(
-                litellm.UnsupportedParamsError,
-                match=r"does not support temperature=1\. anthropic-version 2026-10-21 removed temperature, top_p and top_k",
-            ):
-                await pending
-            return
-        await pending
-
-    sent: Final = upstream.requests[-1]
-    assert sent.headers["anthropic-version"] == "2026-10-21"
-    assert isinstance(sent.body, dict)
-    assert "temperature" not in sent.body
 
 
 @pytest.mark.parametrize("stop_sequences", [None, []], ids=["no-stops", "empty-stops"])

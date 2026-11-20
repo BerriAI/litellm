@@ -23,7 +23,11 @@ from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
 from litellm.litellm_core_utils.url_utils import ensure_api_route
-from litellm.llms.anthropic.messages.api_versions import requested_api_version, sampling_params_to_drop
+from litellm.llms.anthropic.messages.api_versions import (
+    requested_api_version,
+    sampling_params_to_drop,
+    serves_anthropic_api_versions,
+)
 from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
 from litellm.llms.anthropic.messages.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -651,8 +655,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if thinking_enabled or effort_enabled:
             optional_params.pop("temperature", None)
 
-    def anthropic_api_version(self, headers: Mapping[str, object]) -> str | None:
-        return requested_api_version(headers) if self._resolved_provider == "anthropic" else None
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
+        serves_versions: Final = self._resolved_provider == "anthropic" and serves_anthropic_api_versions(
+            AnthropicModelInfo.resolve_anthropic_api_base(api_base)
+        )
+        return requested_api_version(headers) if serves_versions else None
 
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
         """False on legs whose final ``anthropic_beta`` list is only known after this transform (Bedrock Invoke),
@@ -737,7 +744,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         dropped_sampling_params: Final = sampling_params_to_drop(
             anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
-            self.anthropic_api_version(headers),  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+            self.anthropic_api_version(headers, litellm_params.api_base),  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
             model=model,
             provider=self._resolved_provider,
             drop_params=drops_unsupported_params(getattr(litellm_params, "drop_params", None)),

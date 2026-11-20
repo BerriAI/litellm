@@ -239,6 +239,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         &self,
         request: MessagesRequest,
         headers: &Headers,
+        _url: &str,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
         drop_sampling_params_removed_by_version(
@@ -1543,6 +1544,7 @@ mod tests {
                     "messages": [{"role": "user", "content": "hi"}]
                 })),
                 &vec![("anthropic-version".to_string(), version.to_string())],
+                "https://team.services.ai.azure.com/anthropic/v1/messages",
                 true,
             )
             .unwrap();

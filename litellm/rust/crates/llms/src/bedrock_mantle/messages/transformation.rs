@@ -155,6 +155,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         &self,
         request: MessagesRequest,
         headers: &Headers,
+        _url: &str,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
         drop_sampling_params_removed_by_version(
@@ -587,6 +588,7 @@ mod tests {
                 }))
                 .unwrap(),
                 &vec![("anthropic-version".to_string(), version.to_string())],
+                "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages",
                 true,
             )
             .unwrap();

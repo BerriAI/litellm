@@ -71,7 +71,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return False
 
-    def anthropic_api_version(self, headers: Mapping[str, object]) -> str | None:
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
         return requested_api_version(headers)
 
     def get_complete_url(

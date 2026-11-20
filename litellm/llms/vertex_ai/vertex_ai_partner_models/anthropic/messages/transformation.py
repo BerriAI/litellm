@@ -83,7 +83,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
     def should_strip_billing_metadata(self) -> bool:
         return True
 
-    def anthropic_api_version(self, headers: Mapping[str, object]) -> str | None:
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
         requested: Final = requested_api_version(headers)
         return requested if requested in _VERSIONS_VERTEX_ACCEPTS_IN_BODY else _VERTEX_DEFAULT_VERSION
 
