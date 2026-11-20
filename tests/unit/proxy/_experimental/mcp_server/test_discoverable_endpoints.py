@@ -6084,7 +6084,7 @@ async def test_register_bridge_keeps_client_callback_without_gateway_opt_in(
 async def test_register_bridge_with_proxy_base_url_registers_gateway_client_not_laptop_loopback(
     monkeypatch: pytest.MonkeyPatch, auth_type_value: Literal["oauth_delegate", "true_passthrough"]
 ) -> None:
-    """A laptop MCP client (VS Code) registers with its own loopback redirect. With PROXY_BASE_URL set
+    """A laptop MCP client (VS Code) registers with its own loopback redirect. With explicit opt-in
     the gateway must not relay that registration upstream: it registers its one shared client bound
     to the gateway /callback, keeps it, and hands the caller a client bound to the caller's loopback.
     Relaying the loopback is the customer failure on upstreams that restrict redirect domains."""
