@@ -610,6 +610,50 @@ async def test_gateway_tools_walks_session_bound_pages(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_repeated_cursorless_listings_do_not_store_tool_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "cursorless-single-page-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    store = MemoryToolPageStore()
+    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", store)
+    transport, calls = _session_bound_tools_transport(tool_count=1, page_size=1, ttl_ms=0)
+    server = MCPServer(server_id="bound", name="bound", url="https://bound.example/mcp", transport=MCPTransport.http)
+    manager = MCPServerManager(upstream_transport=transport)
+    monkeypatch.setattr(manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    context = mcp_operations.prepare_context()
+
+    first: Final = await catalog.aggregate_gateway_tools(
+        context,
+        PaginatedRequestParams(),
+        [server],
+        {},
+        enforce_rate_limits=False,
+        use_tool_list_cache=False,
+    )
+    second: Final = await catalog.aggregate_gateway_tools(
+        context,
+        PaginatedRequestParams(),
+        [server],
+        {},
+        enforce_rate_limits=False,
+        use_tool_list_cache=False,
+    )
+    results: Final = (first, second)
+    await asyncio.gather(*tuple(catalog._TOOL_PRODUCERS.values()))
+
+    assert tuple(tuple(tool.name for tool in result.tools) for result in results) == (
+        ("bound-bound-tool-0",),
+        ("bound-bound-tool-0",),
+    )
+    assert all(result.next_cursor is None for result in results)
+    assert not any(key.startswith("mcp:tools:list-page:v2:") for key in store.values)
+    requests: Final = tuple(calls.get_nowait() for _ in range(calls.qsize()))
+    assert len(tuple(request for request in requests if request[1] == "tools/list")) == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "salt_key",
     (pytest.param("session-bound-tools-pages-test", id="salt-present"), pytest.param(None, id="salt-missing")),
@@ -1359,7 +1403,7 @@ async def test_streaming_tool_pages_preserve_large_upstream_page_without_splitti
 
 
 @pytest.mark.asyncio
-async def test_streaming_tool_page_publisher_reads_back_an_indivisible_oversized_tool(
+async def test_streaming_tool_page_publisher_does_not_store_an_indivisible_oversized_terminal_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from mcp.types import Tool
@@ -1382,12 +1426,10 @@ async def test_streaming_tool_page_publisher_reads_back_an_indivisible_oversized
     await publisher.publish(ListToolsResult(tools=[oversized]))
     await publisher.finish(ServerListOk(tool_count=1), failed=False)
 
-    cached: Final = catalog._CACHED_TOOL_PAGE.validate_python(
-        store.values[catalog._tool_page_cache_key("c" * 64, "bounded", snapshot_id, 0)]
-    )
     assert first_page.result().tools == [oversized]
-    assert cached.result.tools == [oversized]
-    assert len(cached.model_dump_json().encode()) > 512 * 1024
+    assert first_page.result().next_cursor is None
+    assert len(first_page.result().model_dump_json().encode()) > 512 * 1024
+    assert not any(key.startswith("mcp:tools:list-page:v2:") for key in store.values)
 
 
 def _session_bound_tools_transport(

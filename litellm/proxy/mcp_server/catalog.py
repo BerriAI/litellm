@@ -1077,6 +1077,12 @@ class _StreamingToolPagePublisher:
             )
         )
         terminal_page: Final = self._with_outcome(page, outcome)
+        return_terminal_page_without_storage: Final = (
+            not failed and self.pending_final is not None and self.next_index == 0 and not self.first_page.done()
+        )
+        if return_terminal_page_without_storage:
+            self.first_page.set_result(terminal_page)
+            return
         status: Final = _ToolProducerStatus(
             state="failed" if failed else "complete",
             deadline_at=time.time(),
