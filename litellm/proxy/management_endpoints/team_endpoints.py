@@ -656,9 +656,7 @@ async def refresh_cached_team(
     await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
         await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
-    await evict_budget_windows_absent_marker(
-        entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id, user_api_key_cache=user_api_key_cache
-    )
+    await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id)
 
 
 _refresh_cached_team: Final = refresh_cached_team
@@ -2497,7 +2495,7 @@ def _member_user_ids(members_with_roles: Sequence[dict[str, object]]) -> tuple[s
     return tuple(user_id for member in members_with_roles if isinstance((user_id := member.get("user_id")), str))
 
 
-async def _evict_created_membership_caches(
+async def evict_created_membership_caches(
     user_ids: Iterable[str],
     team_id: str,
     user_api_key_cache: UserApiKeyCache,
@@ -2519,6 +2517,9 @@ async def _evict_created_membership_caches(
             for user_id in user_ids
         )
     )
+
+
+_evict_created_membership_caches: Final = evict_created_membership_caches
 
 
 @router.post("/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
@@ -3566,7 +3567,7 @@ async def _update_team_member_role(
     return before, after
 
 
-def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
+def emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
     """Update the Prometheus team members gauge after a membership change.
 
     No-ops when the Prometheus callback is not registered, and never lets a
@@ -3579,6 +3580,9 @@ def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
         prometheus_logger.set_team_members_metric(team)
     except Exception as e:
         verbose_proxy_logger.debug("Prometheus: failed to emit team members metric: %s", str(e))
+
+
+_emit_team_members_metric: Final = emit_team_members_metric
 
 
 async def _resolve_existing_member_user_ids(
@@ -3703,7 +3707,7 @@ def _schedule_team_membership_audit_log(
     )
 
 
-def _schedule_team_member_add_audit_logs(
+def schedule_team_member_add_audit_logs(
     team_id: str,
     team_alias: str | None,
     updated_users: Sequence[LiteLLM_UserTable],
@@ -3746,6 +3750,9 @@ def _schedule_team_member_add_audit_logs(
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
+
+
+_schedule_team_member_add_audit_logs: Final = schedule_team_member_add_audit_logs
 
 
 async def _validate_and_populate_member_user_info(

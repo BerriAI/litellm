@@ -293,6 +293,25 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             )
         )
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        unguarded: Final = AnthropicConfig.transform_extra_body(
+            self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+        )
+        stripped: Final = strip_beta_gated_request_body(
+            {**request, **unguarded},
+            {},
+            drop_params=litellm_params.get("drop_params"),
+            model=model,
+            provider="bedrock_invoke",
+        )
+        return {key: stripped[key] for key in unguarded if key in stripped}
+
     @property
     def uses_async_transform_request(self) -> bool:
         return True

@@ -7728,6 +7728,7 @@ def _jwt_auth_patches(mapped_key):
     import jwt
     from cryptography.hazmat.primitives.asymmetric import rsa
 
+    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -7735,7 +7736,8 @@ def _jwt_auth_patches(mapped_key):
     jwks_url = "https://idp.example.test/mapped/jwks"
     signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     cache = UserApiKeyCache()
-    cache.set_cache(
+    jwks_cache = DualCache()
+    jwks_cache.set_cache(
         f"litellm_jwt_auth_keys_{jwks_url}",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
     )
@@ -7752,6 +7754,7 @@ def _jwt_auth_patches(mapped_key):
     stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client", object()))
     stack.enter_context(patch("litellm.proxy.proxy_server.litellm_jwtauth", jwt_auth))
     stack.enter_context(patch("litellm.proxy.proxy_server.user_api_key_cache", cache))
+    stack.enter_context(patch("litellm.proxy.proxy_server.jwks_cache", jwks_cache))
     stack.enter_context(
         patch(
             "litellm.proxy.mcp_server.bridge_token_flow._key_owner_scim_deactivated",
@@ -12830,7 +12833,7 @@ async def test_enforced_login_warms_verified_token_readable_without_database_loo
     proof = await current_binding_proof(server.oauth_identity_binding, "alice", "srv")
     cache = DualCache()
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-cache-warm-encryption-salt")
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "mcp_state_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(
         mcp_server_manager, "global_mcp_server_manager", SimpleNamespace(invalidate_user_oauth_token_cache=AsyncMock())
@@ -13011,6 +13014,7 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple[_JwtOAuthConfig
     import jwt
     from cryptography.hazmat.primitives.asymmetric import rsa
 
+    from litellm.caching.dual_cache import DualCache
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_JWTAuth
@@ -13018,7 +13022,8 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple[_JwtOAuthConfig
 
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     cache: Final = UserApiKeyCache()
-    cache.set_cache(
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache(
         "litellm_jwt_auth_keys_https://idp.example.test/jwks",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
     )
@@ -13031,6 +13036,7 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple[_JwtOAuthConfig
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "jwks_cache", jwks_cache)
     prisma: Final = MagicMock()
     prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=None)

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 from fastapi import status
 
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.app_auth import authenticated_resource_id
+from litellm.proxy.auth.app_auth import authenticated_resource_alias, authenticated_resource_id
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
     CUSTOMER_ORG_ALIAS_HEADER,
@@ -47,7 +47,11 @@ async def registration_refusal(prisma_client: "PrismaClient | None", authenticat
         else None
     )
     app: Final = (
-        await store.by_resource(definition.resource_type, resource_id)
+        await store.by_resource(
+            definition.resource_type,
+            resource_id,
+            authenticated_resource_alias(definition.resource_type, resource_id, authenticated),
+        )
         if definition.resource_type is not None and resource_id is not None
         else None
     )

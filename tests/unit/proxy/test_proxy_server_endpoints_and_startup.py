@@ -8574,6 +8574,51 @@ async def test_update_general_settings_user_api_key_cache_max_size_resizes_the_r
     assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
 
 
+_CACHES_SPLIT_FROM_THE_AUTH_CACHE: Final = (
+    "hook_cache",
+    "mcp_state_cache",
+    "jwks_cache",
+    "ui_settings_cache",
+    "sso_flow_cache",
+    "budget_windows_absent_cache",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", _CACHES_SPLIT_FROM_THE_AUTH_CACHE)
+async def test_a_cache_split_from_the_auth_cache_still_follows_user_api_key_cache_max_size(name, monkeypatch):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = DualCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server_module, name, cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 300})
+
+    for index in range(250):
+        cache.set_cache(key=f"entry-{index}", value=index, local_only=True)
+    assert cache.get_cache(key="entry-0", local_only=True) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", _CACHES_SPLIT_FROM_THE_AUTH_CACHE)
+async def test_a_cache_split_from_the_auth_cache_still_follows_user_api_key_cache_ttl(name, monkeypatch, tmp_path):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\ngeneral_settings:\n  user_api_key_cache_ttl: 7\n")
+    cache = DualCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server_module, name, cache)
+
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    assert (cache.default_in_memory_ttl, cache.default_redis_ttl) == (7.0, 7.0)
+
+
 @pytest.mark.asyncio
 async def test_update_general_settings_clearing_user_api_key_cache_max_size_restores_the_default(monkeypatch):
     """Blanking the field in the dashboard deletes the key, so the cache must fall

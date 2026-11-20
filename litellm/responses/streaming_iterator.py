@@ -440,6 +440,7 @@ class BaseResponsesAPIStreamingIterator:
     _started_tool_call: bool = False
     _earlier_rounds_spend: BilledRoundsSpend | None = None
     _replays_stored_stream: bool = False
+    _caches_incomplete_response: bool = False
 
     def __init__(
         self,
@@ -878,7 +879,15 @@ class BaseResponsesAPIStreamingIterator:
 
         completed_response: Final = self.completed_response
         openai_types: Final = get_openai_response_types()
-        if getattr(completed_response, "type", None) != openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        cacheable_event_types: Final = (
+            (
+                openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            )
+            if self._caches_incomplete_response
+            else (openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,)
+        )
+        if getattr(completed_response, "type", None) not in cacheable_event_types:
             return
 
         from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
@@ -1468,10 +1477,12 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     """
     Mock iterator—fake a stream by slicing the full response text into
-    5 char deltas, then emit a completed event.
+    5 char deltas, then emit a completed or incomplete event.
 
     Models like o1-pro don't support streaming, so we fake it.
     """
+
+    _caches_incomplete_response: bool = True
 
     CHUNK_SIZE = 5
 
@@ -1525,7 +1536,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -1539,7 +1553,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
@@ -1592,7 +1609,10 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -1606,7 +1626,10 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
@@ -2132,7 +2155,12 @@ def build_synthetic_response_events(
         )
 
     events.append(
-        openai_types.ResponseCompletedEvent(
+        openai_types.ResponseIncompleteEvent(
+            type=openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            response=transformed,
+        )
+        if transformed.status == "incomplete"
+        else openai_types.ResponseCompletedEvent(
             type=openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
             response=transformed,
         )
@@ -2343,14 +2371,14 @@ _PII_DELTA_EVENT_TYPES: Final = frozenset(
 
 
 def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], unmask_pii_text: object) -> str:
-    """Put the original PII back into one client-bound event: ``response.completed`` output text, or a delta."""
+    """Put the original PII back into one client-bound event: a completed or incomplete response's text, or a delta."""
     try:
         evt_obj: Final = _load_json_object(response_str)
     except (json.JSONDecodeError, TypeError):
         return response_str
     event_type: Final = evt_obj.get("type")
 
-    if event_type == "response.completed":
+    if event_type in _HISTORY_TERMINAL_EVENT_TYPES:
         modified = False
         response_obj: Final = evt_obj.get("response")
         if not _is_json_object(response_obj):
@@ -2809,10 +2837,10 @@ class ResponsesWebSocketStreaming:
                 # and the text-bearing "done" events. Per-fragment Presidio
                 # cannot reliably catch PII spanning multiple delta chunks (e.g.
                 # "alice@" + "example.com"), and the done events carry the full
-                # output text that response.completed already delivers in
-                # fully-masked form; forwarding them would leak unmasked PII
-                # before response.completed arrives. The client receives only the
-                # masked response.completed.
+                # output text that the terminal event (response.completed or
+                # response.incomplete) already delivers in fully-masked form;
+                # forwarding them would leak unmasked PII before it arrives. The
+                # client receives only the masked terminal event.
                 if self.output_guardrail_callbacks:
                     try:
                         _evt_payload: Mapping[str, object] = _load_json_object(response_str)
@@ -3025,8 +3053,9 @@ class ResponsesWebSocketStreaming:
 
     async def _mask_response_completed(self, response_str: str) -> str:
         """
-        Apply Presidio output masking (apply_to_output=True) to the
-        ``response.completed`` event before it is forwarded to the client.
+        Apply Presidio output masking (apply_to_output=True) to the terminal
+        ``response.completed`` or ``response.incomplete`` event before it is
+        forwarded to the client.
 
         Walks ``response.output[*].content[*].text`` and masks every text block,
         as well as ``response.output[*].arguments`` on function-call items and
@@ -3043,7 +3072,7 @@ class ResponsesWebSocketStreaming:
         except (json.JSONDecodeError, TypeError):
             return response_str
 
-        if evt_obj.get("type") != "response.completed":
+        if evt_obj.get("type") not in _HISTORY_TERMINAL_EVENT_TYPES:
             return response_str
 
         modified = False

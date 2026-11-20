@@ -109,7 +109,14 @@ class _PrismaTeamMembershipTable(Protocol):
     ) -> _PrismaRecord: ...
 
 
-class MemberWriteTx(Protocol):
+class BudgetWriteTx(Protocol):
+    """Where `resolve_member_budget_id` reads and writes budgets when the caller owns the transaction."""
+
+    @property
+    def litellm_budgettable(self) -> _PrismaBudgetTable: ...
+
+
+class MemberWriteTx(BudgetWriteTx, Protocol):
     """Transaction surface `add_new_member` writes through when the caller owns one.
 
     A caller already holding a transaction, and with it a pooled connection plus that
@@ -121,9 +128,6 @@ class MemberWriteTx(Protocol):
     def litellm_usertable(self) -> _PrismaUserTable: ...
 
     @property
-    def litellm_budgettable(self) -> _PrismaBudgetTable: ...
-
-    @property
     def litellm_teammembership(self) -> _PrismaTeamMembershipTable: ...
 
 
@@ -131,7 +135,7 @@ def _user_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _Prism
     return tx.litellm_usertable if tx is not None else UserRepository(prisma_client).table
 
 
-def _budget_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _PrismaBudgetTable:
+def _budget_table(prisma_client: PrismaClient, tx: BudgetWriteTx | None) -> _PrismaBudgetTable:
     return tx.litellm_budgettable if tx is not None else BudgetRepository(prisma_client).table
 
 
@@ -403,7 +407,7 @@ async def _clone_team_default_budget_for_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     budget_duration_override: str | None = None,
-    tx: MemberWriteTx | None = None,
+    tx: BudgetWriteTx | None = None,
 ) -> str | None:
     """
     Create a new budget row that copies the values from the team's default
@@ -451,7 +455,7 @@ async def _clone_team_default_budget_for_member(
     return new_budget.budget_id
 
 
-async def _resolve_member_budget_id(
+async def resolve_member_budget_id(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
@@ -459,7 +463,7 @@ async def _resolve_member_budget_id(
     allowed_models: list[str] | None,
     budget_duration: str | None,
     default_team_budget_id: str | None,
-    tx: MemberWriteTx | None = None,
+    tx: BudgetWriteTx | None = None,
 ) -> str | None:
     """
     Resolve the budget a new team member should be linked to.
@@ -517,8 +521,11 @@ async def _resolve_member_budget_id(
     return response.budget_id
 
 
+_resolve_member_budget_id: Final = resolve_member_budget_id
+
+
 async def _team_default_budget_duration(
-    prisma_client: PrismaClient, default_team_budget_id: str, tx: MemberWriteTx | None
+    prisma_client: PrismaClient, default_team_budget_id: str, tx: BudgetWriteTx | None
 ) -> str | None:
     """The reset period a member with models of their own and no cap of their own must carry.
 

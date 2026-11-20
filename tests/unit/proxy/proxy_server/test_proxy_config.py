@@ -6207,7 +6207,7 @@ async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_reg
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_jwk: Final = jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
-    proxy_server.user_api_key_cache.set_cache(
+    proxy_server.jwks_cache.set_cache(
         key=f"litellm_jwt_auth_keys_{jwks_url}", value=[{**public_jwk, "kid": "k1"}]
     )
     monkeypatch.setattr(proxy_server, "premium_user", True)
