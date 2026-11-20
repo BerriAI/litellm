@@ -45,6 +45,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_chat_stream_usage,
     effective_scan_only_tool_results_for_guardrail,
+    effective_scan_tool_calls_as_text_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     list_field,
@@ -166,7 +167,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
             *(
                 _legacy_function_calls(cast("Iterable[object]", messages))  # cast-ok: request messages arrive untyped
-                if guardrail_to_apply.scan_tool_calls_as_text is True and not scan_only_tool_results
+                if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply) and not scan_only_tool_results
                 else ()
             ),
         ]
@@ -467,7 +468,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 0: Check if response has any text content to process
         legacy_function_calls: Final = (
             _legacy_function_calls(choice.message for choice in response.choices)
-            if guardrail_to_apply.scan_tool_calls_as_text is True
+            if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
             else ()
         )
         if not self._has_text_content(response) and not legacy_function_calls:

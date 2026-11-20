@@ -2935,7 +2935,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
@@ -2947,7 +2947,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return
 
-        new_messages: Final[list[AllMessageValues] | None] = data.get("messages")
+        new_messages: Final = _request_messages(data)
         if new_messages is None:
             verbose_proxy_logger.warning("Bedrock AI: not running guardrail. No messages in data")
             return
