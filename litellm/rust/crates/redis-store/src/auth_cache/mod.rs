@@ -7,7 +7,7 @@ use litellm_python_compat::{Value, json};
 use litellm_redis_client::{Declared, RedisBatch, commands};
 use parking_lot::Mutex;
 
-pub use self::keys::is_key_object;
+pub use self::keys::{AuthObject, is_key_object};
 pub use self::types::Settings;
 use crate::{
     Error, Number, Pending, RequestRedis, Send, codec,
