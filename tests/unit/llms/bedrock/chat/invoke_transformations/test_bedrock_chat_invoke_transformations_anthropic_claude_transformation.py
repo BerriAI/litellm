@@ -2,7 +2,7 @@ import asyncio, base64, importlib
 import copy
 import json
 import uuid
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -2426,11 +2426,9 @@ def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
     assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]
 
 
-@pytest.mark.parametrize(("drop_params", "fallbacks_kept"), [(False, True), (True, False)])
-def test_bedrock_invoke_claude_extra_body_keeps_the_conversation_and_gates_fallbacks_on_drop_params(
-    drop_params: bool, fallbacks_kept: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
+def _bedrock_invoke_claude_with_extra_body(
+    extra_body: Mapping[str, object], drop_params: bool
+) -> tuple[httpx.Request, ...]:
     captured_requests: Final[list[httpx.Request]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -2459,22 +2457,55 @@ def test_bedrock_invoke_claude_extra_body_keeps_the_conversation_and_gates_fallb
             client=client,
             max_tokens=16,
             drop_params=drop_params,
-            extra_body={
-                "fallbacks": [{"model": "claude-opus-5-5"}],
-                "model": "claude-opus-5-5",
-                "messages": [{"role": "user", "content": "unchecked"}],
-                "system": "unchecked",
-                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
-                "stop_sequences": ["5"],
-                "max_tokens": 4096,
-            },
+            extra_body=dict(extra_body),
         )
     finally:
         client.close()
+    return tuple(captured_requests)
 
-    request_body: Final = json.loads(captured_requests[0].content)
-    assert request_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
-    assert {"model", "system", "tools"}.isdisjoint(request_body)
+
+_GUARDED_EXTRA_BODY: Final = MappingProxyType(
+    {
+        "model": "claude-opus-5-5",
+        "messages": [{"role": "user", "content": "unchecked"}],
+        "system": "unchecked",
+        "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+        "stop_sequences": ["5"],
+    }
+)
+
+
+@pytest.mark.parametrize(("drop_params", "fallbacks_kept"), [(False, True), (True, False)])
+def test_bedrock_invoke_claude_extra_body_sends_fields_top_level_and_gates_fallbacks_on_drop_params(
+    drop_params: bool, fallbacks_kept: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body(
+        {"fallbacks": [{"model": "claude-opus-5-5"}], "stop_sequences": ["5"], "max_tokens": 4096}, drop_params
+    )
+
+    request_body: Final = json.loads(requests[0].content)
     assert request_body["stop_sequences"] == ["5"]
     assert request_body["max_tokens"] == 16
     assert request_body.get("fallbacks") == ([{"model": "claude-opus-5-5"}] if fallbacks_kept else None)
+
+
+def test_bedrock_invoke_claude_extra_body_drops_guarded_keys_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body(_GUARDED_EXTRA_BODY, drop_params=True)
+
+    request_body: Final = json.loads(requests[0].content)
+    assert request_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    assert {"model", "system", "tools"}.isdisjoint(request_body)
+    assert request_body["stop_sequences"] == ["5"]
+
+
+def test_bedrock_invoke_claude_extra_body_answers_400_for_guarded_keys_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages, model, system, tools"):
+        _bedrock_invoke_claude_with_extra_body(_GUARDED_EXTRA_BODY, drop_params=False)

@@ -147,7 +147,7 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     assert "default_api_key_tpm_limit" not in request_body
 
 
-def test_anthropic_completion_sends_extra_body_fields_top_level_without_replacing_the_conversation() -> None:
+def test_anthropic_completion_sends_extra_body_fields_top_level_and_drops_guarded_keys_under_drop_params() -> None:
     captured_requests: Final[list[httpx.Request]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -174,8 +174,9 @@ def test_anthropic_completion_sends_extra_body_fields_top_level_without_replacin
             api_key="test-key",
             client=client,
             max_tokens=16,
+            drop_params=True,
             extra_body={
-                "fallbacks": [{"model": "claude-opus-5-5"}],
+                "stop_sequences": ["5"],
                 "model": "claude-opus-5-5",
                 "messages": [{"role": "user", "content": "unchecked"}],
                 "system": "unchecked",
@@ -191,7 +192,7 @@ def test_anthropic_completion_sends_extra_body_fields_top_level_without_replacin
         "model": "claude-sonnet-5-5",
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
         "max_tokens": 16,
-        "fallbacks": [{"model": "claude-opus-5-5"}],
+        "stop_sequences": ["5"],
     }, request_body
 
 
@@ -226,6 +227,31 @@ def test_anthropic_completion_lets_extra_body_lower_max_tokens_but_never_raise_i
     )
 
     assert json.loads(route.calls.last.request.content)["max_tokens"] == sent_max_tokens
+
+
+def test_anthropic_completion_answers_400_for_guarded_extra_body_keys_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=httpx.Response(500))
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages, model, stream, system, tools"):
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            max_tokens=16,
+            extra_body={
+                "model": "claude-opus-5-5",
+                "messages": [{"role": "user", "content": "unchecked"}],
+                "system": "unchecked",
+                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                "stream": True,
+                "stop_sequences": ["5"],
+            },
+        )
+
+    assert not route.called
 
 
 def test_anthropic_completion_rejects_a_non_object_extra_body_before_calling_anthropic() -> None:

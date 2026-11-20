@@ -197,7 +197,6 @@ _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools", "stream"})
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
@@ -269,7 +268,16 @@ def _fields_behind(messages: Sequence[object], error: Exception) -> Iterable[tup
             return ()
 
 
-def admitted_extra_body(extra_body: Mapping[str, object], request: Mapping[str, object]) -> Mapping[str, object]:
+def admitted_extra_body(
+    extra_body: Mapping[str, object], request: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object] | AnthropicError:
+    guarded: Final = sorted(EXTRA_BODY_GUARDED_KEYS.intersection(extra_body))
+    if guarded and not drop_params:
+        return AnthropicError(
+            status_code=400,
+            message=f"extra_body can't set {', '.join(guarded)}, since litellm builds them from the request. "
+            "Send them as request fields, or set drop_params to drop them",
+        )
     unguarded: Final = {key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS}
     match unguarded.get("max_tokens"), request.get("max_tokens"):
         case (int() as requested_cap, int() as admitted_cap) if requested_cap > admitted_cap:
@@ -278,14 +286,14 @@ def admitted_extra_body(extra_body: Mapping[str, object], request: Mapping[str, 
             return MappingProxyType(unguarded)
 
 
-def _request_extra_body(extra_body: object) -> Mapping[str, object]:
+def _request_extra_body(extra_body: object) -> Mapping[str, object] | AnthropicError:
     match extra_body:
         case None:
             return MappingProxyType({})
         case Mapping():
             return _REQUEST_PARAMS_ADAPTER.validate_python(extra_body)
         case _:
-            raise AnthropicError(
+            return AnthropicError(
                 status_code=400,
                 message=f"Invalid type for 'extra_body': expected an object, got {type(extra_body).__name__}",
             )
@@ -2765,6 +2773,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             dict[str, object], optional_params
         )
         extra_body: Final = _request_extra_body(request_params.pop("extra_body", None))
+        if isinstance(extra_body, AnthropicError):
+            raise extra_body
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
@@ -2790,11 +2800,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 output_key="top_k",
             )
         output_format: Final = request_params.get("output_format")
-        if (
-            output_format is not None
-            and not isinstance(output_format, Mapping)
-            and drops_unsupported_params(_LITELLM_PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params"))
-        ):
+        if output_format is not None and not isinstance(output_format, Mapping) and drop_params:
             request_params.pop("output_format")
 
         request_body: Final = {
@@ -2803,7 +2809,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             **request_params,
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
-        data: Final = {**request_body, **admitted_extra_body(extra_body, request_body)}
+        admitted: Final = admitted_extra_body(extra_body, request_body, drop_params)
+        if isinstance(admitted, AnthropicError):
+            raise admitted
+        data: Final = {**request_body, **admitted}
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
 
@@ -2816,7 +2825,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, object]:
-        return admitted_extra_body(extra_body, request)
+        admitted: Final = admitted_extra_body(
+            extra_body, request, drops_unsupported_params(litellm_params.get("drop_params"))
+        )
+        if isinstance(admitted, AnthropicError):
+            raise admitted
+        return admitted
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data.
