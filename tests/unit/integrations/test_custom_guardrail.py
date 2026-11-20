@@ -3866,3 +3866,166 @@ def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first
         {"pii": {"extra_body": {"threshold": 1}}},
         "model-guard",
     ]
+
+
+_REPLAY_RECORD: Final = {"version": 1, "items": [], "checksum": "0" * 64}
+
+
+def _bridged_turns(with_commentary: bool = True) -> dict[str, object]:  # mutable-ok: a request dict the hooks rewrite
+    carried: Final = (
+        {"openai_responses_commentary": [["checking", " paris"]], "openai_responses_replay": dict(_REPLAY_RECORD)}
+        if with_commentary
+        else {}
+    )
+    return {
+        "model": "gpt-5.6",
+        "messages": [
+            {"role": "user", "content": "weather in paris?"},
+            {
+                "role": "assistant",
+                "content": "it rains",
+                "provider_specific_fields": {"phase": "final_answer", **carried},
+            },
+        ],
+    }
+
+
+def _contents(data: object) -> tuple[object, ...]:
+    messages: Final = data.get("messages") if isinstance(data, dict) else None
+    return (
+        tuple(message.get("content") for message in messages if isinstance(message, dict))
+        if isinstance(messages, list)
+        else ()
+    )
+
+
+class _ContentHookGuardrail(CustomGuardrail):
+    """A guardrail with its own pre-call and during-call hooks that read message content, like vendor hooks do."""
+
+    def __init__(self, *, masks: bool = False, error: BaseException | None = None) -> None:
+        super().__init__(guardrail_name="content-hook")
+        self.masks: Final = masks
+        self.error: Final = error
+        self.seen: tuple[object, ...] = ()
+        self.received: object = None
+        self.watched: object = None
+        self.watched_during_hook: tuple[object, ...] = ()
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: object,
+        data: dict,  # mutable-ok: overrides the hook, which rewrites the request it receives
+        call_type: str,
+    ) -> object:
+        self.seen = _contents(data)
+        self.received = data
+        if self.error is not None:
+            raise self.error
+        messages: Final = data.get("messages")
+        for message in messages if self.masks and isinstance(messages, list) else ():
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                message["content"] = str(message["content"]).replace("paris", "[CITY]")
+        return data
+
+    async def async_moderation_hook(
+        self,
+        data: dict,  # mutable-ok: overrides the hook
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: str,
+    ) -> object:
+        self.seen = _contents(data)
+        self.watched_during_hook = _contents(self.watched)
+        if self.error is not None:
+            raise self.error
+        return None
+
+
+async def _run_pre_call(guardrail: _ContentHookGuardrail, data: dict) -> object:  # mutable-ok: the live request
+    return await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="completion"
+    )
+
+
+def _sent_upstream(data: object) -> str:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    messages: Final = data.get("messages") if isinstance(data, dict) else None
+    assert isinstance(messages, list)
+    sent, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        messages, replay_openai_history=True
+    )
+    return json.dumps(sent)
+
+
+@pytest.mark.asyncio
+async def test_a_content_reading_pre_call_hook_sees_bridged_commentary_and_leaves_it_carried() -> None:
+    guardrail: Final = _ContentHookGuardrail()
+    data: Final = _bridged_turns()
+    original_messages: Final = data["messages"]
+    original: Final = copy.deepcopy(original_messages)
+
+    await _run_pre_call(guardrail, data)
+
+    assert guardrail.seen == ("weather in paris?", "checking parisit rains")
+    assert data["messages"] is original_messages
+    assert data["messages"] == original
+    assert _sent_upstream(data).count("checking") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_masking_pre_call_hook_rewrites_bridged_commentary_before_it_goes_upstream() -> None:
+    data: Final = _bridged_turns()
+
+    await _run_pre_call(_ContentHookGuardrail(masks=True), data)
+
+    assert _contents(data) == ("weather in [CITY]?", "checking [CITY]it rains")
+    sent: Final = _sent_upstream(data)
+    assert "paris" not in sent
+    assert sent.count("[CITY]it rains") == 1
+
+
+@pytest.mark.parametrize(
+    "error", [ValueError("blocked"), asyncio.CancelledError()], ids=["hook-raises", "hook-cancelled"]
+)
+@pytest.mark.asyncio
+async def test_a_failed_pre_call_hook_leaves_a_reusable_request_with_its_commentary_once(error: BaseException) -> None:
+    guardrail: Final = _ContentHookGuardrail(error=error)
+    data: Final = _bridged_turns()
+    original: Final = copy.deepcopy(data["messages"])
+
+    for _attempt in range(2):
+        with pytest.raises(type(error)) as raised:
+            await _run_pre_call(guardrail, data)
+        assert raised.value is error
+        assert guardrail.seen == ("weather in paris?", "checking parisit rains")
+        assert data["messages"] == original
+
+    assert _sent_upstream(data).count("checking") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_pre_call_hook_without_bridged_commentary_gets_the_live_request() -> None:
+    guardrail: Final = _ContentHookGuardrail(masks=True)
+    data: Final = _bridged_turns(with_commentary=False)
+
+    await _run_pre_call(guardrail, data)
+
+    assert guardrail.received is data
+    assert _contents(data) == ("weather in [CITY]?", "it rains")
+
+
+@pytest.mark.asyncio
+async def test_a_during_call_hook_reads_bridged_commentary_without_touching_the_in_flight_request() -> None:
+    guardrail: Final = _ContentHookGuardrail(masks=True)
+    data: Final = _bridged_turns()
+    original: Final = copy.deepcopy(data["messages"])
+    guardrail.watched = data
+
+    await guardrail.async_moderation_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion")
+
+    assert guardrail.seen == ("weather in paris?", "checking parisit rains")
+    assert guardrail.watched_during_hook == ("weather in paris?", "it rains")
+    assert data["messages"] == original

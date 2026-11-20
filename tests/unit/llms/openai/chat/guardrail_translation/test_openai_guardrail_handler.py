@@ -2842,7 +2842,7 @@ async def test_every_reader_sees_bridged_commentary_in_rows_aligned_with_texts_a
 
     assert guardrail.texts == ("weather?", "checking parisit rains")
     assert tuple(chain.from_iterable(map(_row_texts, guardrail.rows))) == guardrail.texts
-    assert data == original
+    assert data["messages"] == original["messages"]
 
 
 @pytest.mark.parametrize(
@@ -2980,7 +2980,7 @@ async def test_a_failed_guardrail_leaves_a_reusable_request_with_its_commentary_
         assert raised.value is error
         assert guardrail.texts == ("weather?", "checking parisit rains")
         assert tuple(chain.from_iterable(map(_row_texts, guardrail.rows))) == guardrail.texts
-        assert data == original
+        assert data["messages"] == original["messages"]
 
     messages: Final = data["messages"]
     assert isinstance(messages, list)

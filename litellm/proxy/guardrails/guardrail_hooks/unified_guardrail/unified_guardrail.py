@@ -20,7 +20,7 @@ from pydantic import TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.cost_calculator import infer_call_type
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, show_moved_commentary
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
@@ -324,6 +324,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
         return data
 
+    @show_moved_commentary(data_position=1, applies_rewrites=False)
     async def async_moderation_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, call_type: CallTypesLiteral
     ) -> object:

@@ -1,16 +1,23 @@
+import copy
+import functools
 import hashlib
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, pairwise
-from types import MappingProxyType
-from typing import Annotated, Final, Literal, TypeAlias
+from types import CoroutineType, MappingProxyType
+from typing import Annotated, Final, Literal, ParamSpec, TypeAlias, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 
 REPLAY_FIELD: Final = "openai_responses_replay"
 PHASE_FIELD: Final = "phase"
 COMMENTARY_FIELD: Final = "openai_responses_commentary"
+SHOWS_MOVED_COMMENTARY_MARKER: Final = "_litellm_shows_moved_commentary"
+_P: Final = ParamSpec("_P")
+_R: Final = TypeVar("_R")
 
 Phase: TypeAlias = Literal["commentary", "final_answer"]
 
@@ -430,19 +437,135 @@ def stored_commentary_items(message: object, *, phased: bool) -> tuple[Mapping[s
     return tuple(_message_item(texts, phase) for texts in commentary_parts(message))
 
 
-class _AnyFields(_Frozen):
-    provider_specific_fields: Mapping[str, object] | None = None
+@dataclass(frozen=True, slots=True)
+class _ShownRow:
+    index: int
+    original: object
+    shown: Mapping[str, object]
+    snapshot: Mapping[str, object]
 
 
-def without_scanned_commentary(message: Mapping[str, object]) -> Mapping[str, object]:
-    """A message whose commentary a guardrail read as content, so its raw carrier and record can't come back."""
-    if not commentary_parts(message):
-        return message
+def _combined_content(content: object, parts: tuple[tuple[str, ...], ...]) -> object:
+    commentary: Final = "".join(chain.from_iterable(parts))
+    content_parts: Final = as_object_list(content)
+    if content_parts is not None:
+        return [{"type": "text", "text": commentary}, *content_parts]
+    return commentary + (content if isinstance(content, str) else "")
+
+
+def _shown_row(index: int, message: object, parts: tuple[tuple[str, ...], ...]) -> _ShownRow:
+    fields: Final = as_str_mapping(message) or {}
+    carried: Final = as_str_mapping(fields.get("provider_specific_fields")) or {}
+    shown: Final = {
+        **fields,
+        "content": copy.deepcopy(_combined_content(fields.get("content"), parts)),
+        "provider_specific_fields": dict(without_commentary(carried)),
+    }
+    return _ShownRow(index=index, original=message, shown=shown, snapshot=copy.deepcopy(shown))
+
+
+def _may_carry_commentary(message: object) -> bool:
+    fields: Final = as_str_mapping((as_str_mapping(message) or {}).get("provider_specific_fields")) or {}
+    return fields.get(COMMENTARY_FIELD) is not None
+
+
+def _shown_rows(messages: Sequence[object]) -> tuple[_ShownRow, ...]:
+    candidates: Final = tuple(
+        (index, message) for index, message in enumerate(messages) if _may_carry_commentary(message)
+    )
+    carried: Final = ((index, message, commentary_parts(message)) for index, message in candidates)
+    return tuple(_shown_row(index, message, parts) for index, message, parts in carried if parts)
+
+
+def _settled_message(message: object, index: int, rows: Sequence[_ShownRow], same_shape: bool) -> object:
+    """A shown turn the guardrail left exactly as shown goes back to the original, carrier and replay included.
+    Any change keeps the guardrail's version, whose carrier is already gone."""
+    by_identity: Final = next((row for row in rows if row.shown is message), None)
+    by_position: Final = next((row for row in rows if row.index == index), None) if same_shape else None
+    row: Final = by_identity or by_position
+    return row.original if row is not None and as_str_mapping(message) == row.snapshot else message
+
+
+def _settled_messages(
+    messages: Sequence[object], shown: Sequence[object], rows: Sequence[_ShownRow]
+) -> list[object]:  # mutable-ok: the request's messages list
+    return [
+        _settled_message(message, index, rows, len(messages) == len(shown)) for index, message in enumerate(messages)
+    ]
+
+
+def _with_data(
+    args: tuple[object, ...], kwargs: Mapping[str, object], data_position: int, data: object
+) -> tuple[tuple[object, ...], Mapping[str, object]]:
+    if "data" in kwargs:
+        return args, {**kwargs, "data": data}
+    return (*args[:data_position], data, *args[data_position + 1 :]), kwargs
+
+
+async def call_with_shown_commentary(
+    hook: Callable[..., Awaitable[_R]],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    *,
+    data_position: int,
+    applies_rewrites: bool,
+) -> _R:
+    """Runs a guardrail hook on a copy of its request in which each bridged assistant turn reads its moved
+    commentary as content, so a hook that only reads ``content`` still sees and can rewrite it.
+
+    The live request keeps its own messages until the hook returns. Then, when the hook may rewrite the request,
+    each turn left exactly as shown gets its original message back and a changed one keeps the guardrail's text,
+    and the hook's other top-level changes are copied over. A hook that raises or is cancelled leaves the live
+    messages as they were. Requests without moved commentary reach the hook untouched."""
+    live: Final = kwargs.get("data") if "data" in kwargs else args[data_position] if len(args) > data_position else None
+    request: Final = as_str_mapping(live) or {}
+    messages: Final = as_object_list(request.get("messages")) or ()
+    rows: Final = _shown_rows(messages)
+    if not rows or not isinstance(live, dict):
+        return await hook(*args, **kwargs)
+    shown_messages: Final = [
+        next((row.shown for row in rows if row.index == index), message) for index, message in enumerate(messages)
+    ]
+    shown_request: Final = {**request, "messages": shown_messages}
+    shown_args, shown_kwargs = _with_data(args, kwargs, data_position, shown_request)
     try:
-        fields: Final = _AnyFields.model_validate(_as_json(message)).provider_specific_fields or {}
-    except ValidationError:
-        return {**message, "provider_specific_fields": None}
-    return {**message, "provider_specific_fields": dict(without_commentary(fields))}
+        result: Final = await hook(*shown_args, **shown_kwargs)
+    finally:
+        for key in tuple(key for key in request if key not in shown_request):
+            del live[key]
+        for key, value in shown_request.items():
+            if key != "messages":
+                live[key] = value
+    rewritten: Final[object] = result
+    settled: Final = _settled_messages(
+        as_object_list((as_str_mapping(rewritten) or shown_request).get("messages")) or (), shown_messages, rows
+    )
+    unchanged: Final = len(settled) == len(messages) and all(a is b for a, b in zip(settled, messages))
+    if isinstance(rewritten, dict):
+        rewritten["messages"] = messages if unchanged else settled
+    if applies_rewrites and not unchanged:
+        live["messages"] = settled
+    return result
+
+
+def shows_moved_commentary(
+    *, data_position: int, applies_rewrites: bool
+) -> Callable[[Callable[_P, "CoroutineType[object, object, _R]"]], Callable[_P, "CoroutineType[object, object, _R]"]]:
+    """Decorates a guardrail request hook so it runs through ``call_with_shown_commentary``."""
+
+    def decorate(
+        hook: Callable[_P, "CoroutineType[object, object, _R]"],
+    ) -> Callable[_P, "CoroutineType[object, object, _R]"]:
+        @functools.wraps(hook)
+        async def shown(*args: _P.args, **kwargs: _P.kwargs) -> _R:  # kwargs-ok: forwards the hook's own arguments
+            return await call_with_shown_commentary(
+                hook, args, kwargs, data_position=data_position, applies_rewrites=applies_rewrites
+            )
+
+        vars(shown)[SHOWS_MOVED_COMMENTARY_MARKER] = True
+        return shown
+
+    return decorate
 
 
 def without_commentary(provider_specific_fields: Mapping[str, object]) -> Mapping[str, object]:

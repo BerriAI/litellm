@@ -1,14 +1,16 @@
 import contextvars
 import copy
+import functools
 import hashlib
+import inspect
 import json
 import os
 import secrets
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast, get_args
+from types import CoroutineType, MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, ParamSpec, Protocol, TypeVar, cast, get_args
 
 import httpx
 from pydantic import BaseModel, TypeAdapter
@@ -390,6 +392,43 @@ class GuardrailSetupError(Exception):
     pass
 
 
+_REQUEST_HOOKS: Final = (("async_pre_call_hook", 3, True), ("async_moderation_hook", 1, False))
+_SHOWS_MOVED_COMMENTARY: Final = "_litellm_shows_moved_commentary"
+_P: Final = ParamSpec("_P")
+_R: Final = TypeVar("_R")
+
+
+def show_moved_commentary(
+    *, data_position: int, applies_rewrites: bool
+) -> Callable[[Callable[_P, "CoroutineType[object, object, _R]"]], Callable[_P, "CoroutineType[object, object, _R]"]]:
+    """Decorates a request hook so it reads a bridged turn's moved commentary as that turn's content. The
+    implementation is imported on first call, so guardrail modules don't import the Responses bridge."""
+
+    def decorate(
+        hook: Callable[_P, "CoroutineType[object, object, _R]"],
+    ) -> Callable[_P, "CoroutineType[object, object, _R]"]:
+        @functools.wraps(hook)
+        async def shown(*args: _P.args, **kwargs: _P.kwargs) -> _R:  # kwargs-ok: forwards the hook's own arguments
+            from litellm.completion_extras.litellm_responses_transformation.history import call_with_shown_commentary
+
+            return await call_with_shown_commentary(
+                hook, args, kwargs, data_position=data_position, applies_rewrites=applies_rewrites
+            )
+
+        vars(shown)[_SHOWS_MOVED_COMMENTARY] = True
+        return shown
+
+    return decorate
+
+
+def _show_moved_commentary_in(cls: type, name: str, data_position: int, applies_rewrites: bool) -> None:
+    own_hook: Final[object] = cls.__dict__.get(name)
+    if inspect.iscoroutinefunction(own_hook) and _SHOWS_MOVED_COMMENTARY not in vars(own_hook):
+        setattr(
+            cls, name, show_moved_commentary(data_position=data_position, applies_rewrites=applies_rewrites)(own_hook)
+        )
+
+
 class CustomGuardrail(CustomLogger):
     mcp_block_behavior: Literal["tool_result", "raise"] | None = None
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
@@ -410,6 +449,8 @@ class CustomGuardrail(CustomLogger):
 
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
+        for name, data_position, applies_rewrites in _REQUEST_HOOKS:
+            _show_moved_commentary_in(cls, name, data_position, applies_rewrites)
         own_apply_guardrail: Final[object] = cls.__dict__.get("apply_guardrail")
         if own_apply_guardrail is None or LOGS_GUARDRAIL_INFORMATION_MARKER in vars(own_apply_guardrail):
             return
