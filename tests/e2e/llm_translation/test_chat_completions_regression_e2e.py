@@ -525,7 +525,7 @@ class TestVertexChatCompletions:
                     ],
                     tools=[_WEATHER_TOOL],
                     tool_choice="required",
-                    max_tokens=128,
+                    max_tokens=1024,
                 ),
             )
         )
