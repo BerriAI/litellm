@@ -22,6 +22,7 @@ from pydantic import (
     TypeAdapter,
     ValidationError,
     ValidatorFunctionWrapHandler,
+    WithJsonSchema,
     WrapValidator,
     field_validator,
     model_validator,
@@ -1256,7 +1257,8 @@ class BlockUsers(LiteLLMPydanticObjectBase):
 class ModelParams(LiteLLMPydanticObjectBase):
     model_name: str
     litellm_params: dict
-    model_info: ModelInfo
+    # Inlined so OpenAPI does not emit a second `ModelInfo` component, which would rename the router's `ModelInfo`.
+    model_info: Annotated[ModelInfo, WithJsonSchema(ModelInfo.model_json_schema())]
 
     model_config = ConfigDict(protected_namespaces=())
 

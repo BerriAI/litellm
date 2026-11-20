@@ -2006,3 +2006,25 @@ def test_openapi_documents_config_yaml_schema_and_keeps_config_update_hidden(app
     assert "#/components/schemas/ConfigGeneralSettings" in general_settings_refs
     assert "ConfigGeneralSettings" in schema["components"]["schemas"]
     assert "/config/update" not in schema["paths"]
+
+
+def test_openapi_config_yaml_schema_keeps_router_model_info_component_name(app, client, monkeypatch):
+    from litellm.proxy._types import ModelInfo as ProxyModelInfo
+    from litellm.types.router import ModelInfo as RouterModelInfo
+
+    monkeypatch.setattr(app, "openapi_schema", None)
+    response: Final = client.get("/openapi.json")
+    assert response.status_code == 200
+    components: Final = response.json()["components"]["schemas"]
+
+    assert "/config/yaml" in response.json()["paths"]
+    model_info_components: Final = {name for name in components if name.endswith("ModelInfo")}
+    assert "ModelInfo" in model_info_components
+    assert set(components["ModelInfo"]["properties"]) == set(RouterModelInfo.model_fields)
+    assert {"$ref": "#/components/schemas/ModelInfo"} in (
+        components["Deployment"]["properties"]["model_info"],
+        *components["Deployment"]["properties"]["model_info"].get("anyOf", ()),
+    )
+    config_model_info: Final = components["ModelParams"]["properties"]["model_info"]
+    assert set(config_model_info["properties"]) == set(ProxyModelInfo.model_fields)
+    assert not {name for name in model_info_components if "__" in name}
