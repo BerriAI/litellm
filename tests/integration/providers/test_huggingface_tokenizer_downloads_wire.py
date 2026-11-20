@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
@@ -12,6 +12,8 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from tokenizers import Regex, Tokenizer, models, pre_tokenizers
+
+from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
@@ -114,6 +116,73 @@ def test_counts_after_a_failed_llama_3_tokenizer_download_never_reach_the_hub_ag
     assert first[0] == "openai_tokenizer", first
     assert later == (first,) * _COUNTS_AFTER_FAILURE, later
     assert retried == 0, f"{retried} hub requests after the download already failed"
+
+
+_CountRequest: TypeAlias = tuple[str, dict[str, JsonValue], dict[str, str]]
+
+
+def _anthropic_count(model: str) -> _CountRequest:
+    return "/v1/messages/count_tokens", {"model": model, "messages": [{"role": "user", "content": _PROMPT}]}, {}
+
+
+def _responses_count(model: str) -> _CountRequest:
+    return "/v1/responses/input_tokens", {"model": model, "input": _PROMPT}, {}
+
+
+def _google_count(model: str) -> _CountRequest:
+    return f"/v1beta/models/{model}:countTokens", {"contents": [{"role": "user", "parts": [{"text": _PROMPT}]}]}, {}
+
+
+def _utils_count(model: str) -> _CountRequest:
+    return (
+        "/utils/token_counter",
+        {"model": model, "messages": [{"role": "user", "content": _PROMPT}]},
+        {"call_endpoint": "true"},
+    )
+
+
+def _anthropic_error(message: str) -> JsonValue:
+    return {"type": "error", "error": {"type": "api_error", "message": message}}
+
+
+def _responses_error(message: str) -> JsonValue:
+    return {"error": {"message": message, "type": "internal_server_error", "param": None, "code": None}}
+
+
+def _openai_error(message: str) -> JsonValue:
+    return {"error": {"message": message, "type": "token_counting_error", "param": "model", "code": "503"}}
+
+
+def _google_error(message: str) -> JsonValue:
+    return {"error": {"code": 503, "message": message, "status": "UNAVAILABLE"}}
+
+
+@pytest.mark.parametrize(
+    ("count_request", "envelope"),
+    (
+        (_anthropic_count, _anthropic_error),
+        (_responses_count, _responses_error),
+        (_google_count, _google_error),
+        (_utils_count, _openai_error),
+    ),
+    ids=("anthropic", "responses", "google", "utils"),
+)
+def test_count_endpoints_answer_503_until_the_llama_3_tokenizer_can_load(
+    unreachable_hub_proxy: tuple[OwnedProxy, Wire],
+    count_request: Callable[[str], _CountRequest],
+    envelope: Callable[[str], JsonValue],
+) -> None:
+    owned, _hub = unreachable_hub_proxy
+    with owned.gateway.scenario() as scenario:
+        path, body, params = count_request(_llama_3(scenario, owned.gateway.upstream_url))
+        response: Final = owned.gateway.request("POST", path, body, params=params)
+    assert response.status_code == 503, response.text
+    retry_after: Final[str] = response.headers["retry-after"]
+    assert retry_after.isdigit() and 1 <= int(retry_after) <= HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, response.headers
+    assert _JSON_OBJECT.validate_json(response.content) == envelope(
+        "Could not load the Hugging Face tokenizer Xenova/llama-3-tokenizer to count tokens for this model. "
+        f"LiteLLM retries the load in {retry_after}s"
+    ), response.text
 
 
 def test_streamed_llama_3_chat_after_a_failed_download_counts_usage_without_reaching_the_hub(

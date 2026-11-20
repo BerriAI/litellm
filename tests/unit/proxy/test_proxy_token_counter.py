@@ -45,6 +45,7 @@ from starlette.types import Message
 import litellm
 from litellm import Router
 from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
+from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
 from litellm.litellm_core_utils.tokenizer import HuggingFace
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
@@ -4367,6 +4368,11 @@ async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop
 _GROQ_MODEL: Final = "groq/llama-3.3-70b-versatile"
 
 
+@pytest.fixture
+def hub_tokenizers_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+
+
 def _groq_router(
     litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     router_defaults: Mapping[str, JsonValue] = MappingProxyType({}),
@@ -4422,6 +4428,7 @@ async def _messages_the_inference_polyfill_sends(model: str) -> list[dict[str, J
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("hub_tokenizers_offline")
 async def test_messages_count_tokens_counts_the_body_the_inference_polyfill_sends_on_a_bridged_provider() -> None:
     router: Final = _groq_router()
     unedited_body: Final[dict[str, JsonValue]] = {
@@ -4564,6 +4571,7 @@ async def test_messages_count_tokens_sends_mistral_the_messages_the_inference_po
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("hub_tokenizers_offline")
 @pytest.mark.parametrize(
     ("deployment_params", "router_defaults", "request_options"),
     (
@@ -4609,6 +4617,7 @@ async def test_messages_count_tokens_on_a_bridged_provider_rejects_an_invalid_ed
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("hub_tokenizers_offline")
 async def test_messages_count_tokens_on_a_bridged_provider_counts_without_an_invalid_edit_under_drop_params() -> None:
     router: Final = _groq_router()
     unedited_body: Final[dict[str, JsonValue]] = {
@@ -4634,6 +4643,7 @@ def _turns_compacted_by_the_client() -> list[dict[str, JsonValue]]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("hub_tokenizers_offline")
 async def test_messages_count_tokens_on_a_bridged_provider_counts_only_what_follows_a_client_compaction_block() -> None:
     from litellm.llms.anthropic.messages.adapters.handler import prepare_context_managed_request
 
@@ -6546,6 +6556,70 @@ def test_framed_custom_named_deployment_counts_like_before_while_its_base_model_
             hub_released.set()
 
     assert _run_on_skippable_clock(count_past_the_wait) == ("local_estimate",)
+
+
+def _hub_unreachable(identifier: str) -> None:
+    raise OSError(f"could not reach the hub for {identifier}")
+
+
+def _hub_llama_router(model_info: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "llama",
+                "litellm_params": {"model": "databricks/databricks-meta-llama-3-3-70b-instruct"},
+                "model_info": model_info,
+            }
+        ]
+    )
+
+
+_LLAMA_COUNT_REQUEST: Final = TokenCountRequest(model="llama", messages=[{"role": "user", "content": "What is new?"}])
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_count_answers_503_with_retry_after_while_the_hub_tokenizer_cannot_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({}))
+    _stub_hub_downloads(monkeypatch, _hub_unreachable)
+
+    with pytest.raises(ProxyException) as raised:
+        await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
+    without_call_endpoint: Final = await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=False)
+
+    retry_after: Final = int(raised.value.headers["Retry-After"])
+    assert (raised.value.code, raised.value.type, raised.value.param) == ("503", "token_counting_error", "model")
+    assert raised.value.message == (
+        f"Could not load the Hugging Face tokenizer {_LLAMA_3_HUB_TOKENIZER} to count tokens for this model. "
+        f"LiteLLM retries the load in {retry_after}s"
+    )
+    assert 1 <= retry_after <= HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+    assert without_call_endpoint.tokenizer_type == "openai_tokenizer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_framed_count_answers_the_provider_error_while_the_hub_tokenizer_cannot_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter(
+        {"databricks-meta-llama-3-3-70b-instruct": _provider_reply("llama", status_code=400)}
+    )
+
+    def scripted_databricks_counter(deployment: object, model: str) -> tuple[BaseTokenCounter, str, str]:
+        return counter, model, "databricks"
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({"token_count_framing": 100}))
+    monkeypatch.setattr("litellm.proxy.proxy_server._get_provider_token_counter", scripted_databricks_counter)
+    _stub_hub_downloads(monkeypatch, _hub_unreachable)
+
+    with pytest.raises(ProxyException) as raised:
+        await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
+
+    assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for llama")
+    assert len(counter.calls) == 1
 
 
 _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(

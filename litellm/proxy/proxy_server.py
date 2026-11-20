@@ -233,6 +233,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     HuggingFaceTokenizerKind,
+    HuggingFaceTokenizerUnavailable,
     acredential_updates,
     cost_map_omits_token_price,
     native_structured_output_support,
@@ -15986,13 +15987,11 @@ def _answers_provider_error(error: BaseException) -> bool:
     return (isinstance(error, Exception) or _is_tokenizer_panic(error)) and not _is_fork_guard_error(error)
 
 
-def _provider_error_after_failed_estimate(
-    provider_failure: ProviderCountFailure, error: BaseException
-) -> ProxyException:
+def _provider_error_after_failed_estimate(provider_failure: ProviderCountFailure, cause: str) -> ProxyException:
     verbose_proxy_logger.warning(
         "Local token estimate failed after the provider's count error %s, answering that error: %s",
         provider_failure.status_code,
-        type(error).__name__,
+        cause,
     )
     return provider_failure.to_proxy_exception()
 
@@ -16003,7 +16002,7 @@ async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure
     except BaseException as e:
         if not _answers_provider_error(e):
             raise
-        raise _provider_error_after_failed_estimate(provider_failure, e) from e
+        raise _provider_error_after_failed_estimate(provider_failure, type(e).__name__) from e
 
 
 @dataclass(frozen=True, slots=True)
@@ -16019,7 +16018,7 @@ class _TokenizerLoadsBusy(Exception):
 
 @dataclass(frozen=True, slots=True)
 class _TokenizerLoadOutcome:
-    tokenizer: SelectTokenizerResponse | BaseException
+    tokenizer: SelectTokenizerResponse | HuggingFaceTokenizerUnavailable | BaseException
     finished_at: float
 
 
@@ -16034,9 +16033,9 @@ class _SharedTokenizerLoad:
 
 async def _loaded_tokenizer(
     model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, threads: anyio.CapacityLimiter
-) -> SelectTokenizerResponse | BaseException:
+) -> SelectTokenizerResponse | HuggingFaceTokenizerUnavailable | BaseException:
     try:
-        return await asyncify(litellm.utils.select_tokenizer, limiter=threads)(
+        return await asyncify(litellm.utils.select_tokenizer_or_unavailable, limiter=threads)(
             model=model, custom_tokenizer=custom_tokenizer
         )
     except asyncio.CancelledError:
@@ -16137,7 +16136,7 @@ async def _tokenizer_within_load_wait(
     custom_tokenizer: CustomHuggingfaceTokenizer | None,
     loads: _TokenizerLoads,
     slot: Callable[[asyncio.AbstractEventLoop], _TokenizerLoadSlot],
-) -> SelectTokenizerResponse | BaseException:
+) -> SelectTokenizerResponse | HuggingFaceTokenizerUnavailable | BaseException:
     loop: Final = asyncio.get_running_loop()
     try:
         load: Final = slot(loop).load(model, custom_tokenizer, loads, loop)
@@ -16161,11 +16160,17 @@ async def _tokenizer_or_provider_error(
         _tokenizer_loads_for_this_loop(_TOKENIZER_LOADS),
         partial(_model_tokenizer_load_slot, model, custom_tokenizer),
     )
-    if not isinstance(tokenizer, BaseException):
-        return tokenizer
-    if not _answers_provider_error(tokenizer):
-        raise tokenizer.with_traceback(None)
-    raise _provider_error_after_failed_estimate(provider_failure, tokenizer) from tokenizer
+    match tokenizer:
+        case HuggingFaceTokenizerUnavailable():
+            raise _provider_error_after_failed_estimate(
+                provider_failure, f"Hugging Face tokenizer {tokenizer.tokenizer} is unavailable"
+            )
+        case BaseException() if not _answers_provider_error(tokenizer):
+            raise tokenizer.with_traceback(None)
+        case BaseException():
+            raise _provider_error_after_failed_estimate(provider_failure, type(tokenizer).__name__) from tokenizer
+        case _:
+            return tokenizer
 
 
 async def _tokenizer_model(model: str, base_model: str | None) -> str:
@@ -16184,6 +16189,35 @@ async def _tokenizer_model(model: str, base_model: str | None) -> str:
     return model if isinstance(loaded, BaseException) else base_model
 
 
+def _tokenizer_unavailable_error(unavailable: HuggingFaceTokenizerUnavailable) -> ProxyException:
+    return ProxyException(
+        message=f"Could not load the Hugging Face tokenizer {unavailable.tokenizer} to count tokens for this model. "
+        f"LiteLLM retries the load in {unavailable.retry_in_seconds}s",
+        type="token_counting_error",
+        param="model",
+        code=503,
+        headers={"Retry-After": str(unavailable.retry_in_seconds)},
+    )
+
+
+async def _estimate_tokenizer(
+    model: str,
+    custom_tokenizer: CustomHuggingfaceTokenizer | None,
+    provider_failure: ProviderCountFailure | None,
+    call_endpoint: bool,
+) -> SelectTokenizerResponse:
+    if provider_failure is not None:
+        return await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
+    if not call_endpoint:
+        return await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
+    selected: Final = await asyncify(litellm.utils.select_tokenizer_or_unavailable)(
+        model=model, custom_tokenizer=custom_tokenizer
+    )
+    if isinstance(selected, HuggingFaceTokenizerUnavailable):
+        raise _tokenizer_unavailable_error(selected)
+    return selected
+
+
 async def _local_token_estimate(
     model: str,
     template_model: str,
@@ -16193,12 +16227,9 @@ async def _local_token_estimate(
     tool_choice: str | Mapping[str, object] | None,
     custom_tokenizer: CustomHuggingfaceTokenizer | None,
     provider_failure: ProviderCountFailure | None,
+    call_endpoint: bool,
 ) -> _LocalTokenEstimate:
-    tokenizer: Final = (
-        await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
-        if provider_failure is None
-        else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
-    )
+    tokenizer: Final = await _estimate_tokenizer(model, custom_tokenizer, provider_failure, call_endpoint)
     count: Final = offload_token_count(litellm.token_counter)(
         model=template_model,
         text=prompt,
@@ -17029,6 +17060,7 @@ async def _count_request_tokens(
         tool_choice=counted_tool_choice,
         custom_tokenizer=custom_tokenizer,
         provider_failure=ladder,
+        call_endpoint=call_endpoint,
     )
     template: Final = (
         0 if kimi_k3_messages is None else kimi_k3_template_tokens(len(kimi_k3_messages), bool(counted_tools))

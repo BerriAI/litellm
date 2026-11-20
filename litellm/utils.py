@@ -17,6 +17,7 @@ import io
 import itertools
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -3204,6 +3205,16 @@ _BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading
     {"anthropic": threading.Lock(), "deepseek": threading.Lock()}
 )
 
+_HUGGINGFACE_TOKENIZER_NAMES: Final[Mapping[HuggingFaceTokenizerKind, str]] = MappingProxyType(
+    {
+        "cohere": "Xenova/c4ai-command-r-v01-tokenizer",
+        "anthropic": "anthropic_tokenizer.json",
+        "deepseek": "deepseek_tokenizer.json",
+        "llama2": "hf-internal-testing/llama-tokenizer",
+        "llama3": "Xenova/llama-3-tokenizer",
+    }
+)
+
 
 _HUGGINGFACE_TOKENIZER_DOWNLOADS_ALLOWED: Final[ContextVar[bool]] = ContextVar(
     "litellm_huggingface_tokenizer_downloads_allowed", default=True
@@ -3332,9 +3343,12 @@ _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES: Final = _HuggingFaceTokenizerLoadOutcomes(
 
 def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
     verbose_logger.warning(
-        "Falling back to tiktoken for %s; token counts may be approximate. "
+        "Could not load the Hugging Face tokenizer for %s. Until it loads, its token counts fall back to tiktoken, "
+        "or answer 503 on proxy count endpoints. LiteLLM retries the load after "
+        "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS (%ss). "
         "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. Error: %s",
         json.dumps(redact_secrets(model)),
+        HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
         json.dumps(redact_secrets(reason)),
     )
 
@@ -3366,6 +3380,32 @@ def _return_huggingface_tokenizer(
             return outcome
 
 
+@dataclass(frozen=True, slots=True)
+class HuggingFaceTokenizerUnavailable:
+    tokenizer: str
+    retry_in_seconds: int
+
+
+def select_tokenizer_or_unavailable(
+    model: str,
+    custom_tokenizer: CustomHuggingfaceTokenizer | None = None,
+    outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
+) -> SelectTokenizerResponse | HuggingFaceTokenizerUnavailable:
+    kind: Final = huggingface_tokenizer_kind(model)
+    if custom_tokenizer is not None or litellm.disable_hf_tokenizer_download is True or kind is None:
+        return select_tokenizer(model, custom_tokenizer)
+    match _return_huggingface_tokenizer(model, outcomes):
+        case None:
+            return _return_openai_tokenizer(model)
+        case _HuggingFaceTokenizerLoadFailure(retry_at=retry_at):
+            return HuggingFaceTokenizerUnavailable(
+                tokenizer=_HUGGINGFACE_TOKENIZER_NAMES[kind],
+                retry_in_seconds=max(math.ceil(retry_at - outcomes.clock()), 1),
+            )
+        case loaded:
+            return loaded
+
+
 def huggingface_tokenizer_may_download(
     model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
 ) -> bool:
@@ -3376,21 +3416,16 @@ def huggingface_tokenizer_may_download(
 
 
 def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
+    name: Final = _HUGGINGFACE_TOKENIZER_NAMES[kind]
     match kind:
-        case "cohere":
-            return tokenizer_dispatch.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
+        case "cohere" | "llama2" | "llama3":
+            return tokenizer_dispatch.from_pretrained(name)
         case "anthropic":
             return tokenizer_dispatch.anthropic()
         case "deepseek":
             return tokenizer_dispatch.from_str(
-                resources.files("litellm.litellm_core_utils.tokenizers")
-                .joinpath("deepseek_tokenizer.json")
-                .read_text(encoding="utf-8")
+                resources.files("litellm.litellm_core_utils.tokenizers").joinpath(name).read_text(encoding="utf-8")
             )
-        case "llama2":
-            return tokenizer_dispatch.from_pretrained("hf-internal-testing/llama-tokenizer")
-        case "llama3":
-            return tokenizer_dispatch.from_pretrained("Xenova/llama-3-tokenizer")
         case _:
             assert_never(kind)
 

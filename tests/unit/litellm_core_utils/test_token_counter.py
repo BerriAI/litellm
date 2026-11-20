@@ -1100,12 +1100,14 @@ import unittest
 
 from litellm.utils import (
     _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
+    HuggingFaceTokenizerUnavailable,
     _HuggingFaceTokenizerLoadFailure,
     _HuggingFaceTokenizerLoadOutcomes,
     _return_huggingface_tokenizer,
     _select_tokenizer_helper,
     encoding,
     huggingface_tokenizer_may_download,
+    select_tokenizer_or_unavailable,
     without_huggingface_tokenizer_downloads,
 )
 
@@ -1334,7 +1336,9 @@ def test_remembered_tokenizer_failure_warns_once_instead_of_on_every_count(caplo
             caplog.at_level("WARNING", logger="LiteLLM"),
         ):
             types: Final = tuple(_select_tokenizer_helper(model)["type"] for _ in range(3))
-        fallback_warnings: Final = [r for r in caplog.records if "token counts may be approximate" in r.getMessage()]
+        fallback_warnings: Final = [
+            r for r in caplog.records if "Could not load the Hugging Face tokenizer for" in r.getMessage()
+        ]
         assert types == ("openai_tokenizer",) * 3
         assert len(fallback_warnings) == 1
     finally:
@@ -1471,6 +1475,70 @@ def test_failed_download_is_retried_once_per_window_until_it_loads():
     assert downloads_inside_the_next_window == 2
     assert from_pretrained.call_count == 3
     assert after_the_second_retry == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
+def test_unloadable_hub_tokenizer_is_reported_unavailable_with_the_seconds_until_its_next_load():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=100.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=_run_now)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=OSError("hub unreachable")):
+        at_the_failure: Final = select_tokenizer_or_unavailable(model, outcomes=outcomes)
+        clock.return_value = 100.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS - 12.25
+        before_the_retry: Final = select_tokenizer_or_unavailable(model, outcomes=outcomes)
+
+    assert at_the_failure == HuggingFaceTokenizerUnavailable(
+        tokenizer="Xenova/llama-3-tokenizer", retry_in_seconds=HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+    )
+    assert before_the_retry == HuggingFaceTokenizerUnavailable(
+        tokenizer="Xenova/llama-3-tokenizer", retry_in_seconds=13
+    )
+
+
+def test_unavailable_hub_tokenizer_says_retry_in_one_second_while_its_retry_runs_then_counts_once_loaded():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=100.0)
+    retries: Final[list[Callable[[], None]]] = []
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=retries.append)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=OSError("hub unreachable")):
+        select_tokenizer_or_unavailable(model, outcomes=outcomes)
+    clock.return_value = 100.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 30
+    while_retrying: Final = tuple(select_tokenizer_or_unavailable(model, outcomes=outcomes) for _ in range(2))
+    hub_tokenizer: Final = object()
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=hub_tokenizer):
+        retries[0]()
+    after_the_retry: Final = select_tokenizer_or_unavailable(model, outcomes=outcomes)
+
+    assert (
+        while_retrying
+        == (HuggingFaceTokenizerUnavailable(tokenizer="Xenova/llama-3-tokenizer", retry_in_seconds=1),) * 2
+    )
+    assert after_the_retry == {"type": "huggingface_tokenizer", "tokenizer": hub_tokenizer}
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [("LITELLM_OFFLINE_MODE", "true"), ("disable_hf_tokenizer_download", True)],
+    ids=["offline mode", "hub downloads disabled"],
+)
+def test_hub_tokenizer_that_must_not_download_counts_with_tiktoken_instead_of_unavailable(
+    monkeypatch: pytest.MonkeyPatch, variable: str, value: str | bool
+):
+    if isinstance(value, str):
+        monkeypatch.setenv(variable, value)
+    else:
+        monkeypatch.setattr(litellm, variable, value)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(start_retry=_run_now)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=OSError("hub unreachable")) as hub:
+        selected: Final = select_tokenizer_or_unavailable(
+            "databricks/databricks-meta-llama-3-3-70b-instruct", outcomes=outcomes
+        )
+
+    assert not isinstance(selected, HuggingFaceTokenizerUnavailable)
+    assert selected["type"] == "openai_tokenizer"
+    assert hub.call_count == 0
 
 
 def test_retry_after_the_window_runs_in_the_background_while_every_count_answers_at_once():

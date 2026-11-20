@@ -414,7 +414,7 @@ def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeyp
             result = _select_tokenizer_helper("llama-2")
         assert result["type"] == "openai_tokenizer"
         assert result["tokenizer"].encode("hello")
-        assert ("token counts may be approximate" in caplog.text) is (log_level == "WARNING")
+        assert ("Could not load the Hugging Face tokenizer for" in caplog.text) is (log_level == "WARNING")
         assert ("install tokenizers" in caplog.text) is (log_level == "WARNING")
     finally:
         _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
@@ -495,7 +495,9 @@ def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
         assert result["type"] == "openai_tokenizer"
         assert result["tokenizer"].encode("hello")
         message = next(
-            record.getMessage() for record in caplog.records if "token counts may be approximate" in record.getMessage()
+            record.getMessage()
+            for record in caplog.records
+            if "Could not load the Hugging Face tokenizer for" in record.getMessage()
         )
         assert "llama-2" in message
         assert "download failed" in message
