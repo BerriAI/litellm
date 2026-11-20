@@ -198,6 +198,39 @@ def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
 
 
+def _names_its_finish(candidate: Candidates) -> bool:
+    return (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
+
+
+def _content_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
+    content: Final = candidate.get("content")
+    return content.get("parts", ()) if content is not None else ()
+
+
+def _inline_image(part: HttpxPartType) -> ImageURLListItem | None:
+    inline_data: Final = part.get("inlineData", {})
+    mime_type: Final = inline_data.get("mimeType", "")
+    if not mime_type.startswith("image/"):
+        return None
+    return ImageURLListItem(
+        image_url=ImageURLObject(url=f"data:{mime_type};base64,{inline_data.get('data', '')}", detail="auto"),
+        index=0,
+        type="image_url",
+    )
+
+
+def _images_in(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
+    return tuple(image for image in map(_inline_image, parts) if image is not None)
+
+
+def _final_images(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
+    return _images_in(tuple(part for part in parts if part.get("thought") is not True))
+
+
+def _last_thought_image(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
+    return _images_in(tuple(part for part in parts if part.get("thought") is True))[-1:]
+
+
 def _served_model_name(model_version: object) -> str | None:
     if not isinstance(model_version, str) or not model_version:
         return None
@@ -1663,23 +1696,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _extract_image_response_from_parts(self, parts: list[HttpxPartType]) -> list[ImageURLListItem] | None:
         """Extract image response from parts if present"""
-        images: Final[list[ImageURLListItem]] = []
-        for part in parts:
-            if "inlineData" in part and part.get("thought") is not True:
-                inline_data = part.get("inlineData", {})
-                mime_type = inline_data.get("mimeType", "")
-                data = inline_data.get("data", "")
-                if mime_type.startswith("image/"):
-                    # Convert base64 data to data URI format
-                    data_uri = f"data:{mime_type};base64,{data}"
-                    images.append(
-                        ImageURLListItem(
-                            image_url=ImageURLObject(url=data_uri, detail="auto"),
-                            index=0,
-                            type="image_url",
-                        )
-                    )
-        return images
+        return list(_final_images(parts) or _last_thought_image(parts))
 
     def _extract_audio_response_from_parts(self, parts: list[HttpxPartType]) -> ChatCompletionAudioResponse | None:
         """Extract audio response from parts if present"""
@@ -2486,8 +2503,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
                     parts=candidate["content"]["parts"]
                 )
-                image_response = VertexGeminiConfig()._extract_image_response_from_parts(
-                    parts=candidate["content"]["parts"]
+                image_response = (
+                    list(_final_images(candidate["content"]["parts"]))
+                    if isinstance(model_response, ModelResponseStream)
+                    else VertexGeminiConfig()._extract_image_response_from_parts(parts=candidate["content"]["parts"])
                 )
 
                 thinking_blocks = VertexGeminiConfig()._extract_thinking_blocks_from_parts(
@@ -3509,6 +3528,8 @@ class ModelResponseIterator:
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
         self._answer_offset: int = 0
         self._hop_answer_bytes: int = 0
+        self._held_thought_images: Mapping[int, tuple[ImageURLListItem, ...]] = MappingProxyType({})
+        self._image_settled_indexes: frozenset[int] = frozenset()
 
     @property
     def accumulated_json(self) -> str:
@@ -3714,6 +3735,8 @@ class ModelResponseIterator:
 
             setattr(model_response, "usage", usage)
             self._plan_resume(processed_chunk, model_response)
+            self._hold_thought_images(_candidates or ())
+            self._release_held_thought_images(_candidates or (), model_response)
 
             model_response.hidden_params["is_finished"] = False
             return model_response
@@ -3737,6 +3760,43 @@ class ModelResponseIterator:
         if not self._answer_offset:
             return chunk
         return {**chunk, "candidates": [with_spans_shifted(candidates[0], self._answer_offset), *candidates[1:]]}
+
+    def _hold_thought_images(self, candidates: Sequence[Candidates]) -> None:
+        indexed_parts: Final = tuple(
+            (candidate.get("index", position), _content_parts(candidate))
+            for position, candidate in enumerate(candidates)
+        )
+        self._image_settled_indexes = self._image_settled_indexes | frozenset(
+            index for index, parts in indexed_parts if _final_images(parts)
+        )
+        self._held_thought_images = MappingProxyType(
+            {
+                **self._held_thought_images,
+                **{
+                    index: _last_thought_image(parts) or self._held_thought_images.get(index, ())
+                    for index, parts in indexed_parts
+                },
+            }
+        )
+
+    def _release_held_thought_images(
+        self, candidates: Sequence[Candidates], model_response: "ModelResponseStream"
+    ) -> None:
+        finishing_indexes: Final = frozenset(
+            candidate.get("index", position)
+            for position, candidate in enumerate(candidates)
+            if _names_its_finish(candidate)
+        )
+        for choice in model_response.choices:
+            if (
+                choice.index not in finishing_indexes
+                or choice.finish_reason is None
+                or choice.index in self._image_settled_indexes
+            ):
+                continue
+            self._image_settled_indexes = self._image_settled_indexes | {choice.index}
+            if held := self._held_thought_images.get(choice.index):
+                choice.delta.images = list(held)
 
     def _plan_resume(self, processed_chunk: GenerateContentResponseBody, model_response: "ModelResponseStream") -> None:
         if self._output_cap is None:
