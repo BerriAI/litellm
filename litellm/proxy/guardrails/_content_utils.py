@@ -12,6 +12,7 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
+from itertools import count
 from typing import Any, Final
 
 from pydantic import TypeAdapter
@@ -128,6 +129,31 @@ def _json_has_text(value: object, *, with_keys: bool) -> bool:
     return has_value or (with_keys and next(iter_json_keys(value), None) is not None)
 
 
+def distinct_keys(renames: Sequence[tuple[str, str]]) -> tuple[str, ...]:
+    return tuple(_claim_names(renames))
+
+
+def _claim_names(renames: Sequence[tuple[str, str]]) -> Iterator[str]:
+    taken: Final[set[str]] = {new for old, new in renames if new == old}  # mutable-ok: names already used in one object
+    for old, new in renames:
+        if new == old:
+            yield old
+            continue
+        name = next(candidate for candidate in _numbered(new) if candidate not in taken)
+        taken.add(name)
+        yield name
+
+
+def _numbered(name: str) -> Iterator[str]:
+    yield name
+    yield from (f"{name} ({number})" for number in count(2))
+
+
+def _renamed_fields(fields: Mapping[str, object], visit: Callable[[str], str]) -> tuple[tuple[str, object], ...]:
+    names: Final = distinct_keys(tuple((key, visit(key) if key else key) for key in fields))
+    return tuple(zip(names, fields.values()))
+
+
 @dataclass(frozen=True, slots=True)
 class _JsonFrame:
     source: object
@@ -145,7 +171,7 @@ def map_json_text(value: object, visit: Callable[[str], str], *, rewrite_keys: b
             continue
         fields = _text_object(current)
         if fields is not None:
-            renamed = tuple((visit(key) if rewrite_keys and key else key, child) for key, child in fields.items())
+            renamed = _renamed_fields(fields, visit) if rewrite_keys else tuple(fields.items())
             mapped: dict[str, object] = {key: None for key, _ in renamed}  # mutable-ok: owned output slots
             frame.write(mapped)
             pending.extend(_JsonFrame(child, partial(mapped.__setitem__, key)) for key, child in reversed(renamed))
