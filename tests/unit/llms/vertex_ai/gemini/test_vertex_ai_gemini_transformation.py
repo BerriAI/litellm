@@ -3039,3 +3039,169 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     assert signatures == [get_dummy_thought_signature()]
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
     assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == get_dummy_thought_signature()
+
+
+def _get_time_call(tool_call_id: str | None, name: str = "get_time") -> Mapping[str, object]:
+    return {"id": tool_call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+
+def _assistant_calling(*tool_calls: Mapping[str, object]) -> Mapping[str, object]:
+    return {"role": "assistant", "content": None, "tool_calls": list(tool_calls)}
+
+
+def _function_call_parts(parts: Sequence[PartType]) -> Sequence[PartType]:
+    return [part for part in parts if "function_call" in part]
+
+
+def _function_response_parts(parts: Sequence[PartType]) -> Sequence[PartType]:
+    return [part for part in parts if "function_response" in part]
+
+
+@pytest.mark.parametrize(
+    "assistant_messages",
+    [
+        pytest.param(
+            [_assistant_calling(_get_time_call("call_1"), _get_time_call("call_2"))],
+            id="parallel calls in one assistant message",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call("call_2")),
+            ],
+            id="calls split across consecutive assistant messages",
+        ),
+    ],
+)
+def test_gemini_2_keeps_identical_calls_with_distinct_ids(assistant_messages: Sequence[Mapping[str, object]]) -> None:
+    messages: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        *assistant_messages,
+        {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "12:01"},
+    ]
+
+    contents: Final = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
+
+    get_time: Final = {"function_call": {"name": "get_time", "args": {}}}
+    assert contents == [
+        {"role": "user", "parts": [{"text": "What time is it? Ask twice."}]},
+        {"role": "model", "parts": [get_time, get_time]},
+        {
+            "role": "user",
+            "parts": [
+                {"function_response": {"name": "get_time", "response": {"content": "12:00"}}},
+                {"function_response": {"name": "get_time", "response": {"content": "12:01"}}},
+            ],
+        },
+    ], f"each tool call id must keep its own functionCall, got {contents}"
+
+
+def test_responses_api_parallel_identical_calls_reach_gemini_2_as_separate_function_calls() -> None:
+    input_items: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        {"type": "function_call", "call_id": "call_time_first", "name": "get_time", "arguments": "{}"},
+        {"type": "function_call", "call_id": "call_time_second", "name": "get_time", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_time_first", "output": "12:00"},
+        {"type": "function_call_output", "call_id": "call_time_second", "output": "12:01"},
+    ]
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(input_items, {})
+
+    parts: Final = _parts_of(
+        gemini_convert_messages_with_history(messages, model="gemini-2.5-flash", custom_llm_provider="gemini")
+    )
+
+    assert _function_call_parts(parts) == [
+        {"function_call": {"name": "get_time", "args": {}}},
+        {"function_call": {"name": "get_time", "args": {}}},
+    ], f"expected one functionCall per Responses function_call item, got {parts}"
+    assert _function_response_parts(parts) == [
+        {"function_response": {"name": "get_time", "response": {"content": "12:00"}}},
+        {"function_response": {"name": "get_time", "response": {"content": "12:01"}}},
+    ], f"expected the two outputs in order, got {parts}"
+
+
+def test_gemini_3_keeps_identical_parallel_calls_with_their_ids_and_signature() -> None:
+    signed_call: Final = {**_get_time_call("call_1"), "provider_specific_fields": {"thought_signature": "c2lnX2E="}}
+    messages: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        _assistant_calling(signed_call, _get_time_call("call_2")),
+        {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "12:01"},
+    ]
+
+    parts: Final = _parts_of(gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash"))
+
+    assert _function_call_parts(parts) == [
+        {"function_call": {"name": "get_time", "args": {}, "id": "call_1"}, "thoughtSignature": "c2lnX2E="},
+        {"function_call": {"name": "get_time", "args": {}, "id": "call_2"}},
+    ], f"the signature must stay on the first call only, got {parts}"
+    assert _function_response_parts(parts) == [
+        {"function_response": {"name": "get_time", "response": {"content": "12:00"}, "id": "call_1"}},
+        {"function_response": {"name": "get_time", "response": {"content": "12:01"}, "id": "call_2"}},
+    ], f"expected both responses with their ids, got {parts}"
+
+
+@pytest.mark.parametrize(
+    ("assistant_messages", "expected_call_names"),
+    [
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call("call_1")),
+            ],
+            ["get_time"],
+            id="same id replayed in consecutive assistant messages",
+        ),
+        pytest.param(
+            [_assistant_calling(_get_time_call("call_1"), _get_time_call("call_1"))],
+            ["get_time"],
+            id="same id repeated in one assistant message",
+        ),
+        pytest.param(
+            [_assistant_calling(_get_time_call(""), _get_time_call(""))],
+            ["get_time"],
+            id="empty ids",
+        ),
+        pytest.param(
+            [_assistant_calling(_get_time_call(None), _get_time_call(None))],
+            ["get_time"],
+            id="missing ids",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call(None)),
+            ],
+            ["get_time"],
+            id="call without id after an identical call with id",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "function_call": {"name": "get_time", "arguments": "{}"}},
+                {"role": "assistant", "content": None, "function_call": {"name": "get_time", "arguments": "{}"}},
+            ],
+            ["get_time"],
+            id="legacy function_call replayed",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call("call_1", name="get_date")),
+            ],
+            ["get_time", "get_date"],
+            id="same id with different content",
+        ),
+    ],
+)
+def test_gemini_2_dedup_of_calls_without_a_new_id_is_unchanged(
+    assistant_messages: Sequence[Mapping[str, object]], expected_call_names: Sequence[str]
+) -> None:
+    messages: Final = [{"role": "user", "content": "What time is it?"}, *assistant_messages]
+
+    contents: Final = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "What time is it?"}]},
+        {"role": "model", "parts": [{"function_call": {"name": name, "args": {}}} for name in expected_call_names]},
+    ], f"calls that repeat a seen id or carry no id keep the existing dedup, got {contents}"

@@ -671,6 +671,19 @@ def check_if_part_exists_in_parts(parts: list[PartType], part: PartType, exclude
     return False
 
 
+def _explicit_tool_call_id(tool_call: ChatCompletionAssistantToolCall) -> str | None:
+    tool_call_id: Final = tool_call.get("id")
+    return tool_call_id if isinstance(tool_call_id, str) and tool_call_id else None
+
+
+def _function_tool_call_ids(tool_calls: Sequence[ChatCompletionAssistantToolCall]) -> tuple[str | None, ...]:
+    return tuple(_explicit_tool_call_id(tool_call) for tool_call in tool_calls if "function" in tool_call)
+
+
+def _is_unseen_tool_call_id(tool_call_id: str | None, seen_ids: Sequence[str | None]) -> bool:
+    return tool_call_id is not None and tool_call_id not in seen_ids
+
+
 def _collect_tool_call_thought_signatures(
     assistant_msg: ChatCompletionAssistantMessage,
 ) -> frozenset[str]:
@@ -955,9 +968,19 @@ def gemini_convert_messages_with_history(
                         custom_llm_provider=custom_llm_provider,
                         drop_params=drop_params,
                     )
-                    ## check if gemini_tool_call already exists in assistant_content
-                    for gemini_tool_call_part in gemini_tool_call_parts:
-                        if not check_if_part_exists_in_parts(
+                    message_tool_calls = assistant_msg.get("tool_calls")
+                    tool_call_ids = (
+                        _function_tool_call_ids(message_tool_calls)
+                        if message_tool_calls is not None
+                        else (None,) * len(gemini_tool_call_parts)
+                    )
+                    earlier_turn_tool_call_ids = _function_tool_call_ids(turn_tool_calls)
+                    for index, (gemini_tool_call_part, tool_call_id) in enumerate(
+                        zip(gemini_tool_call_parts, tool_call_ids, strict=True)
+                    ):
+                        seen_tool_call_ids = (*earlier_turn_tool_call_ids, *tool_call_ids[:index])
+                        is_new_tool_call = _is_unseen_tool_call_id(tool_call_id, seen_tool_call_ids)
+                        if is_new_tool_call or not check_if_part_exists_in_parts(
                             assistant_content,
                             gemini_tool_call_part,
                             excluded_keys=["thoughtSignature"],
