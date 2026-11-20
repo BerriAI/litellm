@@ -344,6 +344,7 @@ export default function UserInfoView({
         ...userData,
         user_email: formValues.user_email ?? userData.user_email,
         user_alias: formValues.user_alias ?? userData.user_alias,
+        user_role: formValues.user_role ?? userData.user_role,
         models: formValues.models ?? userData.models,
         max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
         tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
@@ -400,9 +401,8 @@ export default function UserInfoView({
   };
 
   const unknownTimestamp = t("users.userInfo.details.unknown");
-  const unlimitedLabel = t("users.userInfo.unlimited");
-  const budgetLimit =
-    userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : unlimitedLabel;
+  const unlimited = t("users.userInfo.unlimited");
+  const budgetLimit = userData.max_budget === null ? unlimited : `$${formatNumberWithCommas(userData.max_budget, 2)}`;
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
   // Build a legacy-compatible shape for UserEditView
@@ -714,7 +714,7 @@ export default function UserInfoView({
                   <p>
                     {userData.max_budget !== null && userData.max_budget !== undefined
                       ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                      : unlimitedLabel}
+                      : unlimited}
                   </p>
                 </div>
 

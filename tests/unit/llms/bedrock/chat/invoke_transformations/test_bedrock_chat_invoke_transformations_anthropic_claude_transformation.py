@@ -18,6 +18,7 @@ from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.conftest import NativeStructuredOutputKey
@@ -1162,6 +1163,73 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
     )
 
     assert result.get("anthropic_beta") == expected_betas
+
+
+@pytest.mark.parametrize(
+    ("search_tool", "expected_bedrock_tool"),
+    [
+        pytest.param(
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "tool_search_tool_bm25", "name": "tool_search_tool_bm25"},
+            id="bm25",
+        ),
+        pytest.param(
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {"type": "tool_search_tool_regex", "name": "tool_search_tool_regex"},
+            id="regex",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-opus-5", id="invoke"),
+        pytest.param(AmazonMantleConfig(), "anthropic.claude-opus-5-5", id="mantle"),
+    ],
+)
+def test_bedrock_chat_invoke_sends_the_tool_search_tool_with_deferred_tools(
+    local_model_cost_map,
+    local_beta_headers_config,
+    search_tool,
+    expected_bedrock_tool,
+    config: AmazonAnthropicClaudeConfig,
+    model: str,
+):
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Where is parcel 1Z999AA10123456784?"}],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "max_tokens": 64,
+                "tools": [
+                    search_tool,
+                    {
+                        "type": "function",
+                        "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}},
+                    },
+                    {
+                        "type": "function",
+                        "defer_loading": True,
+                        "function": {
+                            "name": "lookup_package_tracking",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"tracking_number": {"type": "string"}},
+                            },
+                        },
+                    },
+                ],
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["tools"][0] == expected_bedrock_tool
+    assert [tool.get("name") for tool in result["tools"][1:]] == ["get_time", "lookup_package_tracking"]
 
 
 _REPLAYED_WEATHER_SEARCH: Final = {

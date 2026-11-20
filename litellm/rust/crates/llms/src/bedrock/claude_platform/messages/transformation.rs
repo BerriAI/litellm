@@ -3,7 +3,7 @@
 //! `anthropic-workspace-id`, authenticated by an API key, the Bedrock bearer token or SigV4.
 use std::sync::LazyLock;
 
-use litellm_auth::{AwsParams, ParamKind, ParamSpec};
+use litellm_auth::{AwsParams, ClaudePlatformParams, ParamKind, ParamSpec};
 use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, resolve_aws_region};
 use litellm_env::resolve_non_empty;
 use litellm_host::interceptors::RetriedRequest;
@@ -41,26 +41,11 @@ const PROVIDER: &str = "Claude Platform on AWS";
 const API_KEY_ENV: &str = "ANTHROPIC_AWS_API_KEY";
 const BEARER_ENV: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const BASE_ENVS: &[&str] = &["ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_AWS_API_BASE"];
-const WORKSPACE_ENVS: &[&str] = &["ANTHROPIC_AWS_WORKSPACE_ID", "ANTHROPIC_WORKSPACE_ID"];
 const REGION_ENVS: &[&str] = &["AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"];
 const WORKSPACE_HEADER: &str = "anthropic-workspace-id";
 const DEFAULT_UNSUPPORTED: &[&str] = &["context_management"];
 /// The region botocore signs in when nothing names one.
 const DEFAULT_SIGNING_REGION: &str = "us-west-2";
-
-/// The workspace Python's config requires before it builds the call, raising `AuthenticationError`.
-static WORKSPACE: ParamSpec = ParamSpec {
-    setting: "workspace_id",
-    kind: ParamKind::Credential,
-    wire: &[
-        "workspace_id",
-        "aws_workspace_id",
-        "anthropic-workspace-id",
-        "anthropic_workspace_id",
-    ],
-    module_global: None,
-    env: WORKSPACE_ENVS,
-};
 
 /// The region Python's config requires to build the default endpoint, raising `AuthenticationError`
 /// once its logger knows the resolved call.
@@ -117,9 +102,9 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         let workspace = resolve_non_empty(
             params.claude_platform.workspace().as_deref(),
             env,
-            WORKSPACE_ENVS,
+            ClaudePlatformParams::WORKSPACE.env,
         )
-        .ok_or_else(|| Error::Auth(WORKSPACE.missing(PROVIDER)))?;
+        .ok_or_else(|| Error::Auth(ClaudePlatformParams::WORKSPACE.missing(PROVIDER)))?;
         let headers = with_header(headers, WORKSPACE_HEADER, workspace);
         let key = resolve_non_empty(api_key.filter(|key| !key.is_empty()), env, &[API_KEY_ENV]);
         if let Some(key) = key {
@@ -214,7 +199,7 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             [API_KEY_ENV, BEARER_ENV]
                 .into_iter()
                 .chain(BASE_ENVS.iter().copied())
-                .chain(WORKSPACE_ENVS.iter().copied())
+                .chain(ClaudePlatformParams::WORKSPACE.env.iter().copied())
                 .chain(REGION_ENVS.iter().copied())
                 .chain(AwsParams::secret_names().iter().copied())
                 .collect()

@@ -57,6 +57,7 @@ from litellm.litellm_core_utils.fallback_generalizations import match_routing_ge
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     anthropic_pass_through_api_base,
+    is_anthropic_oauth_key,
     merge_anthropic_beta_headers,
 )
 from litellm.llms.azure.common_utils import entra_rejection_in
@@ -155,6 +156,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket
     openai_websocket_frame_kind,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    ANTHROPIC_CLIENT_OAUTH_STATE_KEY,
     STORED_PROMPT_PROBE_MODEL,
     HttpPassThroughEndpointHelpers,
     UpstreamRequest,
@@ -1380,11 +1382,6 @@ async def anthropic_proxy_route(
     )
 
     # Add or update query parameters
-    anthropic_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider="anthropic",
-        region_name=None,
-    )
-
     ## check for streaming
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
@@ -1399,9 +1396,7 @@ async def anthropic_proxy_route(
     )
 
     ## CREATE PASS-THROUGH
-    auth_header: Final = await AnthropicModelInfo.aget_auth_header(
-        anthropic_api_key or None, allow_workload_identity=True
-    )
+    auth_header: Final = await anthropic_route_auth_header()
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
@@ -3383,15 +3378,32 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
     return forwarded
 
 
+async def anthropic_route_auth_header() -> Mapping[str, str] | None:
+    credential: Final = passthrough_endpoint_router.get_credentials(custom_llm_provider="anthropic", region_name=None)
+    return await AnthropicModelInfo.aget_auth_header(credential or None, allow_workload_identity=True)
+
+
+async def anthropic_route_uses_client_oauth(request: Request, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    _upstream_headers_for_anthropic_route(request, user_api_key_dict, await anthropic_route_auth_header())
+    return getattr(request.state, ANTHROPIC_CLIENT_OAUTH_STATE_KEY, False) is True
+
+
 def _upstream_headers_for_anthropic_route(
     request: Request, user_api_key_dict: UserAPIKeyAuth, proxy_auth_header: Mapping[str, str] | None
 ) -> Mapping[str, str]:
+    setattr(request.state, ANTHROPIC_CLIENT_OAUTH_STATE_KEY, False)
     caller_headers: Final = caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
     )
     if proxy_auth_header is None:
         if _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
             raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
+        setattr(
+            request.state,
+            ANTHROPIC_CLIENT_OAUTH_STATE_KEY,
+            is_anthropic_oauth_key(caller_headers.get("authorization"))
+            or is_anthropic_oauth_key(caller_headers.get("x-api-key")),
+        )
         return caller_headers
     forwarded: Final = MappingProxyType(
         {name: value for name, value in caller_headers.items() if name not in _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS}

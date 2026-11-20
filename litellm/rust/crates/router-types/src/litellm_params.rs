@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
-use litellm_auth_types::{AwsParams, ParamSpec, VertexParams};
+use litellm_auth_types::{AwsParams, ClaudePlatformParams, ParamSpec, VertexParams};
 use litellm_secret_value::SecretValue;
 
 use serde::Deserialize;
@@ -78,96 +78,10 @@ impl LitellmParams {
             "aws_bedrock_project_id",
         ]
         .into_iter()
-        .chain(ClaudePlatformParams::FIELDS)
+        .chain(ClaudePlatformParams::fields())
         .chain(AwsParams::fields())
         .chain(VertexParams::fields())
     }
-}
-
-/// The Claude Platform on AWS settings a `bedrock/claude_platform/` call carries: the workspace,
-/// under any of the four spellings Python's config reads, and the body params the endpoint rejects.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-pub struct ClaudePlatformParams {
-    pub workspace_id: Option<WorkspaceId>,
-    pub aws_workspace_id: Option<WorkspaceId>,
-    #[serde(rename = "anthropic-workspace-id")]
-    pub anthropic_workspace_header: Option<WorkspaceId>,
-    pub anthropic_workspace_id: Option<WorkspaceId>,
-    pub claude_platform_unsupported_params: Option<UnsupportedParams>,
-}
-
-impl ClaudePlatformParams {
-    const FIELDS: [&'static str; 5] = [
-        "workspace_id",
-        "aws_workspace_id",
-        "anthropic-workspace-id",
-        "anthropic_workspace_id",
-        "claude_platform_unsupported_params",
-    ];
-
-    /// The workspace in Python's lookup order, skipping empty spellings.
-    pub fn workspace(&self) -> Option<String> {
-        [
-            &self.workspace_id,
-            &self.aws_workspace_id,
-            &self.anthropic_workspace_header,
-            &self.anthropic_workspace_id,
-        ]
-        .into_iter()
-        .find_map(|workspace| workspace.as_ref()?.text())
-    }
-
-    /// The body params to drop instead of the endpoint's default set, when a list names them.
-    pub fn unsupported_params(&self) -> Option<&[String]> {
-        match self.claude_platform_unsupported_params.as_ref()? {
-            UnsupportedParams::Names(names) => Some(names),
-            _ => None,
-        }
-    }
-
-    /// The Python type name of an override that is not a list, which Python warns it ignores.
-    pub fn ignored_override_type(&self) -> Option<&'static str> {
-        match self.claude_platform_unsupported_params.as_ref()? {
-            UnsupportedParams::Names(_) | UnsupportedParams::MixedList(_) => None,
-            UnsupportedParams::Flag(_) => Some("bool"),
-            UnsupportedParams::Integer(_) => Some("int"),
-            UnsupportedParams::Float(_) => Some("float"),
-            UnsupportedParams::Text(_) => Some("str"),
-            UnsupportedParams::Mapping(_) => Some("dict"),
-        }
-    }
-}
-
-/// A workspace id as a config writes it: text, or a bare number YAML reads as one.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(untagged)]
-pub enum WorkspaceId {
-    Text(String),
-    Number(serde_json::Number),
-}
-
-impl WorkspaceId {
-    fn text(&self) -> Option<String> {
-        match self {
-            Self::Text(text) if text.is_empty() => None,
-            Self::Text(text) => Some(text.clone()),
-            Self::Number(number) => Some(number.to_string()),
-        }
-    }
-}
-
-/// `claude_platform_unsupported_params`: a list of names, or any other value, which Python
-/// ignores in favour of the default set.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(untagged)]
-pub enum UnsupportedParams {
-    Names(Vec<String>),
-    MixedList(Vec<serde::de::IgnoredAny>),
-    Flag(bool),
-    Integer(i64),
-    Float(f64),
-    Text(String),
-    Mapping(serde::de::IgnoredAny),
 }
 
 /// The `litellm_params` keys no field names, kept as written. Its `Debug` lists the keys
@@ -199,78 +113,24 @@ impl fmt::Debug for ExtraParams {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
-    use serde_json::{Value, json};
+    use serde_json::{Map, Value, json};
 
     use super::*;
 
-    fn platform(fields: Value) -> ClaudePlatformParams {
-        let mut params = json!({"model": "bedrock/claude_platform/claude-test"});
-        params
-            .as_object_mut()
-            .unwrap()
-            .extend(fields.as_object().unwrap().clone());
-        serde_json::from_value::<LitellmParams>(params)
-            .unwrap()
-            .claude_platform
-    }
-
     #[rstest]
-    #[case::none(json!({}), None)]
-    #[case::text(json!({"workspace_id": "w"}), Some("w"))]
-    #[case::number(json!({"aws_workspace_id": 42}), Some("42"))]
-    #[case::header_spelling(json!({"anthropic-workspace-id": "h"}), Some("h"))]
-    #[case::empty_skipped(json!({"workspace_id": "", "anthropic_workspace_id": "u"}), Some("u"))]
-    fn the_workspace_is_read_from_any_spelling(
-        #[case] fields: Value,
-        #[case] expected: Option<&str>,
-    ) {
-        assert_eq!(platform(fields).workspace().as_deref(), expected);
-    }
-
-    #[rstest]
-    #[case::absent(json!({}), None)]
-    #[case::names(json!({"claude_platform_unsupported_params": ["a", "b"]}), Some(vec!["a", "b"]))]
-    #[case::empty_list(json!({"claude_platform_unsupported_params": []}), Some(vec![]))]
-    #[case::text_ignored(json!({"claude_platform_unsupported_params": "a"}), None)]
-    #[case::mixed_list_ignored(json!({"claude_platform_unsupported_params": ["a", 1]}), None)]
-    fn only_a_list_of_names_overrides_the_rejected_params(
-        #[case] fields: Value,
-        #[case] expected: Option<Vec<&str>>,
-    ) {
-        let params = platform(fields);
-        assert_eq!(
-            params
-                .unsupported_params()
-                .map(|names| names.iter().map(String::as_str).collect::<Vec<_>>()),
-            expected
-        );
-    }
-
-    #[rstest]
-    #[case::list(json!({"claude_platform_unsupported_params": ["a"]}), None)]
-    #[case::mixed_list(json!({"claude_platform_unsupported_params": ["a", 1]}), None)]
-    #[case::text(json!({"claude_platform_unsupported_params": "a"}), Some("str"))]
-    #[case::integer(json!({"claude_platform_unsupported_params": 1}), Some("int"))]
-    #[case::float(json!({"claude_platform_unsupported_params": 1.5}), Some("float"))]
-    #[case::flag(json!({"claude_platform_unsupported_params": true}), Some("bool"))]
-    #[case::mapping(json!({"claude_platform_unsupported_params": {"a": 1}}), Some("dict"))]
-    fn an_ignored_override_is_named_by_its_python_type(
-        #[case] fields: Value,
-        #[case] expected: Option<&str>,
-    ) {
-        assert_eq!(platform(fields).ignored_override_type(), expected);
-    }
-
-    #[rstest]
-    fn the_workspace_keys_stay_out_of_the_extra_params() {
-        let params: LitellmParams = serde_json::from_value(json!({
-            "model": "m",
-            "workspace_id": "w",
-            "aws_workspace_id": "a",
-            "aws_region_name": "us-east-1",
-        }))
+    fn every_claude_platform_field_lands_in_its_group_not_the_extra_params() {
+        let claude_platform: Map<String, Value> = ClaudePlatformParams::fields()
+            .map(|name| (name.to_string(), json!("x")))
+            .collect();
+        let params: LitellmParams = serde_json::from_value(Value::Object(
+            [("model".to_string(), json!("m"))]
+                .into_iter()
+                .chain(claude_platform)
+                .collect(),
+        ))
         .unwrap();
         assert!(params.extra.is_empty(), "{:?}", params.extra);
-        assert_eq!(params.aws.aws_region_name.as_deref(), Some("us-east-1"));
+        assert_eq!(params.claude_platform.workspace().as_deref(), Some("x"));
+        assert_eq!(params.claude_platform.ignored_override_type(), Some("str"));
     }
 }

@@ -26,7 +26,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFini
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.types.utils import ModelResponseStream, StandardLoggingKubernetesPodRouting
+    from litellm.types.utils import ClaudeSubscriptionUsage, ModelResponseStream, StandardLoggingKubernetesPodRouting
 
     Span = _Span | Any
 else:
@@ -621,6 +621,43 @@ def proxy_stamped_used_client_oauth_token(metadata: object, litellm_params: Mapp
     if isinstance(litellm_metadata, Mapping) and "used_client_oauth_token" in litellm_metadata:
         return litellm_metadata["used_client_oauth_token"]
     return metadata.get("used_client_oauth_token") if isinstance(metadata, Mapping) else None
+
+
+def _claude_subscription_headers(headers: Mapping[str, object] | None) -> Mapping[str, str]:
+    return {
+        key.lower().removeprefix("llm_provider-"): value
+        for key, value in (headers or {}).items()
+        if isinstance(value, str)
+    }
+
+
+def claude_subscription_usage(
+    call_details: Mapping[str, object], response: object = None
+) -> "ClaudeSubscriptionUsage | None":
+    params: Final = as_str_mapping(call_details.get("litellm_params"))
+    metadata: Final = params.get("metadata") if params is not None else None
+    if (
+        call_details.get("custom_llm_provider") != "anthropic"
+        or proxy_stamped_used_client_oauth_token(metadata, params) is not True
+    ):
+        return None
+    hidden: Final = as_str_mapping(attribute_or_none(response, "_hidden_params"))
+    additional: Final = as_str_mapping(hidden.get("additional_headers")) if hidden is not None else None
+    raw: Final = as_str_mapping(call_details.get("response_headers"))
+    headers: Final = {**_claude_subscription_headers(additional), **_claude_subscription_headers(raw)}
+    prefix: Final = "anthropic-ratelimit-unified-"
+    status: Final = headers.get(f"{prefix}status")
+    overage_status: Final = headers.get(f"{prefix}overage-status")
+    is_overage: Final = headers.get(f"{prefix}overage-in-use") == "true" or (
+        status == "rejected" and overage_status in ("allowed", "allowed_warning")
+    )
+    if status is None and not is_overage:
+        return None
+    return {
+        "is_overage": is_overage,
+        "status": status,
+        "overage_status": overage_status,
+    }
 
 
 def proxy_stamped_kubernetes_pod_routing(
