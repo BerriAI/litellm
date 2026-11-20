@@ -282,7 +282,7 @@ class SSEUsageParser:
             self._absorb_message_start(event)
         elif event_type == "message_delta":
             self._absorb_message_delta(event)
-        elif event_type == "response.completed":
+        elif event_type in ("response.completed", "response.incomplete"):
             self._absorb_response_completed(event)
         elif isinstance(event.get("usage"), Mapping):
             self._absorb_usage(event["usage"])

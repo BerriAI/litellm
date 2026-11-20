@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from itertools import groupby
-from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
+from typing import TYPE_CHECKING, Any, Final, Generic, NamedTuple, Protocol
 
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
@@ -22,7 +22,7 @@ from litellm.repositories import rust_database
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
-from litellm.rust_bridge._native import RustSpendLogRepository
+from litellm.rust_bridge._native import RustAgentIdentityRepository, RustAuditLogRepository, RustSpendLogRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
@@ -108,6 +108,13 @@ class AgentsRepository(PrismaTableRepository["prisma_models.LiteLLM_AgentsTable"
 
 class AgentIdentityRepository(PrismaTableRepository["prisma_models.LiteLLM_AgentIdentity"]):
     table_name = "litellm_agentidentity"
+
+    async def record_authentication(self, agent_id: str, revision: str) -> bool:
+        """Stamps the identity as authenticated now. False when it is no longer the active one at ``revision``, or
+        its agent is disabled or no longer identity managed."""
+        return await rust_database.required_repository(RustAgentIdentityRepository).record_authentication(
+            agent_id, revision
+        )
 
 
 class RetiredAgentIdentityRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgentIdentity"]):
@@ -426,8 +433,52 @@ class AdaptiveRouterStateRepository(PrismaTableRepository["prisma_models.LiteLLM
     table_name = "litellm_adaptiverouterstate"
 
 
+class NewAuditLog(NamedTuple):
+    """One audit log row to insert. ``before_value`` and ``updated_values`` are JSON text. A ``changed_by`` or
+    ``changed_by_api_key`` of None is stored as empty, and an ``updated_at`` without a zone is read as UTC."""
+
+    id: str
+    updated_at: datetime
+    changed_by: str | None
+    changed_by_api_key: str | None
+    action: str
+    table_name: str
+    object_id: str
+    before_value: str | None
+    updated_values: str | None
+
+
+_EPOCH: Final = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _audit_log_row(row: NewAuditLog) -> tuple[str, int, str | None, str | None, str, str, str, str | None, str | None]:
+    updated_at: Final = (
+        row.updated_at if row.updated_at.tzinfo is not None else row.updated_at.replace(tzinfo=timezone.utc)
+    )
+    return (
+        row.id,
+        (updated_at - _EPOCH) // timedelta(microseconds=1),
+        row.changed_by,
+        row.changed_by_api_key,
+        row.action,
+        row.table_name,
+        row.object_id,
+        row.before_value,
+        row.updated_values,
+    )
+
+
 class AuditLogRepository(PrismaTableRepository["prisma_models.LiteLLM_AuditLog"]):
     table_name = "litellm_auditlog"
+
+    async def insert(self, row: NewAuditLog) -> None:
+        await rust_database.required_repository(RustAuditLogRepository).insert(_audit_log_row(row))
+
+    async def insert_many(self, rows: Sequence[NewAuditLog]) -> None:
+        """Inserts every row in one statement, so either all of them are stored or none is."""
+        await rust_database.required_repository(RustAuditLogRepository).insert_many(
+            tuple(_audit_log_row(row) for row in rows)
+        )
 
 
 class AdaptiveRouterSessionRepository(PrismaTableRepository["prisma_models.LiteLLM_AdaptiveRouterSession"]):

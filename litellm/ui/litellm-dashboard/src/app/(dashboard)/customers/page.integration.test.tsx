@@ -47,6 +47,7 @@ const mockCustomerApi = ({
   organizations?: readonly CustomerOrganization[];
   cachePricing?: Readonly<Pick<SpendMetrics, "cache_cost" | "priced_cache_tokens">>;
 }> = {}) => {
+  const updateOrganization = vi.fn<(id: string, body: components["schemas"]["OrganizationPatch"]) => void>();
   const createOrganization = vi.fn((body: components["schemas"]["OrganizationCreate"]) => ({
     ...original[1],
     customer_org_id: body.customer_org_id,
@@ -70,7 +71,10 @@ const mockCustomerApi = ({
     }
     if (url.pathname === "/management/v1/customer_organizations" && request.method === "GET") {
       const data = [
-        ...organizations,
+        ...organizations.map((organization) => ({
+          ...organization,
+          ...updateOrganization.mock.calls.findLast(([id]) => id === organization.customer_org_id)?.[1],
+        })),
         ...createOrganization.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
       ];
       return Response.json({
@@ -127,10 +131,19 @@ const mockCustomerApi = ({
       const created = createOrganization(body);
       return Response.json({ customer_org_id: created.customer_org_id }, { status: 201 });
     }
+    const organization = organizations.find(
+      (entry) => url.pathname === `/management/v1/customer_organizations/${entry.customer_org_id}`,
+    );
+    if (organization && request.method === "GET") return Response.json(organization);
+    if (organization && request.method === "PATCH") {
+      const body: components["schemas"]["OrganizationPatch"] = await request.json();
+      updateOrganization(organization.customer_org_id, body);
+      return Response.json({ ...organization, ...body });
+    }
     throw new Error(`Unexpected request ${request.method} ${url.pathname}`);
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { createOrganization };
+  return { createOrganization, updateOrganization };
 };
 
 beforeEach(() => {
@@ -151,12 +164,33 @@ afterEach(() => {
   document.cookie = "token=; Max-Age=0; Path=/";
 });
 
-const customerLinks = () =>
-  within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link", {
-    name: (name) => name !== "App budgets",
-  });
+const customerLinks = () => within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link");
 
 describe("customer organization overview", () => {
+  it("edits an existing organization budget and refreshes its row without changing filters or pagination", async () => {
+    const { updateOrganization } = mockCustomerApi();
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<CustomersPage />, {
+      searchParams: "?search=customer&sort_by=customer&sort_order=desc&page=2&from=2024-02-01&to=2024-02-29",
+      onUrlUpdate,
+    });
+    const row = await screen.findByRole("row", { name: /Customer 00/ });
+    await user.click(within(row).getByRole("button", { name: "Edit", exact: true }));
+    const limit = await screen.findByRole("spinbutton", { name: "Spend limit (USD)" });
+    expect(limit).toHaveValue(10);
+    fireEvent.change(limit, { target: { value: "25" } });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(updateOrganization).toHaveBeenCalledExactlyOnceWith(
+      "customer-00",
+      expect.objectContaining({ budget: expect.objectContaining({ max_budget: 25, budget_duration: "1mo" }) }),
+    );
+    expect(await within(row).findByText("$25.00", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+  });
+
   it("shows each organization's assigned tier or custom budget in the budget group column", async () => {
     mockCustomerApi({
       organizations: [
@@ -207,9 +241,6 @@ describe("customer organization overview", () => {
       "href",
       "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15",
     );
-    expect(
-      within(screen.getByRole("row", { name: /Customer 29/ })).getByRole("link", { name: "App budgets" }),
-    ).toHaveAttribute("href", "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15#app-budgets");
     const overview = screen.getByRole("region", { name: "Overall customer usage" });
     expect(within(overview).getByText("$100.00")).toBeInTheDocument();
     expect(within(overview).getByText("20")).toBeInTheDocument();
