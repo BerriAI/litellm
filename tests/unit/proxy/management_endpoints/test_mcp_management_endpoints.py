@@ -3590,7 +3590,7 @@ class TestTemporaryMCPSessionEndpoints:
                 return_value=prisma_client,
             ),
             patch(
-                "litellm.proxy.mcp_server.db.get_mcp_server",
+                "litellm.proxy.mcp_server.db.get_mcp_server_without_profiles",
                 new=mock_get_mcp_server,
             ),
             patch.object(
@@ -12235,3 +12235,94 @@ def test_the_server_response_schema_stays_an_object_with_its_properties() -> Non
     schema: Final = LiteLLM_MCPServerTable.model_json_schema(mode="serialization")
 
     assert {"server_id", "additional_auth"} <= set(schema["properties"])
+
+
+@pytest.mark.parametrize(
+    ("verb", "path", "body"),
+    [
+        pytest.param("put", "/v1/mcp/server", {"server_id": "analytics", "additional_auth": []}, id="put-drops-it"),
+        pytest.param("delete", "/v1/mcp/server/analytics", None, id="delete"),
+        pytest.param("put", "/v1/mcp/server/analytics/reject", {"review_notes": "no"}, id="reject-active"),
+    ],
+)
+def test_removing_a_granted_profile_is_refused_with_409_naming_the_key_alias(
+    profile_api: _ProfileApi, verb: str, path: str, body: dict[str, object] | None
+) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    assert admin.post("/v1/mcp/server", json=_server_body("analytics", _api_profile("ana-bots"))).status_code == 201
+    profile_api.prisma.key_grants["nightly-bot"] = ["ana-bots"]
+    before: Final = ([dict(row) for row in profile_api.prisma.servers], [dict(row) for row in profile_api.prisma.profiles])
+
+    response: Final = admin.request(verb.upper(), path, json=body)
+
+    assert (response.status_code, response.json()) == (
+        409,
+        {
+            "detail": {
+                "error": "MCP auth profiles are still granted. Remove the grants first.",
+                "grants": [{"kind": "key", "name": "nightly-bot", "mcp_auth_profiles": ["ana-bots"]}],
+            }
+        },
+    )
+    assert ([dict(row) for row in profile_api.prisma.servers], profile_api.prisma.profiles) == before
+
+
+def test_deleting_a_server_whose_profiles_are_not_granted_deletes_it(profile_api: _ProfileApi) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    assert admin.post("/v1/mcp/server", json=_server_body("analytics", _api_profile("ana-bots"))).status_code == 201
+    profile_api.prisma.key_grants["nightly-bot"] = ["gh-bots"]
+
+    response: Final = admin.delete("/v1/mcp/server/analytics")
+
+    assert response.status_code == 202, response.text
+    assert profile_api.prisma.servers == []
+
+
+def test_a_case_only_respell_of_a_granted_profile_keeps_it_guarded(profile_api: _ProfileApi) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    created: Final = admin.post("/v1/mcp/server", json=_server_body("tickets", _api_profile("Tickets-Bots")))
+    profile_api.prisma.key_grants["nightly-bot"] = ["Tickets-Bots"]
+    resent: Final = {k: v for k, v in _api_profile("tickets-bots").items() if not k.startswith("client_")}
+
+    respelled: Final = admin.put("/v1/mcp/server", json={"server_id": "tickets", "additional_auth": [resent]})
+    deleted: Final = admin.delete("/v1/mcp/server/tickets")
+
+    assert (created.status_code, respelled.status_code, deleted.status_code) == (201, 202, 409)
+    assert [profile["id"] for profile in respelled.json()["additional_auth"]] == ["Tickets-Bots"]
+    assert [row["server_id"] for row in profile_api.prisma.servers] == ["tickets"]
+
+
+@pytest.mark.parametrize(
+    ("verb", "path", "body", "removed_status"),
+    [
+        pytest.param("delete", "/v1/mcp/server/analytics", None, 202, id="delete"),
+        pytest.param("put", "/v1/mcp/server/analytics/reject", {"review_notes": "no"}, 200, id="reject-active"),
+    ],
+)
+@pytest.mark.parametrize("profiles", [(), (_api_profile("ana-bots"),)], ids=["no-profiles", "profiles"])
+def test_removing_a_server_while_the_profile_table_is_unreadable_refuses_only_a_profiled_one(
+    profile_api: _ProfileApi,
+    caplog: pytest.LogCaptureFixture,
+    verb: str,
+    path: str,
+    body: dict[str, object] | None,
+    removed_status: int,
+    profiles: tuple[dict[str, object], ...],
+) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    assert admin.post("/v1/mcp/server", json=_server_body("analytics", *profiles)).status_code == 201
+
+    async def unreadable(**_: object) -> list[object]:
+        raise ConnectionError("database is restarting")
+
+    profile_api.prisma.db.litellm_mcpauthprofiletable.find_many = unreadable
+    before: Final = [dict(row) for row in profile_api.prisma.servers]
+
+    if profiles:
+        with pytest.raises(ConnectionError):
+            admin.request(verb.upper(), path, json=body)
+        assert [dict(row) for row in profile_api.prisma.servers] == before
+    else:
+        response: Final = admin.request(verb.upper(), path, json=body)
+        assert response.status_code == removed_status, response.text
+        assert "could not read the MCP auth profiles of MCP server analytics" in caplog.text

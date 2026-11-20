@@ -74,6 +74,11 @@ from litellm.proxy.management_helpers.audit_logs import (
     get_audit_log_changed_by,
     is_audit_logging_enabled,
 )
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import (
+    StillGranted,
+    raise_if_server_profiles_granted,
+    still_granted_error,
+)
 from litellm.proxy.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -1960,6 +1965,8 @@ if MCP_AVAILABLE:
                 detail={"error": "MCP server is already rejected."},
             )
 
+        if existing.approval_status in (None, MCPApprovalStatus.active, "approved"):
+            await raise_if_server_profiles_granted(server_id, prisma_client)
         was_active: Final = existing.approval_status == MCPApprovalStatus.active
         rejected: Final = await reject_mcp_server(
             prisma_client,
@@ -2675,6 +2682,7 @@ if MCP_AVAILABLE:
                 },
             )
 
+        await raise_if_server_profiles_granted(server_id, prisma_client)
         # try to delete the mcp server
         mcp_server_record_deleted: Final = await delete_mcp_server(prisma_client, server_id)
 
@@ -3365,6 +3373,8 @@ if MCP_AVAILABLE:
             raise_mcp_identifier_conflict(mcp_server_record_updated)
         if isinstance(mcp_server_record_updated, AuthProfileRefusal):
             raise_auth_profile_refusal(mcp_server_record_updated)
+        if isinstance(mcp_server_record_updated, StillGranted):
+            raise still_granted_error(mcp_server_record_updated)
 
         if mcp_server_record_updated is None:
             raise HTTPException(

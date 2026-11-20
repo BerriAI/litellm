@@ -9,10 +9,14 @@ from fastapi import HTTPException, status
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm._logging import verbose_proxy_logger
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy.utils import PrismaClient
+    from litellm.repositories.prisma_protocols import TableActions
 
 
 _MAX_GRANT_IDS: Final = 256
@@ -210,3 +214,130 @@ def refuse_auth_profile_grants(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": f"mcp_auth_profiles can be set on keys, teams and agents, not on a {carrier}."},
         )
+
+
+_HOLDER_INCLUDE: Final = MappingProxyType({"verification_tokens": True, "teams": True, "agents_table": True})
+
+
+@dataclass(frozen=True, slots=True)
+class GrantHolder:
+    kind: Literal["key", "team", "agent"]
+    name: str
+    profile_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class StillGranted:
+    holders: tuple[GrantHolder, ...]
+
+
+def _grant_holders(row: "prisma_models.LiteLLM_ObjectPermissionTable") -> Iterator[GrantHolder]:
+    profile_ids: Final = tuple(row.mcp_auth_profiles)
+    for token in row.verification_tokens or ():
+        yield GrantHolder("key", token.key_alias or token.key_name or "key without alias", profile_ids)
+    for team in row.teams or ():
+        yield GrantHolder("team", team.team_alias or team.team_id, profile_ids)
+    for agent in row.agents_table or ():
+        yield GrantHolder("agent", agent.agent_name or agent.agent_id, profile_ids)
+
+
+async def auth_profile_grant_holders(
+    profile_ids: Sequence[str], permission_table: "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]"
+) -> tuple[GrantHolder, ...]:
+    if not profile_ids:
+        return ()
+    rows: Final = await permission_table.find_many(
+        where={"mcp_auth_profiles": {"has_some": list(profile_ids)}},  # bounded-ok: one server's profiles
+        include=_HOLDER_INCLUDE,
+    )
+    return tuple(chain.from_iterable(map(_grant_holders, rows)))
+
+
+def still_granted_error(refusal: StillGranted) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "MCP auth profiles are still granted. Remove the grants first.",
+            "grants": [
+                {"kind": holder.kind, "name": holder.name, "mcp_auth_profiles": list(holder.profile_ids)}
+                for holder in refusal.holders
+            ],
+        },
+    )
+
+
+async def raise_if_auth_profiles_granted(profile_ids: Sequence[str], prisma_client: "PrismaClient | None") -> None:
+    if prisma_client is None:
+        return
+    from litellm.repositories.table_repositories import ObjectPermissionRepository
+
+    holders: Final = await auth_profile_grant_holders(
+        profile_ids, ObjectPermissionRepository(prisma_client, use_writer=True).table
+    )
+    if holders:
+        raise still_granted_error(StillGranted(holders))
+
+
+async def raise_if_server_profiles_granted(server_id: str, prisma_client: "PrismaClient") -> None:
+    from litellm.proxy.mcp_server.auth_profile_db import stored_profile_rows
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    try:
+        profile_ids: Final = tuple(await stored_profile_rows(prisma_client, server_id))
+    except Exception as error:
+        loaded: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if loaded is not None and loaded.additional_auth:
+            raise
+        verbose_proxy_logger.warning(
+            "could not read the MCP auth profiles of MCP server %s, removing it as it has none loaded: %s",
+            server_id,
+            error,
+        )
+        return
+    await raise_if_auth_profiles_granted(profile_ids, prisma_client)
+
+
+def _refused_holders(
+    row: "prisma_models.LiteLLM_ObjectPermissionTable", profiles: Mapping[str, RegisteredProfile]
+) -> Iterator[str]:
+    error: Final = grant_error(tuple(row.mcp_auth_profiles), profiles)
+    if error is None:
+        return
+    for holder in _grant_holders(row):
+        yield f"{holder.kind} {holder.name}: {describe_grant_error(error)}"
+
+
+async def _startup_grant_refusal(prisma_client: "PrismaClient") -> str | None:
+    from litellm.repositories.table_repositories import ObjectPermissionRepository
+
+    rows: Final = await ObjectPermissionRepository(prisma_client, use_writer=True).table.find_many(
+        where={"NOT": [{"mcp_auth_profiles": {"is_empty": True}}]}, include=_HOLDER_INCLUDE
+    )
+    profiles: Final = await grantable_auth_profiles(
+        chain.from_iterable(row.mcp_auth_profiles for row in rows), prisma_client
+    )
+    refused: Final = tuple(chain.from_iterable(_refused_holders(row, profiles) for row in rows))
+    return None if not refused else f"MCP auth profile grants no longer match the MCP servers: {'; '.join(refused)}"
+
+
+async def mcp_auth_profile_startup_refusal(
+    config_servers: Iterable[MCPServer], prisma_client: "PrismaClient | None"
+) -> str | None:
+    if prisma_client is None:
+        return None
+    from litellm.proxy.mcp_server.auth_profile_db import startup_profile_refusal
+
+    profile_refusal: Final = await startup_profile_refusal(config_servers, prisma_client)
+    if profile_refusal is not None:
+        return profile_refusal
+    from prisma.errors import PrismaError
+
+    from litellm.proxy._types import DB_CONNECTION_ERROR_TYPES
+
+    try:
+        return await _startup_grant_refusal(prisma_client)
+    except (PrismaError, *DB_CONNECTION_ERROR_TYPES) as error:
+        verbose_proxy_logger.warning(
+            "Skipped the MCP auth profile grant check at startup, the database could not be read: %s", error
+        )
+        return None

@@ -44,6 +44,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import StillGranted
 from litellm.proxy.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointAuthConfigError,
     normalize_token_endpoint_auth_method,
@@ -1774,7 +1775,7 @@ async def _resolve_persisted_dcr_client(
     the server-scoped store, while a rowless non-config server is a throwaway temp/session server with
     no persisted client. Returns (row_or_None, credentials_or_None); the row is only needed by the
     reuse path to refresh the registry for a DB-declared server."""
-    from litellm.proxy.mcp_server.db import get_mcp_server  # noqa: PLC0415  # avoids circular import
+    from litellm.proxy.mcp_server.db import get_mcp_server_without_profiles  # noqa: PLC0415  # avoids circular import
     from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # avoids circular import
         global_mcp_server_manager,
     )
@@ -1782,7 +1783,7 @@ async def _resolve_persisted_dcr_client(
 
     try:
         prisma_client = get_prisma_client_or_throw("Database not connected. Cannot read MCP OAuth client registration.")
-        row: Final = await get_mcp_server(prisma_client=prisma_client, server_id=mcp_server.server_id)
+        row: Final = await get_mcp_server_without_profiles(prisma_client, mcp_server.server_id)
     except Exception as exc:  # noqa: BLE001  # best-effort read; DB may be unreachable
         if raise_on_error:
             raise
@@ -1835,13 +1836,36 @@ async def _refresh_persisted_dcr_server(persisted_server: Optional["LiteLLM_MCPS
         )
 
         try:
-            await global_mcp_server_manager.update_server(persisted_server)
+            await global_mcp_server_manager.update_server(await _with_registered_profiles(persisted_server))
         except Exception as exc:  # noqa: BLE001  # best-effort registry refresh
             verbose_logger.warning(
                 "register_client_with_server: failed to refresh persisted DCR client registration for server_id=%s: %s",
                 persisted_server.server_id,
                 exc,
             )
+
+
+async def _with_registered_profiles(persisted_server: "LiteLLM_MCPServerTable") -> "LiteLLM_MCPServerTable":
+    from litellm.proxy.mcp_server.auth_profile_db import read_stored_profiles  # noqa: PLC0415  # avoids circular import
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # avoids circular import
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415  # avoids circular import
+
+    server_id: Final = persisted_server.server_id
+    read: Final = global_mcp_server_manager.catalog.read_profiles_of(server_id, persisted_server.updated_at)
+    if read is not None:
+        return persisted_server.model_copy(update={"additional_auth": read or None})
+    stored: Final = await read_stored_profiles(
+        get_prisma_client_or_throw("Database not connected. Cannot read MCP auth profiles."),
+        (server_id,),
+        use_writer=True,
+    )
+    loaded: Final = global_mcp_server_manager.registry.get(server_id)
+    profiles: Final = (
+        stored.get(server_id) if stored is not None else (loaded.additional_auth if loaded is not None else None)
+    )
+    return persisted_server.model_copy(update={"additional_auth": profiles or None})
 
 
 async def _persisted_dcr_redirect_uri_is_stale(mcp_server: MCPServer, current_redirect_uri: str) -> bool:
@@ -2013,7 +2037,7 @@ async def _persist_dcr_client_registration(
         )
         if (
             updated_row is not None
-            and not isinstance(updated_row, McpIdentifierConflict)
+            and not isinstance(updated_row, (McpIdentifierConflict, StillGranted))
             and not isinstance(updated_row, AuthProfileRefusal)
         ):
             await _refresh_persisted_dcr_server(updated_row)

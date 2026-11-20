@@ -33,6 +33,7 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import NewMCPServerWithProfilesRequest, UpdateMCPServerWithProfilesRequest
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import GrantHolder, StillGranted
 from litellm.proxy.mcp_server.auth_profile_db import SubmittedProfiles
 from litellm.proxy.mcp_server.db import create_mcp_server_if_identifier_free, update_mcp_server
 from litellm.proxy.utils import PrismaClient
@@ -866,3 +867,45 @@ def test_a_put_resending_profiles_without_secrets_keeps_them_in_postgres(monkeyp
     stored_settings: Final = rows[0]["credentials"]
     assert isinstance(stored_settings, dict) and stored_settings["token_endpoint_auth_method"] == "client_secret_basic"
     assert (_secret(rows[0], "client_secret"), _secret(rows[1], "auth_value")) == ("S1", "T2")
+
+
+def test_a_put_dropping_a_granted_profile_is_refused_and_leaves_postgres_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _analytics_server(monkeypatch) as server_id:
+        ana: Final = "ana-bots-" + server_id
+        gh: Final = "gh-bots-" + server_id
+        ana_profile: Final = _profile(
+            ana,
+            "oauth2",
+            oauth2_flow="client_credentials",
+            client_id="ana-app",
+            client_secret="S1",
+            token_url="https://auth.example/token",
+        )
+        holder: Final = "nightly-bot-" + server_id
+
+        async def drop_the_granted_profile() -> tuple[list[dict[str, JsonValue]], object]:
+            async with connected_proxy_prisma() as prisma_client:
+                await _create_with_profiles(
+                    prisma_client, server_id, [ana_profile, _profile(gh, "bearer_token", authentication_token="T2")]
+                )
+                await prisma_client.db.litellm_objectpermissiontable.create(
+                    data={"object_permission_id": holder, "mcp_auth_profiles": [gh]}
+                )
+                await prisma_client.db.litellm_verificationtoken.create(
+                    data={"token": holder, "key_alias": holder, "object_permission_id": holder}
+                )
+                stored: Final = read_rows(_PROFILE_ROWS, (server_id,))
+                return stored, await _put_profiles(prisma_client, server_id, [ana_profile])
+
+        try:
+            before, refused = asyncio.run(drop_the_granted_profile())
+            after: Final = read_rows(_PROFILE_ROWS, (server_id,))
+        finally:
+            write_rows('DELETE FROM "LiteLLM_VerificationToken" WHERE token = %s', (holder,))
+            write_rows('DELETE FROM "LiteLLM_ObjectPermissionTable" WHERE object_permission_id = %s', (holder,))
+
+    assert refused == StillGranted((GrantHolder("key", holder, (gh,)),))
+    assert [row["profile_id"] for row in before] == [ana, gh]
+    assert after == before

@@ -870,6 +870,13 @@ def _mock_scheduled_proxy_config() -> MagicMock:
     )
 
 
+def _prisma_client_without_mcp_auth_profiles() -> MagicMock:
+    client: Final = MagicMock()
+    client.writer_db.litellm_mcpauthprofiletable.find_many = AsyncMock(return_value=[])
+    client.writer_db.litellm_objectpermissiontable.find_many = AsyncMock(return_value=[])
+    return client
+
+
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_deployment(
     monkeypatch: pytest.MonkeyPatch,
@@ -881,7 +888,7 @@ async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_depl
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
@@ -956,7 +963,7 @@ async def test_committed_spend_twins_outlive_the_slowest_spend_write_to_the_db(
         ):
             await ProxyStartupEvent.initialize_scheduled_background_jobs(
                 general_settings={},
-                prisma_client=MagicMock(),
+                prisma_client=_prisma_client_without_mcp_auth_profiles(),
                 proxy_budget_rescheduler_min_time=1,
                 proxy_budget_rescheduler_max_time=2,
                 proxy_batch_write_at=proxy_batch_write_at,
@@ -985,7 +992,7 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
@@ -1027,7 +1034,7 @@ async def test_initialize_scheduled_jobs_registers_cleanup_when_retention_lives_
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
@@ -1073,7 +1080,7 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
@@ -1122,7 +1129,7 @@ async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_inte
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
@@ -1169,7 +1176,7 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
@@ -1673,7 +1680,7 @@ class MockPrisma:
         self.database_url = database_url
         self.proxy_logging_obj = proxy_logging_obj
         self.http_client = http_client
-        self.writer_db = MagicMock()
+        self.writer_db = _prisma_client_without_mcp_auth_profiles().writer_db
 
     async def connect(self):
         pass
@@ -8772,7 +8779,7 @@ async def test_batch_cost_poller_is_confirmed_before_serving(monkeypatch):
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
@@ -8812,7 +8819,7 @@ async def test_store_model_in_db_db_override_when_config_false():
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
 
     # Mock DB returning store_model_in_db=True in general_settings
     mock_db_record = MagicMock()
@@ -8857,7 +8864,7 @@ async def test_store_model_in_db_db_check_skipped_when_already_true(monkeypatch)
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
 
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
@@ -8899,7 +8906,7 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     # Simulate DB failure
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(side_effect=Exception("DB connection error"))
 
@@ -14746,7 +14753,7 @@ async def _run_scheduled_background_jobs():
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client = _prisma_client_without_mcp_auth_profiles()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
 
     mock_proxy_logging = MagicMock(spec=ProxyLogging)

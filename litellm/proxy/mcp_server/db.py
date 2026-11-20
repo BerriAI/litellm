@@ -37,6 +37,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # 
     get_salt_key,
 )
 from litellm.proxy.common_utils.fips import fips_mode_active
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import StillGranted, auth_profile_grant_holders
 from litellm.proxy.mcp_server.auth_profile_db import (
     SubmittedProfiles,
     checked_profiles,
@@ -101,6 +102,9 @@ class _UserEnvVarsTransactionClient(Protocol):
 
     @property
     def litellm_mcpservertable(self) -> "TableActions[prisma_db_models.LiteLLM_MCPServerTable]": ...
+
+    @property
+    def litellm_objectpermissiontable(self) -> "TableActions[prisma_db_models.LiteLLM_ObjectPermissionTable]": ...
 
     @property
     def litellm_mcpauthprofiletable(self) -> "TableActions[prisma_db_models.LiteLLM_MCPAuthProfileTable]": ...
@@ -1527,7 +1531,7 @@ def _host_move_recheck(server_id: str) -> "Callable[[_UserEnvVarsTransactionClie
 
 
 class _ProfileWriteRefused(Exception):
-    def __init__(self, refusal: AuthProfileRefusal) -> None:
+    def __init__(self, refusal: AuthProfileRefusal | StillGranted) -> None:
         super().__init__("the stored MCP auth profiles refuse this replacement")
         self.refusal = refusal
 
@@ -1550,6 +1554,11 @@ def _profile_replacement(
         rows: Final = replacement_profile_rows(profiles, profile_write.touched_by, stored)
         if rows:
             await table.create_many(data=[{**row, "server_id": server_id} for row in rows])
+        kept: Final = frozenset(profile.id.lower() for profile in profiles)
+        removed: Final = tuple(profile_id for profile_id in stored if profile_id.lower() not in kept)
+        holders: Final = await auth_profile_grant_holders(removed, tx.litellm_objectpermissiontable)
+        if holders:
+            raise _ProfileWriteRefused(StillGranted(holders))
 
     return replace
 
@@ -1562,7 +1571,7 @@ async def _update_row_or_name_raced_profile(
     profile_write: _ProfileWrite,
     expected_updated_at: datetime | None,
     submitted_profiles: object,
-) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | None":
+) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | StillGranted | None":
     from prisma.errors import UniqueViolationError  # noqa: PLC0415  # prisma client is generated at build time
 
     try:
@@ -1584,11 +1593,11 @@ async def _update_row_or_name_raced_profile(
 
 async def _readable_updated_row(
     prisma_client: PrismaClient,
-    row: "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | None",
-) -> LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | None:
+    row: "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | StillGranted | None",
+) -> LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | StillGranted | None:
     if row is None:
         return None
-    if isinstance(row, McpIdentifierConflict):
+    if isinstance(row, (McpIdentifierConflict, StillGranted)):
         return row
     if isinstance(row, AuthProfileRefusal):
         return row
@@ -1606,7 +1615,7 @@ async def update_mcp_server(
     expected_updated_at: datetime | None = None,
     *,
     submitted_profiles: SubmittedProfiles | None = None,
-) -> LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | None:
+) -> LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | StillGranted | None:
     """
     Update a new mcp server record in the db
 

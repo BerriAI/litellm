@@ -1,12 +1,16 @@
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
 
+import httpx
 import pytest
 from fastapi import HTTPException
+from prisma.errors import ClientNotConnectedError
 
 from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewOrganizationRequest
 from litellm.proxy.management_helpers.mcp_auth_profile_grants import (
     enforce_auth_profile_grant_write,
+    mcp_auth_profile_startup_refusal,
+    raise_if_auth_profiles_granted,
 )
 from litellm.proxy.mcp_server.db import LOADABLE_MCP_SERVER_FILTER
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
@@ -41,9 +45,12 @@ class _PermissionTable:
         grants: Final = self.stored.get(where["object_permission_id"])
         return None if grants is None else SimpleNamespace(mcp_auth_profiles=grants)
 
-    async def find_many(self, where: object, include: object) -> tuple[SimpleNamespace, ...]:
+    async def find_many(self, where: dict[str, object], include: object) -> tuple[SimpleNamespace, ...]:
         self.grant_queries = (*self.grant_queries, where)
-        return self.granted_rows
+        if where == {"NOT": [{"mcp_auth_profiles": {"is_empty": True}}]}:
+            return tuple(row for row in self.granted_rows if row.mcp_auth_profiles)
+        wanted: Final = set(where["mcp_auth_profiles"]["has_some"])  # case-sensitive, as Postgres array overlap
+        return tuple(row for row in self.granted_rows if wanted & set(row.mcp_auth_profiles))
 
 
 class _ProfileTable:
@@ -51,10 +58,31 @@ class _ProfileTable:
         self.rows = rows
         self.lookups: tuple[object, ...] = ()
 
-    async def find_many(self, where: dict[str, object]) -> tuple[SimpleNamespace, ...]:
+    async def find_many(
+        self, where: dict[str, object] | None = None, include: object = None
+    ) -> tuple[SimpleNamespace, ...]:
+        if where is None or "profile_id_normalized" not in where:
+            return ()
         self.lookups = (*self.lookups, where)
         wanted: Final = where["profile_id_normalized"]["in"]
         return tuple(row for row in self.rows if row.profile_id_normalized in wanted)
+
+
+def _row(
+    grants: list[str],
+    *,
+    keys: tuple[tuple[str, str | None] | tuple[str, str | None, str | None], ...] = (),
+    teams: tuple[tuple[str, str | None], ...] = (),
+    agents: tuple[tuple[str, str | None], ...] = (),
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        mcp_auth_profiles=grants,
+        verification_tokens=[
+            SimpleNamespace(token=key[0], key_alias=key[1], key_name=key[2] if len(key) > 2 else None) for key in keys
+        ],
+        teams=[SimpleNamespace(team_id=team_id, team_alias=alias) for team_id, alias in teams],
+        agents_table=[SimpleNamespace(agent_id=agent_id, agent_name=name) for agent_id, name in agents],
+    )
 
 
 def _prisma(
@@ -406,3 +434,143 @@ def test_a_grant_serialized_as_json_is_still_refused_on_a_user() -> None:
         refuse_auth_profile_grants("user", '{"mcp_auth_profiles": ["ana-bots"]}')
 
     assert refused.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_removing_a_granted_profile_is_refused_naming_holders_never_their_hashes() -> None:
+    table: Final = _PermissionTable(
+        {},
+        (
+            _row(
+                ["Ana-Bots"],
+                keys=(
+                    ("a9519a10deadbeef", "nightly-bot", None),
+                    ("77e0c2d1aa", None, "sk-...abcd"),
+                    ("4cb1af8451229fe0", None, None),
+                ),
+                teams=(("payments-team-id", "payments"), ("3f2a9c7e-team-without-alias", None)),
+                agents=(("0b1d6e44-agent-without-name", None),),
+            ),
+        ),
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await raise_if_auth_profiles_granted(("Ana-Bots",), _prisma(table))
+
+    assert refused.value.status_code == 409
+    assert refused.value.detail["grants"] == [
+        {"kind": kind, "name": name, "mcp_auth_profiles": ["Ana-Bots"]}
+        for kind, name in (
+            ("key", "nightly-bot"),
+            ("key", "sk-...abcd"),
+            ("key", "key without alias"),
+            ("team", "payments"),
+            ("team", "3f2a9c7e-team-without-alias"),
+            ("agent", "0b1d6e44-agent-without-name"),
+        )
+    ]
+    assert "4cb1af84" not in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_removing_a_granted_profile_is_refused_even_when_the_replica_has_not_seen_the_grant() -> None:
+    granted_on_the_writer: Final = _PermissionTable({}, (_row(["Ana-Bots"], keys=(("a9519a10", "nightly-bot"),)),))
+
+    with pytest.raises(HTTPException) as refused:
+        await raise_if_auth_profiles_granted(
+            ("Ana-Bots",), _prisma(granted_on_the_writer, replica=_PermissionTable({}))
+        )
+
+    assert refused.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_without_a_database_removes_a_profile_without_a_grant_query() -> None:
+    assert await raise_if_auth_profiles_granted(("ana-bots",), None) is None
+
+
+@pytest.mark.asyncio
+async def test_removing_a_server_without_profiles_runs_no_grant_query() -> None:
+    table: Final = _PermissionTable({}, (_row(["ana-bots"], keys=(("hashed", None),)),))
+    await raise_if_auth_profiles_granted((), _prisma(table))
+    assert table.grant_queries == ()
+
+
+@pytest.mark.asyncio
+async def test_the_proxy_refuses_to_start_while_a_grant_names_an_unknown_profile_or_two_of_one_server() -> None:
+    table: Final = _PermissionTable(
+        {},
+        (
+            _row(["ana-bots", "News-Bots"], keys=(("hashed-ok", "ok-bot"),)),
+            _row(["ANA-Gone", "gh-bots"], teams=(("payments-id", "payments"),)),
+            _row(["ana-bots", "ana-ci"], keys=(("hashed-two", "two-bot"),)),
+        ),
+    )
+
+    refusal: Final = await mcp_auth_profile_startup_refusal((), _prisma(table, _ProfileTable()))
+
+    assert refusal == (
+        "MCP auth profile grants no longer match the MCP servers: "
+        "team payments: Unknown MCP auth profile ids in mcp_auth_profiles: ANA-Gone; "
+        "key two-bot: mcp_auth_profiles may name one profile per MCP server: analytics (ana-bots, ana-ci)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_grant_on_a_stored_profile_lets_the_proxy_start() -> None:
+    table: Final = _PermissionTable({}, (_row(["slack-bots"], keys=(("hashed", "slack-bot"),)),))
+
+    assert (
+        await mcp_auth_profile_startup_refusal(
+            (), _prisma(table, _ProfileTable((_stored_profile("Slack-Bots", "slack"),)))
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_grant_revoked_on_the_writer_lets_the_proxy_start_before_the_replica_catches_up() -> None:
+    revoked_on_the_writer: Final = _prisma(
+        _PermissionTable({}), replica=_PermissionTable({}, (_row(["gone-bots"], keys=(("hashed", "old-bot"),)),))
+    )
+
+    assert await mcp_auth_profile_startup_refusal((), revoked_on_the_writer) is None
+
+
+class _UnreadablePermissionTable(_PermissionTable):
+    def __init__(self, error: Exception) -> None:
+        super().__init__({})
+        self.error = error
+
+    async def find_many(self, where: dict[str, object], include: object) -> tuple[SimpleNamespace, ...]:
+        raise self.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", [httpx.ConnectError("connection refused"), ClientNotConnectedError()], ids=["transport", "prisma"]
+)
+async def test_an_unreadable_database_skips_the_startup_check_with_a_warning(
+    caplog: pytest.LogCaptureFixture, failure: Exception
+) -> None:
+    unreachable: Final = _UnreadablePermissionTable(failure)
+
+    assert await mcp_auth_profile_startup_refusal((), cast("PrismaClient", _prisma(unreachable))) is None
+    assert "Skipped the MCP auth profile grant check" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_startup_check_that_breaks_for_a_reason_other_than_the_database_stops_startup() -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        await mcp_auth_profile_startup_refusal(
+            (),
+            cast(
+                "PrismaClient",
+                _prisma(_UnreadablePermissionTable(TypeError("unexpected keyword argument 'use_writer'"))),
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_no_database_skips_the_startup_check() -> None:
+    assert await mcp_auth_profile_startup_refusal((), None) is None

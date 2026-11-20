@@ -202,6 +202,14 @@ class _ServerTable:
         row: Final = self._find(where["server_id"])
         return None if row is None else self._as_row(row)
 
+    async def delete(self, where: Mapping[str, object]) -> FakeRow | None:
+        row: Final = self._find(where["server_id"])
+        if row is None:
+            return None
+        self._store.servers.remove(row)
+        self._store.profiles[:] = [p for p in self._store.profiles if p["server_id"] != row["server_id"]]
+        return self._as_row(row)
+
     async def find_first(self, where: Mapping[str, object] | None = None, **_: object) -> FakeRow | None:
         if not self._store.identifier_checks or where is None:
             return None
@@ -229,11 +237,38 @@ class _ConfigTable:
         return None
 
 
+class _PerUserTable:
+    async def find_many(self, **_: object) -> Sequence[FakeRow]:
+        return []
+
+    async def delete_many(self, **_: object) -> int:
+        return 0
+
+
+class _PermissionTable:
+    def __init__(self, store: "FakeMcpPrisma") -> None:
+        self._store = store
+
+    async def find_many(self, where: Mapping[str, object], include: Mapping[str, object]) -> Sequence[FakeRow]:
+        wanted: Final = set(where["mcp_auth_profiles"]["has_some"])
+        return [
+            FakeRow(
+                mcp_auth_profiles=grants,
+                verification_tokens=[FakeRow(token="hashed", key_alias=alias, key_name=None)],
+                teams=[],
+                agents_table=[],
+            )
+            for alias, grants in self._store.key_grants.items()
+            if wanted & set(grants)
+        ]
+
+
 class _Transaction:
     def __init__(self, store: "FakeMcpPrisma") -> None:
         self._store = store
         self.litellm_mcpservertable = store.db.litellm_mcpservertable
         self.litellm_mcpauthprofiletable = store.db.litellm_mcpauthprofiletable
+        self.litellm_objectpermissiontable = store.db.litellm_objectpermissiontable
         self._snapshot: tuple[list[dict[str, object]], list[dict[str, object]]] | None = None
 
     async def execute_raw(self, query: str, *args: object) -> int:
@@ -255,7 +290,11 @@ class _Db:
     def __init__(self, store: "FakeMcpPrisma") -> None:
         self.litellm_mcpservertable = _ServerTable(store)
         self.litellm_mcpauthprofiletable = _ProfileTable(store)
+        self.litellm_objectpermissiontable = _PermissionTable(store)
         self.litellm_config = _ConfigTable()
+        self.litellm_mcpusercredentials = _PerUserTable()
+        self.litellm_mcpuserenvvars = _PerUserTable()
+        self.litellm_mcpserveroauthclient = _PerUserTable()
         self._store = store
 
     def tx(self) -> _Transaction:
@@ -266,6 +305,7 @@ class FakeMcpPrisma:
     def __init__(self) -> None:
         self.servers: list[dict[str, object]] = []
         self.profiles: list[dict[str, object]] = []
+        self.key_grants: dict[str, list[str]] = {}
         self.db = _Db(self)
         self.writer_db = self.db
         self._hold_until: int | None = None
