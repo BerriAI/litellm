@@ -89,11 +89,12 @@ describe("customer budget usage", () => {
         ...entity,
         id: "custom",
         budgetLimit: null,
-        budgetLimits: [{ budget_duration: "7d", max_budget: 5 }],
+        budgetLimits: [{ budget_duration: "7d", max_budget: 10 }],
       };
       const uncapped = { ...entity, id: "none", budgetLimit: null, budgetLimits: [] };
+      const calendar = { ...entity, budgetLimits: [{ budget_duration: "1mo", max_budget: 20 }] };
       expect(
-        [uncapped, entity, custom].sort((a, b) => compareCustomerBudgets(a, b, desc)).map((row) => row.id),
+        [uncapped, calendar, custom].sort((a, b) => compareCustomerBudgets(a, b, desc)).map((row) => row.id),
       ).toEqual(desc ? ["member", "custom", "none"] : ["custom", "member", "none"]);
       expect(customerBudgetStatus(customerBudgetUsage(custom))).toBe("customerPortal.analytics.budgetUsageUnavailable");
     },

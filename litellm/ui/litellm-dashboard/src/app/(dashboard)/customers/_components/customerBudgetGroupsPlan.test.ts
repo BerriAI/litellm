@@ -28,7 +28,7 @@ const organization: Organization = {
 
 describe("planCustomerBudgetGroups", () => {
   it("keeps custom caps and their reset identity when calendar caps are edited or cleared", () => {
-    const custom = { budget_duration: "48h", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
+    const custom = { budget_duration: "7d", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
     const original = {
       ...organization,
       default_budgets: [{ ...organization.default_budgets[0], budget_limits: [custom] }],

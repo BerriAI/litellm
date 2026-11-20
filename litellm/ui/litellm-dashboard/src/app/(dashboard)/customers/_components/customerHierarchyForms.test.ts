@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { updateBudgetPeriod } from "./customerBudgetForm";
 import {
   buildCustomerHierarchyPatch as buildPatch,
   customerHierarchyFields as initialFields,
@@ -57,6 +58,42 @@ const buildCustomerHierarchyPatch = (entity: CustomerHierarchyEntity, fields: Cu
   buildPatch(entity, fields, memberOrganization);
 
 describe("customer hierarchy settings payloads", () => {
+  it.each(["organization", "team", "member"] as const)(
+    "preserves custom caps while editing or removing calendar caps in the %s editor",
+    (kind) => {
+      const custom = { budget_duration: "7d", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
+      const monthly = { budget_duration: "1mo", max_budget: 50, reset_at: "2027-02-01T00:00:00Z" };
+      const yearly = { budget_duration: "12mo", max_budget: 500 };
+      const budget = { max_budget: null, budget_duration: null, budget_limits: [monthly, yearly, custom] };
+      const entities: Record<typeof kind, CustomerHierarchyEntity> = {
+        organization: { kind: "organization", record: { ...organization, budget } },
+        team: { kind: "team", record: { ...audit, customer_team_id: "team", parent_org_id: "org-1", budget } },
+        member: {
+          kind: "member",
+          record: { ...member, budget_id: "private", budget, budget_override: null, budget_override_expires_at: null },
+        },
+      };
+      const entity = entities[kind];
+      const fields = customerHierarchyFields(entity);
+      expect(
+        buildCustomerHierarchyPatch(entity, {
+          ...updateBudgetPeriod(fields, "1mo", "0"),
+          ...(kind === "organization" ? { maxBudget: "0" } : {}),
+        }),
+      ).toMatchObject({
+        patch: { body: { budget: { budget_limits: [{ ...monthly, max_budget: 0 }, yearly, custom] } } },
+      });
+      expect(
+        buildCustomerHierarchyPatch(entity, {
+          ...updateBudgetPeriod(fields, "1mo", ""),
+          ...(kind === "organization" ? { maxBudget: "" } : {}),
+        }),
+      ).toMatchObject({
+        patch: { body: { budget: { budget_limits: [yearly, custom] } } },
+      });
+    },
+  );
+
   it("should load the member template from the API response", () => {
     expect(customerHierarchyFields({ kind: "member", record: member }, memberOrganization).templateId).toBe(
       member.budget_id,

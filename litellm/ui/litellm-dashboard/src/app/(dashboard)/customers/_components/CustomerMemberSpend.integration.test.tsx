@@ -48,7 +48,7 @@ describe("CustomerMemberSpend pagination", () => {
     const custom = {
       ...members[0],
       budgetLimits: [
-        { budget_duration: "7d", max_budget: 5 },
+        { budget_duration: "7d", max_budget: 10 },
         { budget_duration: "48h", max_budget: 2 },
       ],
     };
@@ -58,7 +58,7 @@ describe("CustomerMemberSpend pagination", () => {
         onMemberClick={vi.fn()}
       />,
     );
-    expect(screen.getByRole("cell", { name: "$5.00" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "$10.00" })).toBeInTheDocument();
     expect(screen.queryByText("No limit")).not.toBeInTheDocument();
     expect(screen.getByText(/\(7d\)/)).toBeInTheDocument();
     expect(screen.getByText(/\(48h\)/)).toBeInTheDocument();

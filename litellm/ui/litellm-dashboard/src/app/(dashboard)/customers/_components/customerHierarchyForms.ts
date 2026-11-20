@@ -1,4 +1,5 @@
 import type { components } from "@/lib/http/schema";
+import { CALENDAR_BUDGET_DURATIONS, mergeBudgetLimits } from "@/lib/forms/budgetWindows";
 
 import {
   budgetEditorFields,
@@ -148,11 +149,16 @@ const organizationBudget = (original: Budget | null | undefined, parsed: Budget)
     ...original,
     ...parsed,
     max_budget: windows?.some((window) => window.budget_duration === "1mo") ? original?.max_budget : parsed.max_budget,
-    budget_limits:
-      windows?.flatMap((window) => {
-        if (window.budget_duration !== "1mo") return [window];
-        return parsed.max_budget != null ? [{ ...window, max_budget: parsed.max_budget }] : [];
-      }) ?? windows,
+    budget_limits: windows
+      ? mergeBudgetLimits(
+          windows,
+          windows.flatMap((window) => {
+            if (window.budget_duration !== CALENDAR_BUDGET_DURATIONS[0]) return [];
+            return parsed.max_budget != null ? [{ ...window, max_budget: parsed.max_budget }] : [];
+          }),
+          [CALENDAR_BUDGET_DURATIONS[0]],
+        )
+      : windows,
   };
 };
 

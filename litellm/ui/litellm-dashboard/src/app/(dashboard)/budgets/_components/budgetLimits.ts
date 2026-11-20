@@ -3,6 +3,7 @@ import type { components } from "@/lib/http/schema";
 import { pickDirty } from "@/lib/forms/pickDirty";
 import type { BudgetFormValues } from "./BudgetFormFields";
 import { applyBudgetPrecision } from "./budgetPrecision";
+import { CALENDAR_BUDGET_DURATIONS, mergeBudgetLimits } from "@/lib/forms/budgetWindows";
 
 export const COMBINED_BUDGET_DURATION = "monthly-and-annually";
 
@@ -34,27 +35,26 @@ function singlePeriodPayload(
   existingLimits: BudgetWriteRequest["budget_limits"],
 ): BudgetWriteRequest {
   if (!existingLimits?.length) return scalar;
-  const custom = existingLimits.filter((limit) => !["1mo", "12mo"].includes(limit.budget_duration));
   if (dirty?.budget_duration) {
+    const remaining = mergeBudgetLimits(existingLimits, []);
     if (values.additional_max_budget !== undefined) {
       const { max_budget: _max, budget_duration: _duration, ...other } = scalar;
       const duration = values.budget_duration === "12mo" ? "12mo" : "1mo";
       const existing = existingLimits.find((limit) => limit.budget_duration === duration);
+      const limits = mergeBudgetLimits(
+        existingLimits,
+        values.max_budget == null ? [] : [{ ...existing, budget_duration: duration, max_budget: values.max_budget }],
+      );
       return {
         ...other,
-        budget_limits:
-          values.max_budget == null
-            ? custom.length
-              ? custom
-              : null
-            : [{ ...existing, budget_duration: duration, max_budget: values.max_budget }, ...custom],
+        budget_limits: limits.length ? limits : null,
       };
     }
     return {
       ...scalar,
       max_budget: values.max_budget,
       budget_duration: values.budget_duration,
-      budget_limits: custom.length ? custom : null,
+      budget_limits: remaining.length ? remaining : null,
     };
   }
   if (!dirty?.max_budget) return scalar;
@@ -68,7 +68,8 @@ function singlePeriodPayload(
     if (limit.budget_duration !== duration) return [limit];
     return amount == null ? [] : [{ ...limit, max_budget: amount }];
   });
-  return { ...other, budget_limits: limits.length ? limits : null };
+  const merged = mergeBudgetLimits(existingLimits, limits, [duration ?? "", ...CALENDAR_BUDGET_DURATIONS]);
+  return { ...other, budget_limits: merged.length ? merged : null };
 }
 
 function combinedPeriodPayload(
@@ -89,11 +90,10 @@ function combinedPeriodPayload(
     ...(dirty?.budget_duration && values.additional_max_budget === undefined
       ? { max_budget: null, budget_duration: null }
       : {}),
-    budget_limits: [
+    budget_limits: mergeBudgetLimits(existingLimits, [
       calendarLimit(monthly, values, dirty, "max_budget"),
       calendarLimit(annual, values, dirty, "annual_budget"),
-      ...(existingLimits?.filter((limit) => !["1mo", "12mo"].includes(limit.budget_duration)) ?? []),
-    ],
+    ]),
   };
 }
 

@@ -54,7 +54,8 @@ describe("EditBudgetModal", () => {
   it("edits a custom-only window without converting it to a scalar cap", async () => {
     const user = userEvent.setup();
     const custom = { budget_duration: "48h", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
-    renderModal({ ...EXISTING_BUDGET, max_budget: null, budget_duration: null, budget_limits: [custom] });
+    const existing = { ...EXISTING_BUDGET, max_budget: null, budget_duration: null, budget_limits: [custom] };
+    renderModal(existing);
     expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(3);
     fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "4" } });
     await save(user);

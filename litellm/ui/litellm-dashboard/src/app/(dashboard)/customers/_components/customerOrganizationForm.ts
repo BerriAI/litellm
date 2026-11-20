@@ -1,9 +1,11 @@
 import type { components } from "@/lib/http/schema";
+import { mergeBudgetLimits } from "@/lib/forms/budgetWindows";
 
 export type CustomerCapPolicy = NonNullable<components["schemas"]["BudgetTemplate"]["cap_policy"]>;
 export const defaultCustomerCapPolicy: CustomerCapPolicy = "pause_until_reset";
 
 export interface CustomerBudgetGroupFields {
+  budgetLimits?: components["schemas"]["Budget"]["budget_limits"];
   id: string;
   name: string;
   monthlyBudget: string;
@@ -108,6 +110,7 @@ export function validateCustomerBudgetGroups(
     fields.groups.some(
       (group) =>
         !existingGroupIds.includes(group.id) &&
+        !mergeBudgetLimits(group.budgetLimits, []).length &&
         [group.monthlyBudget, group.yearlyBudget, group.tpm, group.rpm].every((value) => !value.trim()),
     )
   ) {
@@ -154,7 +157,10 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
     default_budgets: fields.groups.map((group): components["schemas"]["BudgetTemplate"] => ({
       name: group.name.trim(),
       cap_policy: group.capPolicy,
-      budget_limits: [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")],
+      budget_limits: mergeBudgetLimits(group.budgetLimits, [
+        ...limit(group.monthlyBudget, "1mo"),
+        ...limit(group.yearlyBudget, "12mo"),
+      ]),
       ...(group.tpm.trim() ? { tpm_limit: Number(group.tpm) } : {}),
       ...(group.rpm.trim() ? { rpm_limit: Number(group.rpm) } : {}),
     })),

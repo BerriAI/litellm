@@ -1,4 +1,5 @@
 import type { components } from "@/lib/http/schema";
+import { CALENDAR_BUDGET_DURATIONS, mergeBudgetLimits } from "@/lib/forms/budgetWindows";
 
 export type Budget = components["schemas"]["Budget"];
 const budgetKeys = [
@@ -89,9 +90,14 @@ export const budgetEditorValue = (fields: BudgetEditorFields, original?: Budget 
       return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
     windows.push({ ...window.budget, max_budget: parsedWindow.max_budget });
   }
+  const merged = mergeBudgetLimits(
+    original?.budget_limits,
+    windows,
+    original?.budget_limits?.map((window) => window.budget_duration),
+  );
   return {
     ok: true,
-    value: { ...budgetSettings(original), ...parsed, budget_limits: windows.length ? windows : null },
+    value: { ...budgetSettings(original), ...parsed, budget_limits: merged.length ? merged : null },
   } as const;
 };
 
@@ -100,7 +106,7 @@ export const compactBudgetEditorFields = (budget?: Budget | null): BudgetEditorF
   budgetDuration: budget == null ? "1mo" : budget.budget_duration ?? "",
 });
 
-type BudgetPeriod = "1mo" | "12mo";
+type BudgetPeriod = (typeof CALENDAR_BUDGET_DURATIONS)[number];
 
 export const budgetPeriodAmount = (fields: BudgetEditorFields, duration: BudgetPeriod): string => {
   const scalar = fields.budgetDuration === duration ? fields.maxBudget : "";
