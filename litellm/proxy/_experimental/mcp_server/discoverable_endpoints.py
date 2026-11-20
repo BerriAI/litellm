@@ -108,7 +108,6 @@ from litellm.proxy._experimental.mcp_server.proxy_api_credentials import (
     lookup_consent_teams,
     mint_proxy_credential,
 )
-from litellm.secret_managers.main import get_secret_bool
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -119,6 +118,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPTokenEndpointAuthMethod
