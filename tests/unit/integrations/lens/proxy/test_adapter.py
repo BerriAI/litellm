@@ -14,6 +14,7 @@ from litellm.integrations.lens.proxy.adapter import (
     forward,
     lens_request,
     login_redirect,
+    login_user_name,
     password_change_redirect,
     request_body,
     service_connection,
@@ -347,7 +348,7 @@ SIGN_IN_URL: Final = "http://gateway.test/ui/login?redirect_to=%2Flens%2Flogin"
 def test_lens_login_redirects_a_signed_in_user_to_lens_with_a_sign_in_only_token(
     connection: Connection, identity: Identity
 ) -> None:
-    response: Final = login_redirect(connection, "https://lens.test", identity, SIGN_IN_URL, 1000)
+    response: Final = login_redirect(connection, "https://lens.test", identity, None, SIGN_IN_URL, 1000)
     assert response.status_code == 303
     location: Final = response.headers["location"]
     prefix: Final = "https://lens.test/ui/#token="
@@ -372,17 +373,49 @@ def test_lens_login_redirects_a_signed_in_user_to_lens_with_a_sign_in_only_token
     assert response.headers["referrer-policy"] == "no-referrer"
 
 
+def test_lens_login_token_names_the_signed_in_user_and_request_tokens_never_do(
+    connection: Connection, identity: Identity
+) -> None:
+    named: Final = connection.login_token(identity, "kerry@example.com", 1000)
+    forwarded: Final = connection.identity_token(identity, 1000)
+    assert named is not None
+    assert forwarded is not None
+    options: Final = {"verify_exp": False}
+    assert jwt.decode(named, SECRET, algorithms=["HS256"], audience="litellm-lens-login", options=options)[
+        "identity"
+    ] == identity.model_dump(mode="json") | {"user_name": "kerry@example.com"}
+    assert jwt.decode(forwarded, SECRET, algorithms=["HS256"], audience="litellm-lens", options=options)[
+        "identity"
+    ] == identity.model_dump(mode="json")
+
+
+@pytest.mark.parametrize(
+    ("user_id", "user_email", "expected"),
+    (
+        ("dev-user", "dev@example.com", "dev@example.com"),
+        ("default_user_id", None, "root"),
+        ("default_user_id", "owner@example.com", "owner@example.com"),
+        ("dev-user", None, None),
+    ),
+    ids=("user_email", "built_in_admin_username", "admin_email_wins", "no_name_known"),
+)
+def test_lens_login_names_a_user_by_email_and_the_built_in_admin_by_its_username(
+    user_id: str, user_email: str | None, expected: str | None
+) -> None:
+    assert login_user_name(UserAPIKeyAuth(user_id=user_id, user_email=user_email), "root") == expected
+
+
 def test_lens_login_token_cannot_be_used_as_a_forwarded_request_identity(
     connection: Connection, identity: Identity
 ) -> None:
-    token: Final = connection.login_token(identity, 1000)
+    token: Final = connection.login_token(identity, None, 1000)
     assert token is not None
     with pytest.raises(jwt.InvalidAudienceError):
         jwt.decode(token, SECRET, algorithms=["HS256"], audience="litellm-lens", options={"verify_exp": False})
 
 
 def test_lens_login_sends_a_browser_without_a_dashboard_session_to_gateway_sign_in(connection: Connection) -> None:
-    response: Final = login_redirect(connection, "https://lens.test", None, SIGN_IN_URL, 1000)
+    response: Final = login_redirect(connection, "https://lens.test", None, None, SIGN_IN_URL, 1000)
     assert (response.status_code, response.headers["location"]) == (303, SIGN_IN_URL)
 
 
@@ -395,14 +428,14 @@ def test_lens_login_is_unavailable_until_lens_is_fully_configured(
     connection: Connection, identity: Identity, configured: bool, lens_url: str
 ) -> None:
     with pytest.raises(HTTPException) as error:
-        login_redirect(connection if configured else None, lens_url, identity, SIGN_IN_URL, 1000)
+        login_redirect(connection if configured else None, lens_url, identity, None, SIGN_IN_URL, 1000)
     assert error.value.status_code == 503
 
 
 def test_lens_login_refuses_an_identity_with_no_user_or_key(connection: Connection, identity: Identity) -> None:
     anonymous: Final = identity.model_copy(update={"user_id": None, "token": None})
     with pytest.raises(HTTPException) as error:
-        login_redirect(connection, "https://lens.test", anonymous, SIGN_IN_URL, 1000)
+        login_redirect(connection, "https://lens.test", anonymous, None, SIGN_IN_URL, 1000)
     assert error.value.status_code == 403
 
 
