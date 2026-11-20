@@ -794,8 +794,8 @@ def test_gemini_embedding_sends_extra_body_fields_on_each_request(respx_mock: re
     ]
 
 
-def _text_block(text: object, **extra: object) -> dict[str, object]:
-    return {"type": "text", "text": text, **extra}
+def _text_block(text: object) -> dict[str, object]:
+    return {"type": "text", "text": text}
 
 
 LITERAL_TEXTS: Final = (
@@ -839,7 +839,7 @@ class TestTextContentBlocks:
         [
             ({"type": "text"}, "text: Field required"),
             (_text_block(5), "text: Input should be a valid string"),
-            (_text_block("hello", cache_control={"type": "ephemeral"}), "cache_control"),
+            ({"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}, "cache_control"),
         ],
     )
     def test_malformed_text_block_answers_400_naming_the_field(
@@ -849,8 +849,54 @@ class TestTextContentBlocks:
             _build_part_for_input(block)
 
     def test_drop_params_drops_the_text_block_keys_embeddings_do_not_take(self) -> None:
-        block: Final = _text_block(IMAGE_DATA_URI, cache_control={"type": "ephemeral"})
+        block: Final = {"type": "text", "text": IMAGE_DATA_URI, "cache_control": {"type": "ephemeral"}}
         assert _build_part_for_input(block, drop_params=True) == {"text": IMAGE_DATA_URI}
+
+    def test_drop_params_still_answers_400_for_a_non_string_text(self) -> None:
+        block: Final = {"type": "text", "text": 5, "cache_control": {"type": "ephemeral"}}
+        with pytest.raises(BadRequestError, match="text: Input should be a valid string"):
+            _build_part_for_input(block, drop_params=True)
+
+    def test_batch_path_sends_an_empty_text_block_as_an_empty_text_part(self) -> None:
+        body: Final = transform_openai_input_gemini_content(
+            input=[_text_block("")], model=self.MODEL, optional_params={}
+        )
+        assert body["requests"][0]["content"]["parts"] == [{"text": ""}]
+
+    def test_embed_content_path_sends_an_empty_text_block_as_an_empty_text_part(self) -> None:
+        body: Final = transform_openai_input_gemini_embed_content(
+            input=[_text_block("")], model=self.MODEL, optional_params={}
+        )
+        assert body["content"]["parts"] == [{"text": ""}]
+
+    @pytest.mark.parametrize(
+        "embedding_input, texts",
+        [
+            (["alpha beta", "gamma delta"], ("alpha beta", "gamma delta")),
+            ([["alpha beta", "gamma delta"], "epsilon"], ("alpha beta", "gamma delta", "epsilon")),
+            (["alpha beta", IMAGE_DATA_URI, "gamma delta"], ("alpha beta", "gamma delta")),
+        ],
+        ids=["flat-strings", "grouped-strings", "strings-around-media"],
+    )
+    def test_process_response_counts_the_concatenated_plain_text(
+        self, embedding_input: list[object], texts: tuple[str, ...]
+    ) -> None:
+        result: Final = process_response(
+            input=embedding_input,
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            _predictions={"embeddings": [{"values": [0.1]}]},
+        )
+        assert result.usage.prompt_tokens == litellm.token_counter(model=self.MODEL, text="".join(texts)) > 0
+
+    def test_embed_content_usage_fallback_counts_the_concatenated_flat_strings(self) -> None:
+        result: Final = process_embed_content_response(
+            input=["alpha beta", "gamma delta"],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json={"embedding": {"values": [0.1, 0.2]}},
+        )
+        assert result.usage.prompt_tokens == litellm.token_counter(model=self.MODEL, text="alpha betagamma delta") > 0
 
     def test_text_block_is_not_multimodal(self) -> None:
         assert _is_multimodal_input([_text_block(IMAGE_DATA_URI)]) is False

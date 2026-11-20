@@ -405,3 +405,17 @@ async def test_unparseable_bare_media_answers_400_before_any_request(
 
     assert exc_info.value.status_code == 400
     assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_malformed_text_block_answers_400_before_resolving_a_files_reference(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    with pytest.raises(litellm.BadRequestError, match="text: Input should be a valid string"):
+        await _embed("gemini/gemini-embedding-2", sync_mode, [{"type": "text", "text": 5}, "files/clip123"])
+
+    assert len(respx_mock.calls) == 0

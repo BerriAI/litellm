@@ -1109,6 +1109,9 @@ _FILE_BLOCK_ITEM: Final = {"type": "file", "file": {"file_data": "data:video/mp4
             {"input": [{"type": "text", "text": "chunk"}] * 5}, True, id="embedding-text-blocks-are-not-messages"
         ),
         pytest.param(
+            {"input": [{"type": ["message"], "content": "hi"}] * 5}, False, id="unhashable-item-types-still-count"
+        ),
+        pytest.param(
             {"input": [{"type": "message", "role": "user", "content": "hi"}] * 5},
             False,
             id="five-typed-responses-messages-skip-the-cache",

@@ -354,15 +354,17 @@ def _elements(input: GeminiEmbeddingInput) -> Iterator[GeminiEmbeddingElement]:
             yield element
 
 
-def _element_source(element: GeminiEmbeddingElement) -> str:
+def _element_source(element: GeminiEmbeddingElement) -> str | None:
     if isinstance(element, str):
         return element
+    if _parse_text_block(element, drop_params=True) is not None:
+        return None
     return _file_block_source(_parse_file_block(element, drop_params=True))
 
 
 def flatten_media_sources(input: GeminiEmbeddingInput) -> tuple[str, ...]:
     """Every string element plus every file content block's source, in input order. Text blocks are never media."""
-    return tuple(_element_source(element) for element in _elements(input) if not _is_text_block(element))
+    return tuple(source for element in _elements(input) if (source := _element_source(element)) is not None)
 
 
 def _element_text(element: GeminiEmbeddingElement) -> str | None:
