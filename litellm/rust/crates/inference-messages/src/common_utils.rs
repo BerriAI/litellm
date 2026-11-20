@@ -13,8 +13,9 @@ use litellm_llms::{
 };
 use litellm_llms::{
     bedrock::messages::claude_platform::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
-    bedrock::messages::mantle::transformation::BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
-    bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
+    bedrock_mantle::messages::transformation::{
+        BEDROCK_MANTLE_MESSAGES_CONFIG, BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
+    },
 };
 use serde_json::{Map, Value};
 
@@ -212,7 +213,7 @@ mod tests {
         use litellm_llms::{
             base_llm::messages::transformation::BaseMessagesConfig,
             bedrock::messages::claude_platform::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
-            bedrock::messages::mantle::transformation::BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
+            bedrock_mantle::messages::transformation::BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
         };
         let params = litellm_router_types::LitellmParams::default();
         let region = |key: &str| {

@@ -2,7 +2,6 @@
 //! the body, model in the URL, Vertex's betas and labels), sent with a Google access token to the
 //! project and region the call resolves.
 
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use crate::vertex_ai::common_utils::vertex_region;
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
@@ -25,16 +24,14 @@ use crate::{
         beta_gated_fields::strip_beta_gated_request,
         beta_headers::BetaPolicy,
         common_utils::{existing_betas, merge_beta_headers, supports_effort_param},
-        messages::{
-            handler::shape_anthropic_messages_request,
-            transformation::{provider_feature_betas, transform_messages_request},
-        },
+        messages::transformation::{ANTHROPIC_MESSAGES_CONFIG, provider_feature_betas},
     },
     base_llm::{
         auth::{AuthScheme, Headers, LoggedIn, ValidatedEnvironment},
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
+            tools::ToolCustomField,
             transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
@@ -133,13 +130,11 @@ impl MessagesDialect for VertexAiMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
     }
 
-    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
-        }
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ANTHROPIC_MESSAGES_CONFIG.tool_custom_field(model)
     }
 
     fn transform_anthropic_messages_request(
@@ -147,23 +142,14 @@ impl MessagesDialect for VertexAiMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(
+        let request = ANTHROPIC_MESSAGES_CONFIG.transform_anthropic_messages_request(
             request,
-            &context
-                .keeping_display_updates()
-                .warning_dropped_disabled_thinking(),
+            &context.warning_dropped_disabled_thinking(),
         )?;
-        let accepts_effort = supports_effort_param(&context.thinking.capabilities);
-        Ok(MessagesRequest {
-            params: MessagesOptionalParams {
-                output_config: request
-                    .params
-                    .output_config
-                    .and_then(|config| sanitize_output_config(config, accepts_effort)),
-                ..request.params
-            },
-            ..request
-        })
+        Ok(sanitize_vertex_anthropic_output_params(
+            request,
+            supports_effort_param(&context.thinking.capabilities),
+        ))
     }
 
     fn request_body(
@@ -172,39 +158,16 @@ impl MessagesDialect for VertexAiMessagesConfig {
         headers: &Headers,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
-        let version = vertex_version(
-            &request.model,
-            header_value(headers, VERSION_HEADER),
-            drop_params,
-        )?;
-        let output_config = fold_output_format(
-            &request.model,
-            request.params.output_config,
-            request.params.output_format.map(OutputFormat::from),
-        )?;
-        Ok(MessagesRequest {
-            params: MessagesOptionalParams {
-                extra: request
-                    .params
-                    .extra
-                    .into_iter()
-                    .chain([("anthropic_version".to_string(), json!(version))])
-                    .collect(),
-                output_config,
-                output_format: None,
-                ..request.params
-            },
-            ..request
-        })
+        let request = with_vertex_anthropic_version(request, headers, drop_params)?;
+        fold_output_format_into_output_config(request)
     }
 
     /// Python's Vertex beta set merged into the caller's betas, then the handler's
     /// `update_headers_with_filtered_beta` over the `vertex_ai` row.
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        BetaPolicy::Filter(BetaProvider::VertexAi).apply(merge_beta_headers(
-            without_headers(headers, &[VERSION_HEADER]),
-            vertex_feature_betas(request),
-        ))
+        let headers = without_headers(headers, &[VERSION_HEADER]);
+        BetaPolicy::Filter(BetaProvider::VertexAi)
+            .apply(merge_beta_headers(headers, vertex_feature_betas(request)))
     }
 
     /// Python's transform strips the thinking and system fields the final, filtered header does
@@ -216,30 +179,27 @@ impl MessagesDialect for VertexAiMessagesConfig {
         headers: Headers,
         context: &MessagesTransformContext,
     ) -> Result<(MessagesRequest, Headers), Error> {
-        let stripped = strip_beta_gated_request(
+        let request = strip_beta_gated_request(
             request,
             &existing_betas(&headers),
             context.drops_unsupported_params,
             BetaProvider::VertexAi,
         );
-        let normalized = strip_cache_control_scope(normalize_system_role_messages(
-            stripped,
+        let request = normalize_system_role_messages(
+            request,
             context
                 .thinking
                 .capabilities
                 .supports_mid_conversation_system,
             context.drops_unsupported_params,
             BetaProvider::VertexAi,
-        ));
-        Ok((normalized, headers))
+        );
+        Ok((strip_cache_control_scope(request), headers))
     }
 
     /// Vertex addresses the model in the URL and rejects it in the body.
-    fn wire_body(&self, mut body: Value) -> Value {
-        if let Value::Object(fields) = &mut body {
-            fields.remove("model");
-        }
-        body
+    fn wire_body(&self, body: Value) -> Value {
+        without_model(body)
     }
 }
 
@@ -251,7 +211,7 @@ impl MessagesReply for VertexAiMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
     }
 }
 
@@ -343,18 +303,26 @@ pub fn complete_vertex_anthropic_url(
 
 /// Python's `sanitize_vertex_anthropic_output_params`: `effort` only reaches models whose
 /// capabilities accept it, a malformed `output_config` is dropped, and an emptied one is omitted.
-fn sanitize_output_config(
-    config: Recognized<OutputConfig>,
+fn sanitize_vertex_anthropic_output_params(
+    request: MessagesRequest,
     accepts_effort: bool,
-) -> Option<Recognized<OutputConfig>> {
-    let Recognized::Known(config) = config else {
-        return None;
+) -> MessagesRequest {
+    let output_config = match request.params.output_config {
+        Some(Recognized::Known(config)) => Some(OutputConfig {
+            effort: config.effort.filter(|_| accepts_effort),
+            ..config
+        })
+        .filter(|config| !config.is_empty())
+        .map(Recognized::Known),
+        Some(Recognized::Unrecognized(_)) | None => None,
     };
-    let sanitized = OutputConfig {
-        effort: config.effort.filter(|_| accepts_effort),
-        ..config
-    };
-    (!sanitized.is_empty()).then_some(Recognized::Known(sanitized))
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            output_config,
+            ..request.params
+        },
+        ..request
+    }
 }
 
 /// Python's `headers[name] = value`: only a key spelled exactly `name` is replaced.
@@ -370,31 +338,35 @@ fn with_exact_header(headers: Headers, name: &str, value: &str) -> Headers {
 /// transform does: an object `output_format` becomes `output_config.format`, winning over one
 /// already there and replacing a malformed `output_config`. Any other value is refused, since
 /// the shared transform already dropped it under `drop_params`.
-fn fold_output_format(
-    model: &str,
-    output_config: Option<Recognized<OutputConfig>>,
-    output_format: Option<OutputFormat>,
-) -> Result<Option<Recognized<OutputConfig>>, Error> {
-    let output_format = match output_format {
-        None => return Ok(output_config),
+fn fold_output_format_into_output_config(
+    mut request: MessagesRequest,
+) -> Result<MessagesRequest, Error> {
+    let output_format = match request.params.output_format.take().map(OutputFormat::from) {
+        None => return Ok(request),
         Some(OutputFormat::Object(format)) => format,
         Some(OutputFormat::Other { python_type }) => {
             return Err(Error::InvalidRequest(
                 crate::ErrorDetail::NonObjectVertexOutputFormat {
-                    model: model.into(),
+                    model: request.model,
                     actual: python_type,
                 },
             ));
         }
     };
-    let config = match output_config {
+    let config = match request.params.output_config {
         Some(Recognized::Known(config)) => config,
         Some(Recognized::Unrecognized(_)) | None => OutputConfig::default(),
     };
-    Ok(Some(Recognized::Known(OutputConfig {
-        format: Some(Value::Object(output_format)),
-        ..config
-    })))
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
+            output_config: Some(Recognized::Known(OutputConfig {
+                format: Some(Value::Object(output_format)),
+                ..config
+            })),
+            ..request.params
+        },
+        ..request
+    })
 }
 
 /// A caller's `output_format`: an object Vertex folds into `output_config.format`, or a value of
@@ -439,6 +411,38 @@ fn vertex_feature_betas(request: &MessagesRequest) -> BetaSet {
                 .then_some(AnthropicBeta::WebSearch20250305),
         )
         .collect()
+}
+
+/// The version Vertex reads from the body, carried there as `anthropic_version`.
+fn with_vertex_anthropic_version(
+    request: MessagesRequest,
+    headers: &Headers,
+    drop_params: bool,
+) -> Result<MessagesRequest, Error> {
+    let version = vertex_version(
+        &request.model,
+        header_value(headers, VERSION_HEADER),
+        drop_params,
+    )?;
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
+            extra: request
+                .params
+                .extra
+                .into_iter()
+                .chain([("anthropic_version".to_string(), json!(version))])
+                .collect(),
+            ..request.params
+        },
+        ..request
+    })
+}
+
+fn without_model(mut body: Value) -> Value {
+    if let Value::Object(fields) = &mut body {
+        fields.remove("model");
+    }
+    body
 }
 
 fn vertex_version<'a>(

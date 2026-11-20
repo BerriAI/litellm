@@ -1,4 +1,3 @@
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{
     AzureAuthInputs, AzureTokenRetry, ConfigValue, DEFAULT_AZURE_SCOPE, TokenTransport,
@@ -7,7 +6,7 @@ use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
-    providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
+    providers::anthropic::{BetaProvider, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
@@ -19,9 +18,8 @@ use crate::{
         beta_gated_fields::strip_beta_gated_request,
         beta_headers::BetaPolicy,
         common_utils::{API_KEY_PLACEMENT, existing_betas, strip_trailing_slashes},
-        messages::{
-            handler::shape_anthropic_messages_request,
-            transformation::{transform_messages_request, update_headers_with_safeguards_beta},
+        messages::transformation::{
+            ANTHROPIC_MESSAGES_CONFIG, update_headers_with_safeguards_beta,
         },
     },
     azure_ai::common_utils::{
@@ -36,6 +34,7 @@ use crate::{
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
+            tools::ToolCustomField,
             transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
@@ -166,13 +165,11 @@ impl MessagesDialect for AzureAiMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
     }
 
-    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
-        }
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ANTHROPIC_MESSAGES_CONFIG.tool_custom_field(model)
     }
 
     fn transform_anthropic_messages_request(
@@ -180,11 +177,11 @@ impl MessagesDialect for AzureAiMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, &context.keeping_display_updates())
+        ANTHROPIC_MESSAGES_CONFIG.transform_anthropic_messages_request(request, context)
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
+        ANTHROPIC_MESSAGES_CONFIG.default_headers()
     }
 
     /// Python's `_update_headers_with_anthropic_beta`, then the handler's
@@ -207,22 +204,22 @@ impl MessagesDialect for AzureAiMessagesConfig {
         headers: Headers,
         context: &MessagesTransformContext,
     ) -> Result<(MessagesRequest, Headers), Error> {
-        let stripped = strip_beta_gated_request(
+        let request = strip_beta_gated_request(
             request,
             &existing_betas(&headers),
             context.drops_unsupported_params,
             BetaProvider::AzureAi,
         );
-        let normalized = strip_cache_control_scope(normalize_system_role_messages(
-            stripped,
+        let request = normalize_system_role_messages(
+            request,
             context
                 .thinking
                 .capabilities
                 .supports_mid_conversation_system,
             context.drops_unsupported_params,
             BetaProvider::AzureAi,
-        ));
-        Ok((normalized, headers))
+        );
+        Ok((strip_cache_control_scope(request), headers))
     }
 }
 
@@ -234,7 +231,7 @@ impl MessagesReply for AzureAiMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
     }
 }
 

@@ -42,7 +42,7 @@
 ## Messages providers
 
 - Every Messages provider config lives at `src/<provider>/messages/transformation.rs`. A provider with several Messages routes uses one subfolder per route, `src/<provider>/messages/<route>/transformation.rs`, and `src/<provider>/messages/` holds only what its routes share
-- The config type is `<Provider>[<Route>]MessagesConfig` and its value `<PROVIDER>[_<ROUTE>]_MESSAGES_CONFIG`, in Rust acronym casing (`AzureAiMessagesConfig`, `AZURE_AI_MESSAGES_CONFIG`). A route whose name would read as another provider's adds `Route` (`bedrock/messages/mantle/` is `BedrockMantleRouteMessagesConfig`, the `bedrock_mantle` provider is `BedrockMantleMessagesConfig`)
+- The config type is `<Provider>[<Route>]MessagesConfig` and its value `<PROVIDER>[_<ROUTE>]_MESSAGES_CONFIG`, in Rust acronym casing (`AzureAiMessagesConfig`, `AZURE_AI_MESSAGES_CONFIG`). A route whose name would read as another provider's adds `Route` (the `bedrock/mantle/` route is `BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG`, the `bedrock_mantle` provider is `BEDROCK_MANTLE_MESSAGES_CONFIG`)
 - The Python counterpart of each config, path and class, is listed in that folder's AGENTS.md `# references`, not in the type name or the module path. Every route folder gets its own AGENTS.md
 - Every Messages provider implements the four parts in `src/base_llm/messages/transformation.rs`: `MessagesEndpoint` (endpoint selection and URL), `MessagesAuth` (secrets and credential validation), `MessagesDialect` (every body and header edit, and what the call logs) and `MessagesReply` (response, stream, cost and retries). `BaseMessagesConfig` is their blanket supertrait, so callers take `&dyn BaseMessagesConfig`. Add no further Messages traits
 
