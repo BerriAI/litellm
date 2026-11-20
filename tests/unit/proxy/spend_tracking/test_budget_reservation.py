@@ -823,3 +823,41 @@ def test_created_customer_windows_keep_local_alignment_and_full_intervals(
         )[0]
         assert counter.window_start == current
         assert counter.reset_at == current + interval
+
+
+@pytest.mark.parametrize(
+    "now,expected_start,expected_end",
+    (
+        ("2026-11-01T05:15:00Z", "2026-11-01T05:00:00Z", "2026-11-01T06:00:00Z"),
+        ("2026-11-01T06:15:00Z", "2026-11-01T06:00:00Z", "2026-11-01T07:00:00Z"),
+        ("2026-03-08T06:45:00Z", "2026-03-08T06:00:00Z", "2026-03-08T07:00:00Z"),
+    ),
+)
+def test_new_customer_hourly_window_includes_current_usage_through_dst(
+    now: str, expected_start: str, expected_end: str
+) -> None:
+    counter: Final = customer_window_counters(
+        "customer_team",
+        "hourly-team",
+        (BudgetLimit(budget_duration="1h", max_budget=1),),
+        now=datetime.fromisoformat(now),
+        reset_settings=BudgetResetSettings(timezone="America/New_York"),
+    )[0]
+
+    assert counter.window_start == datetime.fromisoformat(expected_start)
+    assert counter.reset_at == datetime.fromisoformat(expected_end)
+
+
+@pytest.mark.parametrize("days_after_reset", (0, 1, 2, 30))
+def test_expired_customer_elapsed_schedule_keeps_its_saved_anchor(days_after_reset: int) -> None:
+    saved_reset: Final = datetime(2026, 11, 1, 4, tzinfo=timezone.utc)
+    start: Final = saved_reset + timedelta(days=days_after_reset)
+    counter: Final = customer_window_counters(
+        "customer_team", "daily-team",
+        (BudgetLimit(budget_duration="24h", max_budget=1, reset_at=saved_reset),),
+        now=start + timedelta(minutes=1),
+        reset_settings=BudgetResetSettings(timezone="America/New_York"),
+    )[0]
+
+    assert counter.window_start == start
+    assert counter.reset_at == start + timedelta(hours=24)

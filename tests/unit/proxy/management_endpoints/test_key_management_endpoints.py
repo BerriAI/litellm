@@ -25262,4 +25262,3 @@ async def test_key_cap_edit_retains_an_existing_elapsed_schedule() -> None:
 
     assert updated["max_budget"] == 20
     assert "budget_reset_at" not in updated
-

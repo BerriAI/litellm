@@ -121,7 +121,7 @@ async def _write_budget_update(
         previous: Final = tuple(
             limit for window in current or () if (limit := _stored_budget_limit(window)) is not None
         )
-        window_data: Final = (
+        window_data: Final[Mapping[str, object]] = (
             budget_row_values(
                 {
                     "budget_limits": initialize_budget_limits(

@@ -647,4 +647,3 @@ def test_saved_elapsed_schedules_do_not_shorten_at_local_unit_rollover(
     assert get_next_standardized_reset_time(
         duration, saved_reset, "UTC", elapsed_anchor=saved_reset
     ) == datetime.fromisoformat(expected)
-
