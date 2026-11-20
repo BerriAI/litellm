@@ -8,6 +8,7 @@ import hashlib
 import itertools
 import json
 import logging
+import re
 import socket
 import threading
 import traceback
@@ -300,7 +301,7 @@ async def test_token_counter_leaves_the_routers_deployment_without_the_credentia
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call_endpoint", [False, True], ids=["local tokenizer", "provider count api"])
 async def test_token_counter_reads_an_oidc_api_key_only_when_it_calls_the_provider(
-    tmp_path, monkeypatch, call_endpoint
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, call_endpoint: bool
 ):
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
     llm_router = Router(
@@ -6579,7 +6580,7 @@ _LLAMA_COUNT_REQUEST: Final = TokenCountRequest(model="llama", messages=[{"role"
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
-async def test_count_answers_503_with_retry_after_while_the_hub_tokenizer_cannot_load(
+async def test_count_answers_503_naming_the_next_load_without_a_retry_after_header_while_the_hub_tokenizer_cannot_load(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({}))
@@ -6589,13 +6590,14 @@ async def test_count_answers_503_with_retry_after_while_the_hub_tokenizer_cannot
         await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
     without_call_endpoint: Final = await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=False)
 
-    retry_after: Final = int(raised.value.headers["Retry-After"])
-    assert (raised.value.code, raised.value.type, raised.value.param) == ("503", "token_counting_error", "model")
-    assert raised.value.message == (
-        f"Could not load the Hugging Face tokenizer {_LLAMA_3_HUB_TOKENIZER} to count tokens for this model. "
-        f"LiteLLM retries the load in {retry_after}s"
+    retry_in: Final = re.fullmatch(
+        f"Could not load the Hugging Face tokenizer {re.escape(_LLAMA_3_HUB_TOKENIZER)} to count tokens for this "
+        r"model\. LiteLLM retries the load in (\d+)s",
+        raised.value.message,
     )
-    assert 1 <= retry_after <= HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+    assert (raised.value.code, raised.value.type, raised.value.param) == ("503", "token_counting_error", "model")
+    assert retry_in is not None and 1 <= int(retry_in[1]) <= HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+    assert "Retry-After" not in (raised.value.headers or {})
     assert without_call_endpoint.tokenizer_type == "openai_tokenizer"
 
 

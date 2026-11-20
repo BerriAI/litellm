@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -177,11 +178,12 @@ def test_count_endpoints_answer_503_until_the_llama_3_tokenizer_can_load(
         path, body, params = count_request(_llama_3(scenario, owned.gateway.upstream_url))
         response: Final = owned.gateway.request("POST", path, body, params=params)
     assert response.status_code == 503, response.text
-    retry_after: Final[str] = response.headers["retry-after"]
-    assert retry_after.isdigit() and 1 <= int(retry_after) <= HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, response.headers
+    assert "retry-after" not in response.headers, response.headers
+    retry_in: Final = re.search(r"LiteLLM retries the load in (\d+)s", response.text)
+    assert retry_in is not None and 1 <= int(retry_in[1]) <= HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, response.text
     assert _JSON_OBJECT.validate_json(response.content) == envelope(
         "Could not load the Hugging Face tokenizer Xenova/llama-3-tokenizer to count tokens for this model. "
-        f"LiteLLM retries the load in {retry_after}s"
+        f"LiteLLM retries the load in {retry_in[1]}s"
     ), response.text
 
 

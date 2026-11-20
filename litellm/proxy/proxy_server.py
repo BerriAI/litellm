@@ -16196,7 +16196,6 @@ def _tokenizer_unavailable_error(unavailable: HuggingFaceTokenizerUnavailable) -
         type="token_counting_error",
         param="model",
         code=503,
-        headers={"Retry-After": str(unavailable.retry_in_seconds)},
     )
 
 
