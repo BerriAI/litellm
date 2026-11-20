@@ -270,9 +270,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
         """
         Drop the encrypted reasoning that none of ``target_deployments`` minted or shares an
         encryption boundary with, keeping each item's readable summary. Encrypted reasoning that
-        carries no litellm origin marker is attributed to ``unmarked_origin``: the affinity pin
-        names the deployment its marker decoded to, a fallback hop names the deployment that just
-        failed, and ``None`` drops it, since no deployment is known to have minted it.
+        carries no litellm origin marker is attributed to ``unmarked_origin``: a fallback hop names
+        the deployment that just failed, and ``None`` drops it, since no deployment is known to have
+        minted it. The affinity pin passes ``None``, since one item's marker does not say who minted
+        another.
         """
         target_ids: Final = frozenset(
             str(model_info["id"])
@@ -331,7 +332,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
         """
         If the request ``input`` contains litellm-encoded item IDs, or its Anthropic
         ``messages`` replay a bridge-tagged thinking block, decode the embedded
-        ``model_id`` and pin the request to that deployment. When the origin cannot
+        ``model_id`` and pin the request to that deployment, dropping the encrypted reasoning
+        that carries no marker, since its origin is unknown. When the origin cannot
         serve this turn and no encryption-boundary peer is configured (it is
         unhealthy, the request was routed to a different group by an auto-router tier
         change or model switch, or the marker is removed/unknown/forged), the
@@ -386,7 +388,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
-                self.router, request_input, anthropic_messages, (deployment,), unmarked_origin=model_id
+                self.router, request_input, anthropic_messages, (deployment,), unmarked_origin=None
             )
             return [deployment]
 
@@ -404,7 +406,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
-                self.router, request_input, anthropic_messages, boundary_matches, unmarked_origin=model_id
+                self.router, request_input, anthropic_messages, boundary_matches, unmarked_origin=None
             )
             return boundary_matches
 
