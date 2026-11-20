@@ -1845,6 +1845,7 @@ def test_responses_chat_cap_lowers_the_hold_only_when_every_deployment_bridges_a
 
 _CHAT_BODY: Final[Mapping[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
 _INPUT_BODY: Final[Mapping[str, object]] = {"input": "hi"}
+_CONTENTS_BODY: Final[Mapping[str, object]] = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
 
 
 @pytest.mark.parametrize(
@@ -1885,6 +1886,16 @@ def test_only_a_responses_max_output_tokens_below_the_forwarded_minimum_holds_th
         ("/claude_code_gateway/v1/messages", _CHAT_BODY, {"max_tokens": 1}, True),
         ("/v1beta/interactions", _INPUT_BODY, {"max_tokens": 1}, False),
         ("/v1beta/interactions", _INPUT_BODY, {"max_output_tokens": 1}, False),
+        ("/v1beta/models/priced-model:generateContent", _CONTENTS_BODY, {"max_tokens": 1}, False),
+        ("/models/priced-model:generateContent", _CONTENTS_BODY, {"max_output_tokens": 1}, False),
+        ("/v1beta/models/priced-model:streamGenerateContent", _CONTENTS_BODY, {"max_completion_tokens": 1}, False),
+        ("/gemini/v1beta/models/priced-model:generateContent", _CONTENTS_BODY, {"max_tokens": 1}, False),
+        (
+            "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/models/priced-model:streamGenerateContent",
+            _CONTENTS_BODY,
+            {"inferenceConfig": {"maxTokens": 1}},
+            False,
+        ),
     ],
 )
 def test_routes_outside_the_call_type_map_trust_only_the_cap_they_forward(

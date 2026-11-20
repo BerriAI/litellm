@@ -1663,12 +1663,13 @@ _PASS_THROUGH_OUTPUT_TOKEN_FIELDS: Final = (
 _OutputCapSurface: TypeAlias = Literal["completion", "responses", "messages", "pass_through", "uncapped"]
 _CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
 _INTERACTIONS_ROUTES: Final = frozenset({"/interactions", "/v1beta/interactions"})
+_GENERATE_CONTENT_ROUTE_SUFFIXES: Final = (":generateContent", ":streamGenerateContent")
 
 
 def _output_cap_surface(route: str, request_body: Mapping[str, object]) -> _OutputCapSurface:
     if CURSOR_CHAT_COMPLETIONS_ROUTE in route:
         return "completion" if is_chat_completions_body(request_body) else "responses"
-    if route in _INTERACTIONS_ROUTES:
+    if route in _INTERACTIONS_ROUTES or route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
         return "uncapped"
     call_types: Final = frozenset(get_call_types_for_route(route.removeprefix(_CLAUDE_CODE_GATEWAY_PREFIX)) or ())
     if call_types & _RESPONSES_CALL_TYPES:
