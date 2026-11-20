@@ -6422,7 +6422,11 @@
       "stats": {
         "cacheHitRatio": "Cache Hit Ratio",
         "cacheHits": "Cache Hits",
-        "cachedCompletionTokens": "Cached Completion Tokens"
+        "cachedCompletionTokens": "Cached Completion Tokens",
+        "costAvoided": "Estimated provider cost avoided (USD)",
+        "costAvoidedHelp": "What the provider would have charged for the requests served from the response cache. This is a gross estimate before cache infrastructure costs, and it does not include provider prompt-caching discounts.",
+        "unpricedHits_one": "{{count}} cache hit has no recorded cost and is not counted.",
+        "unpricedHits_other": "{{count}} cache hits have no recorded cost and are not counted."
       },
       "series": {
         "apiRequests": "LLM API requests",

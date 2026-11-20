@@ -4006,6 +4006,7 @@ class SpendLogsMetadata(TypedDict):
     billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
     route_call_type: ReadOnly[NotRequired[str | None]]
     upstream_provider: ReadOnly[NotRequired[str | None]]
+    saved_cache_cost: ReadOnly[NotRequired[float]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     is_silent_experiment: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None

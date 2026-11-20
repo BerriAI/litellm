@@ -32,11 +32,14 @@ RUN: Final = uuid.uuid4()
 INFERENCE_KEY: Final = f"ca-inference-{RUN}"
 INFO_ONLY_KEY: Final = f"ca-info-only-{RUN}"
 OUTSIDER_KEY: Final = f"ca-outsider-{RUN}"
+CACHE_KEY: Final = f"ca-cache-{RUN}"
 INFERENCE_ALIAS: Final = f"alias-inference-{RUN}"
 INFO_ONLY_ALIAS: Final = f"alias-info-only-{RUN}"
 OUTSIDER_ALIAS: Final = f"alias-outsider-{RUN}"
+CACHE_ALIAS: Final = f"alias-cache-{RUN}"
 INFERENCE_MODEL: Final = f"gpt-5.4-mini-{RUN}"
 INFO_ONLY_MODEL: Final = f"ghost-model-{RUN}"
+CACHED_MODEL: Final = f"claude-haiku-4-5-{RUN}"
 NO_FILTER: Final = "[]"
 OWNER: Final = f"owner-{RUN}"
 OWNER_TEAM: Final = f"team-{RUN}"
@@ -60,21 +63,24 @@ async def _spend_log(
     error_code: str = "",
     user: str = "",
     team_id: str = "",
+    cache_hit: bool = False,
+    stored_metadata: dict | None = None,
 ) -> None:
     metadata: Final = {"error_information": {"error_code": error_code, "error_class": "ProxyException"}}
     await db.execute_raw(
         'INSERT INTO "LiteLLM_SpendLogs" ("request_id", "call_type", "api_key", "startTime", "endTime", "model", '
-        '"status", "metadata", "user", "team_id") '
-        "VALUES ($1, $2, $3, $4::timestamp, $4::timestamp, $5, $6, $7::jsonb, $8, $9)",
+        '"status", "metadata", "user", "team_id", "cache_hit") '
+        "VALUES ($1, $2, $3, $4::timestamp, $4::timestamp, $5, $6, $7::jsonb, $8, $9, $10)",
         str(uuid.uuid4()),
         call_type,
         api_key,
         AT_NOON,
         model,
         status,
-        json.dumps(metadata if status == "failure" else {}),
+        json.dumps(stored_metadata if stored_metadata is not None else metadata if status == "failure" else {}),
         user,
         team_id,
+        str(cache_hit),
     )
 
 
@@ -84,6 +90,7 @@ async def seeded(db):
         (INFERENCE_KEY, INFERENCE_ALIAS),
         (INFO_ONLY_KEY, INFO_ONLY_ALIAS),
         (OUTSIDER_KEY, OUTSIDER_ALIAS),
+        (CACHE_KEY, CACHE_ALIAS),
     ):
         await db.execute_raw(
             'INSERT INTO "LiteLLM_VerificationToken" ("token", "key_alias") VALUES ($1, $2)', token, alias
@@ -97,15 +104,42 @@ async def seeded(db):
     await _spend_log(db, INFO_ONLY_KEY, "/v1/models", "failure", model=INFO_ONLY_MODEL, error_code="401", user=OUTSIDER)
     await _spend_log(db, INFO_ONLY_KEY, "/key/info", "success", user=OUTSIDER)
     await _spend_log(db, OUTSIDER_KEY, "acompletion", "success", model=INFERENCE_MODEL, user=OUTSIDER)
+    for model, cache_hit, stored in (
+        (CACHED_MODEL, False, {"saved_cache_cost": 0.0}),
+        (CACHED_MODEL, True, {"saved_cache_cost": 0.02}),
+        (CACHED_MODEL, True, {"saved_cache_cost": 0.05}),
+        (CACHED_MODEL, True, {}),
+        (CACHED_MODEL, True, {"saved_cache_cost": None}),
+        (INFERENCE_MODEL, True, {"saved_cache_cost": 1.0}),
+    ):
+        await _spend_log(
+            db, CACHE_KEY, "acompletion", "success", model=model, cache_hit=cache_hit, stored_metadata=stored
+        )
     yield
-    keys: Final = [INFERENCE_KEY, INFO_ONLY_KEY, OUTSIDER_KEY]
+    keys: Final = [INFERENCE_KEY, INFO_ONLY_KEY, OUTSIDER_KEY, CACHE_KEY]
     await db.execute_raw('DELETE FROM "LiteLLM_SpendLogs" WHERE "api_key" = ANY($1::text[])', keys)
     await db.execute_raw('DELETE FROM "LiteLLM_VerificationToken" WHERE "token" = ANY($1::text[])', keys)
 
 
-async def _groups(db, key_aliases: list[str], scope: tuple = GRANT_ALL) -> dict[str, dict]:
-    rows: Final = await db.query_raw(GROUPS_SQL, DAY, DAY, json.dumps(key_aliases), NO_FILTER, INFO_ROUTES_JSON, *scope)
+async def _groups(
+    db, key_aliases: list[str], scope: tuple = GRANT_ALL, models: list[str] | None = None
+) -> dict[str, dict]:
+    rows: Final = await db.query_raw(
+        GROUPS_SQL, DAY, DAY, json.dumps(key_aliases), json.dumps(models or []), INFO_ROUTES_JSON, *scope
+    )
     return {row["call_type"]: row for row in rows}
+
+
+async def test_saved_cache_cost_adds_up_priced_cache_hits_and_counts_the_rest_as_unpriced(db):
+    group: Final = (await _groups(db, [CACHE_ALIAS], models=[CACHED_MODEL]))["acompletion"]
+    assert group["cache_hits"] == 4
+    assert group["saved_cache_cost"] == pytest.approx(0.07)
+    assert group["unpriced_cache_hits"] == 2
+
+
+async def test_saved_cache_cost_follows_the_model_filter(db):
+    every_model: Final = (await _groups(db, [CACHE_ALIAS]))["acompletion"]
+    assert every_model["saved_cache_cost"] == pytest.approx(1.07)
 
 
 async def test_groups_drop_info_routes_and_keep_unknown_for_rows_without_an_endpoint(db):

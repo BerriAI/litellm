@@ -218,6 +218,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "used_client_oauth_token",
         "claude_subscription_usage",
         "upstream_provider",
+        "saved_cache_cost",
         KUBERNETES_POD_ROUTING_KEY,
         "litellm_roi_estimator",
         "is_silent_experiment",
@@ -242,6 +243,17 @@ class _UpstreamProviderMetadata(TypedDict, total=False):
 
 class _RouteCallTypeMetadata(TypedDict, total=False):
     route_call_type: ReadOnly[str]
+
+
+class _SavedCacheCostMetadata(TypedDict, total=False):
+    saved_cache_cost: ReadOnly[float]
+
+
+def _cache_hit_saved_cost(standard_logging_payload: Mapping[str, object] | None, cache_hit: bool) -> float | None:
+    saved_cost: Final = (
+        standard_logging_payload.get("saved_cache_cost") if cache_hit and standard_logging_payload is not None else None
+    )
+    return float(saved_cost) if isinstance(saved_cost, (int, float)) and not isinstance(saved_cost, bool) else None
 
 
 def _adapter_route_call_type(call_type: object, metadata: Mapping[str, object]) -> str | None:
@@ -319,12 +331,16 @@ def _get_spend_logs_metadata(
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
     is_silent_experiment: bool = False,
     route_call_type: str | None = None,
+    saved_cache_cost: float | None = None,
 ) -> SpendLogsMetadata:
     upstream_provider_metadata: Final[_UpstreamProviderMetadata] = (
         {"upstream_provider": upstream_provider} if upstream_provider is not None else {}
     )
     route_call_type_metadata: Final[_RouteCallTypeMetadata] = (
         {"route_call_type": route_call_type} if route_call_type is not None else {}
+    )
+    saved_cache_cost_metadata: Final[_SavedCacheCostMetadata] = (
+        {"saved_cache_cost": saved_cache_cost} if saved_cache_cost is not None else {}
     )
     if metadata is None:
         return SpendLogsMetadata(
@@ -360,6 +376,7 @@ def _get_spend_logs_metadata(
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
             **upstream_provider_metadata,
+            **saved_cache_cost_metadata,
             attempted_retries=None,
             max_retries=None,
             attempted_fallbacks=None,
@@ -390,6 +407,7 @@ def _get_spend_logs_metadata(
         **_stored_customer_identity(customer_metadata),
         **upstream_provider_metadata,
         **route_call_type_metadata,
+        **saved_cache_cost_metadata,
         autorouter_savings=autorouter_savings,
         autorouter_savings_estimate=autorouter_savings_estimate,
         autorouter_baseline_observation=autorouter_baseline_observation,
@@ -1019,6 +1037,7 @@ def get_logging_payload(
         ),
         kubernetes_pod_routing=kubernetes_pod_routing,
         route_call_type=route_call_type,
+        saved_cache_cost=_cache_hit_saved_cost(standard_logging_payload, cache_hit=cache_hit is True),
         azure_spillover=azure_spillover(
             response_headers=kwargs.get("response_headers")
             if isinstance(kwargs.get("response_headers"), Mapping)
