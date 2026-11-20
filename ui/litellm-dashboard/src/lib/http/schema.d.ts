@@ -33287,7 +33287,7 @@ export interface components {
         /** ImageProviderSpecificFields */
         ImageProviderSpecificFields: {
             /** Thought Signature */
-            thought_signature: string;
+            thought_signature?: string;
         } & {
             [key: string]: unknown;
         };

@@ -2927,10 +2927,10 @@ def test_assistant_image_replays_its_own_thought_signature(
                 "role": "assistant",
                 "content": "Here is your cat.",
                 "images": [_generated_image("Y2F0")],
-                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+                "provider_specific_fields": {"thought_signatures": ["sig-text"]},
             },
-            [("Here is your cat.", None), ("Y2F0", "sig-cat")],
-            id="unsigned-text-signed-image",
+            [("Here is your cat.", "sig-text"), ("Y2F0", None)],
+            id="streamed-history-signature-stays-on-text",
         ),
         pytest.param(
             {
@@ -2941,6 +2941,16 @@ def test_assistant_image_replays_its_own_thought_signature(
             },
             [("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final")],
             id="image-only-right-aligned",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here are both versions.",
+                "images": [_generated_image("ZHJhZnQ="), _generated_image("ZmluYWw=")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-final"]},
+            },
+            [("Here are both versions.", "sig-text"), ("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final")],
+            id="text-signature-not-given-to-draft",
         ),
         pytest.param(
             {
