@@ -38,14 +38,21 @@ def _proxy_config(directory: Path) -> Path:
     return config
 
 
-def _jwks_respond(private_key: rsa.RSAPrivateKey, failing: threading.Event) -> Callable[[Request], Reply]:
+_DISCOVERY_TARGET: Final = "/.well-known/openid-configuration"
+
+
+def _idp_respond(
+    private_key: rsa.RSAPrivateKey, failing: threading.Event, failing_target: str, failure_status: int
+) -> Callable[[Request], Reply]:
     public_jwk: Final = _JWK.validate_json(RSAAlgorithm.to_jwk(private_key.public_key()))
     keys: Final = json.dumps({"keys": [{**public_jwk, "kid": _KEY_ID, "use": "sig", "alg": "RS256"}]}).encode()
 
     def respond(request: Request) -> Reply:
-        assert request.target == "/jwks"
-        if failing.is_set():
-            return Reply(status=500, body=b'{"error":"internal"}')
+        assert request.target in ("/jwks", _DISCOVERY_TARGET)
+        if failing.is_set() and request.target == failing_target:
+            return Reply(status=failure_status, body=b'{"error":"internal"}')
+        if request.target == _DISCOVERY_TARGET:
+            return Reply(body=json.dumps({"jwks_uri": f"http://{request.headers['host']}/jwks"}).encode())
         return Reply(body=keys)
 
     return respond
@@ -63,7 +70,7 @@ def test_jwks_5xx_after_expiry_serves_stale_keys_and_backs_off(tmp_path: Path) -
     token: Final = _admin_jwt(private_key)
     with (
         gateway_from_environment() as base,
-        wire_server(_jwks_respond(private_key, failing)) as jwks,
+        wire_server(_idp_respond(private_key, failing, "/jwks", 500)) as jwks,
         owned_proxy(
             base, tmp_path / "proxy", {"JWT_PUBLIC_KEY_URL": f"{jwks.url}/jwks"}, config=_proxy_config(tmp_path)
         ) as gateway,
@@ -87,3 +94,64 @@ def test_jwks_5xx_after_expiry_serves_stale_keys_and_backs_off(tmp_path: Path) -
         again, fetched_again = models_then_fetches()
         assert again.status_code == 200, again.text
         assert fetched_again == refetched
+
+
+def _expired_reply_after_idp_fails(
+    tmp_path: Path, key_path: str, failing_target: str, failure_status: int
+) -> tuple[httpx.Response, httpx.Response]:
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    failing: Final = threading.Event()
+    token: Final = _admin_jwt(private_key)
+    with (
+        gateway_from_environment() as base,
+        wire_server(_idp_respond(private_key, failing, failing_target, failure_status)) as idp,
+        owned_proxy(
+            base, tmp_path / "proxy", {"JWT_PUBLIC_KEY_URL": f"{idp.url}{key_path}"}, config=_proxy_config(tmp_path)
+        ) as gateway,
+    ):
+
+        def models_then_fetches() -> tuple[httpx.Response, int]:
+            response: Final = gateway.request("GET", "/v1/models", key=token)
+            return response, idp.received.qsize()
+
+        warm, fetched = models_then_fetches()
+        failing.set()
+        expired, _ = eventually(
+            models_then_fetches, lambda seen: seen[1] > fetched, seconds=_PUBLIC_KEY_TTL_SECONDS * 15
+        )
+        return warm, expired
+
+
+def test_oidc_discovery_5xx_after_expiry_serves_stale_keys(tmp_path: Path) -> None:
+    warm, expired = _expired_reply_after_idp_fails(tmp_path, _DISCOVERY_TARGET, _DISCOVERY_TARGET, 503)
+
+    assert warm.status_code == 200, warm.text
+    assert expired.status_code == 200, expired.text
+
+
+def test_jwks_404_after_expiry_still_denies_with_401(tmp_path: Path) -> None:
+    warm, expired = _expired_reply_after_idp_fails(tmp_path, "/jwks", "/jwks", 404)
+
+    assert warm.status_code == 200, warm.text
+    assert expired.status_code == 401, expired.text
+    assert "returned status 404" in expired.text
+
+
+def test_jwks_5xx_with_nothing_cached_answers_503_and_backs_off(tmp_path: Path) -> None:
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    failing: Final = threading.Event()
+    failing.set()
+    token: Final = _admin_jwt(private_key)
+    with (
+        gateway_from_environment() as base,
+        wire_server(_idp_respond(private_key, failing, "/jwks", 500)) as jwks,
+        owned_proxy(
+            base, tmp_path / "proxy", {"JWT_PUBLIC_KEY_URL": f"{jwks.url}/jwks"}, config=_proxy_config(tmp_path)
+        ) as gateway,
+    ):
+        first: Final = gateway.request("GET", "/v1/models", key=token)
+        second: Final = gateway.request("GET", "/v1/models", key=token)
+
+        assert (first.status_code, second.status_code) == (503, 503), (first.text, second.text)
+        assert first.json()["error"]["type"] == "auth_provider_unavailable"
+        assert jwks.received.qsize() == 1
