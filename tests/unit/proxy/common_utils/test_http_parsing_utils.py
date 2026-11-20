@@ -23,6 +23,7 @@ import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.proxy._types import ProxyException
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
     _safe_get_request_parsed_body,
@@ -1810,3 +1811,48 @@ def test_read_request_path_params_returns_mappings_and_drops_non_mapping_metadat
 
 def test_read_request_path_params_without_request_is_none() -> None:
     assert read_request_path_params(None) is None
+
+
+def _get_request(path: str, query_string: str) -> Request:
+    request: Final = _starlette_request(b"", "application/json", path)
+    request.scope["method"] = "GET"
+    request.scope["query_string"] = query_string.encode()
+    return request
+
+
+def test_query_string_does_not_smuggle_banned_body_params() -> None:
+    """A browser OAuth authorize URL carries client_id in the query string, not in a body."""
+    request: Final = _get_request("/MS_Office/upstream/authorize", "response_type=code&client_id=test-client")
+
+    request_data: Final = populate_request_with_path_params({}, request)
+
+    assert request_data == {"response_type": "code"}
+    assert (
+        is_request_body_safe(
+            request_body=request_data,
+            general_settings={"allow_client_side_credentials": False},
+            llm_router=None,
+            model="",
+        )
+        is True
+    )
+
+
+def test_query_string_keeps_the_params_rbac_reads() -> None:
+    request: Final = _get_request("/v1/models", "model=gpt-4o&limit=5")
+
+    assert populate_request_with_path_params({}, request) == {"model": "gpt-4o", "limit": "5"}
+
+
+def test_banned_params_are_still_refused_in_the_body() -> None:
+    request: Final = _get_request("/v1/chat/completions", "api_base=http://attacker.example")
+
+    request_data: Final = populate_request_with_path_params({"api_base": "http://attacker.example"}, request)
+
+    with pytest.raises(ValueError, match="api_base is not allowed in request body"):
+        is_request_body_safe(
+            request_body=request_data,
+            general_settings={"allow_client_side_credentials": False},
+            llm_router=None,
+            model="gpt-4o",
+        )

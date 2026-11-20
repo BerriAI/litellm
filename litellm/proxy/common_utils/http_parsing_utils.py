@@ -1,6 +1,7 @@
 import json
 import re
 from collections.abc import Collection, Mapping
+from functools import lru_cache
 from types import MappingProxyType, UnionType
 from typing import Annotated, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
@@ -837,6 +838,18 @@ def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     return [tag for tag in combined_tags if isinstance(tag, str)]
 
 
+@lru_cache(maxsize=1)
+def _banned_body_params() -> frozenset[str]:
+    """Names ``is_request_body_safe`` refuses in a request *body*.
+
+    Imported on first use: ``auth_utils`` imports this module at module level, so
+    importing it up here would close the cycle.
+    """
+    from litellm.proxy.auth.auth_utils import _BANNED_REQUEST_BODY_PARAMS  # noqa: PLC0415
+
+    return frozenset(_BANNED_REQUEST_BODY_PARAMS)
+
+
 def populate_request_with_path_params(request_data: dict, request: Request) -> dict:
     """
     Copy FastAPI path params and query params into the request payload so downstream checks
@@ -855,7 +868,16 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
     # Add query parameters to request_data (for GET requests, etc.)
     query_params: Final = safe_get_request_query_params(request)
     if query_params:
+        # A query string is not a body. The names the body gate refuses (`api_base`,
+        # `client_id`, the observability credentials, ...) are banned because the body is
+        # spread into the provider call; a query value never is, and nothing downstream
+        # reads them for RBAC either. Copying them in made the gate reject the request
+        # instead - a browser OAuth authorize URL carries `?client_id=` - and left the
+        # name sitting in the dict the call path reads.
+        body_banned: Final = _banned_body_params()
         for key, value in query_params.items():
+            if key in body_banned:
+                continue
             # Don't overwrite existing values from request body
             request_data.setdefault(key, value)
 
