@@ -2267,6 +2267,24 @@ async def test_finished_connects_do_not_count_toward_the_pending_code_cap(
 
 
 @pytest.mark.asyncio
+async def test_redeeming_codes_after_their_window_counter_was_lost_keeps_the_cap(
+    client: TestClient, salted: None, window_clock: MagicMock
+) -> None:
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
+
+    shared: Final = _SharedStore()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        codes: Final = [_issued_code("busy-user") for _ in range(_AUTH_CODES_PER_USER_MAX)]
+        shared.counts.clear()
+        redeemed: Final = [(await _redeem(code, _CredentialTable())).status_code for code in codes]
+        pending: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
+        refused: Final = _authorize_as("busy-user")
+    assert redeemed == [200] * _AUTH_CODES_PER_USER_MAX
+    assert pending == [302] * _AUTH_CODES_PER_USER_MAX
+    assert refused.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_redeeming_a_code_after_its_window_ended_leaves_no_counter_behind(
     client: TestClient, salted: None, window_clock: MagicMock
 ) -> None:

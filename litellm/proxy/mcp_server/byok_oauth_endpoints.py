@@ -207,14 +207,16 @@ async def _reserve_auth_code_slot(
 
 @with_service_target(_AUTH_CODES_TARGET)
 async def _release_auth_code_slot(user_id: str, issued_at: float) -> None:
-    """Give one slot back to the window ``issued_at`` falls in, while that window is still the current one. Its
-    counter's TTL starts at the window's first code, so the counter outlives the window and a decrement never
-    creates it."""
+    """Give one slot back to the window ``issued_at`` falls in, while that window is still the current one. A
+    decrement that finds the counter already gone (evicted, flushed, or expired on a worker whose clock runs behind)
+    is undone, so a lost counter never goes negative and lifts the cap."""
     shared: Final = _shared_code_store()
     if shared is None or _auth_code_window(issued_at) != _auth_code_window(time.time()):
         return
+    key: Final = _auth_code_window_key(user_id, issued_at)
     try:
-        await shared.async_increment(_auth_code_window_key(user_id, issued_at), -1, ttl=_AUTH_CODE_TTL_SECONDS)
+        if await shared.async_increment(key, -1, ttl=_AUTH_CODE_TTL_SECONDS) < 0:
+            await shared.async_increment(key, 1, ttl=_AUTH_CODE_TTL_SECONDS)
     except Exception as e:  # noqa: BLE001  # the window expires with its TTL, so a missed release only delays one slot
         verbose_proxy_logger.warning("byok: pending-code slot not released: %s", e)
 
