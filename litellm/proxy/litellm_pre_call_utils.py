@@ -471,14 +471,27 @@ else:
     PolicyMatchContext = Any
 
 
-def parse_cache_control(cache_control: str) -> dict[str, str | bool]:
-    cache_dict: Final[dict[str, str | bool]] = {}
-    for directive in cache_control.split(","):
-        key, separator, value = directive.strip().partition("=")
-        if key:
-            cache_dict[key.lower()] = value.strip() if separator else True
+def parse_cache_control(cache_control: str) -> Mapping[str, str | bool]:
+    directives: Final = (directive.partition("=") for directive in cache_control.split(","))
+    return MappingProxyType(
+        {
+            key.strip().lower(): value.strip() if separator else True
+            for key, separator, value in directives
+            if key.strip()
+        }
+    )
 
-    return cache_dict
+
+def _header_cache_controls(
+    cache_dict: Mapping[str, str | bool], allowed_cache_controls: Sequence[object] | None
+) -> Mapping[str, bool]:
+    return MappingProxyType(
+        {
+            directive: True
+            for directive in ("no-cache", "no-store")
+            if cache_dict.get(directive) and (not allowed_cache_controls or directive in allowed_cache_controls)
+        }
+    )
 
 
 LITELLM_METADATA_ROUTES: Final = (
@@ -3101,17 +3114,14 @@ async def add_litellm_data_to_request(
     data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
-    # Starlette lower-cases header names, so this lookup has to be lower-case too.
     cache_control_header: Final[str | None] = _headers.get("cache-control")
     if cache_control_header:
         cache_dict: Final = parse_cache_control(cache_control_header)
         if cache_dict.get("s-maxage") is not None:
             data["ttl"] = cache_dict["s-maxage"]
-        header_cache_controls: Final[dict[str, bool]] = {
-            directive: True for directive in ("no-cache", "no-store") if cache_dict.get(directive)
-        }
+        header_cache_controls: Final = _header_cache_controls(cache_dict, user_api_key_dict.allowed_cache_controls)
         if header_cache_controls:
-            request_cache: Final = data["cache"] if "cache" in data else None
+            request_cache: Final = data.get("cache")
             data["cache"] = {  # rebind-ok: data is an out-param
                 **header_cache_controls,
                 **(request_cache if isinstance(request_cache, dict) else {}),

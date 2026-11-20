@@ -8588,48 +8588,69 @@ async def test_key_cache_metadata_only_keeps_request_controls_the_key_allows(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "cache_control_header, request_cache, expected_cache",
+    "cache_control_header, request_cache, allowed_cache_controls, expected_cache",
     [
-        pytest.param("no-cache", None, {"no-cache": True}, id="no-cache-skips-the-cache-read"),
-        pytest.param("No-Cache", None, {"no-cache": True}, id="directive-names-in-any-case"),
-        pytest.param("max-age=0, no-cache", None, {"no-cache": True}, id="directives-without-a-space-after-the-comma"),
-        pytest.param("NO-STORE", None, {"no-store": True}, id="no-store-skips-the-cache-write"),
-        pytest.param("no-store", {"no-cache": False}, {"no-cache": False, "no-store": True}, id="body-controls-win"),
+        pytest.param("no-cache", None, [], {"no-cache": True}, id="no-cache-skips-the-cache-read"),
+        pytest.param("No-Cache", None, [], {"no-cache": True}, id="directive-names-in-any-case"),
+        pytest.param(
+            "max-age=0,no-cache", None, [], {"no-cache": True}, id="directives-without-a-space-after-the-comma"
+        ),
+        pytest.param("NO-STORE", None, [], {"no-store": True}, id="no-store-skips-the-cache-write"),
+        pytest.param("no-store", {"no-cache": False}, [], {"no-cache": False, "no-store": True}, id="body-controls-win"),
+        pytest.param(
+            "no-cache, no-store", None, ["no-store"], {"no-store": True}, id="key-allowed-directives-are-kept"
+        ),
+        pytest.param("no-cache", None, ["ttl"], None, id="key-disallowed-directives-are-ignored-not-rejected"),
     ],
 )
 async def test_cache_control_header_reaches_the_request_cache(
-    cache_control_header: str, request_cache: dict[str, object] | None, expected_cache: dict[str, object]
+    cache_control_header: str,
+    request_cache: dict[str, object] | None,
+    allowed_cache_controls: list[str],
+    expected_cache: dict[str, object] | None,
 ):
     """A client that sends the standard header gets the same behaviour as the body `cache` dict."""
-    request: Final = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/chat/completions",
-            "scheme": "http",
-            "server": ("localhost", 4000),
-            "query_string": b"",
-            "headers": [(b"cache-control", cache_control_header.encode())],
-        }
+    updated: Final = await _add_data_with_cache_control_header(
+        cache_control_header,
+        {"ttl": 300, **({} if request_cache is None else {"cache": request_cache})},
+        UserAPIKeyAuth(api_key="hashed-key", allowed_cache_controls=allowed_cache_controls),
     )
 
-    updated: Final = await add_litellm_data_to_request(
-        data={
-            "model": "gpt-4.1-mini",
-            "messages": [{"role": "user", "content": "hello"}],
-            "ttl": 300,
-            **({} if request_cache is None else {"cache": request_cache}),
-        },
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+    assert updated.get("cache") == expected_cache
+    assert updated["ttl"] == 300
+
+
+@pytest.mark.asyncio
+async def test_cache_control_header_s_maxage_sets_the_cache_entry_ttl():
+    updated: Final = await _add_data_with_cache_control_header(
+        "S-MaxAge=60,no-store", {"ttl": 300}, UserAPIKeyAuth(api_key="hashed-key")
+    )
+
+    assert float(updated["ttl"]) == 60
+    assert updated["cache"] == {"no-store": True}
+
+
+async def _add_data_with_cache_control_header(
+    cache_control_header: str, request_fields: dict[str, object], key: UserAPIKeyAuth
+) -> dict:
+    return await add_litellm_data_to_request(
+        data={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}], **request_fields},
+        request=Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/chat/completions",
+                "scheme": "http",
+                "server": ("localhost", 4000),
+                "query_string": b"",
+                "headers": [(b"cache-control", cache_control_header.encode())],
+            }
+        ),
+        user_api_key_dict=key,
         proxy_config=MagicMock(),
         general_settings={},
         version="test-version",
     )
-
-    assert updated["cache"] == expected_cache
-    # A header without s-maxage must not clear the body ttl.
-    assert updated["ttl"] == 300
 
 
 class TestPromotedTraceControlFields:
