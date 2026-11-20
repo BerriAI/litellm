@@ -181,6 +181,24 @@ OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
+SENT_SERVICE_TIERS: Final = frozenset({"priority", "flex", "standard"})
+PROVIDER_DEFAULT_SERVICE_TIERS: Final = frozenset({"auto", "default", "scale", "unspecified"})
+VERTEX_SHARED_REQUEST_TIERS: Final = frozenset({"priority", "flex"})
+
+
+def _unsupported_service_tier(service_tier: str) -> UnsupportedParamsError:
+    known_tiers: Final = sorted(SENT_SERVICE_TIERS | PROVIDER_DEFAULT_SERVICE_TIERS)
+    return UnsupportedParamsError(
+        message=(
+            f"Invalid `service_tier`: {service_tier!r}. "
+            f"Must be one of: {', '.join(repr(tier) for tier in known_tiers)}. "
+            "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+            "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+        ),
+        status_code=400,
+    )
+
+
 def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
     return UnsupportedParamsError(
         message=(
@@ -538,11 +556,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> None:
         return cls._drop_search_tools_mixed_with_functions(optional_params)
 
-    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
+    def _map_service_tier_param(self, value: str, optional_params: dict, drop_params: bool) -> None:
+        from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+
         normalized: Final = value.lower().removeprefix("service_tier_")
-        if normalized in ("auto", "default", "scale", "unspecified"):
+        if normalized in SENT_SERVICE_TIERS:
+            optional_params["service_tier"] = normalized
             return
-        optional_params["service_tier"] = normalized
+        if normalized in PROVIDER_DEFAULT_SERVICE_TIERS:
+            return
+        if litellm.drop_params is True or normalize_drop_params(drop_params) is True:
+            return
+        raise _unsupported_service_tier(value)
 
     def _transform_computer_use_config(self, computer_use_config: dict) -> dict:
         """
@@ -1378,7 +1403,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 _tools = self._map_web_search_options(value)
                 optional_params = self._add_tools_to_optional_params(optional_params, [_tools])
             elif param == "service_tier" and isinstance(value, str):
-                self._map_service_tier_param(value, optional_params)
+                self._map_service_tier_param(value, optional_params, drop_params)
             elif param == "include_server_side_tool_invocations" and value is True:
                 optional_params["include_server_side_tool_invocations"] = True
         if litellm.vertex_ai_safety_settings is not None:
@@ -2818,18 +2843,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
 
-        # Vertex AI: route service_tier via headers for actual tier enforcement.
-        # See: https://github.com/BerriAI/litellm/issues/34914
         optional_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], optional_params)  # cast-ok: bare dict
         litellm_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_params)  # cast-ok: bare dict
         service_tier: Final = optional_fields.get("service_tier")
-        provider: Final = litellm_fields.get("custom_llm_provider")
-        if isinstance(service_tier, str) and service_tier in ("priority", "flex") and provider != "gemini":
+        is_vertex: Final = litellm_fields.get("custom_llm_provider") != litellm.LlmProviders.GEMINI
+        if is_vertex and isinstance(service_tier, str) and service_tier in VERTEX_SHARED_REQUEST_TIERS:
             default_headers["X-Vertex-AI-LLM-Request-Type"] = "shared"
             default_headers["X-Vertex-AI-LLM-Shared-Request-Type"] = service_tier
 
         if headers is not None:
-            default_headers.update(headers)
+            default_headers.update(cast(Mapping[str, str], headers))  # cast-ok: bare dict
 
         return default_headers
 
