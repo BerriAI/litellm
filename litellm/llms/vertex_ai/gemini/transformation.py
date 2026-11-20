@@ -757,35 +757,37 @@ def _right_aligned(signatures: Sequence[str], count: int) -> tuple[str | None, .
     return (None,) * (count - claimed) + tuple(signatures[len(signatures) - claimed :])
 
 
-def _signed_assistant_images(
-    images: object,
-    message_signatures: Sequence[object],
-    tool_call_signatures: frozenset[str],
-) -> tuple[tuple[GeminiMediaSource, str | None], ...]:
+def _sourced_assistant_images(images: object) -> tuple[tuple[GeminiMediaSource, str | None], ...]:
     items: Final = tuple(filter(None, map(as_str_mapping, as_object_list(images) or ())))
-    sourced: Final = tuple(
+    return tuple(
         (source, _own_image_thought_signature(item))
         for item in items
         if (source := _assistant_image_source(item)) is not None
     )
-    if any(signature for _, signature in sourced):
-        return sourced
-    pool: Final = tuple(
-        signature
-        for signature in message_signatures
-        if isinstance(signature, str) and signature not in tool_call_signatures
-    )
-    return tuple(zip((source for source, _ in sourced), _right_aligned(pool, len(sourced)), strict=True))
 
 
 def _assistant_text_thought_signature(
     message_signatures: Sequence[object],
-    signed_images: Sequence[tuple[GeminiMediaSource, str | None]],
+    own_image_signatures: frozenset[str],
     tool_call_signatures: frozenset[str],
 ) -> str | None:
-    claimed: Final = tuple(signature for _, signature in signed_images if signature is not None)
-    first: Final = next((signature for signature in message_signatures if signature not in claimed), None)
+    first: Final = next((signature for signature in message_signatures if signature not in own_image_signatures), None)
     return first if isinstance(first, str) and first not in tool_call_signatures else None
+
+
+def _signed_assistant_images(
+    sourced_images: tuple[tuple[GeminiMediaSource, str | None], ...],
+    message_signatures: Sequence[object],
+    claimed_signatures: frozenset[str],
+) -> tuple[tuple[GeminiMediaSource, str | None], ...]:
+    if any(signature for _, signature in sourced_images):
+        return sourced_images
+    pool: Final = tuple(
+        signature
+        for signature in message_signatures
+        if isinstance(signature, str) and signature not in claimed_signatures
+    )
+    return tuple(zip((source for source, _ in sourced_images), _right_aligned(pool, len(sourced_images)), strict=True))
 
 
 def _assistant_image_part(
@@ -807,17 +809,26 @@ def _signed_text_and_image_parts(
 ) -> tuple[PartType, ...]:
     tool_call_signatures: Final = _collect_tool_call_thought_signatures(assistant_msg)
     message_signatures: Final = _message_thought_signatures(assistant_msg)
+    sourced_images: Final = _sourced_assistant_images(assistant_msg.get("images"))
+    content: Final = assistant_msg.get("content")
+    text_signature: Final = (
+        _assistant_text_thought_signature(
+            message_signatures,
+            frozenset(signature for _, signature in sourced_images if signature is not None),
+            tool_call_signatures,
+        )
+        if isinstance(content, str)
+        else None
+    )
     signed_images: Final = _signed_assistant_images(
-        assistant_msg.get("images"), message_signatures, tool_call_signatures
+        sourced_images, message_signatures, tool_call_signatures | frozenset(filter(None, (text_signature,)))
     )
     image_parts: Final = tuple(
         _assistant_image_part(source, signature, model, vertex_project, vertex_credentials)
         for source, signature in signed_images
     )
-    content: Final = assistant_msg.get("content")
     if not isinstance(content, str):
         return image_parts
-    text_signature: Final = _assistant_text_thought_signature(message_signatures, signed_images, tool_call_signatures)
     text_part: Final = (
         PartType(text=content) if text_signature is None else PartType(text=content, thoughtSignature=text_signature)
     )

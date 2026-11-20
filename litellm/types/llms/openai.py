@@ -290,7 +290,7 @@ class ImageURLObject(TypedDict, total=False):
     detail: str | None
 
 
-class ImageProviderSpecificFields(TypedDict):
+class ImageProviderSpecificFields(TypedDict, total=False):
     thought_signature: ReadOnly[str]
 
 
