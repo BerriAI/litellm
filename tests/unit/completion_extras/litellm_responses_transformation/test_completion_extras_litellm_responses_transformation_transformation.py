@@ -8225,6 +8225,50 @@ def test_stream_end_releases_standalone_commentary_as_content(end_event: Mapping
     assert _streamed_texts(_STANDALONE_COMMENTARY, end_event=end_event) == ("Only a plan.", "Thinking it over.")
 
 
+def test_stream_empty_commentary_deltas_neither_drop_text_nor_add_separators() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    items: Final = (
+        _summary_item("rs_plan", "Plan."),
+        _commentary_item("msg_pre", "Checking."),
+        _answer_item("msg_final", "Hello!"),
+    )
+    commentary_delta: Final = {"type": "response.output_text.delta", "output_index": 1, "content_index": 0}
+    answer_delta: Final = {"type": "response.output_text.delta", "output_index": 2, "content_index": 0}
+    events: Final = (
+        {"type": "response.output_item.added", "output_index": 0, "item": _added_stream_item(items[0])},
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_text.delta", "output_index": 0, "summary_index": 0, "delta": "Plan."},
+        {"type": "response.output_item.done", "output_index": 0, "item": dict(items[0])},
+        {"type": "response.output_item.added", "output_index": 1, "item": _added_stream_item(items[1])},
+        {**commentary_delta, "delta": ""},
+        {**commentary_delta, "delta": "Chec"},
+        {**commentary_delta, "delta": ""},
+        {**commentary_delta, "delta": "king."},
+        {"type": "response.output_item.done", "output_index": 1, "item": dict(items[1])},
+        {"type": "response.output_item.added", "output_index": 2, "item": _added_stream_item(items[2])},
+        {**answer_delta, "delta": "Hel"},
+        {**answer_delta, "delta": "lo!"},
+        {"type": "response.output_item.done", "output_index": 2, "item": dict(items[2])},
+        _completed_event(items),
+    )
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter(()), sync_stream=True)
+
+    deltas: Final = tuple(
+        chunk.choices[0].delta for chunk in (iterator.chunk_parser(dict(event)) for event in events) if chunk.choices
+    )
+    folded: Final = _folded_message(items)
+
+    streamed: Final = (
+        "".join(delta.content or "" for delta in deltas),
+        "".join(getattr(delta, "reasoning_content", None) or "" for delta in deltas),
+    )
+    assert streamed == ("Hello!", "Plan. Checking.")
+    assert (folded.content, getattr(folded, "reasoning_content", None)) == streamed
+
+
 def test_convert_response_output_moves_commentary_from_raw_dict_items() -> None:
     choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # the fold is the unit under test
         (dict(_commentary_item("msg_pre", "Checking.")), dict(_answer_item("msg_final", "Hello!"))),
