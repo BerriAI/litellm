@@ -3864,8 +3864,12 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = hidden_response_cost
             self._record_zero_cost_diagnostic(logging_result, hidden_response_cost)
             self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
-        elif (existing_cost := self.model_call_details.get("response_cost")) is not None and (
-            existing_cost != 0 or self.call_type == CallTypes.pass_through.value  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+        elif (
+            (existing_cost := self.model_call_details.get("response_cost")) is not None
+            and self._route_priced_cost is None
+            and (
+                existing_cost != 0 or self.call_type == CallTypes.pass_through.value  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+            )
         ):
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
