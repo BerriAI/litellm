@@ -316,6 +316,7 @@ describe("AddAutoRouterTab", () => {
       /quality-custom/,
     );
     expect(screen.queryByRole("button", { name: "Use suggested models" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Your model choices are kept.")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
@@ -431,7 +432,7 @@ describe("AddAutoRouterTab", () => {
 
   it.each(["Capability", "Fuse v2"])("restores simple setup after leaving %s", async (approach) => {
     mockFetchAvailableModels.mockResolvedValue(
-      ["claude-haiku-5-5", "claude-opus-5-5"].map((model_group) => ({ model_group, mode: "chat" })),
+      ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"].map((model_group) => ({ model_group, mode: "chat" })),
     );
     renderWithProviders(<Harness />);
     await screen.findByRole("combobox", { name: "Everyday model" });
@@ -439,12 +440,18 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByRole("button", { name: "Routing approach" })).toHaveTextContent(approach);
     expect(screen.queryByRole("combobox", { name: "Everyday model" })).not.toBeInTheDocument();
     await selectAutoRouterOption("Routing approach", "Complexity");
-    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
-    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("claude-opus-5-5");
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("gpt-6-luna");
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("gpt-6-astra");
+    expect(screen.queryByRole("button", { name: "Use suggested models" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Best quality", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("gpt-6.1-sol");
+    fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("gpt-6-luna");
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("gpt-6.1-sol");
     fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
     fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
-    expectTierModel("Simple", "claude-haiku-5-5");
-    expectTierModel("Reasoning", "claude-opus-5-5");
+    expectTierModel("Simple", "gpt-6-luna");
+    expectTierModel("Reasoning", "gpt-6.1-sol");
   });
 
   it.each(["Capability", "Fuse v2"])(
@@ -475,6 +482,7 @@ describe("AddAutoRouterTab", () => {
         if (approach === "Capability") await user.keyboard("{Escape}");
       }
       fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+      fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
       await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
       fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
@@ -537,9 +545,9 @@ describe("AddAutoRouterTab", () => {
     expectTierModel("Reasoning", "gpt-6-astra");
   });
 
-  it("keeps manual solver choices on goal changes and carries them into Advanced", async () => {
+  it("keeps manual solver choices through strategy and goal changes and carries them into Advanced", async () => {
     mockFetchAvailableModels.mockResolvedValue(
-      ["claude-haiku-5-5", "custom-fast", "claude-opus-5-5"].map((model_group) => ({
+      ["gpt-6-luna", "custom-fast", "gpt-6.1-sol", "gpt-6-astra"].map((model_group) => ({
         model_group,
         mode: "chat",
       })),
@@ -548,12 +556,14 @@ describe("AddAutoRouterTab", () => {
     const everyday = await screen.findByRole("combobox", { name: "Everyday model" });
     await userEvent.click(everyday);
     await userEvent.click(await screen.findByRole("option", { name: /custom-fast/ }));
+    await selectAutoRouterApproach("Capability");
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
     fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
     expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("custom-fast");
-    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("claude-opus-5-5");
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("gpt-6-astra");
     fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
     expectTierModel("Simple", "custom-fast");
-    expectTierModel("Reasoning", "claude-opus-5-5");
+    expectTierModel("Reasoning", "gpt-6-astra");
   });
 
   it("keeps standard setup usable when the Heuristic v2 allowance is exhausted", async () => {

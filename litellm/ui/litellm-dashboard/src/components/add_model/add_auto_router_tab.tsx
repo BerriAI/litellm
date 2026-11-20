@@ -437,11 +437,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const handleClassifierChange = (config: ComplexityRouterConfigValue) => {
     switchyard.deselect();
     setSelectedPreset(undefined);
-    if (
-      !advanced &&
-      isForecastClassifier(advancedConfig.classifier_type) &&
-      !isForecastClassifier(config.classifier_type)
-    ) {
+    if (!advanced && detailedSetup && !isForecastClassifier(config.classifier_type)) {
       setPrefillAttempted(true);
       const { SIMPLE, REASONING } = config.tiers;
       if (
@@ -449,7 +445,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           ([tier, models]) => models.length === (tier === "SIMPLE" || tier === "REASONING" ? 1 : 0),
         )
       ) {
-        setSolverOverrides({ everyday: SIMPLE[0], hard: REASONING[0] });
+        if (SIMPLE[0] !== everyday?.name || REASONING[0] !== hard?.name) {
+          setSolverOverrides({ everyday: SIMPLE[0], hard: REASONING[0] });
+        }
       } else {
         setAdvanced(true);
       }
