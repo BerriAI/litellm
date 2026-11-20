@@ -39,7 +39,9 @@ describe("planCustomerBudgetGroups", () => {
     const custom = { budget_duration: "7d", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
     const original = {
       ...organization,
-      default_budgets: [{ ...organization.default_budgets[0], max_budget: null, budget_duration: null, budget_limits: [custom] }],
+      default_budgets: [
+        { ...organization.default_budgets[0], max_budget: null, budget_duration: null, budget_limits: [custom] },
+      ],
     };
     const rows = customerBudgetGroupRows(original);
     expect(planCustomerBudgetGroups(original, rows, "standard")).toMatchObject({ changed: false });

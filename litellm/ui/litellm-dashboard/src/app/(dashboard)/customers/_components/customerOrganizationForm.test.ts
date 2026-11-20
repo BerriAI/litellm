@@ -24,14 +24,12 @@ describe("buildCustomerOrganizationBody", () => {
         defaultGroupId: "group",
         groups: [
           {
+            ...budgetEditorFields({
+              budget_limits: [...(amount ? [{ budget_duration: "1mo", max_budget: Number(amount) }] : []), custom],
+            }),
             id: "group",
             name: "Group",
-            monthlyBudget: amount,
-            yearlyBudget: "",
-            tpm: "",
-            rpm: "",
             capPolicy: defaultCustomerCapPolicy,
-            budgetLimits: [custom],
           },
         ],
       }),

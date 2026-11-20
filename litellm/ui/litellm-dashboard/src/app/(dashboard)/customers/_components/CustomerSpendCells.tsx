@@ -144,8 +144,10 @@ export function CustomerSpendCells({
   const budgets = budgetUnavailable ? [] : customerBudgetUsage(member);
   const monthlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "monthly");
   const yearlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "yearly");
-  const otherBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "other");
-  const customWindows = otherBudgets.some((budget) => budget.source === "window");
+  const otherBudgets = budgets.filter(
+    (budget) => budget.source === "window" && customerBudgetPeriod(budget.budget_duration) === "other",
+  );
+  const customWindows = otherBudgets.length > 0;
 
   const status = customerBudgetStatus(budgets);
   const atLimit = status === "customerPortal.analytics.reachedLimit";
@@ -198,7 +200,13 @@ export function CustomerSpendCells({
               />
             ))}
             {yearlyBudgets.length === 0 && (
-              <CustomerBudgetSpend spend={yearlySpend} limit={null} limitKnown={!budgetUnavailable} label={t("customerPortal.analytics.yearlySpend")} showLimit={!customWindows} />
+              <CustomerBudgetSpend
+                spend={yearlySpend}
+                limit={null}
+                limitKnown={!budgetUnavailable}
+                label={t("customerPortal.analytics.yearlySpend")}
+                showLimit={!customWindows}
+              />
             )}
           </div>
         </TableCell>

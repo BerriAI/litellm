@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { updateBudgetPeriod } from "./customerBudgetForm";
 import {
   buildCustomerHierarchyPatch as buildPatch,
   customerHierarchyFields as initialFields,
@@ -108,16 +107,19 @@ describe("customer hierarchy settings payloads", () => {
       const fields = customerHierarchyFields(entity);
       expect(
         buildCustomerHierarchyPatch(entity, {
-          ...updateBudgetPeriod(fields, "1mo", "0"),
-          ...(kind === "organization" ? { maxBudget: "0" } : {}),
+          ...fields,
+          budgetWindows: fields.budgetWindows.map((window) => ({
+            ...window,
+            maxBudget: window.budget.budget_duration === "1mo" ? "0" : window.maxBudget,
+          })),
         }),
       ).toMatchObject({
         patch: { body: { budget: { budget_limits: [{ ...monthly, max_budget: 0 }, yearly, custom] } } },
       });
       expect(
         buildCustomerHierarchyPatch(entity, {
-          ...updateBudgetPeriod(fields, "1mo", ""),
-          ...(kind === "organization" ? { maxBudget: "" } : {}),
+          ...fields,
+          budgetWindows: fields.budgetWindows.filter((window) => window.budget.budget_duration !== "1mo"),
         }),
       ).toMatchObject({
         patch: { body: { budget: { budget_limits: [yearly, custom] } } },
