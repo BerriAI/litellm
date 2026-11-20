@@ -21,6 +21,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
 }));
 const app: App = {
   app_id: "app-1",
+  auto_create_customers: false,
   resource_type: "team",
   resource_id: "team-assistant",
   alias: "Assistant",
@@ -118,7 +119,7 @@ describe("customer member apps", () => {
     expect(screen.getByText("1,000 TPM")).toBeInTheDocument();
     expect(screen.getByText("20 RPM")).toBeInTheDocument();
     expect(screen.getByText("25%")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Assistant", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Assistant" }));
     expect(onAppSelect).toHaveBeenCalledExactlyOnceWith(app.app_id);
   });
 
@@ -141,19 +142,16 @@ describe("customer member apps", () => {
       screen.getByRole("combobox", { name: "Budget source" }),
       "Enter custom limits instead",
     );
-    act(() => {
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "5" } });
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Yearly budget" }), { target: { value: "50" } });
-    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "50" } });
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Reset period" }), "/ year");
     await user.click(screen.getByRole("button", { name: "Save member app budget" }));
     await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
     const request = requests.find((row) => row.method === "PUT");
     expect(new URL(request!.url).pathname).toBe("/management/v1/apps/app-1/customer_members/member-1");
     expect(await request?.json()).toEqual({
       budget: {
-        max_budget: 5,
-        budget_duration: "1mo",
-        budget_limits: [{ max_budget: 50, budget_duration: "12mo" }],
+        max_budget: 50,
+        budget_duration: "12mo",
       },
     });
   });
@@ -203,8 +201,8 @@ describe("customer member apps", () => {
         { ...app, default_customer_member_budget: { rpm_limit: 99, allowed_models: ["inherited-model"] } },
       ]);
       const user = await openBudget();
-      expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(5);
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "7" } });
+      expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(5);
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "7" } });
       expect(await saveBudget(user)).toEqual(expectedPatch);
     },
   );
@@ -306,13 +304,21 @@ describe("customer member apps", () => {
     const user = await openBudget();
     await user.click(await screen.findByRole("combobox", { name: "Budget source" }));
     await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
-    expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(500);
-    expect(screen.getByRole("spinbutton", { name: "Yearly budget" })).toHaveValue(5000);
+    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(500);
+    expect(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveValue(5000);
     expect(screen.getByRole("spinbutton", { name: "Tokens per minute" })).toHaveValue(10000);
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "750" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "750" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+      target: { value: "6000" },
+    });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "" } });
     expect(await saveBudget(user)).toEqual({
-      budget: { max_budget: 750, budget_duration: "1mo", rpm_limit: null },
+      budget: {
+        max_budget: 750,
+        budget_duration: "1mo",
+        budget_limits: [{ ...base.budget_limits[0], max_budget: 6000 }],
+        rpm_limit: null,
+      },
     });
   });
 });

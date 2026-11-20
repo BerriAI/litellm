@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appAccessChanged, grantedAppIds } from "./internalAccess";
+import { appAccessChanged, grantedAppIds } from "./appAccessApi";
 
 describe("internal access", () => {
   it("reads the granted apps and treats a missing object permission as no apps", () => {

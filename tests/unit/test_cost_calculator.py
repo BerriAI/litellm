@@ -744,6 +744,54 @@ def test_completion_cost_keeps_the_served_bedrock_row_unless_it_is_the_region_st
     assert cost == pytest.approx(_bedrock_global_cost(served_shape) * _BEDROCK_PROFILE_RATE_MULTIPLIERS[served_model])
 
 
+_FIREWORKS_SERVED_MODEL: Final = "accounts/fireworks/models/router-pricing-test"
+_FIREWORKS_SERVED_RATES: Final = MappingProxyType({"input_cost_per_token": 3e-7, "output_cost_per_token": 1.2e-6})
+
+
+def _fireworks_router_cost(monkeypatch: pytest.MonkeyPatch, router: str, router_row: Mapping[str, float]) -> float:
+    row_base: Final = {"litellm_provider": "fireworks_ai", "mode": "chat"}
+    monkeypatch.setitem(
+        litellm.model_cost, f"fireworks_ai/{_FIREWORKS_SERVED_MODEL}", {**row_base, **_FIREWORKS_SERVED_RATES}
+    )
+    monkeypatch.setitem(litellm.model_cost, f"fireworks_ai/{router}", {**row_base, **router_row})
+    response: Final = ModelResponse(
+        model=f"fireworks_ai/{_FIREWORKS_SERVED_MODEL}",
+        usage=Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+    )
+    return completion_cost(completion_response=response, model=f"fireworks_ai/{router}")
+
+
+def test_completion_cost_bills_the_fireworks_router_row_when_fireworks_serves_the_base_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cost: Final = _fireworks_router_cost(
+        monkeypatch,
+        "accounts/fireworks/routers/router-pricing-test-spot",
+        {"input_cost_per_token": 1.5e-7, "output_cost_per_token": 6e-7},
+    )
+
+    assert cost == pytest.approx(1000 * 1.5e-7 + 100 * 6e-7)
+
+
+@pytest.mark.parametrize(
+    ("requested", "requested_row"),
+    [
+        pytest.param("accounts/fireworks/routers/router-pricing-test-unpriced", {}, id="unpriced-router"),
+        pytest.param(
+            "accounts/fireworks/models/router-pricing-test-alias",
+            {"input_cost_per_token": 1.5e-7, "output_cost_per_token": 6e-7},
+            id="priced-non-router",
+        ),
+    ],
+)
+def test_completion_cost_keeps_the_served_fireworks_row_unless_a_priced_router_was_requested(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, requested: str, requested_row: Mapping[str, float]
+) -> None:
+    cost: Final = _fireworks_router_cost(monkeypatch, requested, requested_row)
+
+    assert cost == pytest.approx(1000 * 3e-7 + 100 * 1.2e-6)
+
+
 @pytest.mark.parametrize(
     ("base_model", "custom_pricing", "router_model_id", "priced_row"),
     [

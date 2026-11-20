@@ -1492,11 +1492,15 @@ export const dailyActivityExportCall = (
   entity: DailyActivityEntity,
   req: DailyActivityRequest,
   exportType: ExportType,
-  format: ExportFormat,
+  { format, includeMetadata = false }: { format: ExportFormat; includeMetadata?: boolean },
 ): Promise<Blob> =>
   apiClient.getBlob(`/${entity}/daily/activity/export`, {
     accessToken: req.accessToken,
-    query: dailyActivityQuery(entity, req, { export_type: exportType, format }),
+    query: dailyActivityQuery(entity, req, {
+      export_type: exportType,
+      format,
+      ...(includeMetadata ? { include_metadata: "true" } : {}),
+    }),
   });
 
 export const userDailyActivityUserPageCall = (

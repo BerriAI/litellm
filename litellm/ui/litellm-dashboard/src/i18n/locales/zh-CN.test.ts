@@ -19,8 +19,8 @@ const markers = (value: string) => ({
   references: [...value.matchAll(/\$t\(([^)]+)\)/g)].map((match) => match[1]).sort(),
 });
 
-describe("简体中文词库", () => {
-  it("沿用英文键并保留插值变量和富文本组件", () => {
+describe("zh-CN locale", () => {
+  it("only uses English keys and keeps their placeholders, rich-text tags and $t references", () => {
     const english = new Map(entries(en));
     const incompatible = entries(zh).filter(([key, value]) => {
       const source = english.get(key);
@@ -34,11 +34,11 @@ describe("简体中文词库", () => {
     expect(incompatible).toEqual([]);
   });
 
-  it("通过官方语言注册加载中文，保留动态值并回退缺失词条", async () => {
+  it("loads through the language registry, keeps dynamic values and falls back to English for missing keys", async () => {
     expect(supportedLanguages(LOCALES)).toContain("zh-CN");
     expect(resolveLanguage("zh-CN", LOCALES)).toBe("zh-CN");
     const load = LOCALES.get("zh-CN");
-    if (!load) throw new Error("中文词库尚未注册");
+    if (!load) throw new Error("zh-CN is not registered in LOCALES");
     const messages = await load();
     const instance = i18next.createInstance();
     const options = {
@@ -49,7 +49,7 @@ describe("简体中文词库", () => {
     };
     await instance.init(options);
     const formatter = instance.services.formatter;
-    if (!formatter) throw new Error("i18next 格式化器尚未初始化");
+    if (!formatter) throw new Error("i18next formatter is not initialized");
     registerFormats(formatter);
     expect(instance.t("shell.sidebarAccountMenu.language.label")).toBe("语言");
     const date = new Date("2026-11-11T04:03:02Z");
@@ -66,12 +66,11 @@ describe("简体中文词库", () => {
       instance.t("shell.sidebarAccountMenu.triggerLabel", { role: "proxy_admin", identity: "unchanged-model-123" }),
     ).toContain("unchanged-model-123");
     expect(instance.t("vectorStores.table.files.count", { count: 2 })).toBe("2 个文件");
-    // 未覆盖的词条必须按官方英文回退，不能显示原始键。
     instance.removeResourceBundle("zh-CN", "translation");
     expect(instance.t("shell.sidebarAccountMenu.logout")).toBe(en.shell.sidebarAccountMenu.logout);
   });
 
-  it("说明已开启服务器的授权范围并解析客户组织引用", async () => {
+  it("says every enabled server gets access and resolves the customer organization terms", async () => {
     const instance = i18next.createInstance();
     const options = {
       lng: "zh-CN",
@@ -80,7 +79,6 @@ describe("简体中文词库", () => {
       interpolation: { escapeValue: false },
     };
     await instance.init(options);
-    // 授权范围按开启状态决定，不能继续暗示只有手动登录的服务器才获授权。
     expect(instance.t("chat.mcpAppsPanel.connectModeSubtitle")).toBe(
       "请关闭此连接不应使用的服务器。点击服务器可查看工具或登录。",
     );
