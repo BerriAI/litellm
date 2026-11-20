@@ -300,13 +300,44 @@ _PASSWORD_DATABASE_URL: Final = "postgresql://litellm:hunter2-pw@db:5432/litellm
         {"DATABASE_URL": "postgresql://litellm@db:5432/litellm?sslidentity=/certs/client.p12&sslpassword=p12-pass"},
         {},
         {"DATABASE_URL": _PASSWORD_DATABASE_URL, "IAM_TOKEN_DB_AUTH": "True"},
+        {"DATABASE_URL": _PASSWORD_DATABASE_URL, "IAM_TOKEN_DB_AUTH": "1"},
         {"DATABASE_URL": _PASSWORD_DATABASE_URL, "AZURE_POSTGRESQL_AUTH": "true"},
+        {"DATABASE_URL": _PASSWORD_DATABASE_URL, "AZURE_POSTGRESQL_AUTH": "yes"},
         {"DATABASE_URL": "postgresql://litellm:pw@[::1/litellm"},
     ],
-    ids=["client-certificate", "no-database", "rds-iam-token", "azure-entra-token", "unparseable-url"],
+    ids=[
+        "client-certificate",
+        "no-database",
+        "rds-iam-token",
+        "rds-iam-token-set-to-1",
+        "azure-entra-token",
+        "azure-entra-token-set-to-yes",
+        "unparseable-url",
+    ],
 )
 def test_no_password_login_warning_without_a_database_password(environ: Mapping[str, str]) -> None:
     assert database_password_login_warning(environ) is None
+
+
+_POOLED_DATABASE_URL: Final = "postgresql://litellm_pgbouncer:pool-pw@127.0.0.1:6432/litellm?pgbouncer=true"
+
+
+@pytest.mark.parametrize(
+    "token_login",
+    [{}, {"IAM_TOKEN_DB_AUTH": "true"}, {"AZURE_POSTGRESQL_AUTH": "true"}],
+    ids=["password-upstream", "rds-iam-upstream", "azure-entra-upstream"],
+)
+def test_pgbouncer_workers_always_get_the_password_login_warning(token_login: Mapping[str, str]) -> None:
+    warning: Final = database_password_login_warning(
+        {"DATABASE_URL": _POOLED_DATABASE_URL, "LITELLM_PGBOUNCER_POOLED_DATABASE_URL": "true", **token_login}
+    )
+    assert warning is not None
+    assert "LITELLM_PGBOUNCER_ENABLED" in warning
+    assert "pool-pw" not in warning
+
+
+def test_an_unreadable_token_flag_still_gets_the_password_login_warning() -> None:
+    assert database_password_login_warning({"DATABASE_URL": _PASSWORD_DATABASE_URL, "IAM_TOKEN_DB_AUTH": "maybe"})
 
 
 def test_the_password_login_warning_names_database_url_but_not_the_password() -> None:
