@@ -361,31 +361,56 @@ mod tests {
     }
 
     #[cfg(feature = "native-tls")]
-    #[test]
-    fn hands_pkcs1_sec1_and_exported_client_keys_to_native_tls_as_pkcs8()
-    -> Result<(), Box<dyn StdError>> {
+    mod native_tls_client_key {
+        use std::error::Error as StdError;
+
         use openssl::{
             ec::{EcGroup, EcKey},
+            error::ErrorStack,
             nid::Nid,
             pkey::PKey,
             rsa::Rsa,
         };
+        use rstest::rstest;
 
-        let rsa = Rsa::generate(2048)?;
-        let p256 = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?;
-        let ec = EcKey::generate(&p256)?;
-        let pkcs8 = PKey::from_rsa(rsa.clone())?.private_key_to_pem_pkcs8()?;
-        let exported = [b"Bag Attributes\n    localKeyID: 01\n".as_slice(), &pkcs8].concat();
+        use super::super::pkcs8_pem;
 
-        for pem in [
-            rsa.private_key_to_pem()?,
-            ec.private_key_to_pem()?,
-            exported,
-        ] {
-            let key = super::pkcs8_pem(&pem).ok_or("OpenSSL reads the key")?;
-            assert!(key.starts_with(b"-----BEGIN PRIVATE KEY-----\n"));
+        fn pkcs1_rsa() -> Result<Vec<u8>, ErrorStack> {
+            Rsa::generate(2048)?.private_key_to_pem()
         }
-        assert_eq!(super::pkcs8_pem(b"not a key"), None);
-        Ok(())
+
+        fn sec1_ec() -> Result<Vec<u8>, ErrorStack> {
+            let p256 = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?;
+            EcKey::generate(&p256)?.private_key_to_pem()
+        }
+
+        fn pkcs12_export() -> Result<Vec<u8>, ErrorStack> {
+            let pkcs8 = PKey::from_rsa(Rsa::generate(2048)?)?.private_key_to_pem_pkcs8()?;
+            Ok([b"Bag Attributes\n    localKeyID: 01\n".as_slice(), &pkcs8].concat())
+        }
+
+        #[rstest]
+        #[case::pkcs1_rsa(pkcs1_rsa)]
+        #[case::sec1_ec(sec1_ec)]
+        #[case::pkcs12_export_with_bag_attributes(pkcs12_export)]
+        fn hands_the_same_key_to_native_tls_as_pkcs8(
+            #[case] pem: fn() -> Result<Vec<u8>, ErrorStack>,
+        ) -> Result<(), Box<dyn StdError>> {
+            let original = pem()?;
+
+            let pkcs8 = pkcs8_pem(&original).ok_or("OpenSSL reads the key")?;
+
+            assert!(pkcs8.starts_with(b"-----BEGIN PRIVATE KEY-----\n"));
+            assert_eq!(
+                PKey::private_key_from_pem(&pkcs8)?.public_key_to_der()?,
+                PKey::private_key_from_pem(&original)?.public_key_to_der()?
+            );
+            Ok(())
+        }
+
+        #[rstest]
+        fn leaves_a_file_openssl_cannot_read_to_sqlx() {
+            assert_eq!(pkcs8_pem(b"not a key"), None);
+        }
     }
 }
