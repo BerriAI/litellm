@@ -14,10 +14,13 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+import copy
 import json
 import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -26,9 +29,14 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.completion_extras.litellm_responses_transformation.history import (
+    commentary_parts,
+    without_scanned_commentary,
+)
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     replayed_tool_search_tool_names,
 )
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
@@ -61,6 +69,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
+    ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
 )
@@ -87,6 +96,91 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+@dataclass(frozen=True, slots=True)
+class _CommentaryRow:
+    """A bridged assistant turn whose moved commentary every guardrail reads as part of its content."""
+
+    index: int
+    parts: tuple[tuple[str, ...], ...]
+    original: object
+    combined: object
+
+
+def _combined_content(content: object, parts: tuple[tuple[str, ...], ...]) -> object:
+    commentary: Final = "".join(chain.from_iterable(parts))
+    content_parts: Final = as_object_list(content)
+    if content_parts is not None:
+        return [ChatCompletionTextObject(type="text", text=commentary), *content_parts]
+    return commentary + (content if isinstance(content, str) else "")
+
+
+def _in_scope(message: AllMessageValues, *, skip_system: bool, skip_tool: bool, scan_only_tool_results: bool) -> bool:
+    return not role_out_of_guardrail_scope(
+        str(dict(message).get("role") or "").lower(),
+        skip_system_message=skip_system,
+        skip_tool_message=skip_tool,
+        scan_only_tool_results=scan_only_tool_results,
+    )
+
+
+def _commentary_rows(
+    messages: Sequence[AllMessageValues], *, skip_system: bool, skip_tool: bool, scan_only_tool_results: bool
+) -> tuple[_CommentaryRow, ...]:
+    scoped: Final = (
+        (index, message, commentary_parts(message))
+        for index, message in enumerate(messages)
+        if _in_scope(
+            message, skip_system=skip_system, skip_tool=skip_tool, scan_only_tool_results=scan_only_tool_results
+        )
+    )
+    return tuple(
+        _CommentaryRow(index, parts, _content(message), _combined_content(_content(message), parts))
+        for index, message, parts in scoped
+        if parts
+    )
+
+
+def _content(message: AllMessageValues) -> object:
+    return dict(message).get("content")
+
+
+def _settled_messages(
+    messages: Sequence[AllMessageValues],
+    rows: Sequence[_CommentaryRow],
+    *,
+    skip_system: bool,
+    skip_tool: bool,
+    scan_only_tool_results: bool,
+) -> Sequence[Mapping[str, object]]:
+    if not rows:
+        return messages
+    return [
+        _settled_commentary(
+            message,
+            rows,
+            in_scope=_in_scope(
+                message, skip_system=skip_system, skip_tool=skip_tool, scan_only_tool_results=scan_only_tool_results
+            ),
+        )
+        for message in messages
+    ]
+
+
+def _settled_commentary(
+    message: AllMessageValues, rows: Sequence[_CommentaryRow], *, in_scope: bool
+) -> Mapping[str, object]:
+    """An untouched turn gets its own content back with its carrier and replay. A rewritten one keeps the
+    guardrailed text as its content and drops the carrier and replay, so the original can't come back."""
+    parts: Final = commentary_parts(message) if in_scope else ()
+    if not parts:
+        return message
+    content: Final = _content(message)
+    unchanged: Final = next((row for row in rows if row.parts == parts and row.combined == content), None)
+    if unchanged is None:
+        return without_scanned_commentary(message)
+    return {**message, "content": unchanged.original}
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -136,6 +230,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_to_check: Final[list[ChatCompletionToolParam]] = []
         text_task_mappings: Final[list[tuple[int, int | None]]] = []
         tool_call_task_mappings: Final[list[tuple[int, int]]] = []
+        structured_messages: Final = self.get_structured_messages(data)
+        commentary_rows: Final = _commentary_rows(
+            structured_messages or [],
+            skip_system=skip_system,
+            skip_tool=skip_tool,
+            scan_only_tool_results=scan_only_tool_results,
+        )
+        for row in commentary_rows:
+            messages[row.index]["content"] = copy.deepcopy(row.combined)
 
         # Step 1: Extract all text content, images, and tool calls
         for msg_idx, message in enumerate(messages):
@@ -152,7 +255,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 scan_only_tool_results=scan_only_tool_results,
             )
 
-        structured_messages: Final = self.get_structured_messages(data)
         server_tool_call_tasks: Final = tuple(
             _input_server_tool_call_tasks(
                 structured_messages or [],
@@ -217,14 +319,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
-                data["messages"] = (
+                data["messages"] = _settled_messages(
                     guardrailed_structured_messages
                     if guardrail_to_apply.structured_messages_cover_full_request()
                     else merge_guardrailed_scoped_messages(
                         full_messages=structured_messages or [],
                         scoped_indices=scoped_message_indices,
                         guardrailed_scoped=guardrailed_structured_messages,
-                    )
+                    ),
+                    commentary_rows,
+                    skip_system=skip_system,
+                    skip_tool=skip_tool,
+                    scan_only_tool_results=scan_only_tool_results,
                 )
             else:
                 # Step 3: Map guardrail responses back to original message structure
@@ -250,6 +356,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         guardrailed_tool_calls=guardrailed_tool_calls[len(tool_calls_to_check) :],
                         task_mappings=tuple(mapping for mapping, _ in server_tool_call_tasks),
                     )
+                settled_messages: Final = _settled_messages(
+                    structured_messages or [],
+                    commentary_rows,
+                    skip_system=skip_system,
+                    skip_tool=skip_tool,
+                    scan_only_tool_results=scan_only_tool_results,
+                )
+                for index in range(len(settled_messages)) if commentary_rows else ():
+                    messages[index] = settled_messages[index]
 
         elif (
             not images_to_check

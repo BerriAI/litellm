@@ -258,7 +258,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request, replays_responses_history
+            from .transformation import is_structured_output_request, output_guardrails_apply, replays_responses_history
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -269,6 +269,7 @@ class ResponsesToCompletionBridgeHandler:
                 ),
                 replays_openai_history=replays_responses_history(custom_llm_provider),
                 streams_reasoning_signatures=streams_reasoning_signatures,
+                guards_output=output_guardrails_apply(litellm_params, stream=True),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -371,7 +372,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request, replays_responses_history
+            from .transformation import is_structured_output_request, output_guardrails_apply, replays_responses_history
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -382,6 +383,7 @@ class ResponsesToCompletionBridgeHandler:
                 ),
                 replays_openai_history=replays_responses_history(custom_llm_provider),
                 streams_reasoning_signatures=streams_reasoning_signatures,
+                guards_output=output_guardrails_apply(litellm_params, stream=True),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

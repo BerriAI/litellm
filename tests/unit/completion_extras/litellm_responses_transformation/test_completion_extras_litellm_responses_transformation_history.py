@@ -14,7 +14,9 @@ from openai.types.chat import ChatCompletionChunk
 import litellm
 from litellm.completion_extras.litellm_responses_transformation import history
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import convert_to_streaming_response
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponseStream
 
 OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
@@ -216,6 +218,7 @@ def _assistant_turn(
     terminal_event: str | None = "response.completed",
     status: str = "completed",
     response_format: Mapping[str, object] | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     reply: Final = httpx.Response(
         200, content=json.dumps(_response(output, status)), headers={"content-type": "application/json"}
@@ -230,6 +233,7 @@ def _assistant_turn(
             api_key="sk-test",
             stream=stream,
             response_format=response_format,
+            metadata=dict(metadata) if metadata is not None else None,
             **route_params,
         )
         message: Final = (
@@ -316,10 +320,11 @@ def test_an_edited_chat_field_wins_over_the_recorded_items(
 ) -> None:
     sent: Final = _next_turn_input(edit(_assistant_turn(OUTPUT, stream=False)))
 
-    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
-    assert sent[3]["content"] == [{"type": "output_text", "text": expected_text}]
-    assert sent[3]["phase"] == expected_phase
-    assert sent[4]["arguments"] == expected_arguments
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "message", "function_call"]
+    assert sent[3] == REPLAYED[0]
+    assert sent[4]["content"] == [{"type": "output_text", "text": expected_text}]
+    assert sent[4]["phase"] == expected_phase
+    assert sent[5]["arguments"] == expected_arguments
 
 
 def _without_replay(fields: Mapping[str, object]) -> Mapping[str, object]:
@@ -354,9 +359,10 @@ def test_missing_or_corrupt_replay_metadata_falls_back_to_the_chat_fields(
 
     sent: Final = _next_turn_input({**assistant, "provider_specific_fields": corrupt(_replayed_fields(assistant))})
 
-    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
-    assert sent[3]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
-    assert sent[3]["phase"] == "final_answer"
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "message", "function_call"]
+    assert sent[3] == REPLAYED[0]
+    assert sent[4]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
+    assert sent[4]["phase"] == "final_answer"
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
@@ -367,8 +373,9 @@ def test_an_unphased_answer_after_commentary_is_never_labeled_commentary(stream:
     sent: Final = _next_turn_input(_edit_content(assistant))
 
     assert _replayed_fields(assistant).get("phase") is None
-    assert _types(sent[1:-1]) == ["message", "function_call"]
-    assert "phase" not in sent[1]
+    assert _types(sent[1:-1]) == ["message", "message", "function_call"]
+    assert sent[1] == REPLAYED[0]
+    assert "phase" not in sent[2]
 
 
 def _with_text(item: Mapping[str, object], text: str) -> Mapping[str, object]:
@@ -505,7 +512,7 @@ SEARCH_OUTPUT: Final = {
     ("tools", "expected"),
     [
         ((*TOOLS, {"type": "tool_search"}), ["tool_search_call", "tool_search_output", *_types(REPLAYED)]),
-        (TOOLS, ["reasoning", "reasoning", "message", "function_call"]),
+        (TOOLS, ["reasoning", "reasoning", "message", "message", "function_call"]),
     ],
     ids=["searching", "not-searching"],
 )
@@ -540,7 +547,9 @@ def test_an_incomplete_or_unsupported_output_records_no_replay(
     sent: Final = _next_turn_input(assistant)
 
     assert "openai_responses_replay" not in _replayed_fields(assistant)
-    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "message", "function_call"]
+    assert sent[3] == REPLAYED[0]
+    assert sent[4]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
 
 
 def _chunks_before_error(stream: Iterator[object]) -> Iterator[object]:
@@ -628,17 +637,81 @@ def test_a_stream_assembled_by_the_openai_sdk_keeps_one_phase_and_replays_the_ne
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
-def test_a_route_without_replay_records_no_phase_or_replay(stream: bool) -> None:
+def test_a_route_without_replay_records_only_the_commentary_carrier(stream: bool) -> None:
     assistant: Final = _assistant_turn(OUTPUT, stream=stream, model=XAI_MODEL)
 
-    assert _replayed_fields(assistant) == {}
+    assert _replayed_fields(assistant) == {history.COMMENTARY_FIELD: [["Checking the weather."]]}
 
 
 def test_a_route_without_replay_ignores_a_recorded_replay() -> None:
     sent: Final = _next_turn_input(_assistant_turn(OUTPUT, stream=False), model=XAI_MODEL)
 
-    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "message", "function_call"]
+    assert sent[3] == UNPHASED_COMMENTARY
     assert all("phase" not in item for item in sent)
+
+
+UNPHASED_COMMENTARY: Final = {k: v for k, v in REPLAYED[0].items() if k != "phase"}
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+@pytest.mark.parametrize(
+    "output", [(COMMENTARY, FINAL_ANSWER), (COMMENTARY, WEATHER_CALL)], ids=["answer", "tool-call"]
+)
+def test_a_route_without_replay_resends_moved_commentary_without_a_phase(
+    output: Sequence[Mapping[str, object]], stream: bool
+) -> None:
+    assistant: Final = _assistant_turn(output, stream=stream, model=XAI_MODEL)
+
+    sent: Final = _next_turn_input(assistant, model=XAI_MODEL)
+
+    assert "Checking the weather." not in str(assistant["content"])
+    assert UNPHASED_COMMENTARY in sent
+    assert all("phase" not in item for item in sent)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+@pytest.mark.parametrize(
+    ("event_hook", "default_on", "requested", "keeps_commentary"),
+    [
+        ("post_call", True, False, True),
+        ("during_call", True, False, True),
+        ("logging_only", True, False, True),
+        ("pre_call", True, False, False),
+        ("post_call", False, True, True),
+        ("post_call", False, False, False),
+    ],
+    ids=[
+        "default-post-call",
+        "default-during-call",
+        "default-logging-only",
+        "pre-call-only",
+        "requested",
+        "not-requested",
+    ],
+)
+def test_commentary_stays_in_content_while_an_output_guardrail_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    event_hook: str,
+    default_on: bool,
+    requested: bool,
+    keeps_commentary: bool,
+) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="reply-filter", event_hook=GuardrailEventHooks(event_hook), default_on=default_on
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    assistant: Final = _assistant_turn(
+        (COMMENTARY, FINAL_ANSWER),
+        stream=stream,
+        metadata={"guardrails": ["reply-filter"]} if requested else None,
+    )
+
+    expected: Final = "Checking the weather.Paris: light rain." if keeps_commentary else "Paris: light rain."
+    assert assistant["content"] == expected
+    assert (history.COMMENTARY_FIELD in _replayed_fields(assistant)) is not keeps_commentary
 
 
 SECOND_THOUGHT: Final = {**SECOND_REASONING, "summary": [{"type": "summary_text", "text": "Lyon is likely dry."}]}
@@ -709,14 +782,21 @@ def test_a_resealed_record_that_does_not_fit_the_chat_fields_falls_back(items: S
 
     sent: Final = _next_turn_input(_resealed(assistant, items))
 
-    assert _types(sent[1:-1]) == ["message", "function_call"]
-    assert sent[1]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
-
+    assert _types(sent[1:-1]) == ["message", "message", "function_call"]
+    assert sent[1] == REPLAYED[0]
+    assert sent[2]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
 
 
 def test_a_record_written_before_commentary_moved_out_of_content_still_replays() -> None:
     assistant: Final = _assistant_turn(OUTPUT, stream=False)
-    earlier_turn: Final = {**assistant, "content": "Checking the weather.Paris: light rain."}
+    earlier_fields: Final = {
+        key: value for key, value in _replayed_fields(assistant).items() if key != history.COMMENTARY_FIELD
+    }
+    earlier_turn: Final = {
+        **assistant,
+        "content": "Checking the weather.Paris: light rain.",
+        "provider_specific_fields": earlier_fields,
+    }
     earlier_record: Final = (
         {"type": "message", "parts": [21], "phase": "commentary"},
         {"type": "reasoning", "index": 0},
@@ -728,6 +808,52 @@ def test_a_record_written_before_commentary_moved_out_of_content_still_replays()
     sent: Final = _next_turn_input(_resealed(earlier_turn, earlier_record))
 
     assert sent[1:-1] == list(REPLAYED)
+
+
+APPLY_PATCH_CALL: Final = {
+    "type": "apply_patch_call",
+    "id": "apc_readme",
+    "call_id": "call_apply_readme",
+    "status": "completed",
+    "operation": {"type": "update_file", "path": "README.md", "diff": "@@\n-old\n+new\n"},
+}
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+@pytest.mark.parametrize(
+    "output",
+    [
+        (COMMENTARY, APPLY_PATCH_CALL),
+        (COMMENTARY, APPLY_PATCH_CALL, FINAL_ANSWER),
+        (COMMENTARY, WEB_SEARCH, FINAL_ANSWER),
+    ],
+    ids=["apply-patch", "apply-patch-then-answer", "web-search-then-answer"],
+)
+def test_commentary_moved_from_a_turn_without_a_record_is_resent_with_its_phase(
+    output: Sequence[Mapping[str, object]], stream: bool
+) -> None:
+    assistant: Final = _assistant_turn(output, stream=stream)
+
+    sent: Final = _next_turn_input(assistant)
+
+    assert "Checking the weather." not in str(assistant["content"])
+    assert "openai_responses_replay" not in _replayed_fields(assistant)
+    assert REPLAYED[0] in sent
+
+
+def test_a_changed_commentary_carrier_is_resent_only_in_its_changed_form() -> None:
+    assistant: Final = _assistant_turn(OUTPUT, stream=False)
+    rewritten: Final = {
+        **assistant,
+        "provider_specific_fields": {**_replayed_fields(assistant), history.COMMENTARY_FIELD: [["[MASKED]"]]},
+    }
+
+    sent: Final = _next_turn_input(rewritten)
+
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "message", "function_call"]
+    assert sent[3] == {**REPLAYED[0], "content": [{"type": "output_text", "text": "[MASKED]"}]}
+    assert "Checking the weather." not in json.dumps(sent)
+
 
 PATCH_CALL: Final = {
     "type": "custom_tool_call",

@@ -55,6 +55,11 @@ SECRET: Final = "private-redaction-canary"
 SIGNATURE: Final = "opaque-thought-signature"
 
 
+_COMMENTARY_RECORD: Final = MappingProxyType(
+    {"version": 1, "items": [{"type": "message", "parts": [len(SECRET)], "stored": True}], "checksum": "0" * 64}
+)
+
+
 def _provider_fields() -> dict[str, object]:
     return {
         "reasoning_content": SECRET,
@@ -77,6 +82,8 @@ def _provider_fields() -> dict[str, object]:
         "executed_tools": [{"type": "search", "search_results": {"results": [{"content": SECRET}]}}],
         "custom_outputs": {"answer": SECRET},
         "tool_search_items": [{"type": "tool_search_output", "tools": [{"description": SECRET}]}],
+        "openai_responses_commentary": [[SECRET]],
+        "openai_responses_replay": dict(_COMMENTARY_RECORD),
         "compaction_blocks": [{"type": "compaction", "content": SECRET, "signature": "compaction-signature"}],
         "compaction_start": {"type": "compaction", "content": SECRET},
         "compaction_delta": {"type": "compaction_delta", "content": SECRET},
@@ -130,6 +137,41 @@ def test_redaction_reuses_message_rules_for_request_body_and_provider_fields(sha
     assert body["system"] == "kept-system" and body["model"] == "redaction-model"
     assert body["metadata"] is params["metadata"]
     assert result == original_result and params == original_params
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        (
+            {
+                "phase": "final_answer",
+                "openai_responses_commentary": [[SECRET]],
+                "openai_responses_replay": dict(_COMMENTARY_RECORD),
+            },
+            {"phase": "final_answer", "openai_responses_commentary": None, "openai_responses_replay": None},
+        ),
+        (
+            {"phase": "final_answer", "openai_responses_replay": {"version": 1, "items": [], "checksum": "0" * 64}},
+            {"phase": "final_answer", "openai_responses_replay": {"version": 1, "items": [], "checksum": "0" * 64}},
+        ),
+    ],
+    ids=["record-bound-to-commentary", "record-without-commentary"],
+)
+def test_redaction_drops_a_replay_record_only_with_the_commentary_it_binds(
+    fields: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    response: Final = ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!", "provider_specific_fields": dict(fields)},
+            }
+        ]
+    )
+
+    redacted: Final = perform_redaction({"litellm_params": _request_params({})}, response)
+
+    assert redacted.choices[0].message.provider_specific_fields == expected
 
 
 def _reasoning_items() -> list[dict[str, object]]:

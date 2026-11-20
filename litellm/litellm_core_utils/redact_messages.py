@@ -318,6 +318,12 @@ def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:
 
 def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[str, object]:
     """Copy of provider_specific_fields with its reasoning redacted the same way as the message's own."""
+    from litellm.completion_extras.litellm_responses_transformation.history import without_commentary
+
+    return without_commentary(_redacted_reasoning_fields(fields))
+
+
+def _redacted_reasoning_fields(fields: Mapping[str, object]) -> Mapping[str, object]:
     return {
         **fields,
         **({"reasoning_content": REDACTED_BY_LITELLM} if fields.get("reasoning_content") is not None else {}),

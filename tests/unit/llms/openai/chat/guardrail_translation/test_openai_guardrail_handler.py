@@ -5,8 +5,10 @@ Tests the handler's ability to process input/output for Chat Completions API
 with guardrail transformations, including tool calls.
 """
 
+import copy
 import json
 from collections.abc import Iterable, Mapping
+from itertools import chain
 from typing import Any, Final, Literal, Optional
 
 import pytest
@@ -2776,3 +2778,161 @@ class TestStreamingScanKey:
         for released in (text_only, finished_tool_call):
             ended = handler.released_stream_as_ended(released)
             assert len(ended) == len(released) and all(a is b for a, b in zip(ended, released, strict=True))
+
+
+_REPLAY: Final = {"version": 1, "items": [], "checksum": "0" * 64}
+
+
+def _bridged_turn_request(content: object = "it rains", *extra_messages: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.completion_extras.litellm_responses_transformation import history
+
+    return {
+        "messages": [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": content,
+                "provider_specific_fields": {
+                    "phase": "final_answer",
+                    history.COMMENTARY_FIELD: [["checking", " paris"]],
+                    history.REPLAY_FIELD: dict(_REPLAY),
+                },
+            },
+            *extra_messages,
+        ]
+    }
+
+
+def _row_texts(message: Mapping[str, object]) -> tuple[str, ...]:
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return (content,)
+    parts: Final = content if isinstance(content, list) else []
+    return tuple(str(part["text"]) for part in parts if isinstance(part, dict) and part.get("text") is not None)
+
+
+class _ReadingGuardrail(CustomGuardrail):
+    """Reads texts and rows without rewriting either, like a detector that only blocks."""
+
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="reader")
+        self.texts: tuple[str, ...] = ()
+        self.rows: tuple[Mapping[str, object], ...] = ()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.texts = tuple(inputs.get("texts") or [])
+        self.rows = tuple(copy.deepcopy(list(inputs.get("structured_messages") or [])))
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_every_reader_sees_bridged_commentary_in_rows_aligned_with_texts_and_nothing_changes() -> None:
+    guardrail: Final = _ReadingGuardrail()
+    data: Final = dict(_bridged_turn_request())
+    original: Final = copy.deepcopy(data)
+
+    await OpenAIChatCompletionsHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.texts == ("weather?", "checking parisit rains")
+    assert tuple(chain.from_iterable(map(_row_texts, guardrail.rows))) == guardrail.texts
+    assert data == original
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("it rains", "CHECKING PARISIT RAINS"),
+        (
+            [{"type": "text", "text": "it rains"}],
+            [{"type": "text", "text": "CHECKING PARIS"}, {"type": "text", "text": "IT RAINS"}],
+        ),
+        (None, "CHECKING PARIS"),
+    ],
+    ids=["string-content", "list-content", "tool-call-turn"],
+)
+@pytest.mark.asyncio
+async def test_a_texts_rewrite_of_bridged_commentary_becomes_the_content_and_drops_the_carrier(
+    content: object, expected: object
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation import history
+
+    data: Final = dict(_bridged_turn_request(content))
+
+    await OpenAIChatCompletionsHandler().process_input_messages(data, MockGuardrail())
+
+    messages: Final = data["messages"]
+    assert isinstance(messages, list)
+    assert messages[1]["content"] == expected
+    assert history.commentary_parts(messages[1]) == ()
+    assert messages[1]["provider_specific_fields"]["phase"] == "final_answer"
+    assert "checking" not in json.dumps(messages)
+
+
+class _StructuredRewriteGuardrail(CustomGuardrail):
+    def __init__(self, *, in_place: bool) -> None:
+        super().__init__(guardrail_name="structured-rewrite")
+        self.in_place: Final = in_place
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        structured: Final = inputs.get("structured_messages") or []
+        if self.in_place:
+            for message in structured:
+                message["content"] = str(message.get("content")).upper()
+            return GenericGuardrailAPIInputs(structured_messages=structured)
+        return {
+            **inputs,
+            "structured_messages": [
+                {**message, "content": str(message.get("content")).upper()} for message in structured
+            ],
+        }
+
+
+@pytest.mark.parametrize("in_place", [False, True], ids=["returned-rows", "rows-rewritten-in-place"])
+@pytest.mark.asyncio
+async def test_a_structured_rewrite_of_bridged_commentary_becomes_the_content_and_drops_the_carrier(
+    in_place: bool,
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation import history
+
+    data: Final = dict(_bridged_turn_request())
+
+    await OpenAIChatCompletionsHandler().process_input_messages(data, _StructuredRewriteGuardrail(in_place=in_place))
+
+    messages: Final = data["messages"]
+    assert isinstance(messages, list)
+    assert messages[1]["content"] == "CHECKING PARISIT RAINS"
+    assert history.commentary_parts(messages[1]) == ()
+    assert "checking" not in json.dumps(messages)
+
+
+class _ToolResultsOnlyGuardrail(MockGuardrail):
+    scan_only_tool_results = True
+
+
+@pytest.mark.asyncio
+async def test_bridged_commentary_follows_the_guardrail_role_scope() -> None:
+    guardrail: Final = _ToolResultsOnlyGuardrail()
+    data: Final = dict(
+        _bridged_turn_request("it rains", {"role": "tool", "tool_call_id": "call_1", "content": "result"})
+    )
+    messages: Final = data["messages"]
+    assert isinstance(messages, list)
+    original: Final = copy.deepcopy(messages[1])
+
+    await OpenAIChatCompletionsHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.last_inputs is not None
+    assert guardrail.last_inputs["texts"] == ["result"]
+    assert messages[1] == original

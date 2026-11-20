@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from functools import reduce
 from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar, Union, cast
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -31,6 +31,7 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
     PHASE_FIELD,
     Phase,
     UnknownPhase,
+    commentary_carrier,
     fills_turn,
     message_item_phase,
     output_message_text,
@@ -38,6 +39,7 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
     replay_fields,
     replay_items,
     requested_phase,
+    stored_commentary_items,
     turn_moves_commentary,
 )
 from litellm.integrations.anthropic_cache_control_hook import (
@@ -113,6 +115,7 @@ if TYPE_CHECKING:
 
     from litellm import LiteLLMLoggingObj
     from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+    from litellm.types.guardrails import GuardrailEventHooks
     from litellm.types.llms.openai import (
         ALL_RESPONSES_API_TOOL_PARAMS,
         AllMessageValues,
@@ -329,6 +332,35 @@ class _BuiltReasoningItem(TypedDict):
 
 def serves_anthropic_messages(logging_obj: object) -> bool:
     return attribute_or_none(logging_obj, "call_type") == CallTypes.anthropic_messages.value
+
+
+_OUTPUT_GUARDRAIL_HOOKS: Final = ("post_call", "during_call", "logging_only")
+
+
+def output_guardrails_apply(litellm_params: Mapping[str, object], *, stream: bool) -> bool:
+    """Output guardrails read and rewrite only the reply's content, so commentary stays there while one runs."""
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    request: Final = {
+        **({"guardrails": litellm_params["guardrails"]} if isinstance(litellm_params.get("guardrails"), list) else {}),
+        "metadata": as_str_mapping(litellm_params.get("metadata")) or {},
+        "litellm_metadata": as_str_mapping(litellm_params.get("litellm_metadata")) or {},
+        "stream": stream,
+    }
+    guardrails: Final = tuple(callback for callback in litellm.callbacks if isinstance(callback, CustomGuardrail))
+    return any(_runs_on_output(guardrail, request) for guardrail in guardrails)
+
+
+class _GuardrailSelection(Protocol):
+    def should_run_guardrail(self, data: Mapping[str, object], event_type: "GuardrailEventHooks") -> bool: ...
+
+
+def _runs_on_output(guardrail: _GuardrailSelection, request: Mapping[str, object]) -> bool:
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    return any(
+        guardrail.should_run_guardrail(dict(request), GuardrailEventHooks(hook)) for hook in _OUTPUT_GUARDRAIL_HOOKS
+    )
 
 
 def _get_reasoning_items(
@@ -548,11 +580,14 @@ def _reasoning_ids(items: Sequence[Mapping[str, object]]) -> frozenset[str]:
     return frozenset(item_id for item_id in ids if isinstance(item_id, str))
 
 
-def _assistant_replay_items(msg: "AllMessageValues", replay_tool_search: bool) -> tuple[Mapping[str, object], ...]:
+def _assistant_replay_items(
+    msg: "AllMessageValues", replay_tool_search: bool, replay_openai_history: bool
+) -> tuple[Mapping[str, object], ...]:
     searched: Final = _tool_search_input_items(msg) if replay_tool_search else ()
     searched_reasoning_ids: Final = _reasoning_ids(searched)
     reasoning: Final = (item for item in _reasoning_input_items(msg) if item.get("id") not in searched_reasoning_ids)
-    return (*searched, *reasoning)
+    commentary: Final = stored_commentary_items(msg, phased=replay_openai_history)
+    return (*searched, *reasoning, *commentary)
 
 
 def _as_chat_reasoning_items(
@@ -788,6 +823,30 @@ def _fold_choices_into_one(
         finish_reason="tool_calls" if tool_calls else "stop",
         index=0,
     )
+
+
+def _with_commentary_carrier(choice: "Choices", output_items: Sequence[object], moved_commentary: bool) -> "Choices":
+    carrier: Final = commentary_carrier(output_items, moved_commentary=moved_commentary)
+    if not carrier:
+        return choice
+    fields: Final = {**(choice.message.provider_specific_fields or {}), **carrier}
+    message: Final = choice.message.model_copy(update={"provider_specific_fields": fields})
+    return choice.model_copy(update={"message": message})
+
+
+def _stream_commentary_fields(
+    output_payload: object,
+    tool_search_fields: Mapping[str, object] | None,
+    *,
+    splits_commentary: bool,
+    structured_output: bool,
+) -> dict[str, object] | None:  # mutable-ok: Delta.provider_specific_fields is typed as a dict
+    if not splits_commentary or structured_output:
+        return dict(tool_search_fields) if tool_search_fields is not None else None
+    items: Final = _STREAMED_OUTPUT_ITEMS.validate_python(output_payload)
+    moved: Final = turn_moves_commentary(items)
+    fields: Final = {**(tool_search_fields or {}), **commentary_carrier(items, moved_commentary=moved)}
+    return fields or None
 
 
 def _with_replay_fields(
@@ -1262,7 +1321,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         )
                     )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
-                input_items.extend(_assistant_replay_items(msg, replay_tool_search))
+                input_items.extend(_assistant_replay_items(msg, replay_tool_search, replay_openai_history))
                 if content:
                     input_items.append(
                         {
@@ -1307,7 +1366,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
                 if role == "assistant":
-                    input_items.extend(_assistant_replay_items(msg, replay_tool_search))
+                    input_items.extend(_assistant_replay_items(msg, replay_tool_search, replay_openai_history))
                 input_items.append(
                     {
                         "type": "message",
@@ -1322,7 +1381,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 )
             elif role == "assistant":
-                input_items.extend(_assistant_replay_items(msg, replay_tool_search))
+                input_items.extend(_assistant_replay_items(msg, replay_tool_search, replay_openai_history))
 
         return input_items, instructions
 
@@ -1712,7 +1771,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             moved_commentary=moved_commentary,
         )
         if not replay_openai_history:
-            return [folded]
+            return [_with_commentary_carrier(folded, output_items, moved_commentary)]
         return [
             _with_replay_fields(
                 folded,
@@ -1862,7 +1921,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ),
             completed=raw_response.status == "completed",
             keeps_every_reasoning_item=serves_anthropic_messages(logging_obj),
-            splits_commentary=not serves_anthropic_messages(logging_obj),
+            splits_commentary=not serves_anthropic_messages(logging_obj)
+            and not output_guardrails_apply(
+                cast("Mapping[str, object]", litellm_params),  # cast-ok: litellm_params is an untyped dict
+                stream=False,
+            ),
         )
 
         response_is_incomplete: Final = raw_response.status == "incomplete" or (
@@ -1928,6 +1991,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         structured_output: bool = False,
         replays_openai_history: bool = False,
         streams_reasoning_signatures: bool = False,
+        guards_output: bool = False,
     ) -> BaseModelResponseIterator:
         return OpenAiResponsesToChatCompletionStreamIterator(
             streaming_response,
@@ -1936,6 +2000,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             structured_output=structured_output,
             replays_openai_history=replays_openai_history,
             streams_reasoning_signatures=streams_reasoning_signatures,
+            guards_output=guards_output,
         )
 
     def _convert_content_str_to_input_text(self, content: str, role: str) -> dict[str, object]:
@@ -2329,6 +2394,7 @@ _STREAM_END_EVENTS: Final = frozenset(
         ResponsesAPIStreamEvents.ERROR.value,
     }
 )
+_STREAM_INTERRUPTED: Final[Mapping[str, object]] = MappingProxyType({"type": ResponsesAPIStreamEvents.ERROR.value})
 
 
 @dataclass(frozen=True, slots=True)
@@ -2390,6 +2456,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         structured_output: bool = False,
         replays_openai_history: bool = False,
         streams_reasoning_signatures: bool = False,
+        guards_output: bool = False,
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._replays_openai_history: Final = replays_openai_history
@@ -2398,11 +2465,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
         self._structured_output: Final = structured_output
-        self._splits_commentary: Final = not structured_output and not streams_reasoning_signatures
+        self._splits_commentary: Final = (
+            not structured_output and not streams_reasoning_signatures and not guards_output
+        )
         self._first_message_item_done: bool = False
         self._message_phases: Mapping[int, Phase] = MappingProxyType({})
         self._commentary_parts: frozenset[tuple[object, object]] = frozenset()
         self._held: tuple[_HeldText, ...] = ()
+        self._deferred_error: Exception | None = None
         self._turn_filled: bool = False
         self._reasoning_summary_streamed: bool = False
         self._summary_streamed_outputs: frozenset[int | None] = frozenset()
@@ -2704,7 +2774,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                     splits_commentary=splits_commentary,
                                 )
                                 if replays_openai_history
-                                else tool_search_fields
+                                else _stream_commentary_fields(
+                                    output_payload,
+                                    tool_search_fields,
+                                    splits_commentary=splits_commentary,
+                                    structured_output=structured_output,
+                                )
                             ),
                         ),
                         finish_reason=finish_reason,
@@ -2789,6 +2864,38 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             self._summary_streamed_outputs = self._summary_streamed_outputs | {_stream_output_index(chunk)}
         finished: Final = _with_released_text(translated, released)
         return self._with_served_service_tier(self._with_stream_scoped_id(finished))
+
+    def __next__(self) -> "GenericStreamingChunk | ModelResponseStream":
+        if self._deferred_error is not None:
+            raise self._deferred_error
+        try:
+            return super().__next__()
+        except Exception as error:
+            if not self._held:
+                raise
+            return self._flushed_before(error)
+
+    async def __anext__(self) -> "GenericStreamingChunk | ModelResponseStream":
+        if self._deferred_error is not None:
+            raise self._deferred_error
+        try:
+            return await super().__anext__()
+        except Exception as error:
+            if not self._held:
+                raise
+            return self._flushed_before(error)
+
+    def _flushed_before(self, error: Exception) -> "ModelResponseStream":
+        """A stream that fails or stops before deciding held commentary still delivers it, as content,
+        the way a terminal event would, and then surfaces the same error on the next read."""
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        released: Final = self._release_held(_STREAM_INTERRUPTED)
+        self._deferred_error = error
+        chunk: Final = ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason=None)]
+        )
+        return self._with_served_service_tier(self._with_stream_scoped_id(_with_released_text(chunk, released)))
 
     def _commentary_text(self, chunk: Mapping[str, object]) -> "_HeldText | None":
         if not self._splits_commentary or self._item_phase(chunk) != "commentary":

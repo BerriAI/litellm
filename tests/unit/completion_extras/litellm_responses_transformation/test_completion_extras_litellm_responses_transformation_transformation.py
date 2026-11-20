@@ -7,7 +7,7 @@ import json
 import os
 import queue
 import unittest
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
@@ -34,7 +34,13 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.responses.stored_system_prompt import awithout_stored_instructions
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
-from litellm.types.utils import Message, ModelResponse, StandardLoggingPayload, TextCompletionResponse
+from litellm.types.utils import (
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StandardLoggingPayload,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
@@ -7939,10 +7945,6 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
-
-
-
-
 def _commentary_item(item_id: str, *texts: str) -> Mapping[str, object]:
     return {
         "id": item_id,
@@ -8267,6 +8269,144 @@ def test_stream_empty_commentary_deltas_neither_drop_text_nor_add_separators() -
     )
     assert streamed == ("Hello!", "Plan. Checking.")
     assert (folded.content, getattr(folded, "reasoning_content", None)) == streamed
+
+
+class _UpstreamFailed(Exception):
+    pass
+
+
+_HELD_COMMENTARY_EVENTS: Final = (
+    {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": _added_stream_item(_commentary_item("msg_pre", "Checking.")),
+    },
+    {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "Chec"},
+    {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "king."},
+)
+_ANSWER_EVENTS: Final = (
+    {"type": "response.output_item.added", "output_index": 0, "item": _added_stream_item(_answer_item("msg_a", "Hi."))},
+    {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "Hi."},
+)
+
+
+def _sse_lines(events: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    return tuple(f"data: {json.dumps(dict(event))}" for event in events)
+
+
+def _lines_then(lines: Sequence[str], error: BaseException | None) -> Iterator[str]:
+    yield from lines
+    if error is not None:
+        raise error
+
+
+async def _async_lines_then(lines: Sequence[str], error: BaseException | None) -> AsyncIterator[str]:
+    for line in lines:
+        yield line
+    if error is not None:
+        raise error
+
+
+def _delta_texts(chunks: Sequence[object]) -> tuple[str, str]:
+    deltas: Final = tuple(
+        chunk.choices[0].delta for chunk in chunks if isinstance(chunk, ModelResponseStream) and chunk.choices
+    )
+    return (
+        "".join(delta.content or "" for delta in deltas),
+        "".join(getattr(delta, "reasoning_content", None) or "" for delta in deltas),
+    )
+
+
+_INTERRUPTIONS: Final = pytest.mark.parametrize(
+    ("events", "error", "expected", "released"),
+    [
+        (_HELD_COMMENTARY_EVENTS, _UpstreamFailed("upstream failed"), _UpstreamFailed, ("Checking.", "")),
+        (_HELD_COMMENTARY_EVENTS, None, StopIteration, ("Checking.", "")),
+        (_ANSWER_EVENTS, _UpstreamFailed("upstream failed"), _UpstreamFailed, None),
+    ],
+    ids=["error-after-commentary", "end-after-commentary", "error-with-nothing-held"],
+)
+
+
+@_INTERRUPTIONS
+def test_stream_interruption_delivers_held_commentary_then_the_same_error(
+    events: Sequence[Mapping[str, object]],
+    error: Exception | None,
+    expected: type[Exception],
+    released: tuple[str, str] | None,
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=_lines_then(_sse_lines(events), error), sync_stream=True
+    )
+    chunks: Final = tuple(next(iterator) for _ in range(len(events) + (released is not None)))
+
+    with pytest.raises(expected) as raised:
+        next(iterator)
+
+    assert _delta_texts(chunks) == (released if released is not None else ("Hi.", ""))
+    assert error is None or raised.value is error
+
+
+@pytest.mark.asyncio
+async def test_async_stream_error_delivers_held_commentary_then_the_same_error() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    error: Final = _UpstreamFailed("upstream failed")
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=_async_lines_then(_sse_lines(_HELD_COMMENTARY_EVENTS), error), sync_stream=False
+    ).__aiter__()
+    chunks: Final = [await iterator.__anext__() for _ in range(len(_HELD_COMMENTARY_EVENTS) + 1)]
+
+    with pytest.raises(_UpstreamFailed) as raised:
+        await iterator.__anext__()
+
+    assert _delta_texts(chunks) == ("Checking.", "")
+    assert raised.value is error
+
+
+def test_stream_cancellation_propagates_without_being_turned_into_a_chunk() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    cancelled: Final = asyncio.CancelledError()
+    lines: Final = _sse_lines(_HELD_COMMENTARY_EVENTS)
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=_lines_then(lines, cancelled), sync_stream=True
+    )
+    received: Final = tuple(next(iterator) for _ in lines)
+
+    with pytest.raises(asyncio.CancelledError) as raised:
+        next(iterator)
+
+    assert raised.value is cancelled
+    assert _delta_texts(received) == ("", "")
+
+
+@pytest.mark.asyncio
+async def test_async_stream_cancellation_propagates_without_being_turned_into_a_chunk() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    cancelled: Final = asyncio.CancelledError()
+    lines: Final = _sse_lines(_HELD_COMMENTARY_EVENTS)
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=_async_lines_then(lines, cancelled), sync_stream=False
+    ).__aiter__()
+    received: Final = [await iterator.__anext__() for _ in lines]
+
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await iterator.__anext__()
+
+    assert raised.value is cancelled
+    assert _delta_texts(received) == ("", "")
 
 
 def test_convert_response_output_moves_commentary_from_raw_dict_items() -> None:

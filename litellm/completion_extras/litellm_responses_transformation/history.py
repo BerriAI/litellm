@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 REPLAY_FIELD: Final = "openai_responses_replay"
 PHASE_FIELD: Final = "phase"
+COMMENTARY_FIELD: Final = "openai_responses_commentary"
 
 Phase: TypeAlias = Literal["commentary", "final_answer"]
 
@@ -66,7 +67,7 @@ class _MessageEntry(_Frozen):
     type: Literal["message"]
     parts: tuple[Annotated[int, Field(ge=0)], ...]
     phase: Phase | None = None
-    text: tuple[str, ...] | None = None
+    stored: Literal[True] | None = None
 
 
 class _IndexedEntry(_Frozen):
@@ -114,6 +115,7 @@ class _ProviderFields(_Frozen):
     phase: Phase | None = None
     tool_search_items: tuple[Mapping[str, object], ...] | None = None
     openai_responses_replay: object = None
+    openai_responses_commentary: tuple[tuple[str, ...], ...] | None = None
 
 
 class _ChatMessage(_Frozen):
@@ -148,6 +150,16 @@ _PHASE: Final[TypeAdapter[Phase]] = TypeAdapter(Phase)
 
 class _RetainedFields(_PhaseFields):
     openai_responses_replay: object = None
+    openai_responses_commentary: object = None
+
+
+class _CommentaryFields(_Frozen):
+    openai_responses_commentary: tuple[tuple[str, ...], ...] | None = None
+
+
+class _CommentaryMessage(_Frozen):
+    role: str | None = None
+    provider_specific_fields: _CommentaryFields | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +279,7 @@ def _checksum(message: _ChatMessage, entries: Sequence[_MessageEntry | _IndexedE
         "tool_search_items": list((fields.tool_search_items if fields else None) or ()),
         "phase": message.phase or (fields.phase if fields else None),
         "items": [entry.model_dump(mode="json", exclude_none=True) for entry in entries],
+        **({"commentary": [list(parts) for parts in _carrier(message)]} if _carrier(message) else {}),
     }
     encoded: Final = json.dumps(bound, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8", "surrogatepass")).hexdigest()
@@ -289,7 +302,7 @@ def _entry(items: Sequence[_OutputItem], position: int, moved_commentary: bool) 
             type="message",
             parts=tuple(len(part.text) for part in item.content),
             phase=item.phase,
-            text=tuple(part.text for part in item.content) if _is_moved(item, moved_commentary) else None,
+            stored=True if _is_moved(item, moved_commentary) else None,
         )
     ordinal: Final = sum(1 for earlier in items[:position] if _kind(earlier) == _kind(item))
     return _IndexedEntry(type=item.type, index=ordinal)
@@ -331,6 +344,32 @@ def _content_phase(
     return content_message.phase if isinstance(content_message, _OutputMessage) else None
 
 
+def _carrier(message: _ChatMessage) -> tuple[tuple[str, ...], ...]:
+    fields: Final = message.provider_specific_fields
+    return (fields.openai_responses_commentary if fields else None) or ()
+
+
+def _moved_texts(parsed: Sequence[_OutputItem | None], moved_commentary: bool) -> tuple[tuple[str, ...], ...]:
+    messages: Final = tuple(item for item in parsed if isinstance(item, _OutputMessage))
+    return tuple(tuple(part.text for part in item.content) for item in messages if _is_moved(item, moved_commentary))
+
+
+def _carrier_fields(texts: tuple[tuple[str, ...], ...]) -> Mapping[str, object]:
+    return {COMMENTARY_FIELD: [list(parts) for parts in texts]} if texts else {}
+
+
+def commentary_carrier(output_items: Sequence[object], *, moved_commentary: bool) -> Mapping[str, object]:
+    """The moved commentary of a turn, kept so the next request can send it back on any route."""
+    return _carrier_fields(_moved_texts(tuple(map(_parsed_output_item, output_items)), moved_commentary))
+
+
+def _with_carrier(message: _ChatMessage, texts: tuple[tuple[str, ...], ...]) -> _ChatMessage:
+    if not texts:
+        return message
+    fields: Final = (message.provider_specific_fields or _ProviderFields()).model_copy(update={COMMENTARY_FIELD: texts})
+    return message.model_copy(update={"provider_specific_fields": fields})
+
+
 def _with_phase(message: _ChatMessage, phase: Phase | None) -> _ChatMessage:
     if phase is None:
         return message
@@ -350,10 +389,13 @@ def replay_fields(
     phase: Final = _content_phase(
         output_items, parsed, first_message_only=first_message_only, moved_commentary=moved_commentary
     )
-    phase_fields: Final[Mapping[str, object]] = MappingProxyType({PHASE_FIELD: phase} if phase else {})
+    moved_texts: Final = _moved_texts(parsed, moved_commentary)
+    turn_fields: Final[Mapping[str, object]] = MappingProxyType(
+        {**({PHASE_FIELD: phase} if phase else {}), **_carrier_fields(moved_texts)}
+    )
     items: Final = tuple(item for item in parsed if item is not None)
     parsed_message: Final = _chat_message(message)
-    chat: Final = _with_phase(parsed_message, phase) if parsed_message is not None else None
+    chat: Final = _with_carrier(_with_phase(parsed_message, phase), moved_texts) if parsed_message is not None else None
     if (
         not completed
         or not items
@@ -361,10 +403,57 @@ def replay_fields(
         or chat is None
         or not _matches(items, chat, moved_commentary)
     ):
-        return phase_fields
+        return turn_fields
     entries: Final = tuple(_entry(items, position, moved_commentary) for position in range(len(items)))
     replay: Final = _Replay(version=1, items=entries, checksum=_checksum(chat, entries))
-    return MappingProxyType({**phase_fields, REPLAY_FIELD: replay.model_dump(mode="json", exclude_none=True)})
+    return MappingProxyType({**turn_fields, REPLAY_FIELD: replay.model_dump(mode="json", exclude_none=True)})
+
+
+def _commentary_message(message: object) -> _CommentaryMessage | None:
+    try:
+        parsed: Final = _CommentaryMessage.model_validate(_as_json(message))
+    except ValidationError:
+        return None
+    return parsed if parsed.role == "assistant" else None
+
+
+def commentary_parts(message: object) -> tuple[tuple[str, ...], ...]:
+    """The moved commentary an assistant message carries, which is sent upstream on its next turn."""
+    parsed: Final = _commentary_message(message)
+    fields: Final = parsed.provider_specific_fields if parsed is not None else None
+    return (fields.openai_responses_commentary if fields is not None else None) or ()
+
+
+def stored_commentary_items(message: object, *, phased: bool) -> tuple[Mapping[str, object], ...]:
+    """Assistant items for carried commentary, labeled with its phase only on routes that read phase."""
+    phase: Final = "commentary" if phased else None
+    return tuple(_message_item(texts, phase) for texts in commentary_parts(message))
+
+
+class _AnyFields(_Frozen):
+    provider_specific_fields: Mapping[str, object] | None = None
+
+
+def without_scanned_commentary(message: Mapping[str, object]) -> Mapping[str, object]:
+    """A message whose commentary a guardrail read as content, so its raw carrier and record can't come back."""
+    if not commentary_parts(message):
+        return message
+    try:
+        fields: Final = _AnyFields.model_validate(_as_json(message)).provider_specific_fields or {}
+    except ValidationError:
+        return {**message, "provider_specific_fields": None}
+    return {**message, "provider_specific_fields": dict(without_commentary(fields))}
+
+
+def without_commentary(provider_specific_fields: Mapping[str, object]) -> Mapping[str, object]:
+    """Logging copy without the carrier, and without a record that cannot validate once the carrier is gone."""
+    if provider_specific_fields.get(COMMENTARY_FIELD) is None:
+        return provider_specific_fields
+    return {
+        **provider_specific_fields,
+        COMMENTARY_FIELD: None,
+        **({REPLAY_FIELD: None} if REPLAY_FIELD in provider_specific_fields else {}),
+    }
 
 
 def _stored_replay(message: _ChatMessage) -> _Replay | None:
@@ -385,15 +474,18 @@ def _message_texts(entries: Sequence[_MessageEntry], content: str) -> tuple[tupl
     return tuple(parts[start:end] for start, end in pairwise(groups))
 
 
+def _is_sliced(entry: _MessageEntry | _IndexedEntry) -> bool:
+    """A message entry whose text is a slice of the chat content rather than of the commentary carrier."""
+    return isinstance(entry, _MessageEntry) and entry.stored is None
+
+
+def _is_stored(entry: _MessageEntry | _IndexedEntry) -> bool:
+    return isinstance(entry, _MessageEntry) and entry.stored is True
+
+
 def _sliced_entries(entries: Sequence[_MessageEntry | _IndexedEntry]) -> tuple[_MessageEntry, ...]:
-    """Message entries whose text is a slice of the chat content, not stored in the record."""
     messages: Final = tuple(entry for entry in entries if isinstance(entry, _MessageEntry))
-    return tuple(entry for entry in messages if entry.text is None)
-
-
-def _stored_text(entry: _MessageEntry | _IndexedEntry) -> tuple[str, ...] | None:
-    """None marks a message whose text is sliced from the chat content."""
-    return entry.text if isinstance(entry, _MessageEntry) else ()
+    return tuple(entry for entry in messages if entry.stored is None)
 
 
 class _StoredReplay(_Frozen):
@@ -486,7 +578,12 @@ def _fits(message: _ChatMessage, entries: Sequence[_MessageEntry | _IndexedEntry
     )
     parts: Final = chain.from_iterable(entry.parts for entry in _sliced_entries(entries))
     indexed: Final = (entry for entry in entries if isinstance(entry, _IndexedEntry))
-    return sum(parts) == len(message.content or "") and all(entry.index < sizes[entry.type] for entry in indexed)
+    stored: Final = sum(1 for entry in entries if _is_stored(entry))
+    return (
+        sum(parts) == len(message.content or "")
+        and stored == len(_carrier(message))
+        and all(entry.index < sizes[entry.type] for entry in indexed)
+    )
 
 
 def _resolve(
@@ -497,12 +594,16 @@ def _resolve(
         return None
     calls: Final = tuple(entry for entry in indexed if entry.type in ("function_call", "custom_tool_call"))
     texts: Final = _message_texts(_sliced_entries(entries), message.content or "")
-    stored: Final = tuple(_stored_text(entry) for entry in entries)
-    positions: Final = tuple(position for position, text in enumerate(stored) if text is None)
-    stored_texts: Final = {position: text for position, text in enumerate(stored) if text is not None}
+    sliced_positions: Final = tuple(position for position, entry in enumerate(entries) if _is_sliced(entry))
+    stored_positions: Final = tuple(position for position, entry in enumerate(entries) if _is_stored(entry))
     resolved: Final = _Resolved(
         message=message,
-        texts=MappingProxyType({**dict(zip(positions, texts, strict=True)), **stored_texts}),
+        texts=MappingProxyType(
+            {
+                **dict(zip(sliced_positions, texts, strict=True)),
+                **dict(zip(stored_positions, _carrier(message), strict=True)),
+            }
+        ),
         tool_searches=_tool_search_entries(message),
     )
     tool_calls: Final = message.tool_calls or ()
