@@ -2427,7 +2427,7 @@ def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
 
 
 def _bedrock_invoke_claude_with_extra_body(
-    extra_body: Mapping[str, object], drop_params: bool
+    extra_body: Mapping[str, object] | str, drop_params: bool
 ) -> tuple[httpx.Request, ...]:
     captured_requests: Final[list[httpx.Request]] = []
 
@@ -2457,7 +2457,7 @@ def _bedrock_invoke_claude_with_extra_body(
             client=client,
             max_tokens=16,
             drop_params=drop_params,
-            extra_body=dict(extra_body),
+            extra_body=dict(extra_body) if isinstance(extra_body, Mapping) else extra_body,
         )
     finally:
         client.close()
@@ -2481,13 +2481,33 @@ def test_bedrock_invoke_claude_extra_body_sends_fields_top_level_and_gates_fallb
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     requests: Final = _bedrock_invoke_claude_with_extra_body(
-        {"fallbacks": [{"model": "claude-opus-5-5"}], "stop_sequences": ["5"], "max_tokens": 4096}, drop_params
+        {"fallbacks": [{"model": "claude-opus-5-5"}], "stop_sequences": ["5"]}, drop_params
     )
 
     request_body: Final = json.loads(requests[0].content)
     assert request_body["stop_sequences"] == ["5"]
-    assert request_body["max_tokens"] == 16
     assert request_body.get("fallbacks") == ([{"model": "claude-opus-5-5"}] if fallbacks_kept else None)
+
+
+def test_bedrock_invoke_claude_extra_body_caps_a_raised_max_tokens_only_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't raise max_tokens"):
+        _bedrock_invoke_claude_with_extra_body({"max_tokens": 4096}, drop_params=False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body({"max_tokens": 4096}, drop_params=True)
+
+    assert json.loads(requests[0].content)["max_tokens"] == 16
+
+
+def test_bedrock_invoke_claude_rejects_a_non_object_extra_body_before_calling_bedrock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid type for 'extra_body': expected an object, got str"):
+        _bedrock_invoke_claude_with_extra_body('{"top_k": 5}', drop_params=False)
 
 
 def test_bedrock_invoke_claude_extra_body_drops_guarded_keys_under_drop_params(

@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,7 +24,6 @@ from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -198,10 +198,15 @@ def test_anthropic_completion_sends_extra_body_fields_top_level_and_drops_guarde
 
 
 @pytest.mark.parametrize(
-    ("max_tokens", "extra_body_max_tokens", "sent_max_tokens"), [(16, 4096, 16), (16, 5, 5), (None, 5, 5)]
+    ("max_tokens", "extra_body_max_tokens", "drop_params", "sent_max_tokens"),
+    [(16, 4096, True, 16), (16, 5, False, 5), (None, 5, False, 5)],
 )
-def test_anthropic_completion_lets_extra_body_lower_max_tokens_but_never_raise_it(
-    max_tokens: int | None, extra_body_max_tokens: int, sent_max_tokens: int, respx_mock: respx.MockRouter
+def test_anthropic_completion_lets_extra_body_lower_max_tokens_and_caps_a_raise_under_drop_params(
+    max_tokens: int | None,
+    extra_body_max_tokens: int,
+    drop_params: bool,
+    sent_max_tokens: int,
+    respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(
@@ -224,10 +229,31 @@ def test_anthropic_completion_lets_extra_body_lower_max_tokens_but_never_raise_i
         messages=[{"role": "user", "content": "Hello"}],
         api_key="test-key",
         max_tokens=max_tokens,
+        drop_params=drop_params,
         extra_body={"max_tokens": extra_body_max_tokens},
     )
 
     assert json.loads(route.calls.last.request.content)["max_tokens"] == sent_max_tokens
+
+
+def test_anthropic_completion_answers_400_when_extra_body_raises_max_tokens_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=httpx.Response(500))
+
+    with pytest.raises(
+        litellm.BadRequestError, match=re.escape("extra_body can't raise max_tokens above the request's max_tokens (16)")
+    ):
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            max_tokens=16,
+            extra_body={"max_tokens": 4096},
+        )
+
+    assert not route.called
 
 
 def test_anthropic_completion_answers_400_for_guarded_extra_body_keys_without_drop_params(
@@ -284,21 +310,34 @@ def _anthropic_beta_header_sent(
     return sent.headers.get("anthropic-beta", ""), json.loads(sent.content)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("context_management", {"edits": [{"type": "clear_tool_uses_20250919"}]}),
+        ("mcp_servers", [{"type": "url", "url": "https://mcp.example.com/sse", "name": "example"}]),
+        ("container", {"skills": [{"type": "anthropic", "skill_id": "pptx", "version": "latest"}]}),
+    ],
+)
 def test_anthropic_completion_adds_the_same_beta_header_for_a_field_in_extra_body(
+    field: str, value: object, respx_mock: respx.MockRouter
+) -> None:
+    plain_beta, _ = _anthropic_beta_header_sent(respx_mock, {})
+    top_level_beta, top_level_body = _anthropic_beta_header_sent(respx_mock, {field: value})
+    extra_body_beta, extra_body_body = _anthropic_beta_header_sent(respx_mock, {"extra_body": {field: value}})
+
+    assert set(top_level_beta.split(",")) - set(plain_beta.split(","))
+    assert extra_body_beta == top_level_beta
+    assert extra_body_body[field] == top_level_body[field]
+
+
+def test_anthropic_completion_sends_the_extra_body_output_config_over_the_mapped_reasoning_effort(
     respx_mock: respx.MockRouter,
 ) -> None:
-    context_management: Final = {"edits": [{"type": "clear_tool_uses_20250919"}]}
-
-    top_level_beta, top_level_body = _anthropic_beta_header_sent(
-        respx_mock, {"context_management": context_management}
-    )
-    extra_body_beta, extra_body_body = _anthropic_beta_header_sent(
-        respx_mock, {"extra_body": {"context_management": context_management}}
+    _, sent_body = _anthropic_beta_header_sent(
+        respx_mock, {"reasoning_effort": "low", "extra_body": {"output_config": {"effort": "high"}}}
     )
 
-    assert ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value in top_level_beta.split(",")
-    assert extra_body_beta == top_level_beta
-    assert extra_body_body["context_management"] == top_level_body["context_management"] == context_management
+    assert sent_body["output_config"] == {"effort": "high"}
 
 
 def test_anthropic_completion_rejects_a_non_object_extra_body_before_calling_anthropic() -> None:

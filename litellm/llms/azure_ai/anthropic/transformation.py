@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig, admitted_extra_body
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, admitted_extra_body, request_extra_body
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
@@ -38,18 +38,23 @@ def _promote_extra_body_to_optional_params(optional_params: dict, drop_params: o
     them. The caller's values overwrite mapped top-level duplicates, matching
     the native ``anthropic`` provider, and like it never replace the model,
     messages, system prompt, tools, or stream flag litellm builds, or raise its max_tokens.
+    A ``system`` kwarg lands in ``extra_body`` the same way, so it is promoted as the
+    request field the native provider takes, which a system message still replaces.
     """
-    extra_body: Final = optional_params.get("extra_body")
-    if not isinstance(extra_body, dict) or not extra_body:
+    params: Final = _PARAMS_ADAPTER.validate_python(optional_params)
+    extra_body: Final = request_extra_body(params.get("extra_body"))
+    if isinstance(extra_body, AnthropicError):
+        return extra_body
+    if not extra_body:
         return None
     admitted: Final = admitted_extra_body(
-        _PARAMS_ADAPTER.validate_python(extra_body),
-        _PARAMS_ADAPTER.validate_python(optional_params),
+        {key: value for key, value in extra_body.items() if key != "system"},
+        params,
         drops_unsupported_params(drop_params),
     )
     if isinstance(admitted, AnthropicError):
         return admitted
-    optional_params.update(admitted)
+    optional_params.update({**{key: value for key, value in extra_body.items() if key == "system"}, **admitted})
     optional_params.pop("extra_body", None)
     return None
 
@@ -121,7 +126,7 @@ class AzureAnthropicConfig(AnthropicConfig):
             pdf_used=pdf_used,
             api_key=api_key or "",  # Azure auth is already in headers
             file_id_used=file_id_used,
-            is_vertex_request=optional_params.get("is_vertex_request", False),
+            is_vertex_request=optional_params.get("is_vertex_request", False) is True,
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
             thinking=optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
