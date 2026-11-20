@@ -5007,3 +5007,68 @@ def test_strip_advisor_blocks_replaces_an_exchange_with_the_advice_its_result_co
     assert strip_advisor_blocks_from_messages(messages, replace_with_text=True) == [
         {"role": "assistant", "content": expected_content}
     ]
+
+
+_NO_ID_USE: Final = {"type": "server_tool_use", "name": "advisor", "input": {}}
+_NO_ID_RESULT: Final = {"type": "advisor_tool_result", "content": "advice"}
+_WEB_SEARCH_USE: Final = {"type": "server_tool_use", "id": 7, "name": "web_search", "input": {}}
+
+
+@pytest.mark.parametrize("replace_with_text", [False, True], ids=["strip", "replace"])
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        pytest.param(
+            [_advisor_use("srvtoolu_1"), _advisor_result(["srvtoolu_1"]), _OK_TEXT], [_OK_TEXT], id="list-tool-use-id"
+        ),
+        pytest.param(
+            [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT], [_OK_TEXT], id="list-ids"
+        ),
+        pytest.param(
+            [_advisor_use({"id": "srvtoolu_1"}), _advisor_result({"id": "srvtoolu_1"}), _OK_TEXT],
+            [_OK_TEXT],
+            id="object-ids",
+        ),
+        pytest.param([_advisor_use(7), _advisor_result(7), _OK_TEXT], [_OK_TEXT], id="int-ids"),
+        pytest.param(
+            [_advisor_use(["srvtoolu_1"]), _advisor_result("srvtoolu_1"), _OK_TEXT],
+            [_advisor_result("srvtoolu_1"), _OK_TEXT],
+            id="list-use-id-beside-a-string-result-id",
+        ),
+        pytest.param(
+            [_advisor_use(None), _advisor_result(None), _NO_ID_USE, _NO_ID_RESULT, _WEB_SEARCH_USE, _OK_TEXT],
+            [_advisor_use(None), _advisor_result(None), _NO_ID_USE, _NO_ID_RESULT, _WEB_SEARCH_USE, _OK_TEXT],
+            id="null-missing-and-non-advisor-ids-kept",
+        ),
+    ],
+)
+def test_strip_advisor_blocks_drops_advisor_blocks_with_a_non_string_id_under_drop_params(
+    content: list[dict[str, object]], expected: list[dict[str, object]], replace_with_text: bool
+) -> None:
+    messages: Final = [{"role": "assistant", "content": content}]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=replace_with_text, drop_params=True) == [
+        {"role": "assistant", "content": expected}
+    ]
+
+
+def test_strip_advisor_blocks_replaces_a_string_id_exchange_and_drops_a_list_id_one_under_drop_params() -> None:
+    messages: Final = [
+        {
+            "role": "assistant",
+            "content": [
+                _advisor_use("srvtoolu_1"),
+                _advisor_result("srvtoolu_1"),
+                _advisor_use(["srvtoolu_2"]),
+                _advisor_result(["srvtoolu_2"]),
+                _OK_TEXT,
+            ],
+        }
+    ]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=True, drop_params=True) == [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "<advisor_feedback>\nadvice\n</advisor_feedback>"}, _OK_TEXT],
+        }
+    ]

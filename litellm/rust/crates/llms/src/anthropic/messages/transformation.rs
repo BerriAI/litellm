@@ -37,9 +37,9 @@ use crate::{
         minted_oauth_environment, optionally_handle_anthropic_oauth,
         requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
-        strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
-        strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
-        tools_without_strict,
+        strip_raw_advisor_blocks_and_non_string_ids, strip_raw_encrypted_reasoning_blocks,
+        strip_raw_unsigned_thinking_blocks, strip_thinking_blocks_from_anthropic_messages_request,
+        strip_unsigned_thinking_blocks, tools_without_strict,
     },
     base_llm::{
         auth::AuthScheme,
@@ -334,6 +334,12 @@ pub(crate) fn transform_messages_request(
         || continues_message_thread(&request.params)
     {
         request.messages
+    } else if context.drops_unsupported_params {
+        map_messages(
+            request.messages,
+            strip_advisor_blocks,
+            strip_raw_advisor_blocks_and_non_string_ids,
+        )
     } else {
         map_messages(
             request.messages,
@@ -1270,6 +1276,38 @@ mod tests {
                 false
             ),
             Ok(body(merged(tools, json!({"messages": stripped}))))
+        );
+    }
+
+    #[rstest]
+    #[case::kept_without_drop_params(false, json!([
+        {"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."},
+        {"type": "text", "text": "Done."}
+    ]))]
+    #[case::dropped_under_drop_params(true, json!([{"type": "text", "text": "Done."}]))]
+    fn advisor_history_with_a_list_id_is_dropped_only_under_drop_params(
+        #[case] drops_unsupported_params: bool,
+        #[case] expected: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let context = MessagesTransformContext {
+            drops_unsupported_params,
+            ..MessagesTransformContext::with_lookup(unmapped, false, &no_env)
+        };
+        let history = json!([
+            {"role": "user", "content": "Build a worker pool."},
+            {"role": "assistant", "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}},
+                {"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."},
+                {"type": "text", "text": "Done."}
+            ]}
+        ]);
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request(json!({"messages": history})), &context)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed).unwrap()["messages"][1]["content"],
+            expected
         );
     }
 

@@ -1052,6 +1052,30 @@ pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
     })
 }
 
+fn has_non_string_raw_advisor_id(block: &Value) -> bool {
+    let id = match raw_block_type(block) {
+        Some("advisor_tool_result") => block.get("tool_use_id"),
+        _ if is_raw_advisor_use(block) => block.get("id"),
+        _ => None,
+    };
+    id.is_some_and(|id| !id.is_string() && !id.is_null())
+}
+
+pub fn strip_raw_advisor_blocks_and_non_string_ids(message: Value) -> Option<Value> {
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Some(message);
+    }
+    with_raw_blocks(message, |blocks| {
+        Some(
+            blocks
+                .into_iter()
+                .filter(|block| !has_non_string_raw_advisor_id(block))
+                .collect(),
+        )
+    })
+    .and_then(strip_raw_advisor_blocks)
+}
+
 fn is_raw_encrypted_reasoning_block(block: &Value) -> bool {
     let field = match raw_block_type(block) {
         Some("thinking") => block.get("signature"),
@@ -1961,6 +1985,57 @@ mod tests {
         #[case] expected: Value,
     ) {
         assert_eq!(strip_raw_advisor_blocks(turn(blocks)), Some(turn(expected)));
+    }
+
+    #[rstest]
+    #[case::list_answering_a_string_id(
+        json!([advisor_use(json!("srvtoolu_1")), advisor_result(json!(["srvtoolu_1"])), unparsed_block()]),
+        json!([unparsed_block()])
+    )]
+    #[case::non_string_ids(
+        json!([
+            advisor_use(json!(["srvtoolu_1"])), advisor_result(json!(["srvtoolu_1"])),
+            advisor_use(json!({"id": "srvtoolu_2"})), advisor_result(json!({"id": "srvtoolu_2"})),
+            advisor_use(json!(7)), advisor_result(json!(7)),
+            unparsed_block()
+        ]),
+        json!([unparsed_block()])
+    )]
+    #[case::list_use_id_beside_a_string_result_id(
+        json!([advisor_use(json!(["srvtoolu_1"])), advisor_result(json!("srvtoolu_1")), unparsed_block()]),
+        json!([advisor_result(json!("srvtoolu_1")), unparsed_block()])
+    )]
+    #[case::null_and_missing_ids_are_kept(
+        json!([
+            advisor_use(Value::Null), advisor_result(Value::Null),
+            {"type": "server_tool_use", "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "content": {}},
+            {"type": "server_tool_use", "id": 7, "name": "web_search", "input": {}}
+        ]),
+        json!([
+            advisor_use(Value::Null), advisor_result(Value::Null),
+            {"type": "server_tool_use", "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "content": {}},
+            {"type": "server_tool_use", "id": 7, "name": "web_search", "input": {}}
+        ])
+    )]
+    fn strip_raw_advisor_blocks_and_non_string_ids_drops_advisor_blocks_with_a_non_string_id(
+        #[case] blocks: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            strip_raw_advisor_blocks_and_non_string_ids(turn(blocks)),
+            Some(turn(expected))
+        );
+    }
+
+    #[rstest]
+    fn strip_raw_advisor_blocks_and_non_string_ids_leaves_a_user_turn() {
+        let message = json!({"role": "user", "content": advisor_exchange(json!(7))});
+        assert_eq!(
+            strip_raw_advisor_blocks_and_non_string_ids(message.clone()),
+            Some(message)
+        );
     }
 
     const MANY_BLOCKS: usize = 20_000;
