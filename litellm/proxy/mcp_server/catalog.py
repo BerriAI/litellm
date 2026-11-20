@@ -1668,6 +1668,7 @@ async def _fetch_cached_tool_page(
 
     from litellm.proxy.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY, classify_list_exception
     from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller
+    from litellm.proxy.mcp_server.operations import resolve_native_tool_name_for_server
     from litellm.proxy.mcp_server.utils import strip_known_server_prefix
 
     try:
@@ -1693,9 +1694,19 @@ async def _fetch_cached_tool_page(
         meta = tool.meta
         if context.mcp_proxy_mode and meta is not None:
             meta = {key: value for key, value in meta.items() if key != "litellm.ai/proxy_tool_identity"}
-        return tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server), "meta": meta})
+        name: Final = (
+            tool.name if context.mcp_proxy_mode else resolve_native_tool_name_for_server(tool.name, server, (server,))
+        )
+        return tool.model_copy(update={"name": name, "meta": meta})
 
     underlying_tools: Final = tuple(cached_tool_definition(tool) for tool in page.tools)
+    route_tools: Final = (
+        tuple(
+            tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)}) for tool in underlying_tools
+        )
+        if context.mcp_proxy_mode
+        else underlying_tools
+    )
     server_headers: Final = prepared_headers.get(server_id)
     catalog_auth_header: Final = server_headers[2] if server_headers is not None else None
     listed_caller: Final = ListedToolsCaller(
@@ -1720,7 +1731,7 @@ async def _fetch_cached_tool_page(
     )
     listing_updates.callback(
         manager.register_prefixed_tool_routes,
-        underlying_tools,
+        route_tools,
         server,
         register_bare_names=False,
     )

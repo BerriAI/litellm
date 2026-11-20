@@ -1768,7 +1768,11 @@ async def test_missing_cached_page_fails_only_its_server_and_never_refetches(
 
 
 @pytest.mark.asyncio
-async def test_cached_continuation_records_tools_on_the_receiving_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("display_name", (None, "friendly-tool"))
+@pytest.mark.parametrize("mcp_proxy_mode", (False, True))
+async def test_cached_continuation_records_tools_on_the_receiving_worker(
+    monkeypatch: pytest.MonkeyPatch, display_name: str | None, mcp_proxy_mode: bool
+) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.mcp_server import operations as mcp_operations
     from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller
@@ -1785,11 +1789,12 @@ async def test_cached_continuation_records_tools_on_the_receiving_worker(monkeyp
         url="https://bound.example/mcp",
         transport=MCPTransport.http,
     )
+    server.tool_name_to_display_name = {"bound-tool-1": display_name} if display_name is not None else None
     first_manager: Final = MCPServerManager(upstream_transport=transport)
     monkeypatch.setattr(first_manager, "registry", {server.server_id: server})
     monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", first_manager)
     auth: Final = UserAPIKeyAuth(api_key="cached-page-owner", user_id="cached-page-user")
-    context: Final = mcp_operations.prepare_context(auth)
+    context: Final = mcp_operations.prepare_context(auth, mcp_proxy_mode=mcp_proxy_mode)
 
     first: Final = await catalog.aggregate_gateway_tools(
         context,
@@ -1836,12 +1841,17 @@ async def test_cached_continuation_records_tools_on_the_receiving_worker(monkeyp
         use_tool_list_cache=False,
     )
 
-    listed_tool: Final = receiving_manager.get_listed_tool(server, "bound-tool-1", listed_caller)
+    listed_tool_name: Final = "bound-bound-tool-1" if mcp_proxy_mode else "bound-tool-1"
+    listed_tool: Final = receiving_manager.get_listed_tool(server, listed_tool_name, listed_caller)
     assert listed_tool is not None
-    assert listed_tool.name == "bound-tool-1"
+    assert listed_tool.name == listed_tool_name
     assert listed_tool.input_schema == {"type": "object"}
-    assert receiving_manager.get_listed_tool(server, "bound-tool-1", other_caller) is None
-    assert continuation.tools[0].name == "bound-bound-tool-1"
+    assert "litellm.ai/proxy_tool_identity" not in (listed_tool.meta or {})
+    assert receiving_manager.get_listed_tool(server, listed_tool_name, other_caller) is None
+    expected_name: Final = (
+        "bound-bound-tool-1" if mcp_proxy_mode or display_name is None else display_name
+    )
+    assert continuation.tools[0].name == expected_name
     assert "bound-bound-tool-1" in receiving_manager.tool_name_to_mcp_server_name_mapping
     assert "bound-tool-1" not in receiving_manager.tool_name_to_mcp_server_name_mapping
     assert calls.empty()
