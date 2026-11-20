@@ -4,11 +4,21 @@ Azure AI Anthropic CountTokens API transformation logic.
 Extends the base Anthropic CountTokens transformation with Azure authentication.
 """
 
+from collections.abc import Sequence
 from typing import Final
 from urllib.parse import urlsplit
 
+from pydantic import JsonValue
+
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    context_management_betas,
+    count_tokens_feature_betas,
+    merge_anthropic_beta_headers,
+)
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
@@ -28,6 +38,9 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         self,
         api_key: str | None,
         litellm_params: dict[str, object] | None = None,
+        messages: Sequence[object] = (),
+        context_management: JsonValue = None,
+        thinking: JsonValue = None,
     ) -> dict[str, str]:
         """
         Get the required headers for the Azure AI Anthropic CountTokens API.
@@ -38,6 +51,9 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         Args:
             api_key: The Azure AI API key
             litellm_params: Optional LiteLLM parameters for additional auth config
+            messages: The request messages, read for betas the counted features need
+            context_management: The edit spec the count forwards, read for the betas its edits need
+            thinking: The thinking the count forwards, read for the betas inference adds for it
 
         Returns:
             Dictionary of required headers with both x-api-key and Azure authentication
@@ -46,7 +62,16 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         headers: Final = {
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
+            "anthropic-beta": merge_anthropic_beta_headers(
+                ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
+                (
+                    *count_tokens_feature_betas("azure_ai", {}, messages),
+                    *filter_and_transform_beta_headers(
+                        [*context_management_betas(context_management), *AnthropicModelInfo().thinking_betas(thinking)],
+                        "azure_ai",
+                    ),
+                ),
+            ),
             **({"x-api-key": api_key} if api_key else {}),
         }
 

@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Queue
 from threading import Event, Thread
 from typing import Final, cast
-from unittest import SkipTest, skipIf
+from unittest import SkipTest
 from unittest.mock import patch
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -70,7 +70,9 @@ def enqueue(body: object, status: int = 200) -> None:
 
 def enqueue_stream() -> None:
     chunk: Final = {**CHAT, "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "pong"}}]}
-    RESPONSES.put((200, f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()))
+    terminal: Final = {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+    stream: Final = f"data: {json.dumps(chunk)}\n\ndata: {json.dumps(terminal)}\n\ndata: [DONE]\n\n"
+    RESPONSES.put((200, stream.encode()))
 
 
 def bedrock_event(event: str, payload: object) -> bytes:
@@ -200,7 +202,6 @@ def check_messages_tools(base: str) -> None:
     assert (sent["model"], sent["messages"], sent["tools"]) == ("claude-sonnet-5-5", MESSAGES, tools), sent
 
 
-@skipIf(importlib.util.find_spec("fastapi") is None, "BUG: LIT-9333 cache hits import proxy-only fastapi")
 def check_cache_hit(base: str) -> None:
     from litellm.caching.caching import Cache
     from litellm.types.caching import LiteLLMCacheType
@@ -229,7 +230,6 @@ def check_cache_hit(base: str) -> None:
         assert REQUESTS.empty(), "the second SDK call missed the response cache"
 
 
-@skipIf(importlib.util.find_spec("fastapi") is None, "BUG: LIT-9333 Messages streaming imports proxy-only fastapi")
 def check_messages_stream_and_callback(base: str) -> None:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER

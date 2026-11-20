@@ -4,10 +4,11 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
+import openai
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
@@ -71,17 +72,30 @@ class BaseLLMException(Exception):
 _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 
 
+def _client_header_names(client: openai.OpenAI | openai.AsyncOpenAI | None) -> frozenset[str]:
+    if client is None:
+        return frozenset()
+    sdk_user_agent: Final = f"{type(client).__name__}/Python {openai.__version__}"
+    return frozenset(
+        name.lower()
+        for name, value in client.default_headers.items()
+        if name != "User-Agent" or value != sdk_user_agent
+    )
+
+
 def with_attribution_headers(
     attribution_headers: Mapping[str, str],
-    headers: dict[str, str] | None,  # mutable-ok: returned as-is when there is nothing to add
-) -> dict[str, str] | None:  # mutable-ok: becomes the request's outbound headers
+    headers: dict[str, object] | None,  # mutable-ok: returned as-is when there is nothing to add
+    client: openai.OpenAI | openai.AsyncOpenAI | None = None,
+) -> dict[str, object] | None:  # mutable-ok: becomes the request's outbound headers
     """
-    `headers` plus any attribution header the caller didn't already set (names
-    compared case-insensitively). Builds a new dict; `headers` is never mutated.
+    `headers` plus any attribution header the caller didn't already set, on the
+    request or as a default header of its own OpenAI client (names compared
+    case-insensitively). Builds a new dict; `headers` is never mutated.
     """
     if not attribution_headers:
         return headers
-    caller_names: Final = {name.lower() for name in headers or {}}
+    caller_names: Final = {name.lower() for name in headers or {}} | _client_header_names(client)
     return {
         **{name: value for name, value in attribution_headers.items() if name.lower() not in caller_names},
         **(headers or {}),
@@ -199,12 +213,19 @@ class BaseConfig(ABC):
 
     def translate_developer_role_to_system_role(
         self,
-        messages: list[AllMessageValues],
-    ) -> list[AllMessageValues]:
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
         """
         Translate `developer` role to `system` role for non-OpenAI providers.
 
-        Overriden by OpenAI/Azure
+        Overridden by OpenAI, which also places the instructions in one leading system
+        message for an OpenAI-compatible model declared to reject a later system
+        message, and by the o-series and Azure configs.
         """
         return map_developer_role_to_system_role(messages=messages)
 
@@ -506,6 +527,9 @@ class BaseConfig(ABC):
 
     @property
     def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
+        return False
+
+    def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
         return False
 
     def post_stream_processing(self, stream: object) -> object:

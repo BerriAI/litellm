@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     stored_control_options,
 )
 from litellm.types.litellm_params import ControlOptions
+from litellm.utils import get_non_default_completion_params
 
 
 def _funnel_kwargs_completion_forwards(monkeypatch, wif_kwargs: dict[str, object]) -> dict[str, object]:
@@ -199,6 +200,10 @@ class TestGetLitellmParamsKwargsExtraction:
         ({"stream_chunk_size": "64"}, ControlOptions(stream_chunk_size=64)),
         ({"stream_chunk_size": None}, ControlOptions()),
         ({"temperature": 0.2}, ControlOptions()),
+        ({"fake_stream": True}, ControlOptions(fake_stream=True)),
+        ({"fake_stream": "true", "stream_chunk_size": 64}, ControlOptions(stream_chunk_size=64, fake_stream=True)),
+        ({"fake_stream": False}, ControlOptions(fake_stream=False)),
+        ({"fake_stream": "false"}, ControlOptions(fake_stream=False)),
     ],
 )
 def test_control_options_are_read_from_the_request_kwargs(kwargs: dict[str, object], expected: ControlOptions) -> None:
@@ -232,6 +237,13 @@ def test_control_options_reject_a_stream_chunk_size_that_is_not_a_positive_int(r
     assert parse_control_options({"stream_chunk_size": raw}) == InvalidControlOption(
         param="stream_chunk_size",
         message=f"Invalid stream_chunk_size={shown}: expected a positive integer of at most 18 digits",
+    )
+
+
+@pytest.mark.parametrize("raw", ["maybe", "yes", "1", "True", 1, 0, 1.0])
+def test_control_options_reject_a_fake_stream_that_is_not_true_or_false(raw: object) -> None:
+    assert parse_control_options({"fake_stream": raw}) == InvalidControlOption(
+        param="fake_stream", message=f"Invalid fake_stream={raw!r}: expected true or false"
     )
 
 
@@ -339,6 +351,13 @@ class TestGetLitellmParamsDataResidency:
         )
         assert result["data_residency"] == "us"
 
+    def test_fedramp_host_resolves_to_fedramp(self):
+        result = get_litellm_params(
+            custom_llm_provider="openai",
+            api_base="https://gov.api.openai.com/v1",
+        )
+        assert result["data_residency"] == "fedramp"
+
     def test_global_host_resolves_to_none(self):
         result = get_litellm_params(
             custom_llm_provider="openai",
@@ -410,6 +429,14 @@ class TestMetadataFallsBackToLitellmMetadata:
         assert result["metadata"] is not litellm_metadata
         result["metadata"].pop("trace_id")
         assert litellm_metadata == {"trace_id": "trace-1"}
+
+    def test_session_id_derived_from_trace_id_adds_no_provider_params(self):
+        from_trace_id: Final = get_litellm_params(metadata={"trace_id": "trace-1"})
+        from_session_id: Final = get_litellm_params(metadata={"session_id": "session-1"})
+        added_by_trace_id: Final = from_trace_id.keys() - from_session_id.keys()
+
+        assert added_by_trace_id
+        assert not added_by_trace_id & get_non_default_completion_params(from_trace_id).keys()
 
 
 @pytest.mark.parametrize(

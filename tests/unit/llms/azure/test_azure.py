@@ -6,7 +6,7 @@ import os
 import time
 from collections.abc import Mapping
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import httpx
 import pytest
@@ -187,7 +187,7 @@ def test_process_azure_headers_with_dict_input():
         "extra_headers",
     ],
 )
-def test_azure_extra_headers(input, call_type, header_value):
+def test_azure_extra_headers(input, call_type, header_value, monkeypatch: pytest.MonkeyPatch):
     from litellm import embedding, image_generation
 
     # Clear the LLM clients cache to ensure the new http_client is used
@@ -197,7 +197,7 @@ def test_azure_extra_headers(input, call_type, header_value):
 
     messages = [{"role": "user", "content": "Hello world"}]
     with patch.object(http_client, "send", new=MagicMock()) as mock_client:
-        litellm.client_session = http_client
+        monkeypatch.setattr(litellm, "client_session", http_client)
         try:
             if call_type == "completion":
                 func = completion
@@ -291,11 +291,9 @@ def test_get_azure_ad_token_from_username_password(mock_get_bearer_token_provide
 
     mock_credential.assert_called_once_with(client_id=client_id, username=username, password=password)
 
-    mock_get_bearer_token_provider.assert_called_once_with(
-        mock_credential.return_value, "https://cognitiveservices.azure.com/.default"
-    )
+    mock_get_bearer_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
 
-    assert result == mock_token_provider
+    assert result() == "mock-token"
 
 
 def test_azure_openai_gpt_4o_naming(monkeypatch):

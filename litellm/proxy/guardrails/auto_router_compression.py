@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
-from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
+from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ def policy_for_model(
     """
     if llm_router is None:
         return None
-    deployments: Final = llm_router.deployments_for_request(model_alias, request_kwargs)
+    deployments: Final = llm_router.registry().deployments(model_alias, source="for_request", request=request_kwargs)
     markers: Final = tuple(
         litellm_params
         for deployment in deployments

@@ -4,7 +4,7 @@ import pytest
 
 import litellm
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, call
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -55,6 +55,21 @@ async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(se
         {"role": "assistant", "content": [{"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}}]},
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"}]},
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_success_body_that_is_not_a_message_passes_through(server: RecordingServer) -> None:
+    overloaded: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    server.default_response = ResponseSpec(body=overloaded)
+
+    response: Final = await call(server)
+
+    assert_served_natively(server, response)
+    assert isinstance(response, dict)
+    assert {name: value for name, value in response.items() if name != "_hidden_params"} == {
+        **overloaded,
+        "stop_sequence": None,
+    }
 
 
 @pytest.mark.asyncio

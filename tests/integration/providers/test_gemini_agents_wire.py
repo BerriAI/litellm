@@ -75,9 +75,9 @@ def test_agents_forwards_caller_supplied_key_to_chosen_api_base(gateway: Gateway
         assert request.headers["x-goog-api-key"] == "synthetic-caller-key"
         assert _ENV_GEMINI_KEY not in request.headers.values()
         assert json.loads(request.body) == {
-            "name": _AGENT_NAME,
+            "id": _AGENT_NAME,
             "base_agent": "waverunner",
-            "instructions": "make slides",
+            "system_instruction": "make slides",
         }
         return Reply(body=json.dumps(_AGENT_REPLY).encode())
 

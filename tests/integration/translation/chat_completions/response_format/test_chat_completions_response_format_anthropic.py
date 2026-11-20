@@ -6,7 +6,7 @@ import pytest
 from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
-from integration.translation.chat_completions.bases.anthropic import CLAUDE_HAIKU_5_5_TEST_CASE
+from integration.translation.chat_completions.bases.anthropic import CLAUDE_OPUS_4_8_TEST_CASE
 from integration.translation.runner import assert_translation
 
 PLACE_SCHEMA: Final = {
@@ -24,25 +24,25 @@ PLACE_TOOL_USE: Final = {
     "caller": {"type": "direct"},
 }
 
-CLAUDE_HAIKU_5_5_JSON_SCHEMA_TEST_CASE: Final = replace(
-    CLAUDE_HAIKU_5_5_TEST_CASE,
+CLAUDE_OPUS_4_8_JSON_SCHEMA_TEST_CASE: Final = replace(
+    CLAUDE_OPUS_4_8_TEST_CASE,
     scenario="json_schema",
     litellm_request={
-        "model": "anthropic/claude-haiku-5-5",
+        "model": "anthropic/claude-opus-4-8",
         "max_tokens": 128,
         "messages": [{"role": "user", "content": PLACE_PROMPT}],
         "response_format": {"type": "json_schema", "json_schema": {"name": "place", "schema": PLACE_SCHEMA}},
         "cache": {"no-cache": True},
     },
     expected_provider_request={
-        "model": "claude-haiku-5-5",
+        "model": "claude-opus-4-8",
         "messages": [{"role": "user", "content": [{"type": "text", "text": PLACE_PROMPT}]}],
         "max_tokens": 128,
         "tool_choice": {"name": "json_tool_call", "type": "tool"},
         "tools": [{"name": "json_tool_call", "input_schema": PLACE_SCHEMA}],
     },
     mock_provider_response={
-        "model": "claude-haiku-5-5",
+        "model": "claude-opus-4-8",
         "id": "msg_011CgCoP2UR3vcM5ZWmEBd8D",
         "type": "message",
         "role": "assistant",
@@ -68,7 +68,7 @@ CLAUDE_HAIKU_5_5_JSON_SCHEMA_TEST_CASE: Final = replace(
         "id": ANY,
         "created": ANY,
         "object": "chat.completion",
-        "model": "anthropic/claude-haiku-5-5",
+        "model": "anthropic/claude-opus-4-8",
         "choices": [
             {
                 "finish_reason": "stop",
@@ -97,11 +97,11 @@ CLAUDE_HAIKU_5_5_JSON_SCHEMA_TEST_CASE: Final = replace(
     },
 )
 
-CLAUDE_HAIKU_5_5_JSON_SCHEMA_TOOL_NAMED_ENVELOPE_TEST_CASE: Final = replace(
-    CLAUDE_HAIKU_5_5_JSON_SCHEMA_TEST_CASE,
+CLAUDE_OPUS_4_8_JSON_SCHEMA_TOOL_NAMED_ENVELOPE_TEST_CASE: Final = replace(
+    CLAUDE_OPUS_4_8_JSON_SCHEMA_TEST_CASE,
     scenario="json_schema_tool_named_envelope",
     mock_provider_response={
-        **CLAUDE_HAIKU_5_5_JSON_SCHEMA_TEST_CASE.mock_provider_response,
+        **CLAUDE_OPUS_4_8_JSON_SCHEMA_TEST_CASE.mock_provider_response,
         "content": [
             {
                 **PLACE_TOOL_USE,
@@ -114,7 +114,7 @@ CLAUDE_HAIKU_5_5_JSON_SCHEMA_TOOL_NAMED_ENVELOPE_TEST_CASE: Final = replace(
 
 @pytest.mark.parametrize(
     "case",
-    [CLAUDE_HAIKU_5_5_JSON_SCHEMA_TEST_CASE, CLAUDE_HAIKU_5_5_JSON_SCHEMA_TOOL_NAMED_ENVELOPE_TEST_CASE],
+    [CLAUDE_OPUS_4_8_JSON_SCHEMA_TEST_CASE, CLAUDE_OPUS_4_8_JSON_SCHEMA_TOOL_NAMED_ENVELOPE_TEST_CASE],
     ids=lambda case: case.id,
 )
 def test_chat_completions_response_format_anthropic(
