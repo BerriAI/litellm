@@ -1,5 +1,6 @@
 mod admit;
 mod boot;
+mod callbacks;
 mod db;
 mod error;
 mod health;
@@ -10,6 +11,7 @@ mod redis;
 mod resources;
 mod state;
 pub use admit::{Admit, Reason, Refused};
+pub use callbacks::{Callbacks, Unregistrable};
 pub use error::Error;
 pub use redis::RedisClients;
 pub use resources::Resources;
@@ -67,7 +69,7 @@ pub async fn build_inference(
         router,
         shaping,
         routing,
-        host::NativeHost,
+        host::NativeHost::default(),
     )?))
 }
 

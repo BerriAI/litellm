@@ -22,6 +22,7 @@ use crate::{
     Error, Gateway,
     error::{Ended, NoDeployments},
     headers::Routing,
+    hooks::{CallHooks, CallType},
     stream_event::Read,
     stream_hold::{self, Cause, Chunks, Held},
     stream_outcome,
@@ -30,12 +31,17 @@ use crate::{
 /// The chunks of a route's stream.
 pub type RouteChunks = Chunks<litellm_host_http::Error<InferenceError>>;
 
-/// The host the routes are served through. It answers router-core's hostcalls for one call, and
-/// the gateway crate attaches the native one.
+/// The host the routes are served through. It answers router-core's hostcalls and the callback
+/// hooks for one call, and the gateway crate attaches the native one.
 pub trait Host: Send + Sync + Sized + 'static {
     type RouterHost<'a, A: RouteAttempt + 'a>: RouterHost<Response = A::Outcome, Failure = Error>
     where
         Self: 'a;
+
+    type Hooks: CallHooks;
+
+    /// The callback hooks of one call `identity` makes on the `call_type` route.
+    fn hooks(&self, identity: &AuthenticatedRequest, call_type: CallType) -> Self::Hooks;
 
     /// router-core's host for one call that runs `route` on each attempt for `identity`.
     fn router_host<'a, A: RouteAttempt>(
