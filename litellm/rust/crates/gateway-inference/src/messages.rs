@@ -9,6 +9,7 @@ use litellm_host_http::Sse;
 use litellm_inference_messages::{
     MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
 };
+use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
@@ -21,6 +22,7 @@ use crate::{
     Error, Gateway, JsonObject,
     caching::CacheHeaders,
     error::ErrorFormat,
+    hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
     routing::{self, Host, RouteAttempt, RouteChunks},
     serve::{self, Call, Endpoint},
@@ -98,9 +100,25 @@ impl<'a, H: Host> MessagesAttempt<'a, H> {
 }
 
 impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
+    const CALL_TYPE: CallType = CallType::AnthropicMessages;
     const OP: Op = Op::ANTHROPIC_MESSAGES;
     const PATH: &'static str = "/v1/messages";
     const ERRORS: ErrorFormat = ErrorFormat::Anthropic;
+
+    fn counts((ran, _): &Self::Outcome) -> Option<Counts> {
+        let usage = match ran {
+            CallOutput::Complete(MessagesBody::Message(message)) => message.usage.as_ref(),
+            CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.get("usage"),
+            CallOutput::Stream { .. } => None,
+        }?;
+        serde_json::from_value::<MessagesStreamUsage>(usage.clone())
+            .ok()
+            .map(Counts::from)
+    }
+
+    fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
+        Some(counts.messages_usage())
+    }
 
     fn render((ran, cache): Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error> {
         let stream =
@@ -269,6 +287,8 @@ impl From<MessagesStreamUsage> for Counts {
         Self {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
         }
     }
 }
