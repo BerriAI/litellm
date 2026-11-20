@@ -156,7 +156,7 @@ describe("CreateMCPServer permission toggles reaching the payload", () => {
     await fillMinimalHttpServer("Perm_Server");
 
     expect(screen.getByText("Allow All LiteLLM Keys")).toBeInTheDocument();
-    expect(screen.queryByText("Delegate auth to upstream (PKCE passthrough)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Delegate auth to upstream (PKCE Pass-Through)")).not.toBeInTheDocument();
 
     const payload = await submitAndReadPayload();
 

@@ -200,7 +200,7 @@ describe("Gateway app definition", () => {
       default_customer_member_budget: overallPreset,
     });
     const overall = within(await screen.findByRole("region", { name: "Overall app budget" }));
-    expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
+    expect(overall.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(150);
     fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     expect(screen.getByRole("link", { name: "Manage per-member defaults and budget groups" })).toHaveAttribute(
       "href",
@@ -232,7 +232,7 @@ describe("Gateway app definition", () => {
       customEditor.getByRole("combobox", { name: "Overall app budget" }),
       "Enter custom limits instead",
     );
-    expect(customEditor.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
+    expect(customEditor.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(150);
     fireEvent.change(customEditor.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     await expectSavedBudget(user, { max_budget: 150, budget_duration: "1mo", rpm_limit: 0 }, 1);
   });
@@ -271,7 +271,7 @@ describe("Gateway app definition", () => {
     const source = overall.getByRole("combobox", { name: "Overall app budget" });
     await chooseAppOption(user, source, /^App Scale/);
     await chooseAppOption(user, source, "Enter custom limits instead");
-    expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(250);
+    expect(overall.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(250);
     expect(overall.getByRole("spinbutton", { name: "Requests per minute" })).toHaveValue(25);
     fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     await chooseAppOption(user, source, /^No limit/);
@@ -321,10 +321,10 @@ describe("Gateway app definition", () => {
     await user.click(editor.getAllByRole("combobox", { name: "Reset period" })[1]);
     expect(await screen.findByRole("option", { name: "/ year" })).toHaveAttribute("aria-disabled", "true");
     await user.keyboard("{Escape}");
-    const amount = editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })[0];
+    const amount = editor.getAllByRole("spinbutton", { name: "Additional Max Budget (USD)" })[0];
     expect(amount).toHaveAttribute("placeholder", "No limit");
     expect(amount).toHaveAccessibleDescription(
-      "Leave an amount blank to remove that spend limit. Other spend limits and TPM/RPM limits stay unchanged.",
+      "Leave an amount blank to remove that max budget. Other max budgets and TPM/RPM limits stay unchanged.",
     );
     if (action === "clear") {
       fireEvent.change(amount, { target: { value: "" } });
@@ -338,32 +338,32 @@ describe("Gateway app definition", () => {
   it("adds multiple spend limits and can add again after removing every additional row", async () => {
     const user = await openAppSettings({ budget: { max_budget: 500, tpm_limit: 2000, rpm_limit: 100 } });
     const editor = within(await screen.findByRole("region", { name: "Overall app budget" }));
-    const add = editor.getByRole("button", { name: "Add another spend limit" });
-    expect(editor.queryByText("Additional spend limit (USD)")).not.toBeInTheDocument();
+    const add = editor.getByRole("button", { name: "Add another Max Budget" });
+    expect(editor.queryByText("Additional Max Budget (USD)")).not.toBeInTheDocument();
     await user.click(add);
-    fireEvent.change(editor.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+    fireEvent.change(editor.getByRole("spinbutton", { name: "Additional Max Budget (USD)" }), {
       target: { value: "1300" },
     });
     await user.click(add);
-    expect(editor.getByText("Additional spend limit (USD)")).toBeInTheDocument();
-    expect(editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveLength(2);
+    expect(editor.getByText("Additional Max Budget (USD)")).toBeInTheDocument();
+    expect(editor.getAllByRole("spinbutton", { name: "Additional Max Budget (USD)" })).toHaveLength(2);
     await user.click(editor.getAllByRole("combobox", { name: "Reset period" })[2]);
     await user.click(await screen.findByRole("option", { name: "Custom period" }));
     const duplicatePeriod = editor.getByRole("textbox", { name: "Custom period" });
     fireEvent.change(duplicatePeriod, { target: { value: "30d" } });
     expect(duplicatePeriod).toBeInvalid();
-    expect(editor.getByRole("alert")).toHaveTextContent("A spend limit already uses this period.");
+    expect(editor.getByRole("alert")).toHaveTextContent("A max budget already uses this period.");
     await user.click(screen.getByRole("button", { name: "Save app settings" }));
     expect(requests.filter((request) => request.method === "PATCH")).toHaveLength(0);
     await user.click(editor.getAllByRole("button", { name: "Remove limit" })[1]);
     await user.click(editor.getByRole("button", { name: "Remove limit" }));
-    expect(editor.queryByText("Additional spend limit (USD)")).not.toBeInTheDocument();
+    expect(editor.queryByText("Additional Max Budget (USD)")).not.toBeInTheDocument();
     await user.click(add);
-    fireEvent.change(editor.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+    fireEvent.change(editor.getByRole("spinbutton", { name: "Additional Max Budget (USD)" }), {
       target: { value: "1300" },
     });
     await user.click(add);
-    fireEvent.change(editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })[1], {
+    fireEvent.change(editor.getAllByRole("spinbutton", { name: "Additional Max Budget (USD)" })[1], {
       target: { value: "9000" },
     });
     await expectSavedBudget(user, {
