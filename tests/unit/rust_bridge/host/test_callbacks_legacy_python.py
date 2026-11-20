@@ -575,21 +575,23 @@ def test_a_stream_logs_the_flag_python_logs(requested: object, keeps_requested: 
     assert logger.stream == expected
 
 
-_ROUTE_USAGE: Final = MappingProxyType({"prompt_tokens": 1200, "completion_tokens": 300, "total_tokens": 1500})
+def _route_usage() -> Usage:
+    return Usage(prompt_tokens=1200, completion_tokens=300, total_tokens=1500)
 
 
 def _routed_messages_logger() -> Logging:
     logger: Final = _messages_logger()
-    logger.update_environment_variables(
-        model="claude-opus-5-5", user=None, optional_params={}, litellm_params={}, custom_llm_provider="anthropic"
-    )
+    logger.optional_params = {}
+    logger.litellm_params = {}
+    logger.model_call_details["litellm_params"] = {}
+    logger.model_call_details["custom_llm_provider"] = "anthropic"
     return logger
 
 
 def test_a_route_priced_messages_call_is_logged_as_main_prices_it_and_never_repriced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    usage: Final = Usage(**_ROUTE_USAGE)
+    usage: Final = _route_usage()
     receipt: Final = price(
         CallFacts(
             by="call",
@@ -611,7 +613,7 @@ def test_a_route_priced_messages_call_is_logged_as_main_prices_it_and_never_repr
     assert receipt is not None
     priced_by_python: Final = _routed_messages_logger()
     expected_cost: Final = litellm.completion_cost(
-        completion_response=ModelResponse(model="claude-opus-5-5", usage=Usage(**_ROUTE_USAGE)),
+        completion_response=ModelResponse(model="claude-opus-5-5", usage=_route_usage()),
         model="claude-opus-5-5",
         custom_llm_provider="anthropic",
         call_type="anthropic_messages",
@@ -625,9 +627,7 @@ def test_a_route_priced_messages_call_is_logged_as_main_prices_it_and_never_repr
         raise AssertionError("a route-priced call was priced again")
 
     monkeypatch.setattr(litellm, "response_cost_calculator", repriced)
-    logged: Final = logger.response_cost_calculator(
-        result=ModelResponse(model="claude-opus-5-5", usage=Usage(**_ROUTE_USAGE))
-    )
+    logged: Final = logger.response_cost_calculator(result=ModelResponse(model="claude-opus-5-5", usage=_route_usage()))
     assert logged == expected_cost
     assert logger.model_call_details["response_cost"] == expected_cost
     assert logger.cost_breakdown == priced_by_python.cost_breakdown
