@@ -151,7 +151,7 @@ async def test_blocked_history_tool_call_blocks_the_request(handler, request_bod
 
 @pytest.mark.asyncio
 async def test_masked_tool_call_scan_leaves_arguments_untouched():
-    bedrock: Final = _Bedrock()
+    bedrock: Final = _Bedrock(answer=MASK)
     guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock)
     result: Final = await guardrail.apply_guardrail(
         inputs={
