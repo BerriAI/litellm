@@ -184,6 +184,12 @@ def get_audio_file_name(file_obj: FileTypes) -> str:
     Returns:
         str: The name of the file if available, otherwise a string representation of the object.
     """
+    if isinstance(file_obj, tuple) and len(file_obj) > 0:
+        first = file_obj[0]
+        if first is not None:
+            return str(first)
+        if len(file_obj) > 1 and hasattr(file_obj[1], "name"):
+            return str(getattr(file_obj[1], "name"))
     if hasattr(file_obj, "name"):
         return getattr(file_obj, "name")
     elif hasattr(file_obj, "__str__"):

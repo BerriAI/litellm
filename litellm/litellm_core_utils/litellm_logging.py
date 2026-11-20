@@ -1575,9 +1575,15 @@ class Logging(LiteLLMLoggingBaseClass):
         if model is not None:
             self.model = model
         self.user = user
+        # Strip self-referential litellm_logging_obj to prevent cyclic references that delay garbage collection
+        cleaned_litellm_params = {
+            k: v
+            for k, v in litellm_params.items()
+            if not (k == "litellm_logging_obj" and v is self)
+        }
         self.litellm_params = {
             **self.litellm_params,
-            **scrub_sensitive_keys_in_metadata(litellm_params),
+            **scrub_sensitive_keys_in_metadata(cleaned_litellm_params),
         }
         if params_provider is not None and _text(self._litellm_params_view.get("custom_llm_provider")) is None:
             self.litellm_params["custom_llm_provider"] = params_provider
