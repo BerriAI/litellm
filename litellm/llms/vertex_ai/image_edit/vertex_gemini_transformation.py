@@ -13,6 +13,7 @@ import litellm
 from litellm.images.fan_out import image_request_count
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_base_url,
@@ -250,11 +251,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         ]
 
         if not data_list:
-            from litellm.llms.gemini.image_generation.transformation import (
-                raise_if_image_gen_flagged,
-            )
-
-            raise_if_image_gen_flagged(response_json, model, raw_response, llm_provider="vertex_ai")
+            raise empty_image_response_error(response_json, model, "vertex_ai", raw_response)
         usage_metadata: Final = _JSON_DICT.validate_python(response_json.get("usageMetadata") or {})
         traffic_type: Final = usage_metadata.get("trafficType") if usage_metadata else None
         return ImageResponse(
