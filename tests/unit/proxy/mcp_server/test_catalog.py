@@ -1398,6 +1398,7 @@ def _session_bound_tools_transport(
     page_size: int = 1,
     ttl_ms: int = 9000,
     tool_description: str | None = None,
+    tool_input_schema: JsonValue | None = None,
     revision: str | None = None,
 ) -> tuple[httpx2.MockTransport, queue.SimpleQueue[tuple[str, str, str | None, str | None]]]:
     session_ids: Final = count()
@@ -1497,7 +1498,9 @@ def _session_bound_tools_transport(
                     "tools": [
                         {
                             "name": f"{server_id}-tool-{index}",
-                            "inputSchema": {"type": "object"},
+                            "inputSchema": (
+                                tool_input_schema if tool_input_schema is not None else {"type": "object"}
+                            ),
                             **({"description": tool_description} if tool_description is not None else {}),
                         }
                         for index in range(offset, end)
@@ -1858,6 +1861,147 @@ async def test_cached_continuation_records_tools_on_the_receiving_worker(
     assert continuation.tools[0].name == expected_name
     assert "bound-bound-tool-1" in receiving_manager.tool_name_to_mcp_server_name_mapping
     assert "bound-tool-1" not in receiving_manager.tool_name_to_mcp_server_name_mapping
+    assert calls.empty()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan_mode", ("mask", "deny"))
+async def test_cached_continuation_rescans_guardrails_with_current_caller_context(
+    monkeypatch: pytest.MonkeyPatch, scan_mode: str
+) -> None:
+    from fastapi import HTTPException
+
+    import litellm
+    from litellm.caching.dual_cache import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller
+    from litellm.proxy.utils import ProxyLogging
+
+    class CachedContinuationGuardrail(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(guardrail_name="cached-continuation", event_hook="pre_mcp_call", default_on=True)
+            self.seen_auth_metadata: list[object] = []
+
+        async def apply_guardrail(
+            self, inputs: dict[str, object], request_data: dict[str, object], input_type: str, **kwargs: object
+        ) -> dict[str, object]:
+            request_metadata: Final = request_data.get("metadata")
+            auth_metadata: Final = (
+                request_metadata.get("user_api_key_metadata")
+                if isinstance(request_metadata, dict)
+                else None
+            )
+            self.seen_auth_metadata.append(auth_metadata)
+            if not isinstance(auth_metadata, dict) or auth_metadata.get("require_mcp_catalog_guardrail") is not True:
+                return inputs
+            text_values: Final = inputs.get("texts")
+            texts: Final = (
+                tuple(str(text) for text in text_values) if isinstance(text_values, (list, tuple)) else ()
+            )
+            if scan_mode == "deny" and any("BLOCKED" in text for text in texts):
+                raise HTTPException(status_code=400, detail={"error": "cached tool description blocked"})
+            inputs["texts"] = [text.replace("SECRET", "[MASKED]") for text in texts]
+            return inputs
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "cached-continuation-guardrail-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", object())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
+    store: Final = MemoryToolPageStore()
+    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", store)
+    tool_description: Final = "BLOCKED cached description" if scan_mode == "deny" else "SECRET cached description"
+    tool_schema: Final[JsonValue] = {
+        "type": "object",
+        "properties": {"prompt": {"type": "string", "description": "SECRET schema"}},
+    }
+    transport, calls = _session_bound_tools_transport(
+        tool_count=2,
+        page_size=1,
+        ttl_ms=0,
+        tool_description=tool_description,
+        tool_input_schema=tool_schema,
+        revision="fixture-v1",
+    )
+    server: Final = MCPServer(
+        server_id="bound",
+        name="bound",
+        url="https://bound.example/mcp",
+        transport=MCPTransport.http,
+    )
+    initial_auth: Final = UserAPIKeyAuth(
+        api_key="cached-guardrail-owner",
+        user_id="same-caller",
+        metadata={"require_mcp_catalog_guardrail": False},
+    )
+    current_auth: Final = UserAPIKeyAuth(
+        api_key="cached-guardrail-owner",
+        user_id="same-caller",
+        metadata={"require_mcp_catalog_guardrail": True},
+    )
+    initial_context: Final = mcp_operations.prepare_context(initial_auth)
+    current_context: Final = mcp_operations.prepare_context(current_auth)
+    initial_manager: Final = MCPServerManager(upstream_transport=transport)
+    monkeypatch.setattr(initial_manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", initial_manager)
+
+    first: Final = await catalog.aggregate_gateway_tools(
+        initial_context,
+        PaginatedRequestParams(),
+        (server,),
+        {},
+        enforce_rate_limits=False,
+        use_tool_list_cache=False,
+    )
+    assert first.next_cursor is not None
+    await asyncio.gather(*tuple(catalog._TOOL_PRODUCERS.values()))
+    initial_requests: Final = tuple(calls.get_nowait() for _ in range(calls.qsize()))
+    assert sum(request[1] == "tools/list" for request in initial_requests) == 2
+
+    receiving_manager: Final = MCPServerManager(upstream_transport=transport)
+    monkeypatch.setattr(receiving_manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", receiving_manager)
+    guardrail: Final = CachedContinuationGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    ProxyLogging._callback_capabilities_cache.clear()
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.slack_alerting_instance.send_alert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging_obj)
+
+    continuation: Final = await catalog.aggregate_gateway_tools(
+        current_context,
+        PaginatedRequestParams(cursor=first.next_cursor),
+        (server,),
+        {},
+        record_listing=True,
+        enforce_rate_limits=False,
+        use_tool_list_cache=False,
+    )
+
+    assert guardrail.seen_auth_metadata == [{"require_mcp_catalog_guardrail": True}]
+    if scan_mode == "mask":
+        assert continuation.tools[0].description == "[MASKED] cached description"
+        assert continuation.tools[0].input_schema["properties"]["prompt"]["description"] == "[MASKED] schema"
+    else:
+        assert continuation.tools == []
+
+    async with receiving_manager.catalog.operation():
+        _, prepared_headers = await catalog._tool_listing_scope(current_context, (server,), {})
+    listed_caller: Final = ListedToolsCaller(
+        user_api_key_auth=current_auth,
+        mcp_auth_header=prepared_headers[server.server_id][2],
+        raw_headers=current_context.raw_headers,
+        oauth2_headers=current_context.oauth2_headers,
+    )
+    listed_tool: Final = receiving_manager.get_listed_tool(server, "bound-tool-1", listed_caller)
+    if scan_mode == "mask":
+        assert listed_tool is not None
+        assert listed_tool.description == "[MASKED] cached description"
+        assert listed_tool.input_schema["properties"]["prompt"]["description"] == "[MASKED] schema"
+        assert "bound-bound-tool-1" in receiving_manager.tool_name_to_mcp_server_name_mapping
+    else:
+        assert listed_tool is None
+        assert "bound-bound-tool-1" not in receiving_manager.tool_name_to_mcp_server_name_mapping
     assert calls.empty()
 
 

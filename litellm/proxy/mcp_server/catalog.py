@@ -1669,6 +1669,7 @@ async def _fetch_cached_tool_page(
 ) -> ListToolsResult:
     from mcp.types import ListToolsResult
 
+    from litellm.proxy import proxy_server
     from litellm.proxy.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY, classify_list_exception
     from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller
     from litellm.proxy.mcp_server.operations import resolve_native_tool_name_for_server
@@ -1705,6 +1706,26 @@ async def _fetch_cached_tool_page(
         return tool.model_copy(update={"name": name, "meta": meta})
 
     underlying_tools: Final = tuple(cached_tool_definition(tool) for tool in page.tools)
+    served_tools: Final = await manager.scan_tool_catalog(
+        server,
+        underlying_tools,
+        proxy_server.proxy_logging_obj,
+        context.user_api_key_auth,
+        context.raw_headers,
+    )
+    wire_tools_by_native_name: Final = {
+        native_tool.name: wire_tool for wire_tool, native_tool in zip(page.tools, underlying_tools)
+    }
+    served_wire_tools: Final = tuple(
+        native_tool.model_copy(
+            update={
+                "name": wire_tools_by_native_name[native_tool.name].name,
+                "meta": wire_tools_by_native_name[native_tool.name].meta,
+            }
+        )
+        for native_tool in served_tools
+        if native_tool.name in wire_tools_by_native_name
+    )
     server_headers: Final = prepared_headers.get(server_id)
     catalog_auth_header: Final = server_headers[2] if server_headers is not None else None
     listed_caller: Final = ListedToolsCaller(
@@ -1721,7 +1742,7 @@ async def _fetch_cached_tool_page(
     listing_updates.callback(
         manager.record_listed_tools,
         server,
-        underlying_tools,
+        served_tools,
         listed_caller,
         listed_generation,
         record_listing=record_listing,
@@ -1729,11 +1750,11 @@ async def _fetch_cached_tool_page(
     )
     listing_updates.callback(
         manager.register_prefixed_tool_routes,
-        underlying_tools,
+        served_tools,
         server,
         register_bare_names=False,
     )
-    return page
+    return page.model_copy(update={"tools": list(served_wire_tools)})
 
 
 async def aggregate_gateway_tools(

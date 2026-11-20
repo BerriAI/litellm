@@ -6177,7 +6177,19 @@ class MCPServerManager:
         await self._report_catalog_alert(
             server, proxy_logging_obj, AlertType.mcp_pinned_tools_changed, drift.alert(server) if drift else None
         )
-        scan: Final = await scan_tool_descriptions(described, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+        return await self.scan_tool_catalog(server, described, proxy_logging_obj, user_api_key_auth, raw_headers)
+
+    async def scan_tool_catalog(
+        self,
+        server: MCPServer,
+        tools: Sequence[MCPTool],
+        proxy_logging_obj: ProxyLogging | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        raw_headers: Mapping[str, str] | None,
+    ) -> tuple[MCPTool, ...]:
+        if proxy_logging_obj is None:
+            return tuple(tools)
+        scan: Final = await scan_tool_descriptions(tools, server, proxy_logging_obj, user_api_key_auth, raw_headers)
         await self._report_catalog_alert(
             server, proxy_logging_obj, AlertType.mcp_tool_description_blocked, scan.alert(server)
         )
