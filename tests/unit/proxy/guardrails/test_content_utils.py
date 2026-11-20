@@ -1,10 +1,14 @@
 """Tests for the shared guardrail content extraction helpers."""
 
 import sys
+from typing import Final
+
+import pytest
 
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
+    distinct_keys,
     has_non_string_content,
     is_non_conversational_call_type,
     is_string_batch_input,
@@ -425,6 +429,17 @@ def test_build_inspection_messages_joins_multimodal_text_parts():
         ]
     }
     assert build_inspection_messages(data) == [{"role": "user", "content": "first part\nsecond part"}]
+
+
+@pytest.mark.timeout(10)
+def test_distinct_keys_numbers_many_keys_redacted_to_one_name_without_rescanning():
+    renames: Final = (("[REDACTED] (2)", "[REDACTED] (2)"),) + tuple((f"key{i}", "[REDACTED]") for i in range(50_000))
+
+    names: Final = distinct_keys(renames)
+
+    assert names[:4] == ("[REDACTED] (2)", "[REDACTED]", "[REDACTED] (3)", "[REDACTED] (4)")
+    assert names[-1] == "[REDACTED] (50001)"
+    assert len(set(names)) == len(renames)
 
 
 def test_build_inspection_messages_lifts_responses_api_input():

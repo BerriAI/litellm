@@ -63,7 +63,6 @@ def _mock_post(guardrail: LLMShieldProxyGuardrail, *payloads: dict) -> AsyncMock
 
 
 def _redacting_shield(guardrail: LLMShieldProxyGuardrail, pii: dict[str, str]) -> list[list[str]]:
-    """Answers every redact call by swapping each whole text found in `pii`; returns the texts sent."""
     sent: list[list[str]] = []
 
     async def post(url: str, headers: dict, json: dict, timeout: float) -> Response:
