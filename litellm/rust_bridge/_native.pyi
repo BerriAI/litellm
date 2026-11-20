@@ -1899,6 +1899,9 @@ class RustJwtKeyMappingRepository:
         self, jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None = None
     ) -> Future[str | None]: ...
     def mapped_claims(self, tokens: Sequence[str]) -> Future[list[tuple[str, str, str]]]: ...
+    def insert(
+        self, jwt_claim_name: str, jwt_claim_value: str, token: str, *, jwt_issuer: str | None = None, written_by: str
+    ) -> Future[tuple[bool, str | None]]: ...
 
 @final
 class RustModelAccessGroupRepository:
@@ -1933,6 +1936,33 @@ class RustUserRepository:
     ) -> Future[str | None]: ...
     def email_belongs_to_another_user(self, user_email: str, user_id: str) -> Future[bool]: ...
     def backfill_email(self, user_id: str, user_email: str, *, links_any_user: bool) -> Future[str | None]: ...
+    def set_role(self, user_id: str, user_role: str) -> Future[str | None]: ...
+    def insert(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None = None,
+        user_email: str | None = None,
+        links_any_user: bool,
+        user_role: str | None = None,
+        max_budget: float | None = None,
+        budget_duration: str | None = None,
+        budget_reset_at: float | None = None,
+        models: Sequence[str] | None = None,
+        budget_limits: str | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+        user_alias: str | None = None,
+        team_id: str | None = None,
+        organization_id: str | None = None,
+        object_permission_id: str | None = None,
+        password_reset_required: bool | None = None,
+        metadata: str | None = None,
+        allowed_cache_controls: Sequence[str] | None = None,
+        policies: Sequence[str] | None = None,
+        model_max_budget: str | None = None,
+    ) -> Future[tuple[bool, str | None]]: ...
 
 @final
 class RustTeamRepository:
@@ -1970,6 +2000,11 @@ class RustTagRepository:
     def __new__(cls, database: NativeDatabase) -> RustTagRepository: ...
     def names(self, limit: int) -> Future[list[str]]: ...
     def find_many_with_budgets(self, names: Sequence[str]) -> Future[list[str]]: ...
+
+@final
+class RustAgentIdentityRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAgentIdentityRepository: ...
+    def record_authentication(self, agent_id: str, revision: str) -> Future[bool]: ...
 
 @final
 class RustAccessGroupRepository:
@@ -2272,6 +2307,7 @@ __all__ = [
     "RouterCall",
     "RouterCoreHandle",
     "RustAccessGroupRepository",
+    "RustAgentIdentityRepository",
     "RustAuth",
     "RustAuthOutcome",
     "RustAuthSettings",

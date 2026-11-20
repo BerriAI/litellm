@@ -670,8 +670,8 @@ class PythonAuthHost:
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def set_user_role(self, user: LiteLLM_UserTable, role: str) -> LiteLLM_UserTable:
-        await UserRepository(self._db()).table.update(where={"user_id": user.user_id}, data={"user_role": role})
-        return await self._recache_user(user.model_copy(update={"user_role": role}))
+        stored: Final = await UserRepository(self._db()).set_role(user.user_id, role)
+        return await self._recache_user(stored or user.model_copy(update={"user_role": role}))
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def patch_team_membership(

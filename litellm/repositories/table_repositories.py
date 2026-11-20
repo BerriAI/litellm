@@ -22,7 +22,7 @@ from litellm.repositories import rust_database
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
-from litellm.rust_bridge._native import RustSpendLogRepository
+from litellm.rust_bridge._native import RustAgentIdentityRepository, RustSpendLogRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
@@ -108,6 +108,13 @@ class AgentsRepository(PrismaTableRepository["prisma_models.LiteLLM_AgentsTable"
 
 class AgentIdentityRepository(PrismaTableRepository["prisma_models.LiteLLM_AgentIdentity"]):
     table_name = "litellm_agentidentity"
+
+    async def record_authentication(self, agent_id: str, revision: str) -> bool:
+        """Stamps the identity as authenticated now. False when it is no longer the active one at ``revision``, or
+        its agent is disabled or no longer identity managed."""
+        return await rust_database.required_repository(RustAgentIdentityRepository).record_authentication(
+            agent_id, revision
+        )
 
 
 class RetiredAgentIdentityRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgentIdentity"]):
