@@ -499,7 +499,7 @@ from litellm.types.utils import (
     SupportedCacheControls,
 )
 
-_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset(OTEL_DESTINATION_VARS)
+_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset((*OTEL_DESTINATION_VARS, "GENERIC_LOGGER_ENDPOINT"))
 
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}

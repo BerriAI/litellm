@@ -38,9 +38,19 @@ async def _await_with_spawned_tasks(call: Awaitable[_T]) -> _T:
 
 
 @pytest.fixture(autouse=True)
-def set_verbose_logger_level() -> Iterator[None]:
+def set_verbose_logger_level(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    import socket
+
     original_level = verbose_logger.level
     verbose_logger.setLevel(logging.DEBUG)
+    orig_getaddrinfo: Final = socket.getaddrinfo
+
+    def patched_getaddrinfo(host, port, *args, **kwargs):
+        if host == "owned-logger.invalid":
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port or 443))]
+        return orig_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", patched_getaddrinfo)
     yield
     verbose_logger.setLevel(original_level)
 
@@ -1213,3 +1223,15 @@ async def test_queued_logs_go_to_the_replacement_only_when_it_accepts_every_even
         replacement.shutdown()
         await replacement._flush_task
         await handler.close()
+
+
+def test_generic_api_logger_rejects_ssrf_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match="GenericAPILogger endpoint blocked by SSRF guard"):
+        GenericAPILogger.resolve_endpoint("http://169.254.169.254/latest/meta-data/")
+
+    with pytest.raises(ValueError, match="GenericAPILogger endpoint blocked by SSRF guard"):
+        GenericAPILogger.resolve_endpoint("http://127.0.0.1:8200/v1/sys")
+
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    allowed: Final = GenericAPILogger.resolve_endpoint("http://127.0.0.1:8200/v1/sys")
+    assert allowed == "http://127.0.0.1:8200/v1/sys"

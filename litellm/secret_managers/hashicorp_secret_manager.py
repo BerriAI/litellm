@@ -336,11 +336,14 @@ class HashicorpSecretManager(BaseSecretManager):
         return value_str
 
     def _sanitize_path_component(self, value: object) -> str | None:
-        sanitized_value = self._sanitize_plain_value(value)
+        sanitized_value: Final = self._sanitize_plain_value(value)
         if sanitized_value is None:
             return None
-        sanitized_value = sanitized_value.strip("/")
-        return sanitized_value or None
+        stripped: Final = sanitized_value.strip("/")
+        if not stripped:
+            return None
+        raise_if_unsafe_secret_name(stripped)
+        return stripped
 
     def _extract_secret_manager_settings(self, optional_params: Mapping[str, object] | None) -> dict[str, object]:
         if not isinstance(optional_params, dict):

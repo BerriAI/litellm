@@ -7,7 +7,7 @@ import httpx
 
 from litellm import verbose_logger
 
-_UNSAFE_SECRET_NAME_PATTERN: Final = re.compile(r"(^|/)\.\.(/|$)|[\x00-\x1f\x7f-\x9f  ]")
+_UNSAFE_SECRET_NAME_PATTERN: Final = re.compile(r"(^|/)\.\.(/|$)|[?#\x00-\x1f\x7f-\x9f  ]")
 
 
 def raise_if_unsafe_secret_name(secret_name: str) -> None:

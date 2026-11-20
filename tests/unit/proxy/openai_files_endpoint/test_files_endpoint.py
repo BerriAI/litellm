@@ -6619,7 +6619,11 @@ def _setup_managed_file_stored_in_an_unknown_storage_backend(
     proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
     repository = mocker.MagicMock()
     repository.table.find_first = mocker.AsyncMock(
-        return_value=SimpleNamespace(storage_backend="ftp", storage_url="ftp://bucket/file")
+        return_value=SimpleNamespace(
+            storage_backend="ftp",
+            storage_url="ftp://bucket/file",
+            created_by="test-user",
+        )
     )
     monkeypatch.setattr(
         "litellm.proxy.openai_files_endpoints.files_endpoints.ManagedFileRepository", lambda _prisma: repository
@@ -6646,6 +6650,48 @@ def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_rout
     error = response.json()["error"]
     assert error["message"].startswith("Storage backend error")
     assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "file_id", "400")
+
+
+def test_get_file_content_rejects_unauthorized_user_on_storage_backend(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    from types import SimpleNamespace
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging_obj: Final = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files: Final = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.prisma_client = mocker.MagicMock()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    repository: Final = mocker.MagicMock()
+    repository.table.find_first = mocker.AsyncMock(
+        return_value=SimpleNamespace(
+            storage_backend="azure_storage",
+            storage_url="azure://bucket/secret.txt",
+            created_by="victim-user",
+            team_id="victim-team",
+        )
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.ManagedFileRepository",
+        lambda _prisma: repository,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key=None,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="attacker-user",
+        team_id="attacker-team",
+    )
+    try:
+        response: Final = _call_managed_file_route("GET", f"/v1/files/{_unified_managed_file_id()}/content")
+        assert response.status_code == 403, response.text
+        assert "You do not have permission to access this file" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 def test_get_file_model_routed_id_forwards_deployment_provider(mocker: MockerFixture, monkeypatch):

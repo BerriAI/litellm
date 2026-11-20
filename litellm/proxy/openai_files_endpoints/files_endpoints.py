@@ -50,7 +50,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes, int_of
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
-from litellm.llms.base_llm.managed_resources.isolation import build_list_page
+from litellm.llms.base_llm.managed_resources.isolation import build_list_page, can_access_resource
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import enforce_team_s3_bucket_allowlist
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1136,6 +1136,15 @@ async def get_file_content(
                     where={"unified_file_id": file_id}
                 )
                 if db_file and db_file.storage_backend and db_file.storage_url:
+                    if not can_access_resource(
+                        user_api_key_dict=user_api_key_dict,
+                        created_by=getattr(db_file, "created_by", None),
+                        resource_team_id=getattr(db_file, "team_id", None),
+                    ):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You do not have permission to access this file.",
+                        )
                     # File is stored in a storage backend, download it
                     from litellm.llms.base_llm.files.storage_backend_factory import (
                         get_storage_backend,

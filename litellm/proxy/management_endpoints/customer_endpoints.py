@@ -150,6 +150,14 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
     return CustomerResponse.model_validate(record.model_dump())
 
 
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
+        )
+
+
 @router.post(
     "/end_user/block",
     tags=["Customer Management"],
@@ -162,7 +170,10 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
     dependencies=[Depends(user_api_key_auth)],
     response_model=BlockUsersResponse,
 )
-async def block_user(data: BlockUsers):
+async def block_user(
+    data: BlockUsers,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
     """
     [BETA] Reject calls with this end-user id
 
@@ -179,6 +190,7 @@ async def block_user(data: BlockUsers):
         }'
         ```
     """
+    _require_proxy_admin(user_api_key_dict)
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -218,7 +230,10 @@ async def block_user(data: BlockUsers):
     dependencies=[Depends(user_api_key_auth)],
     response_model=UnblockUsersResponse,
 )
-async def unblock_user(data: BlockUsers):
+async def unblock_user(
+    data: BlockUsers,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
     """
     [BETA] Unblock calls with this user id
 
@@ -231,6 +246,7 @@ async def unblock_user(data: BlockUsers):
     }'
     ```
     """
+    _require_proxy_admin(user_api_key_dict)
     try:
         from litellm.enterprise.enterprise_hooks.blocked_user_list import (
             ENTERPRISE_BlockedUserList,
@@ -416,6 +432,7 @@ async def new_end_user(
     - end-user object
     - currently allowed models 
     """
+    _require_proxy_admin(user_api_key_dict)
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         llm_router,
@@ -673,6 +690,7 @@ async def update_end_user(
     See below for all params
     ```
     """
+    _require_proxy_admin(user_api_key_dict)
 
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
@@ -819,6 +837,7 @@ async def delete_end_user(
     See below for all params 
     ```
     """
+    _require_proxy_admin(user_api_key_dict)
     from litellm.proxy.proxy_server import (
         invalidate_spend_counter,
         prisma_client,

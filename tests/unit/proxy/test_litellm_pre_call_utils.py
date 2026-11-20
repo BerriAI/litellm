@@ -9760,6 +9760,24 @@ def test_newrelic_vars_scoped_to_newrelic_callback_entry():
     assert legit.callback_vars == {"newrelic_api_key": "REAL", "newrelic_region": "us"}
 
 
+def test_convert_key_logging_metadata_to_callback_drops_generic_logger_endpoint() -> None:
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+
+    result: Final = convert_key_logging_metadata_to_callback(
+        AddTeamCallback.model_construct(
+            callback_name="generic_api",
+            callback_type="success",
+            callback_vars={
+                "GENERIC_LOGGER_ENDPOINT": "http://169.254.169.254/latest/meta-data/",
+                "posthog_api_key": "valid_val",
+            },
+        ),
+        None,
+    )
+    assert result.callback_vars == {"posthog_api_key": "valid_val"}
+
+
 def _reserved_stamp_request(path: str) -> MagicMock:
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()

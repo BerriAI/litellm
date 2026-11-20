@@ -638,3 +638,34 @@ def test_configuration_matches_native_parity_fixture(
     assert manager.vault_login_namespace == case["expected_login_namespace"]
     assert manager.vault_secret_namespace == case["expected_secret_namespace"]
     assert login_url == expected_login_url
+
+
+@pytest.mark.parametrize(
+    ("param_name", "param_value"),
+    (
+        ("mount_name", "../../sys/raw"),
+        ("mount_name", "mount?query=1"),
+        ("mount_name", "mount#frag"),
+        ("namespace", "../../sys"),
+        ("namespace", "ns?query=1"),
+        ("namespace", "ns#frag"),
+        ("path_prefix", "../../secret"),
+        ("path_prefix", "prefix?query=1"),
+        ("path_prefix", "prefix#frag"),
+        ("secret_name", "../escape"),
+        ("secret_name", "secret?inject=1"),
+        ("secret_name", "secret#frag"),
+    ),
+)
+def test_hashicorp_vault_url_construction_rejects_unsafe_components(
+    monkeypatch: pytest.MonkeyPatch,
+    param_name: str,
+    param_value: str,
+) -> None:
+    manager: Final = _build_manager(monkeypatch, {})
+    if param_name == "secret_name":
+        with pytest.raises(ValueError, match="Invalid secret_name"):
+            manager.get_url(secret_name=param_value)
+    else:
+        with pytest.raises(ValueError, match="Invalid secret_name"):
+            manager.get_url(secret_name="valid-secret", **{param_name: param_value})

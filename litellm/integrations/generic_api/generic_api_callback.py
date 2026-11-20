@@ -22,6 +22,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -238,7 +239,13 @@ class GenericAPILogger(CustomBatchLogger):
 
     @staticmethod
     def resolve_endpoint(endpoint: str | None) -> str | None:
-        return endpoint or os.getenv("GENERIC_LOGGER_ENDPOINT")
+        resolved_endpoint: Final = endpoint or os.getenv("GENERIC_LOGGER_ENDPOINT")
+        if resolved_endpoint is not None and getattr(litellm, "user_url_validation", True):
+            try:
+                validate_url(resolved_endpoint)
+            except SSRFError as e:
+                raise ValueError(f"GenericAPILogger endpoint blocked by SSRF guard: {e}") from e
+        return resolved_endpoint
 
     @staticmethod
     def resolve_headers(
