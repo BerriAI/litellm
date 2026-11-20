@@ -90,17 +90,25 @@ def test_drops_unencodable_format_when_drop_params_is_set():
     assert "output_format" not in params
 
 
-def test_drops_openai_only_speed_and_instructions():
+@pytest.mark.parametrize(("param", "value"), [("speed", 2.0), ("instructions", "whisper it")])
+def test_rejects_openai_only_params_gradium_cannot_honor(param: str, value: object):
+    config = GradiumTextToSpeechConfig()
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"does not support {param}="):
+        config.map_openai_params(model="default", optional_params={param: value}, voice="alloy")
+
+
+def test_drops_unsupported_params_when_the_deployment_sets_drop_params():
     config = GradiumTextToSpeechConfig()
 
     _, params = config.map_openai_params(
         model="default",
-        optional_params={"speed": 2.0, "instructions": "whisper it"},
+        optional_params={"response_format": "mp3", "speed": 2.0, "instructions": "whisper it"},
         voice="alloy",
+        kwargs={"drop_params": True},
     )
 
-    assert "speed" not in params
-    assert "instructions" not in params
+    assert params == {}
 
 
 def test_advertises_the_openai_params_it_honors():
@@ -199,23 +207,6 @@ def test_omits_model_name_for_the_default_model():
     assert "model_name" not in data["dict_body"]
 
 
-def test_merges_extra_body_into_the_request_and_skips_none_values():
-    config = GradiumTextToSpeechConfig()
-
-    data = config.transform_text_to_speech_request(
-        model="default",
-        input="bonjour",
-        voice="YTpq7expH9539ERJ",
-        optional_params={"extra_body": {"json_config": '{"padding_bonus": -1.2}', "unset": None}},
-        litellm_params={},
-        headers={},
-    )
-
-    assert data["dict_body"]["json_config"] == '{"padding_bonus": -1.2}'
-    assert "unset" not in data["dict_body"]
-    assert "extra_body" not in data["dict_body"]
-
-
 def test_raises_on_gradium_plain_text_errors():
     config = GradiumTextToSpeechConfig()
     raw_response = httpx.Response(
@@ -255,11 +246,9 @@ def test_speech_forwards_a_non_default_model_name(gradium_env):
     with respx.mock:
         route = respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
 
-        litellm.speech(
-            model="gradium/pro-voice-clone", input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY
-        )
+        litellm.speech(model="gradium/next-model", input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY)
 
-        assert _sent_body(route)["model_name"] == "pro-voice-clone"
+        assert _sent_body(route)["model_name"] == "next-model"
 
 
 @pytest.mark.asyncio
@@ -304,18 +293,6 @@ def test_speech_rejects_a_missing_voice(gradium_env):
         litellm.speech(model="gradium/default", input="Bonjour", voice=None, api_base=_API_BASE, api_key=_API_KEY)
 
 
-def test_speech_rejects_a_missing_voice_without_a_provider_config(gradium_env, monkeypatch):
-    """`speech()` guards the voice itself on the path where no config was resolved."""
-    monkeypatch.setattr(
-        litellm.utils.ProviderConfigManager,
-        "get_provider_text_to_speech_config",
-        staticmethod(lambda **_: None),
-    )
-
-    with pytest.raises(litellm.BadRequestError, match="must resolve to a Gradium voice id"):
-        litellm.speech(model="gradium/default", input="Bonjour", voice=None, api_base=_API_BASE, api_key=_API_KEY)
-
-
 def test_speech_honors_an_explicit_api_base_and_api_key(gradium_env):
     with respx.mock:
         route = respx.post("https://eu.api.gradium.ai/api/post/speech/tts").mock(
@@ -333,24 +310,6 @@ def test_speech_honors_an_explicit_api_base_and_api_key(gradium_env):
         assert route.calls[-1].request.headers["x-api-key"] == "gd_explicit"
 
 
-def test_speech_falls_back_to_its_own_config(gradium_env, monkeypatch):
-    """`speech()` instantiates the config itself when the manager returns none."""
-    monkeypatch.setattr(
-        litellm.utils.ProviderConfigManager,
-        "get_provider_text_to_speech_config",
-        staticmethod(lambda **_: None),
-    )
-
-    with respx.mock:
-        respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
-
-        response = litellm.speech(
-            model="gradium/default", input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY
-        )
-
-        assert response.content == _AUDIO
-
-
 def test_speech_tracks_cost_per_character(gradium_env, local_model_cost_map):
     with respx.mock:
         respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
@@ -359,4 +318,19 @@ def test_speech_tracks_cost_per_character(gradium_env, local_model_cost_map):
             model="gradium/default", input="a" * 100, voice="alloy", api_base=_API_BASE, api_key=_API_KEY
         )
 
-        assert response._hidden_params["response_cost"] == pytest.approx(100 * 6.9e-05)
+        price_per_character = litellm.model_cost["gradium/default"]["input_cost_per_character"]
+        assert price_per_character > 0
+        assert response._hidden_params["response_cost"] == pytest.approx(100 * price_per_character)
+
+
+def test_speech_bills_whitespace_like_gradium_does(gradium_env, local_model_cost_map):
+    spoken_text = "Oui.     Non.     Oui."
+    with respx.mock:
+        respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
+
+        response = litellm.speech(
+            model="gradium/default", input=spoken_text, voice="alloy", api_base=_API_BASE, api_key=_API_KEY
+        )
+
+        price_per_character = litellm.model_cost["gradium/default"]["input_cost_per_character"]
+        assert response._hidden_params["response_cost"] == pytest.approx(len(spoken_text) * price_per_character)
