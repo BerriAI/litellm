@@ -297,7 +297,7 @@ def _tool_call_arguments_as_text(arguments: object) -> str | None:
     key_parts: Final = chain.from_iterable(path for path, _ in leaves)
     keys: Final = (part for part in key_parts if isinstance(part, str))
     values: Final = (text for _, text in leaves)
-    escaped: Final = dict.fromkeys(text for text in (*keys, *values) if _json_escapes_survive(text))
+    escaped: Final = [text for text in dict.fromkeys(chain(keys, values)) if _json_escapes_survive(text)]
     return "\n".join((json.dumps(decoded, ensure_ascii=False, default=str), *escaped))
 
 

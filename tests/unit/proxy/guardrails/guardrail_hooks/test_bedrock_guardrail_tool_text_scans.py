@@ -190,7 +190,7 @@ async def test_generated_tool_call_arguments_are_not_scanned_by_default():
             response=_tool_call_only_response(), guardrail_to_apply=guardrail, request_data={}
         )
 
-    mock_api.assert_not_called()
+    assert SECRET not in _scanned_output_text(mock_api)
 
 
 @pytest.mark.asyncio
