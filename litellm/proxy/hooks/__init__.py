@@ -22,7 +22,8 @@ from .parallel_request_limiter import (  # noqa: F401  # backwards-compatible pa
     _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
 )
 from .parallel_request_limiter_v3 import (  # noqa: F401  # backwards-compatible package export
-    PROXY_MaxParallelRequestsHandler_v3,
+    ParallelRequestLimiterHook,
+    PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
 )
 from .prompt_cache_prediction import PromptCacheObserver
@@ -37,7 +38,7 @@ from .sensitive_data_routing import (  # noqa: F401  # backwards-compatible pack
 # transitively through `litellm.enterprise.enterprise_hooks` can resolve `PROXY_HOOKS`
 # and `get_proxy_hook` from this partially-initialized module without circling.
 PROXY_HOOKS: Final = {
-    "parallel_request_limiter": PROXY_MaxParallelRequestsHandler_v3,
+    "parallel_request_limiter": ParallelRequestLimiterHook,
     "cache_control_check": PROXY_CacheControlCheck,
     "responses_id_security": ResponsesIDSecurity,
     "message_thread_ownership": MessageThreadOwnership,

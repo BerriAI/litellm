@@ -56,6 +56,7 @@ pub fn route_table() -> Vec<(String, Vec<String>)> {
             ],
         ),
         group("info_routes", &["/key/info", "/user/info", "/team/list"]),
+        group("management_routes", &["/key/generate"]),
         group(
             "mcp_routes",
             &["/mcp/tools/list", "/mcp/tools/call", "/token"],

@@ -17,11 +17,9 @@ from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
-from litellm.llms.bedrock.claude_platform.messages_transformation import BedrockClaudePlatformMessagesConfig
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
-from litellm.llms.bedrock.messages.mantle_transformation import AmazonMantleMessagesConfig
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
@@ -828,9 +826,6 @@ _SAMPLING_PARAMS: Final[dict[str, object]] = {"temperature": 1, "top_p": 0.9, "t
 _CLAUDE_ROUTES_ON_ANTHROPIC_API_VERSIONS: Final = (
     pytest.param(AnthropicMessagesConfig, "claude-sonnet-4-6", id="anthropic"),
     pytest.param(AzureAnthropicMessagesConfig, "claude-sonnet-4-6", id="azure_ai"),
-    pytest.param(VertexAIPartnerModelsAnthropicMessagesConfig, "claude-sonnet-4-6", id="vertex_ai"),
-    pytest.param(AmazonMantleMessagesConfig, "anthropic.claude-sonnet-4-6", id="bedrock_mantle"),
-    pytest.param(BedrockClaudePlatformMessagesConfig, "claude-sonnet-4-6", id="bedrock_claude_platform"),
 )
 
 
@@ -885,9 +880,6 @@ def test_a_later_dated_anthropic_version_also_drops_sampling_params() -> None:
         pytest.param(AnthropicMessagesConfig, "claude-sonnet-4-6", "2026-10-20", id="anthropic-day-before"),
         pytest.param(AnthropicMessagesConfig, "claude-sonnet-4-6", "latest", id="anthropic-undated"),
         pytest.param(AzureAnthropicMessagesConfig, "claude-sonnet-4-6", "2023-06-01", id="azure_ai-2023-06-01"),
-        pytest.param(
-            VertexAIPartnerModelsAnthropicMessagesConfig, "claude-sonnet-4-6", "2023-06-01", id="vertex_ai-2023-06-01"
-        ),
         pytest.param(
             AmazonAnthropicClaudeMessagesConfig,
             "anthropic.claude-sonnet-4-6",

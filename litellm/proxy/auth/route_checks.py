@@ -157,6 +157,27 @@ class RouteChecks:
         """
         Raises Exception if Virtual Key is not allowed to call the route
         """
+        if route in LiteLLMRoutes.own_spend_log_routes.value and not RouteChecks._password_reset_required(valid_token):
+            return True
+        return RouteChecks.assert_key_allowed_routes_grant(route=route, valid_token=valid_token, request=request)
+
+    @staticmethod
+    def _password_reset_required(valid_token: UserAPIKeyAuth) -> bool:
+        return valid_token.metadata.get("password_reset_required") is True
+
+    @staticmethod
+    def key_allowed_routes_grant(route: str, valid_token: UserAPIKeyAuth) -> bool:
+        try:
+            return RouteChecks.assert_key_allowed_routes_grant(route=route, valid_token=valid_token)
+        except HTTPException:
+            return False
+
+    @staticmethod
+    def assert_key_allowed_routes_grant(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Request | None = None,
+    ) -> bool:
 
         # Only check if valid_token.allowed_routes is set and is a list with at least one item
         if valid_token.allowed_routes is None:
@@ -254,7 +275,7 @@ class RouteChecks:
         if denied_auth_enforced_pass_through_route:
             raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
-        if valid_token.metadata.get("password_reset_required") is True:
+        if RouteChecks._password_reset_required(valid_token):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
@@ -836,9 +857,9 @@ class RouteChecks:
         if valid_token.jwt_claims is None or valid_token.token is not None or valid_token.team_id is None:
             return ()
 
-        from litellm.proxy.proxy_server import jwt_handler
+        from litellm.proxy.proxy_server import litellm_jwtauth
 
-        return jwt_handler.litellm_jwtauth.team_allowed_routes
+        return litellm_jwtauth.team_allowed_routes
 
     @staticmethod
     def _require_auth_pass_through_access(

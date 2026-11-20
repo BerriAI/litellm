@@ -16,7 +16,6 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
-    cast,  # noqa: TID251  # get_data returns validated rows selected by table_name,
 )
 
 from typing_extensions import assert_never
@@ -83,6 +82,8 @@ from litellm.redis.stores.spend_counters import (
     user_window_counter,
 )
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.end_user_repository import EndUserRepository
+from litellm.repositories.model_access_group_budget_repository import ModelAccessGroupBudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
 from litellm.repositories.project_repository import ProjectRepository
@@ -90,11 +91,9 @@ from litellm.repositories.table_repositories import (
     CustomerMemberRepository,
     CustomerOrganizationRepository,
     CustomerTeamRepository,
-    EndUserRepository,
-    ModelAccessGroupBudgetRepository,
-    TagRepository,
-    TeamMembershipRepository,
 )
+from litellm.repositories.tag_repository import TagRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
     CustomerSpendTable,
@@ -1547,9 +1546,7 @@ class ResetBudgetJob:
                     try:
                         pre_reset_spend, expected_reset_at = (
                             float(key.spend or 0.0),
-                            cast(  # cast-ok: get_data's key branch returns validated key rows
-                                LiteLLM_VerificationToken, key
-                            ).budget_reset_at,
+                            key.budget_reset_at,
                         )
                         updated_key = await ResetBudgetJob._reset_budget_for_key(
                             key=key,
@@ -1660,9 +1657,7 @@ class ResetBudgetJob:
                     try:
                         pre_reset_spend, expected_reset_at = (
                             float(user.spend or 0.0),
-                            cast(  # cast-ok: get_data's user branch returns validated user rows
-                                LiteLLM_UserTable, user
-                            ).budget_reset_at,
+                            user.budget_reset_at,
                         )
                         updated_user = await ResetBudgetJob._reset_budget_for_user(
                             user=user,
@@ -1781,9 +1776,7 @@ class ResetBudgetJob:
                     try:
                         pre_reset_spend, expected_reset_at = (
                             float(team.spend or 0.0),
-                            cast(  # cast-ok: get_data's team branch returns validated team rows
-                                LiteLLM_TeamTable, team
-                            ).budget_reset_at,
+                            team.budget_reset_at,
                         )
                         updated_team = await ResetBudgetJob._reset_budget_for_team(
                             team=team,
@@ -1892,9 +1885,7 @@ class ResetBudgetJob:
         budget_duration: Final = window["budget_duration"]
         annual: Final = isinstance(budget_duration, str) and is_annual_budget_duration(budget_duration)
         saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
-        reset_at: Final = _as_utc(saved_reset_at) if annual else saved_reset_at.replace(tzinfo=None)
-        cutoff: Final = _as_utc(now) if annual else now
-        if reset_at > cutoff:
+        if _as_utc(saved_reset_at) > _as_utc(now):
             return False
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_store)
         try:

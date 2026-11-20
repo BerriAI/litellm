@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.core_helpers import (
+    claude_subscription_usage,
     json_contains,
     native_messages_reported_cost,
     override_stamped_response_cost,
@@ -32,7 +33,6 @@ from litellm.llms.anthropic.messages.stream_assembly import (
 from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
-from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     is_collection_route,
     log_batch_registration_result,
@@ -190,6 +190,8 @@ class AnthropicPassthroughLoggingHandler:
     ) -> str | None:
         request_body: Final = passthrough_logging_payload.get("request_body")
         if request_body:
+            from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
             return get_end_user_id_from_request_body(request_body)
         return None
 
@@ -333,6 +335,15 @@ class AnthropicPassthroughLoggingHandler:
         logging_obj: LiteLLMLoggingObj,
     ) -> float:
         if logging_obj.model_call_details.get("cache_hit") is True:
+            return 0.0
+        subscription_usage: Final = claude_subscription_usage(
+            {
+                **logging_obj.model_call_details,
+                "custom_llm_provider": logging_obj.model_call_details.get("custom_llm_provider") or "anthropic",
+            },
+            litellm_model_response,
+        )
+        if subscription_usage is not None and not subscription_usage["is_overage"]:
             return 0.0
         custom_llm_provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
         model_for_cost: Final = (

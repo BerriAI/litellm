@@ -158,6 +158,7 @@ const metricsFor = (rows: readonly ClientLog[]): SpendMetrics => ({
   prompt_caching_savings_spend: 0,
   gateway_injected_caching_savings_spend: 0,
   autorouter_savings_spend: 0,
+  customer_margin_spend: 0,
   guardrail_spend: sum(rows, guardrailSpend),
   spend: sum(rows, (row) => row.spend),
   prompt_tokens: sum(rows, (row) => row.prompt_tokens),
@@ -168,6 +169,8 @@ const metricsFor = (rows: readonly ClientLog[]): SpendMetrics => ({
   failed_requests: rows.filter((row) => statusOf(row) === "failure").length,
   cache_read_input_tokens: sum(rows, (row) => cacheTokens(row).cacheReadTokens ?? 0),
   cache_creation_input_tokens: sum(rows, (row) => cacheTokens(row).cacheCreationTokens ?? 0),
+  cache_cost: 0,
+  priced_cache_tokens: 0,
   total_response_time_ms: sum(rows, (row) => (statusOf(row) === "success" ? row.request_duration_ms ?? 0 : 0)),
   timed_requests: rows.filter((row) => statusOf(row) === "success" && row.request_duration_ms != null).length,
 });

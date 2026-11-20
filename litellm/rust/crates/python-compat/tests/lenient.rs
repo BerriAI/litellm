@@ -1,4 +1,4 @@
-use litellm_python_compat::lenient::{IsTrue, LaxBoolOr, Lenient, Truthy};
+use litellm_python_compat::lenient::{IsTrue, LaxBool, LaxBoolOr, Lenient, StrBool, Truthy};
 use rstest::rstest;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -101,4 +101,58 @@ fn lax_bool_or_falls_back_where_pydantic_raises(#[case] value: Value, #[case] ex
         serde_json::from_value::<Enforced>(value).unwrap().0,
         expected
     );
+}
+
+#[serde_as]
+#[derive(Deserialize)]
+struct TextFlag(#[serde_as(as = "StrBool")] bool);
+
+#[rstest]
+#[case::flag(json!(true), true)]
+#[case::false_flag(json!(false), false)]
+#[case::true_text(json!(" True "), true)]
+#[case::python_stripped_true_text(json!("\u{1c}true"), true)]
+#[case::false_text(json!("false"), false)]
+#[case::other_text(json!("yes"), false)]
+#[case::number(json!(1), false)]
+#[case::null(json!(null), false)]
+fn str_bool_is_true_only_for_true(#[case] value: Value, #[case] expected: bool) {
+    assert_eq!(
+        serde_json::from_value::<TextFlag>(value).unwrap().0,
+        expected
+    );
+}
+
+#[serde_as]
+#[derive(Deserialize)]
+struct CoreLaxBool(#[serde_as(as = "LaxBool")] Option<bool>);
+
+#[derive(Deserialize)]
+struct FlagFixtures {
+    rows: Vec<FlagRow>,
+}
+
+#[derive(Deserialize)]
+struct FlagRow {
+    input: String,
+    lax_bool: Option<bool>,
+}
+
+/// Expected values from `generated/flags.json`, which `core_helpers.lax_bool` wrote.
+#[test]
+fn lax_bool_matches_core_helpers() {
+    let fixtures: FlagFixtures = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/generated/flags.json"
+    )))
+    .unwrap();
+    let mismatches: Vec<String> = fixtures
+        .rows
+        .iter()
+        .filter_map(|row| {
+            let read = serde_json::from_str::<CoreLaxBool>(&row.input).unwrap().0;
+            (read != row.lax_bool).then(|| format!("{}: {read:?} != {:?}", row.input, row.lax_bool))
+        })
+        .collect();
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
 }

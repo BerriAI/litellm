@@ -18,8 +18,9 @@ use litellm_llms_types::{
         API_BASE, API_KEY_HEADER, AnthropicBeta, BETA_HEADER, BetaSet,
         DIRECT_BROWSER_ACCESS_HEADER, MESSAGES_PATH,
     },
-    recognized::{Recognized, map_known_runs, python_truthy},
+    recognized::{Recognized, map_known_runs},
 };
+use litellm_python_compat::truthy::json_truthy;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -119,7 +120,7 @@ fn nonempty_secret(value: Option<String>) -> Option<String> {
     value
         .map(|value| {
             value
-                .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+                .trim_matches(litellm_python_compat::unicode::isspace)
                 .to_owned()
         })
         .filter(|value| !value.is_empty())
@@ -888,7 +889,7 @@ fn is_empty_raw_text_block(block: &Value) -> bool {
 fn is_empty_unsigned_raw_thinking_block(block: &Value) -> bool {
     raw_block_type(block) == Some("thinking")
         && is_raw_blank(block.get("thinking"))
-        && !block.get("signature").is_some_and(python_truthy)
+        && !block.get("signature").is_some_and(json_truthy)
 }
 
 /// [`strip_empty_content_blocks`] on a raw message: a text block whose `text` is not a
@@ -1058,7 +1059,7 @@ pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
             .iter()
             .filter(|block| is_raw_advisor_use(block))
             .filter_map(|block| block.get("id"))
-            .filter(|id| python_truthy(id))
+            .filter(|id| json_truthy(id))
             .map(PythonKey::of)
             .collect();
         let answers_advisor =

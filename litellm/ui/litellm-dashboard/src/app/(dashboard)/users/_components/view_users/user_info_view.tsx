@@ -137,7 +137,7 @@ export default function UserInfoView({
           try {
             const teamPromises = data.teams.map(async (teamId: string) => {
               try {
-                const teamData = await teamInfoCall(accessToken, teamId);
+                const teamData = await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 });
                 return {
                   team_id: teamId,
                   team_alias: teamData?.team_info?.team_alias || null,
@@ -213,7 +213,7 @@ export default function UserInfoView({
       if (data.teams && data.teams.length > 0) {
         const teamPromises = data.teams.map(async (teamId: string) => {
           try {
-            const teamData = await teamInfoCall(accessToken, teamId);
+            const teamData = await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 });
             return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
           } catch {
             return { team_id: teamId, team_alias: null };
@@ -254,7 +254,7 @@ export default function UserInfoView({
       if (data.teams && data.teams.length > 0) {
         const teamPromises = data.teams.map(async (teamId: string) => {
           try {
-            const teamData = await teamInfoCall(accessToken, teamId);
+            const teamData = await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 });
             return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
           } catch {
             return { team_id: teamId, team_alias: null };
@@ -344,6 +344,7 @@ export default function UserInfoView({
         ...userData,
         user_email: formValues.user_email ?? userData.user_email,
         user_alias: formValues.user_alias ?? userData.user_alias,
+        user_role: formValues.user_role ?? userData.user_role,
         models: formValues.models ?? userData.models,
         max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
         tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,

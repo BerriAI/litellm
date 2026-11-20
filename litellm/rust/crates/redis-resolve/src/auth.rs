@@ -3,6 +3,7 @@ use litellm_redis_types::{Auth, AwsIamAuth, AzureAdAuth, ProviderHandle, StaticA
 
 use crate::{
     Error,
+    keys::Kwarg,
     options::{self, AwsOptions, Options, flag, secret, text},
 };
 
@@ -84,9 +85,9 @@ fn aws_iam(aws: &AwsOptions, uses_tls: bool) -> Result<AwsIamAuth, Error> {
         }),
         (user_name, cache_name, region) => Err(Error::AwsIamIncomplete {
             missing: [
-                ("aws_iam_user_name", user_name.is_none()),
-                ("aws_iam_cache_name", cache_name.is_none()),
-                ("aws_iam_region", region.is_none()),
+                (Kwarg::AwsIamUserName.name(), user_name.is_none()),
+                (Kwarg::AwsIamCacheName.name(), cache_name.is_none()),
+                (Kwarg::AwsIamRegion.name(), region.is_none()),
             ]
             .into_iter()
             .filter_map(|(name, missing)| missing.then_some(name))

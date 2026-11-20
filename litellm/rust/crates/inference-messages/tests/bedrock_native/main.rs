@@ -116,10 +116,11 @@ async fn prefixes_select_native_messages_and_strip_connection_fields(
         api_key: Some("key".into()),
         api_base: Some(upstream.uri()),
         custom_llm_provider: None,
-        ..with_fields(
-            call,
+        litellm_params: serde_json::from_value(
             json!({"model": model, "workspace_id": "request-workspace"}),
         )
+        .unwrap(),
+        ..with_model(call, model)
     })
     .await;
     assert_eq!(message.model, MODEL);
@@ -357,10 +358,11 @@ async fn native_streams_relay_every_sse_byte(call: MessagesCall, #[case] model: 
                 api_key: Some("key".into()),
                 api_base: Some(upstream.uri()),
                 custom_llm_provider: None,
-                ..with_fields(
-                    call,
-                    json!({"model": model, "stream": true, "workspace_id": "workspace"}),
+                litellm_params: serde_json::from_value(
+                    json!({"model": model, "workspace_id": "workspace"}),
                 )
+                .unwrap(),
+                ..with_fields(call, json!({"model": model, "stream": true}))
             },
             &(),
             None,

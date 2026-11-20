@@ -21,7 +21,9 @@ interface ProviderMarginRow {
 }
 
 const marginRowDisplayName = (provider: string, t: TFunction): string =>
-  provider === "global" ? t("costTracking.marginTable.global") : getProviderLogoAndName(provider).displayName;
+  provider === "global" || provider === "customer"
+    ? t(`costTracking.marginTable.${provider}`)
+    : getProviderLogoAndName(provider).displayName;
 
 const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
   marginConfig,
@@ -96,6 +98,8 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
     .sort((a, b) => {
       if (a.provider === "global") return -1;
       if (b.provider === "global") return 1;
+      if (a.provider === "customer") return -1;
+      if (b.provider === "customer") return 1;
       const displayA = getProviderLogoAndName(a.provider).displayName;
       const displayB = getProviderLogoAndName(b.provider).displayName;
       return displayA.localeCompare(displayB);
@@ -112,6 +116,13 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
               return (
                 <div className="flex items-center space-x-2">
                   <span className="font-medium">{t("costTracking.marginTable.globalAllProviders")}</span>
+                </div>
+              );
+            }
+            if (row.provider === "customer") {
+              return (
+                <div className="flex items-center space-x-2">
+                  <span className="font-medium">{t("costTracking.marginTable.customerRequests")}</span>
                 </div>
               );
             }
@@ -142,14 +153,18 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                         autoFocus
                       />
                       <span className="text-muted-foreground">%</span>
-                      <span className="text-muted-foreground">+</span>
-                      <span className="text-muted-foreground">$</span>
-                      <Input
-                        value={editFixedAmount}
-                        onChange={(e) => setEditFixedAmount(e.target.value)}
-                        placeholder="0.001"
-                        className="w-24"
-                      />
+                      {row.provider !== "customer" && (
+                        <>
+                          <span className="text-muted-foreground">+</span>
+                          <span className="text-muted-foreground">$</span>
+                          <Input
+                            value={editFixedAmount}
+                            onChange={(e) => setEditFixedAmount(e.target.value)}
+                            placeholder="0.001"
+                            className="w-24"
+                          />
+                        </>
+                      )}
                     </div>
                     <Button
                       variant="ghost"

@@ -44,8 +44,15 @@ const GLOBAL_OPTION = {
   providerEnum: null,
 } as const;
 
+const CUSTOMER_OPTION = {
+  value: "customer",
+  labelKey: "costTracking.addMarginForm.provider.customer",
+  providerEnum: null,
+} as const;
+
 const buildProviderOptions = (marginConfig: MarginConfig, t: TFunction): ProviderOption[] => [
   { value: GLOBAL_OPTION.value, label: t(GLOBAL_OPTION.labelKey), providerEnum: GLOBAL_OPTION.providerEnum },
+  { value: CUSTOMER_OPTION.value, label: t(CUSTOMER_OPTION.labelKey), providerEnum: CUSTOMER_OPTION.providerEnum },
   ...Object.entries(Providers).flatMap(([providerEnum, providerDisplayName]) => {
     const providerValue = provider_map[providerEnum as keyof typeof provider_map];
     if (providerValue && marginConfig[providerValue]) {
