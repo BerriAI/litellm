@@ -1,14 +1,12 @@
-import socket
-from collections.abc import Iterator
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
 import pytest
 
-from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.hooks.priority_class_share import MEMBER_SEPARATOR, team_member
 from litellm.redis.stores.active_teams import ActiveTeamStore
-from litellm.redis.stores.connection import connect
+from litellm.redis.stores.active_teams.handle import ActiveMemberRecord
 from litellm.rust_bridge._native import NativeRedisStoreError
 
 
@@ -44,15 +42,22 @@ def test_the_wire_case_is_what_main_sends() -> None:
     assert repr(_WIRE_TOUCH.now) == _WIRE_TOUCH.now_arg
 
 
-@pytest.fixture
-def down_teams() -> Iterator[ActiveTeamStore]:
-    """A real native client to a port nothing listens on, so every Redis call is refused at once."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port: Final = probe.getsockname()[1]
-    yield ActiveTeamStore(connect(RedisCache(host="127.0.0.1", port=port)).active_teams())
+class _DownRedis:
+    """A handle on a Redis that refuses every call, raising what the Rust store raises for one."""
+
+    has_redis: Final = True
+
+    async def touch(
+        self, model: str, member: str, priority_class: str, window_seconds: int
+    ) -> Sequence[ActiveMemberRecord]:
+        raise NativeRedisStoreError("transport", "redis is down")
+
+    def touch_local(
+        self, model: str, member: str, priority_class: str, window_seconds: int
+    ) -> Sequence[ActiveMemberRecord]:
+        raise AssertionError("memory answered for a store that has Redis")
 
 
-async def test_a_touch_fails_while_redis_is_down_and_never_answers_from_memory(down_teams: ActiveTeamStore) -> None:
+async def test_a_touch_fails_while_redis_is_down_and_never_answers_from_memory() -> None:
     with pytest.raises(NativeRedisStoreError):
-        await down_teams.touch("chat", _WIRE_TOUCH.team, "interactive", _WIRE_TOUCH.window)
+        await ActiveTeamStore(_DownRedis()).touch("chat", _WIRE_TOUCH.team, "interactive", _WIRE_TOUCH.window)
