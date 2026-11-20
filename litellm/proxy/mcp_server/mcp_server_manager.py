@@ -4938,11 +4938,19 @@ class MCPServerManager:
         on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
     ) -> ListToolsResult:
         observed: Final = asyncio.Event()
+        admin_ttl: Final = (
+            self._admin_tools_list_ttl(server)
+            if on_page is not None and use_cache and (params is None or params.cursor is None)
+            else None
+        )
 
         async def observe_page(page: ListToolsResult) -> None:
             observed.set()
             if on_page is not None:
-                await on_page(page)
+                observed_page: Final = (
+                    page.model_copy(update={"ttl_ms": admin_ttl * 1000}) if admin_ttl is not None else page
+                )
+                await on_page(observed_page)
 
         fetch_page: Final = self._tools_fetch(
             client, server, params, on_page=observe_page if on_page is not None else None

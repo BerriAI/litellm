@@ -17047,6 +17047,7 @@ async def _list_discovery_tools(
     extra_headers: Mapping[str, str] | None = None,
     user_api_key_auth: UserAPIKeyAuth | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
 ) -> ListToolsResult:
     from mcp.types import PaginatedRequestParams
 
@@ -17058,6 +17059,7 @@ async def _list_discovery_tools(
         extra_headers=None if extra_headers is None else dict(extra_headers),
         user_api_key_auth=user_api_key_auth,
         proxy_logging_obj=proxy_logging_obj,
+        on_page=on_page,
     )
 
 
@@ -17173,12 +17175,20 @@ async def test_tools_list_is_kept_for_the_server_ttl_whatever_the_upstream_decla
     upstream: Final = _DiscoveryUpstream()
     upstream.ttl_ms = upstream_ttl_ms
     server: Final = _server_with_tools_list_ttl(admin_seconds)
+    observed_ttls: list[int | None] = []
+
+    async def observe(page: ListToolsResult) -> None:
+        observed_ttls.append(page.ttl_ms)
+
     with _mcp_upstream(upstream.respond):
-        first: Final = await _list_discovery_tools(manager, cursor, server)
+        first: Final = await _list_discovery_tools(manager, cursor, server, on_page=observe)
         assert first.ttl_ms == admin_seconds * 1000
+        assert observed_ttls == [admin_seconds * 1000]
         clock.now = admin_seconds - 0.125
-        cached: Final = await _list_discovery_tools(manager, cursor, server)
+        observed_ttls.clear()
+        cached: Final = await _list_discovery_tools(manager, cursor, server, on_page=observe)
         assert cached.ttl_ms == 125
+        assert observed_ttls == [125]
         assert upstream.initializes == 1
         clock.now = admin_seconds + 0.001
         assert len((await _list_discovery_tools(manager, cursor, server)).tools) == 1
@@ -17207,9 +17217,16 @@ async def test_tools_list_is_never_cached_for_a_server_whose_ttl_is_zero(monkeyp
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
     upstream: Final = _DiscoveryUpstream()
     server: Final = _server_with_tools_list_ttl(0)
+    observed_ttls: list[int | None] = []
+
+    async def observe(page: ListToolsResult) -> None:
+        observed_ttls.append(page.ttl_ms)
+
     with _mcp_upstream(upstream.respond):
         for _ in range(2):
-            assert (await _list_discovery_tools(manager, server=server)).ttl_ms == 0
+            observed_ttls.clear()
+            assert (await _list_discovery_tools(manager, server=server, on_page=observe)).ttl_ms == 0
+            assert observed_ttls == [0]
         assert upstream.initializes == 2
 
 
