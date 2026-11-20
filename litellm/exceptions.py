@@ -809,9 +809,9 @@ class ContentPolicyViolationError(BadRequestError):
 class ServiceUnavailableError(openai.APIStatusError):
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: object,
+        model: object,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,

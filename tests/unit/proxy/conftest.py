@@ -35,6 +35,7 @@ from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.spend_tracking.native_budgets_replica import native_budgets_enabled
+from tests.unit.proxy.rust_auth_stores import audit_log_store, rust_auth_stores  # noqa: F401  # fixtures
 from tests._module_state import collect_flushable_caches, flush_caches, restore_mutable_state, snapshot_mutable_state
 
 
@@ -436,7 +437,7 @@ def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
 def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
     monkeypatch.setattr(_hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported")))
-    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils._KBKDF_PROPERTIES", None)
+    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils._FIPS_PROPERTIES", None)
 
 
 @pytest.fixture

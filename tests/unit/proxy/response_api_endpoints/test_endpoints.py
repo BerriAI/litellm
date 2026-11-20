@@ -9,7 +9,7 @@ import datetime
 import json
 import re
 import unittest
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 import litellm
+from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import DualCache
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -1237,6 +1238,55 @@ async def test_a_finished_read_or_cancel_bills_usage_only_the_configured_deploym
     assert fastapi_response.headers.getlist("x-litellm-response-cost") == _billed_costs(spend_events.payloads)
     (row,) = stored.table.rows
     assert row.status == "completed"
+
+
+class _OnePollingStateRedis(BaseCache):
+    def __init__(self, state: Mapping[str, object]) -> None:
+        super().__init__()
+        self.state = json.dumps(state)
+        self.ttls: tuple[int, ...] = ()
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> str:
+        return self.state
+
+    async def async_set_cache_pipeline(self, cache_list: object, **kwargs: object) -> None:
+        raise NotImplementedError
+
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
+        async def write(keys: Sequence[str], args: Sequence[str]) -> int:
+            self.state = json.loads(args[0])
+            self.ttls = (*self.ttls, int(args[1]))
+            return 1
+
+        return write
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_polling_response_keeps_the_configured_polling_ttl() -> None:
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import cancel_response
+
+    redis: Final = _OnePollingStateRedis({"id": "litellm_poll_ttl", "object": "response", "status": "in_progress"})
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.redis_usage_cache", redis
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.polling_cache_ttl", 120
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+    ):
+        cancelled: Final = await cancel_response(
+            response_id="litellm_poll_ttl",
+            request=_request_for("POST", "/v1/responses/litellm_poll_ttl/cancel", b""),
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-canceller"),
+        )
+
+    assert cancelled["status"] == "cancelled"
+    assert redis.ttls == (120,)
 
 
 @pytest.mark.asyncio
@@ -2942,14 +2992,14 @@ class TestResponsesWSFirstFrameModelAuth:
                 "Rate limit exceeded",
                 False,
             ),
-            (ValueError("bad metadata"), (None, "invalid_request_error"), "Pre-call error", True),
+            (ValueError("bad metadata"), (500, "server_error"), "Pre-call error", True),
         ],
         ids=["rate-limited", "other-failure"],
     )
     async def test_endpoint_refuses_a_rate_limited_open_with_the_turn_refusal_frame(
         self,
         open_failure: Exception,
-        refusal: tuple[int | None, str],
+        refusal: tuple[int, str],
         close_reason: str,
         logged_traceback: bool,
     ):
@@ -4189,6 +4239,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         assert json.loads(websocket.send_text.await_args.args[0]) == {
             "type": "error",
+            "status": 400,
             "error": {
                 "type": "invalid_request_error",
                 "message": "Content blocked by frame-pick",
@@ -4666,9 +4717,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 proxy_logging_obj,
             ),
         ):
-            await asyncio.wait_for(
-                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock()), timeout=1
-            )
+            await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
 
         proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
         assert [json.loads(frame)["error"]["message"] for frame in sent] == ["relay crashed"]
@@ -6141,6 +6190,7 @@ class TestResponsesInputTokens:
         response_id_security: object | None = None,
         managed_files: object | None = None,
         headers: Mapping[str, str] = EMPTY_MAPPING,
+        key_metadata: Mapping[str, object] = EMPTY_MAPPING,
         general_settings: Mapping[str, object] | None = None,
         raise_server_exceptions: bool = False,
     ) -> tuple[Response, AsyncMock]:
@@ -6167,7 +6217,9 @@ class TestResponsesInputTokens:
                 )
             )
         )
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", request_route=path)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="sk-test", request_route=path, metadata=dict(key_metadata)
+        )
         app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
         app.dependency_overrides[_proxy_llm_router] = lambda: llm_router
         if response_id_security is not None:
@@ -6340,6 +6392,23 @@ class TestResponsesInputTokens:
         assert response.status_code == 200, response.text
         sent = counter.await_args.kwargs["responses_request"]
         assert {name: sent[name] for name in ("tools", "tool_choice", "parallel_tool_calls") if name in sent} == expected
+
+    @pytest.mark.parametrize(
+        "key_metadata, kept",
+        [({}, False), ({"allow_client_pricing_override": True}, True)],
+        ids=["plain_key", "pricing_override_key"],
+    )
+    def test_client_pricing_fields_reach_the_counter_only_when_inference_keeps_them(
+        self, key_metadata: dict[str, object], kept: bool
+    ) -> None:
+        response, counter = self._post_input_tokens(
+            {"model": "gpt-4o", "input": "hi", "base_model": "anthropic.claude-haiku-5-5", "input_cost_per_token": 1.0},
+            key_metadata=key_metadata,
+        )
+
+        assert response.status_code == 200, response.text
+        sent: Final = counter.await_args.kwargs["responses_request"]
+        assert ("base_model" in sent, "input_cost_per_token" in sent, sent["input"]) == (kept, kept, "hi")
 
     def test_previous_response_id_reaches_the_counter_authorized_next_to_the_id_the_client_held(self) -> None:
         from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD

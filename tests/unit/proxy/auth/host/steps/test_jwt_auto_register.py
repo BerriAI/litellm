@@ -5,28 +5,10 @@ from typing import Final
 import pytest
 
 from litellm.proxy.auth.host.steps.jwt_auto_register import create_key_mapping
+from litellm.proxy.utils import hash_token
+from tests.unit.proxy.rust_auth_stores import JwtMapping, RustAuthStores
 
 CLAIM: Final = ("email", "dev@example.com")
-
-
-@dataclass
-class _MappingTable:
-    """The `LiteLLM_JWTKeyMapping` table, unique on issuer, claim name and claim value like the schema."""
-
-    rows: list[dict[str, object]] = field(default_factory=list)  # mutable-ok: the table's stored rows
-    failure: Exception | None = None
-
-    async def create(self, data: dict[str, object]) -> None:
-        if self.failure is not None:
-            raise self.failure
-        scope: Final = (data["jwt_issuer"], data["jwt_claim_name"], data["jwt_claim_value"])
-        if any((row["jwt_issuer"], row["jwt_claim_name"], row["jwt_claim_value"]) == scope for row in self.rows):
-            raise Exception("Unique constraint failed on the fields: (`jwt_issuer`,`jwt_claim_name`,`jwt_claim_value`)")
-        self.rows.append({**data, "is_active": True})
-
-    async def find_first(self, where: dict[str, object]) -> SimpleNamespace | None:
-        match: Final = next((row for row in self.rows if all(row[k] == v for k, v in where.items())), None)
-        return None if match is None else SimpleNamespace(token=match["token"])
 
 
 @dataclass
@@ -37,15 +19,15 @@ class _KeyTable:
         self.deleted.append(where)
 
 
-def _prisma(mappings: _MappingTable, keys: _KeyTable) -> SimpleNamespace:
-    return SimpleNamespace(db=SimpleNamespace(litellm_jwtkeymapping=mappings, litellm_verificationtoken=keys))
+def _prisma(keys: _KeyTable) -> SimpleNamespace:
+    return SimpleNamespace(db=SimpleNamespace(litellm_verificationtoken=keys))
 
 
-async def _map(prisma: SimpleNamespace, existing_hash: str) -> tuple[str | None, bool]:
+async def _map(keys: _KeyTable, existing_hash: str | None, issuer: str | None = None) -> tuple[str | None, bool]:
     return await create_key_mapping(
-        prisma,  # pyright: ignore[reportArgumentType]  # serves only the two tables this module touches
+        _prisma(keys),  # pyright: ignore[reportArgumentType]  # serves only the key table this module touches
         *CLAIM,
-        issuer=None,
+        issuer=issuer,
         behavior="auto_register",
         existing_hash=existing_hash,
         team_id=None,
@@ -56,30 +38,55 @@ async def _map(prisma: SimpleNamespace, existing_hash: str) -> tuple[str | None,
 
 
 @pytest.mark.asyncio
-async def test_a_claim_is_mapped_to_the_key_it_was_given() -> None:
-    mappings: Final = _MappingTable()
-
-    assert await _map(_prisma(mappings, _KeyTable()), "hash-a") == ("hash-a", False)
-    assert [(row["jwt_issuer"], row["token"], row["created_by"]) for row in mappings.rows] == [
-        ("", "hash-a", "auto_register")
+@pytest.mark.parametrize(("issuer", "stored_issuer"), [(None, ""), ("https://idp", "https://idp")])
+async def test_a_claim_is_mapped_to_the_key_it_was_given(
+    rust_auth_stores: RustAuthStores, issuer: str | None, stored_issuer: str
+) -> None:
+    assert await _map(_KeyTable(), "hash-a", issuer) == ("hash-a", False)
+    assert rust_auth_stores.jwt_key_mapping.mappings == [
+        JwtMapping(*CLAIM, token="hash-a", jwt_issuer=stored_issuer, written_by="auto_register")
     ]
 
 
 @pytest.mark.asyncio
-async def test_a_request_that_loses_the_race_returns_the_winners_key_and_keeps_its_own() -> None:
-    mappings: Final = _MappingTable()
+async def test_a_request_that_loses_the_race_returns_the_winners_key_and_keeps_its_own(
+    rust_auth_stores: RustAuthStores,
+) -> None:
     keys: Final = _KeyTable()
-    _ = await _map(_prisma(mappings, keys), "hash-winner")
+    _ = await _map(keys, "hash-winner")
 
-    assert await _map(_prisma(mappings, keys), "hash-loser") == ("hash-winner", True)
+    assert await _map(keys, "hash-loser") == ("hash-winner", True)
     assert keys.deleted == []
-    assert [row["token"] for row in mappings.rows] == ["hash-winner"]
+    assert [mapping.token for mapping in rust_auth_stores.jwt_key_mapping.mappings] == ["hash-winner"]
 
 
 @pytest.mark.asyncio
-async def test_a_database_error_other_than_the_unique_conflict_propagates() -> None:
+async def test_a_request_that_loses_the_race_deletes_the_key_it_minted(
+    rust_auth_stores: RustAuthStores, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def mint(**_: object) -> dict[str, str]:
+        return {"token": "sk-minted"}
+
+    monkeypatch.setattr("litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn", mint)
+    keys: Final = _KeyTable()
+    _ = await _map(keys, "hash-winner")
+
+    assert await _map(keys, None) == ("hash-winner", True)
+    assert keys.deleted == [{"token": hash_token("sk-minted")}]
+
+
+@pytest.mark.asyncio
+async def test_a_claim_held_by_an_inactive_mapping_maps_to_no_key(rust_auth_stores: RustAuthStores) -> None:
+    rust_auth_stores.jwt_key_mapping.mappings.append(JwtMapping(*CLAIM, token="hash-retired", is_active=False))
+
+    assert await _map(_KeyTable(), "hash-a") == (None, True)
+
+
+@pytest.mark.asyncio
+async def test_a_database_error_propagates(rust_auth_stores: RustAuthStores) -> None:
     outage: Final = ConnectionError("database unreachable")
+    rust_auth_stores.jwt_key_mapping.error = outage
 
     with pytest.raises(ConnectionError) as raised:
-        _ = await _map(_prisma(_MappingTable(failure=outage), _KeyTable()), "hash-a")
+        _ = await _map(_KeyTable(), "hash-a")
     assert raised.value is outage

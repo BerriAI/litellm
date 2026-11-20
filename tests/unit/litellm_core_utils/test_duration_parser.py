@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     duration_in_seconds_from,
     get_annual_budget_window_start,
+    get_budget_window_end,
     get_budget_window_start,
     get_next_standardized_reset_time,
     is_annual_budget_duration,
@@ -238,9 +239,7 @@ class TestStandardizedResetTime(unittest.TestCase):
         ),
     ],
 )
-def test_annual_reset_and_window_start(
-    now: datetime, zone: str, reset_time: time, expected: datetime
-) -> None:
+def test_annual_reset_and_window_start(now: datetime, zone: str, reset_time: time, expected: datetime) -> None:
     reset: Final = get_next_standardized_reset_time("12mo", now, zone, reset_time)
     assert reset == expected
     assert get_budget_window_start("12mo", reset) == expected.replace(year=expected.year - 1)
@@ -288,9 +287,7 @@ def test_long_month_spelling_without_a_calendar_schedule_keeps_its_nightly_reset
     ),
 )
 @pytest.mark.parametrize("storage", ("offset", "utc", "naive_utc"))
-def test_annual_window_survives_timestamp_storage(
-    zone: str, reset_at: str, expected: str, storage: str
-) -> None:
+def test_annual_window_survives_timestamp_storage(zone: str, reset_at: str, expected: str, storage: str) -> None:
     reset: Final = datetime.fromisoformat(reset_at)
     stored: Final = {
         "offset": reset,
@@ -490,6 +487,39 @@ class TestGetBudgetWindowStart(unittest.TestCase):
             get_budget_window_start("1y", datetime(2024, 1, 16, tzinfo=timezone.utc)),
             datetime(2024, 1, 15, tzinfo=timezone.utc),
         )
+
+
+@pytest.mark.parametrize(
+    ("duration", "zone", "current_time", "expected"),
+    (
+        ("48h", "UTC", "2024-01-30T00:00:00+00:00", "2024-02-01T00:00:00+00:00"),
+        ("2400h", "UTC", "2024-01-30T00:00:00+00:00", "2024-05-09T00:00:00+00:00"),
+        ("49h", "UTC", "2024-01-30T14:15:30+00:00", "2024-02-01T01:00:00+00:00"),
+        ("2885m", "UTC", "2024-01-30T14:15:30+00:00", "2024-02-01T14:05:00+00:00"),
+        ("172805s", "Asia/Kolkata", "2024-01-30T08:45:30+00:00", "2024-02-01T08:45:05+00:00"),
+    ),
+)
+def test_reset_rollover_keeps_all_elapsed_days(duration: str, zone: str, current_time: str, expected: str) -> None:
+    reset_at: Final = get_next_standardized_reset_time(duration, datetime.fromisoformat(current_time), zone)
+
+    assert reset_at.astimezone(timezone.utc) == datetime.fromisoformat(expected)
+
+
+@pytest.mark.parametrize("duration", ("1d", "24h", "7d", "2w", "30d", "monthly", "1mo", "12mo", "5h", "45s"))
+@pytest.mark.parametrize("zone", ("UTC", "America/Los_Angeles", "Asia/Kolkata"))
+def test_committed_window_end_preserves_its_calendar_and_reset_time(duration: str, zone: str) -> None:
+    for month in (3, 4, 11, 12):
+        reset: Final = datetime(2026, month, 1, 2, 30, tzinfo=ZoneInfo(zone))
+        start: Final = get_budget_window_start(duration, reset).astimezone(timezone.utc).replace(tzinfo=None)
+        assert get_budget_window_end(duration, start, zone) == reset.astimezone(timezone.utc)
+
+
+def test_month_end_uses_a_configured_reset_only_when_it_belongs_to_the_committed_window() -> None:
+    reset: Final = datetime(2026, 3, 31, tzinfo=timezone.utc)
+    assert get_budget_window_end("1mo", datetime(2026, 2, 28), reset_at=reset) == reset
+    assert get_budget_window_end("1mo", datetime(2026, 1, 31), reset_at=reset) == datetime(
+        2026, 2, 28, tzinfo=timezone.utc
+    )
 
 
 @pytest.mark.parametrize(

@@ -104,6 +104,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "allow_client_pricing_override",
         "allow_litellm_changed_by_header",
         "soft_budget_alerting_emails",
+        "max_budget_alert_emails",
         "team_member_max_budget_alert_emails",
         "phoenix_project_name_override",
         "phoenix_project_name",

@@ -68,6 +68,40 @@ async def test_annual_window_reset_waits_for_the_saved_instant(reset_at: str, no
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("budget_duration", ("1h", "1d", "2d", "7d", "1mo"))
+@pytest.mark.parametrize(
+    "now,resets",
+    ((datetime(2020, 1, 1, 7, 59, 59), False), (datetime(2020, 1, 1, 8, 0, 0), True)),
+)
+async def test_window_reset_compares_an_offset_reset_at_as_a_utc_instant(
+    budget_duration: str, now: datetime, resets: bool
+) -> None:
+    store: Final = FakeSpendCounters().store()
+    counter: Final = f"spend:key:offset-budget:window:{budget_duration}"
+    await store.set(counter, 10.0)
+    reset_at: Final = "2020-01-01T00:00:00-08:00"
+    window: Final = {"budget_duration": budget_duration, "reset_at": reset_at, "max_budget": 10.0}
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = MagicMock()
+    client.db.execute_raw = AsyncMock(return_value=1)
+
+    changed: Final = await ResetBudgetJob._reset_expired_window(
+        window,
+        counter,
+        store,
+        now,
+        BudgetResetSettings(timezone="America/Los_Angeles"),
+        client,
+        reset_budget_job_module.Litellm_EntityType.KEY,
+        "offset-budget",
+    )
+
+    assert changed is resets, f"{budget_duration} window due at 08:00Z, swept at {now.isoformat()}Z"
+    assert (await store.read(counter))[0] == (0.0 if resets else 10.0)
+    assert (datetime.fromisoformat(window["reset_at"]) > datetime.fromisoformat(reset_at)) is resets
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
 @pytest.mark.parametrize("microsecond", (0, 123456))
 async def test_annual_reset_persists_the_same_calendar_start_as_admission(  # test-quality-ok: the SQL write is the reset job's observable persistence contract

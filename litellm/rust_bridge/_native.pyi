@@ -1,5 +1,6 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from typing import (
     ClassVar,
     Final,
@@ -284,6 +285,24 @@ class NativeDeploymentHealth:
     def set_sync(self, states: Mapping[str, object], ttl_seconds: float) -> None: ...
 
 @final
+@final
+class ActiveMember:
+    @property
+    def member(self) -> str: ...
+    @property
+    def priority_class(self) -> str: ...
+
+class NativeActiveTeams:
+    def __new__(
+        cls, client: NativeRedisClient | None, clock: Callable[[], float] | None = None
+    ) -> NativeActiveTeams: ...
+    @property
+    def has_redis(self) -> bool: ...
+    def touch(
+        self, model: str, member: str, priority_class: str, window_seconds: int
+    ) -> Future[list[ActiveMember]]: ...
+    def touch_local(self, model: str, member: str, priority_class: str, window_seconds: int) -> list[ActiveMember]: ...
+
 class NativeSensitiveRoutePins:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSensitiveRoutePins: ...
     def get(self, tenant: str, session_id: str, default_ttl_seconds: float) -> Future[str | None]: ...
@@ -610,8 +629,6 @@ class _KeyFacts(Protocol):
     @property
     def project_id(self) -> str | None: ...
     @property
-    def end_user_id(self) -> str | None: ...
-    @property
     def last_refreshed_at(self) -> float | None: ...
 
 class _TeamFacts(Protocol):
@@ -715,6 +732,12 @@ class RustClaimIdentity:
 
 @final
 class RustMappedClaims:
+    @property
+    def customer_org_alias(self) -> str | None: ...
+    @property
+    def customer_member_id(self) -> str | None: ...
+    @property
+    def customer_team_id(self) -> str | None: ...
     @property
     def user_id(self) -> str | None: ...
     @property
@@ -1071,6 +1094,27 @@ class RustDenial:
         def __new__(cls, team_id: str) -> RustDenial.TeamNotFound: ...
         @property
         def team_id(self) -> str: ...
+
+    @final
+    class KeyNotFound(RustDenial):
+        __match_args__: tuple[Literal["hash"]] = ("hash",)
+        def __new__(cls, hash: str) -> RustDenial.KeyNotFound: ...
+        @property
+        def hash(self) -> str: ...
+
+    @final
+    class NoMatchingJwtPublicKey(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.NoMatchingJwtPublicKey: ...
+        @property
+        def message(self) -> str: ...
+
+    @final
+    class IdJagNotBearer(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.IdJagNotBearer: ...
+        @property
+        def message(self) -> str: ...
 
 @final
 class RustAuthOutcome:
@@ -1844,6 +1888,155 @@ class NativeDatabase:
     def close(self) -> Future[None]: ...
 
 @final
+class RustKeyRepository:
+    def __new__(cls, database: NativeDatabase) -> RustKeyRepository: ...
+    def find(self, token: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustJwtKeyMappingRepository:
+    def __new__(cls, database: NativeDatabase) -> RustJwtKeyMappingRepository: ...
+    def mapped_token(
+        self, jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None = None
+    ) -> Future[str | None]: ...
+    def mapped_claims(self, tokens: Sequence[str]) -> Future[list[tuple[str, str, str]]]: ...
+    def insert(
+        self, jwt_claim_name: str, jwt_claim_value: str, token: str, *, jwt_issuer: str | None = None, written_by: str
+    ) -> Future[tuple[bool, str | None]]: ...
+
+@final
+class RustModelAccessGroupRepository:
+    def __new__(cls, database: NativeDatabase) -> RustModelAccessGroupRepository: ...
+    def names(self, limit: int) -> Future[list[str]]: ...
+    def budgets(self, names: Sequence[str]) -> Future[list[tuple[str, float, float | None, bool]]]: ...
+
+@final
+class RustBudgetRepository:
+    def __new__(cls, database: NativeDatabase) -> RustBudgetRepository: ...
+    def find_end_user_default_budget(self, budget_id: str) -> Future[str | None]: ...
+    def find_team_member_default_budget(self, budget_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustEndUserRepository:
+    def __new__(cls, database: NativeDatabase) -> RustEndUserRepository: ...
+    def find_with_budget_and_object_permission(self, end_user_id: str) -> Future[str | None]: ...
+    def find_restricted_ids(self, limit: int) -> Future[list[str]]: ...
+
+@final
+class RustUserRepository:
+    def __new__(cls, database: NativeDatabase) -> RustUserRepository: ...
+    def resolve(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None = None,
+        user_email: str | None = None,
+        email_verified: bool | None = None,
+        links_any_user: bool,
+        use_writer: bool = False,
+    ) -> Future[str | None]: ...
+    def email_belongs_to_another_user(self, user_email: str, user_id: str) -> Future[bool]: ...
+    def backfill_email(self, user_id: str, user_email: str, *, links_any_user: bool) -> Future[str | None]: ...
+    def set_role(self, user_id: str, user_role: str) -> Future[str | None]: ...
+    def insert(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None = None,
+        user_email: str | None = None,
+        links_any_user: bool,
+        user_role: str | None = None,
+        max_budget: float | None = None,
+        budget_duration: str | None = None,
+        budget_reset_at: float | None = None,
+        models: Sequence[str] | None = None,
+        budget_limits: str | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+        user_alias: str | None = None,
+        team_id: str | None = None,
+        organization_id: str | None = None,
+        object_permission_id: str | None = None,
+        password_reset_required: bool | None = None,
+        metadata: str | None = None,
+        allowed_cache_controls: Sequence[str] | None = None,
+        policies: Sequence[str] | None = None,
+        model_max_budget: str | None = None,
+    ) -> Future[tuple[bool, str | None]]: ...
+
+@final
+class RustTeamRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTeamRepository: ...
+    def find_with_model_aliases(self, team_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+    def find_up_to_two_by_alias(self, alias: str) -> Future[list[str]]: ...
+
+@final
+class RustTeamMembershipRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTeamMembershipRepository: ...
+    def find_with_budget(self, user_id: str, team_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+    def add_member(
+        self,
+        user_id: str,
+        team_id: str,
+        *,
+        budget_id: str | None = None,
+        own_budget: tuple[Sequence[str], str | None, float | None, str, str] | None = None,
+    ) -> Future[tuple[Literal["added", "already_member", "team_missing", "user_missing"], str | None, str | None]]: ...
+
+@final
+class RustOrganizationRepository:
+    def __new__(cls, database: NativeDatabase) -> RustOrganizationRepository: ...
+    def find_with_optional_budget(
+        self, organization_id: str, *, include_budget_table: bool = False
+    ) -> Future[str | None]: ...
+    def find_up_to_two_by_alias(self, alias: str) -> Future[list[str]]: ...
+
+@final
+class RustProjectRepository:
+    def __new__(cls, database: NativeDatabase) -> RustProjectRepository: ...
+    def find_with_budget(self, project_id: str) -> Future[str | None]: ...
+
+@final
+class RustSpendLogRepository:
+    def __new__(cls, database: NativeDatabase) -> RustSpendLogRepository: ...
+    def key_window_spend(self, api_key: str, since: datetime) -> Future[float]: ...
+    def team_window_spend(self, team_id: str, since: datetime) -> Future[float]: ...
+    def user_window_spend(self, user_id: str, since: datetime) -> Future[float]: ...
+
+@final
+class RustTagRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTagRepository: ...
+    def names(self, limit: int) -> Future[list[str]]: ...
+    def find_many_with_budgets(self, names: Sequence[str]) -> Future[list[str]]: ...
+
+@final
+class RustAuditLogRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAuditLogRepository: ...
+    def insert(
+        self, row: tuple[str, int, str | None, str | None, str, str, str, str | None, str | None]
+    ) -> Future[None]: ...
+    def insert_many(
+        self, rows: Sequence[tuple[str, int, str | None, str | None, str, str, str, str | None, str | None]]
+    ) -> Future[None]: ...
+
+@final
+class RustAgentIdentityRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAgentIdentityRepository: ...
+    def record_authentication(self, agent_id: str, revision: str) -> Future[bool]: ...
+
+@final
+class RustAccessGroupRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAccessGroupRepository: ...
+    def find_by_access_group_id(self, access_group_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustObjectPermissionRepository:
+    def __new__(cls, database: NativeDatabase) -> RustObjectPermissionRepository: ...
+    def find_by_object_permission_id(
+        self, object_permission_id: str, *, use_writer: bool = False
+    ) -> Future[str | None]: ...
+
+@final
 class NativeTokenRedactor:
     def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
     def redact(self, text: str, replacement: str) -> str | None: ...
@@ -1902,6 +2095,7 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
+def messages_optional_params() -> list[str]: ...
 
 @final
 class NativeModelCapacityState:
@@ -2074,6 +2268,7 @@ def reserve_process_for_forking() -> None: ...
 
 __all__ = [
     "JWT_ID_JAG_TYP",
+    "ActiveMember",
     "AtomicApplied",
     "AtomicOverLimit",
     "AttemptShape",
@@ -2084,6 +2279,7 @@ __all__ = [
     "GuardedReply",
     "HuggingFaceEncoding",
     "LocalSizes",
+    "NativeActiveTeams",
     "NativeAdmission",
     "NativeAuthCache",
     "NativeBudgets",
@@ -2128,20 +2324,36 @@ __all__ = [
     "ResponsesWebSocketConnection",
     "RouterCall",
     "RouterCoreHandle",
+    "RustAccessGroupRepository",
+    "RustAgentIdentityRepository",
+    "RustAuditLogRepository",
     "RustAuth",
     "RustAuthOutcome",
     "RustAuthSettings",
     "RustAuthStep",
     "RustBridgeDeclined",
+    "RustBudgetRepository",
     "RustClaimIdentity",
     "RustDenial",
+    "RustEndUserRepository",
     "RustIdentity",
+    "RustJwtKeyMappingRepository",
     "RustJwtMapping",
     "RustKeyContext",
+    "RustKeyRepository",
     "RustMappedClaims",
+    "RustModelAccessGroupRepository",
+    "RustObjectPermissionRepository",
+    "RustOrganizationRepository",
     "RustPlan",
+    "RustProjectRepository",
+    "RustSpendLogRepository",
+    "RustTagRepository",
     "RustTeamGrant",
+    "RustTeamMembershipRepository",
+    "RustTeamRepository",
     "RustUpstreamError",
+    "RustUserRepository",
     "SpendRead",
     "TokenCounter",
     "Tokenizer",
@@ -2172,6 +2384,7 @@ __all__ = [
     "jwt_presents_claims",
     "jwt_unverified_claims",
     "messages",
+    "messages_optional_params",
     "native_redis_breaker_states",
     "ocr",
     "ocr_health_check_document",
@@ -2445,6 +2658,7 @@ class _FailedStep(_Step):
         "routing_plugins_left_nothing",
         "routing_plugins_need_async",
         "multiple_teams",
+        "multiple_model_groups",
         "reserved",
         "invalid_router_weights",
         "non_numeric_weight",

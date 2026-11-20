@@ -232,6 +232,7 @@ from litellm.types.utils import (
     pricing_override_fields,
 )
 from litellm.utils import (
+    HuggingFaceTokenizerKind,
     acredential_updates,
     cost_map_omits_token_price,
     native_structured_output_support,
@@ -406,6 +407,7 @@ from litellm.litellm_core_utils.core_helpers import (
     json_contains,
     normalize_drop_params,
     require_attributes,
+    without,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -419,6 +421,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_keys,
 )
 from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.messages.context_management.inference_view import (
     InferenceRequestView,
     InferenceRequestViewError,
@@ -542,6 +545,11 @@ from litellm.proxy.common_utils.anthropic_error_payload import (
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
     publish_auth_cache_invalidation,
+)
+from litellm.proxy.common_utils.callback_lifecycle import (
+    CALLBACK_CLOSE_TIMEOUT_SECONDS,
+    close_proxy_callbacks,
+    setup_proxy_callbacks,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.codex_catalog_source import codex_catalog_source
@@ -682,7 +690,11 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
-from litellm.proxy.db.connection_budget import RUST_RESERVED_CONNECTIONS
+from litellm.proxy.db.connection_budget import (
+    configure_pool_budget_from_settings,
+    rust_connections,
+    with_configured_connection_budget,
+)
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -905,6 +917,7 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
 from litellm.proxy.middleware.budget_reservation_release_middleware import (
     BudgetReservationReleaseMiddleware,
 )
+from litellm.proxy.middleware.litellm_response_headers_middleware import LiteLLMResponseHeadersMiddleware
 from litellm.proxy.middleware.redis_request_batch_middleware import RedisRequestBatchMiddleware
 from litellm.proxy.plugin_routes import (
     register_plugins_from_config,
@@ -1628,11 +1641,13 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
+    connections: Final = rust_connections(os.environ)
     database: Final = await database_runtime.Database.open(
         client,
         os.environ["DATABASE_URL"],
         os.environ.get("DATABASE_URL_READ_REPLICA") or None,
-        RUST_RESERVED_CONNECTIONS,
+        writer_connections=connections.writer,
+        reader_connections=connections.reader,
     )
     resources.push_async_callback(database.aclose)
     return database
@@ -1651,10 +1666,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
 
 
 def register_prompt_cache_alerts(
-    settings: Mapping[str, object], prisma: PrismaClient | None, resources: AsyncExitStack
+    settings: Mapping[str, object],
+    prisma: PrismaClient | None,
+    resources: AsyncExitStack,
 ) -> None:
     """Off unless `general_settings.prompt_cache_alerts` is true and a database and a shared salt exist. The logger
-    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends."""
+    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends.
+    """
     if settings.get("prompt_cache_alerts") is not True or prisma is None:
         return
     from litellm.proxy.common_utils.encrypt_decrypt_utils import get_salt_key
@@ -1773,7 +1791,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
 
-    enforce_fips_mode(general_settings_view())
+    settings: Final = general_settings_view()
+    enforce_fips_mode(settings)
+    if configure_pool_budget_from_settings.get() and prisma_client is None:
+        resources.enter_context(with_configured_connection_budget(settings.get("database_connection_pool_limit")))
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -1781,7 +1802,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                 master_key_boot_verdict(
                     master_key=master_key,
                     environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
-                    general_settings=general_settings,
+                    general_settings=settings,
                     config_file_path=user_config_file_path,
                     override_env_is_on=get_secret_bool(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR) is True,
                     salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
@@ -2078,10 +2099,12 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         )
         if telemetry_start is not None:
             telemetry_start.add_done_callback(_log_telemetry_start_failure)
+        startup_callbacks: Final = tuple(litellm.logging_callback_manager.get_all_callbacks())
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
+                    await setup_proxy_callbacks(app, startup_callbacks)
                     gc.freeze()
                     verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
                     yield state
@@ -2122,6 +2145,11 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
             await _flush_spend_around_logging_drain_on_shutdown()
+
+            await close_proxy_callbacks(
+                (*startup_callbacks, *litellm.logging_callback_manager.get_all_callbacks()),
+                timeout=GracefulShutdownManager.remaining(CALLBACK_CLOSE_TIMEOUT_SECONDS),
+            )
 
             await proxy_config.stop_config_sync_subscriber()
 
@@ -2656,6 +2684,10 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
     return JSONResponse(status_code=422, content={"detail": public_errors})
 
 
+def _include_litellm_headers() -> bool:
+    return litellm.include_litellm_headers is not False
+
+
 @app.exception_handler(Exception)
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
@@ -2665,6 +2697,10 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     litellm_call_id: Final = attribute_of(request.state, "litellm_call_id")
     if isinstance(litellm_call_id, str):
         response.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
+    if not _include_litellm_headers():
+        response.raw_headers[:] = [
+            (name, value) for name, value in response.raw_headers if not name.lower().startswith(b"x-litellm-")
+        ]
     return response
 
 
@@ -3855,12 +3891,17 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
 async def customer_accounting_counters(
     ids: CustomerHierarchyIds | None,
     admitted_scopes: tuple[CustomerScopeAuth, ...] | None = None,
+    *,
+    started_at: datetime | None = None,
 ) -> tuple[BudgetCounter, ...]:
     if ids is None:
         return ()
     from itertools import chain
 
-    from litellm.proxy.auth.customer_hierarchy_auth import get_customer_scopes_for_accounting
+    from litellm.proxy.auth.customer_hierarchy_auth import (
+        get_customer_scopes_for_accounting,
+    )
+    from litellm.proxy.management_helpers.customer_hierarchy import utc_datetime
 
     try:
         scopes: Final = (
@@ -3877,10 +3918,10 @@ async def customer_accounting_counters(
             "Unable to load customer budget windows for spend accounting"
         )
         return ()
-    now: Final = datetime.now(timezone.utc)
+    now: Final = utc_datetime(started_at) if started_at is not None else datetime.now(timezone.utc)
     return tuple(
         chain.from_iterable(
-            customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in scopes
+            customer_window_counters(scope.key, scope.entity_id, scope.accounting_limits(), now=now) for scope in scopes
         )
     )
 
@@ -3914,6 +3955,7 @@ async def accounting_window_keys(
             "entity_id": counter.entity_id,
             "window_duration": counter.window_duration,
             "window_start": counter.window_start.isoformat(),
+            **({"reset_at": counter.reset_at.isoformat()} if counter.reset_at is not None else {}),
         }
         for counter in customer_counters
         if counter.window_start is not None
@@ -3992,7 +4034,8 @@ async def _increment_spend_counters_batched(
     customer_counters: Sequence[BudgetCounter] = (),
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
-    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
+    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments.
+    """
     committed_counter_keys: Final = (
         tuple(counter_key for counter_key in committed_spend_scope.tracked() if has_committed_twin(counter_key))
         if committed_spend_scope is not None and response_cost is not None and response_cost > 0
@@ -4288,7 +4331,8 @@ def _flatten_spend_scopes(
 @dataclass(frozen=True, slots=True)
 class _ReservationCounterUpdate:
     """The reserved counters the direct increment must skip, and the adjustments that settle them on the actual
-    cost, still to be written; both empty when the reservation could not be reconciled and was dropped."""
+    cost, still to be written; both empty when the reservation could not be reconciled and was dropped.
+    """
 
     reserved_counter_keys: frozenset[str] = frozenset()
     pending: tuple[PendingSpendIncrement, ...] = ()
@@ -4535,6 +4579,7 @@ async def _enqueue_window_spend_row_update(
                 window_start=window_start,
                 spend=increment,
                 started_at=request_started_at,
+                reset_at=reset_at,
             )
         )
     except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
@@ -4751,7 +4796,8 @@ async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncremen
 def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> bool:
     """Post-call increments ride the request's native post-call pipeline with the other counters. Each counter's
     new value lands in memory when the pipeline settles; a failed one is dropped everywhere so no reader trusts a
-    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
+    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does.
+    """
     settlement: Final = spend_counter_store.increment_many_post_call(
         tuple((item.counter_key, item.increment) for item in pending)
     )
@@ -4763,9 +4809,12 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     return True
 
 
-async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+async def increment_spend_counters_pipeline(
+    pending: Sequence[PendingSpendIncrement],
+) -> tuple[float | None, ...]:
     """One INCRBYFLOAT+EXPIRE pipeline for every pending counter, returning each counter's new value in order; on
-    failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch."""
+    failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch.
+    """
     if not spend_counter_store.has_redis:
         return await run_spend_counter_pipeline(pending=pending)
     try:
@@ -4776,9 +4825,12 @@ async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrem
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
-async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+async def run_spend_counter_pipeline(
+    pending: Sequence[PendingSpendIncrement],
+) -> tuple[float | None, ...]:
     """The pipeline behind ``increment_spend_counters_pipeline`` without its invalidation: the caller decides what
-    happens to counters whose increment may or may not have landed when the pipeline fails."""
+    happens to counters whose increment may or may not have landed when the pipeline fails.
+    """
     if not pending:
         return ()
     if not spend_counter_store.has_redis:
@@ -5677,6 +5729,9 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         default_redis_ttl=litellm.default_redis_ttl,
     )
     spend_counter_store.attach_redis(connect(redis_cache))
+    from litellm.vector_stores.fallbacks import vector_store_fallback_cooldowns
+
+    vector_store_fallback_cooldowns.attach_redis_cache(redis_cache)
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
@@ -6815,7 +6870,7 @@ class ProxyConfig:
 
     def init_cache(
         self,
-        cache_params: dict,
+        cache_params: Mapping[str, Any],
         enable_redis_auth_cache: bool = False,
     ) -> RedisCache | None:
         """
@@ -6833,7 +6888,7 @@ class ProxyConfig:
         if "default_redis_ttl" in cache_params:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
-        litellm.cache = Cache(**cache_params)
+        litellm.cache = Cache(**without(cache_params, "default_redis_ttl"))
 
         resolved_usage_cache = redis_usage_cache
         cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
@@ -7542,6 +7597,8 @@ class ProxyConfig:
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
                         "access_group_rules",
+                        "customer_org_alias_header",
+                        "customer_member_id_header",
                     )
                     if name in typed_general_settings
                 }
@@ -14324,13 +14381,23 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
-    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+    responses={
+        200: {
+            "model": TranscriptionResponse,
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 @router.post(
     "/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
-    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+    responses={
+        200: {
+            "model": TranscriptionResponse,
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 async def audio_transcriptions(
     request: Request,
@@ -15588,12 +15655,13 @@ from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
-    AccessGroupRepository,
     ConfigOverridesRepository,
     InvitationLinkRepository,
     PromptRepository,
@@ -15736,7 +15804,18 @@ def _deployment_with_request_drop_settings(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
     sent_params: Mapping[str, object],
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    overrides: Final = {name: sent_params[name] for name in _REQUEST_DROP_SETTINGS if sent_params.get(name) is not None}
+    overrides: Final = {
+        name: sent_params[name]
+        for name in (
+            *_REQUEST_DROP_SETTINGS,
+            "store",
+            "extra_body",
+            "previous_response_id",
+            "conversation",
+            "truncation",
+        )
+        if name in sent_params
+    }
     if not overrides:
         return deployment
     resolved_deployment: Final = deployment or {}
@@ -15833,7 +15912,10 @@ async def _try_native_responses_count(
 
 
 async def _provider_token_count(
-    count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
+    count_with: Callable[
+        [str, str | None],
+        Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]],
+    ],
     model_to_use: str,
     request_model: str,
     settings: TokenCountSettings,
@@ -15843,7 +15925,8 @@ async def _provider_token_count(
     """Count with the provider, using the token_count_model in its region when one is set.
 
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
-    estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
+    estimate stands in for it and that failure is the answer if the estimate cannot read the request.
+    """
     count_model: Final = settings.count_model
     counting_model: Final = (
         model_to_use
@@ -15989,28 +16072,33 @@ class _TokenizerLoads:
 
 
 _TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_tokenizer_loads")
+_BASE_MODEL_TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_base_model_tokenizer_loads")
 
 
-def _tokenizer_loads_for_this_loop() -> _TokenizerLoads:
-    existing: Final = _TOKENIZER_LOADS.get(None)
+def _tokenizer_loads_for_this_loop(loads: anyio.lowlevel.RunVar[_TokenizerLoads]) -> _TokenizerLoads:
+    existing: Final = loads.get(None)
     if existing is not None:
         return existing
     created: Final = _TokenizerLoads(threads=anyio.CapacityLimiter(TOKENIZER_LOAD_MAX_RUNNING))
-    _TOKENIZER_LOADS.set(created)
+    loads.set(created)
     return created
 
 
 @dataclass(slots=True)
 class _TokenizerLoadSlot:
-    model: str
-    custom_tokenizer: CustomHuggingfaceTokenizer | None
     current: _SharedTokenizerLoad | None = None
 
-    def load(self, loads: _TokenizerLoads, loop: asyncio.AbstractEventLoop) -> _SharedTokenizerLoad | None:
+    def load(
+        self,
+        model: str,
+        custom_tokenizer: CustomHuggingfaceTokenizer | None,
+        loads: _TokenizerLoads,
+        loop: asyncio.AbstractEventLoop,
+    ) -> _SharedTokenizerLoad | None:
         current: Final = self.current
         if current is not None and current.reusable(loop.time()):
             return current
-        self.current = loads.start(self.model, self.custom_tokenizer, loop)
+        self.current = loads.start(model, custom_tokenizer, loop)
         return self.current
 
 
@@ -16018,41 +16106,48 @@ class _TokenizerLoadSlot:
 def _tokenizer_load_slot(
     model: str, custom_tokenizer: _CustomTokenizerKey | None, loop: asyncio.AbstractEventLoop
 ) -> _TokenizerLoadSlot:
-    return _TokenizerLoadSlot(
-        model=model,
-        custom_tokenizer=None
+    return _TokenizerLoadSlot()
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _base_model_tokenizer_load_slot(
+    kind: HuggingFaceTokenizerKind, loop: asyncio.AbstractEventLoop
+) -> _TokenizerLoadSlot:
+    return _TokenizerLoadSlot()
+
+
+def _model_tokenizer_load_slot(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, loop: asyncio.AbstractEventLoop
+) -> _TokenizerLoadSlot:
+    return _tokenizer_load_slot(
+        model,
+        None
         if custom_tokenizer is None
-        else CustomHuggingfaceTokenizer(
-            identifier=custom_tokenizer.identifier,
-            revision=custom_tokenizer.revision,
-            auth_token=custom_tokenizer.auth_token,
+        else _CustomTokenizerKey(
+            identifier=custom_tokenizer["identifier"],
+            revision=custom_tokenizer["revision"],
+            auth_token=custom_tokenizer["auth_token"],
         ),
+        loop,
     )
 
 
-async def _tokenizer_after_provider_error(
-    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
+async def _tokenizer_within_load_wait(
+    model: str,
+    custom_tokenizer: CustomHuggingfaceTokenizer | None,
+    loads: _TokenizerLoads,
+    slot: Callable[[asyncio.AbstractEventLoop], _TokenizerLoadSlot],
 ) -> SelectTokenizerResponse | BaseException:
     loop: Final = asyncio.get_running_loop()
     try:
-        load: Final = _tokenizer_load_slot(
-            model,
-            None
-            if custom_tokenizer is None
-            else _CustomTokenizerKey(
-                identifier=custom_tokenizer["identifier"],
-                revision=custom_tokenizer["revision"],
-                auth_token=custom_tokenizer["auth_token"],
-            ),
-            loop,
-        ).load(_tokenizer_loads_for_this_loop(), loop)
+        load: Final = slot(loop).load(model, custom_tokenizer, loads, loop)
         if load is None:
             return _TokenizerLoadsBusy()
         outcome: Final = await asyncio.wait_for(
             asyncio.shield(load.outcome),
             timeout=max(load.started_at + TOKENIZER_LOAD_WAIT_SECONDS - loop.time(), 0),
         )
-    except Exception as e:  # noqa: BLE001  # a tokenizer that cannot be read, loaded in time, or loaded at all answers the provider's error
+    except Exception as e:  # noqa: BLE001  # each caller decides what a tokenizer that cannot be read, loaded in time, or loaded at all answers
         return e
     return outcome.tokenizer
 
@@ -16060,12 +16155,33 @@ async def _tokenizer_after_provider_error(
 async def _tokenizer_or_provider_error(
     model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure
 ) -> SelectTokenizerResponse:
-    tokenizer: Final = await _tokenizer_after_provider_error(model, custom_tokenizer)
+    tokenizer: Final = await _tokenizer_within_load_wait(
+        model,
+        custom_tokenizer,
+        _tokenizer_loads_for_this_loop(_TOKENIZER_LOADS),
+        partial(_model_tokenizer_load_slot, model, custom_tokenizer),
+    )
     if not isinstance(tokenizer, BaseException):
         return tokenizer
     if not _answers_provider_error(tokenizer):
         raise tokenizer.with_traceback(None)
     raise _provider_error_after_failed_estimate(provider_failure, tokenizer) from tokenizer
+
+
+async def _tokenizer_model(model: str, base_model: str | None) -> str:
+    kind: Final = litellm.utils.huggingface_tokenizer_kind
+    base_kind: Final = None if base_model is None or kind(model) is not None else kind(base_model)
+    if base_model is None or base_kind is None:
+        return model
+    if not litellm.utils.huggingface_tokenizer_may_download(base_model):
+        return base_model
+    loaded: Final = await _tokenizer_within_load_wait(
+        base_model,
+        None,
+        _tokenizer_loads_for_this_loop(_BASE_MODEL_TOKENIZER_LOADS),
+        partial(_base_model_tokenizer_load_slot, base_kind),
+    )
+    return model if isinstance(loaded, BaseException) else base_model
 
 
 async def _local_token_estimate(
@@ -16157,6 +16273,13 @@ def _deployment_base_model(deployment: _TokenCountDeployment) -> str | None:
     return _non_empty_str(deployment.get("model_info", {}).get("base_model")) or _non_empty_str(
         deployment.get("litellm_params", {}).get("base_model")
     )
+
+
+def _tokenizer_base_model(deployment: _TokenCountDeployment) -> str | None:
+    base_model: Final = _deployment_base_model(deployment)
+    if base_model is None or deployment.get("model_info", {}).get("custom_tokenizer") is not None:
+        return None
+    return base_model.split("/", 1)[-1]
 
 
 def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
@@ -16251,6 +16374,14 @@ def _rejected_view(status_code: int, message: str) -> ProxyException:
     ).to_proxy_exception()
 
 
+def _reject_unsupported_messages_params(route: Target | None, litellm_params: Mapping[str, object]) -> None:
+    from litellm.llms.anthropic.messages.responses_adapters.handler import previous_response_id_error
+
+    error: Final = previous_response_id_error(litellm_params) if route in _GATEWAY_EDIT_ROUTES else None
+    if error is not None:
+        raise _rejected_view(400, error)
+
+
 async def _bridged_request_view(
     messages: Sequence[Mapping[str, object]],
     system: object,
@@ -16312,6 +16443,8 @@ async def _gateway_request_view(
             )
         case Target.RESPONSES if edits is not None:
             return await _responses_request_view(messages, system, tools, edits, deployment, fallback_model)
+        case Target.RESPONSES:
+            return InferenceRequestView(messages=messages, system=system)
         case _:
             return None
 
@@ -16358,6 +16491,12 @@ def _deployment_api_base(
     return _non_empty_str(
         _inference_params(deployment.get("litellm_params", {}), responses_request or {}).get("api_base")
     )
+
+
+def _inference_base_model(deployment: _TokenCountDeployment, responses_request: Mapping[str, object]) -> str | None:
+    return _non_empty_str(
+        _inference_params(deployment.get("litellm_params", {}), responses_request).get("base_model")
+    ) or _non_empty_str(deployment.get("model_info", {}).get("base_model"))
 
 
 def _deployment_provider(
@@ -16657,6 +16796,7 @@ async def _count_request_tokens(
         if request_messages is not None and messages_format == "anthropic"
         else None
     )
+    _reject_unsupported_messages_params(route, count_litellm_params)
     if context_edits is not None and route in _GATEWAY_EDIT_ROUTES and malformed_messages is not None:
         raise malformed_messages
     edited_request: Final = (
@@ -16693,6 +16833,10 @@ async def _count_request_tokens(
             _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
+            base_model=_inference_base_model(deployment_view, routed_request),
+            user_continue_message=_inference_params(deployment_view.get("litellm_params", {}), routed_request).get(
+                "user_continue_message"
+            ),
             deployment_params=deployment_defaults,
         )
     )
@@ -16739,7 +16883,13 @@ async def _count_request_tokens(
                 deployment=count_deployment,
                 request_model=request.model,
                 tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
-                system=inference_system,
+                system=(
+                    system_without_claude_code_billing_header(inference_system)
+                    if messages_format == "anthropic"
+                    and route in (Target.CHAT_COMPLETIONS, Target.RESPONSES)
+                    and not isinstance(provider_counter, (OpenAITokenCounter, MistralTokenCounter))
+                    else inference_system
+                ),
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=None if edited_request is not None else context_edits,
@@ -16788,7 +16938,12 @@ async def _count_request_tokens(
     local_messages: Final = (
         request_messages if counted_view is None else [dict(message) for message in counted_view.messages]
     )
-    local_system: Final = system if counted_view is None else counted_view.system
+    post_edit_system: Final = system if counted_view is None else counted_view.system
+    local_system: Final = (
+        system_without_claude_code_billing_header(post_edit_system)
+        if messages_format == "anthropic" and route in (Target.CHAT_COMPLETIONS, Target.RESPONSES)
+        else post_edit_system
+    )
 
     # Default LiteLLM token counting
     custom_tokenizer: CustomHuggingfaceTokenizer | None = None
@@ -16866,7 +17021,7 @@ async def _count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=openai_model or model_to_use,
+        model=openai_model or await _tokenizer_model(model_to_use, _tokenizer_base_model(deployment_view)),
         template_model=template_model,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
@@ -21701,6 +21856,10 @@ def _redact_callback_env_vars(env_vars: dict[str, str | None]) -> dict[str, str 
     }
 
 
+def _configured_callback_row(row: Mapping[str, object], list_key: str) -> Mapping[str, object]:
+    return dict(row, source="config") if proxy_config.litellm_settings.owned_by_config(list_key) else row
+
+
 def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
     if is_full_admin:
         return entries
@@ -22464,13 +22623,25 @@ async def get_config(
         """
 
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "success", environment_variables), "success_callback"
+                )
+            )
 
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "failure", environment_variables), "failure_callback"
+                )
+            )
 
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "success_and_failure", environment_variables), "callbacks"
+                )
+            )
 
         configured_callback_names: Final = frozenset(
             _normalize_callback_alias(callback)
@@ -23286,6 +23457,8 @@ app.add_middleware(
     get_settings=lambda: get_admission_control_settings(general_settings),
     state=admission_control_state,
 )
+app.add_middleware(LiteLLMResponseHeadersMiddleware, include_litellm_headers=_include_litellm_headers)
+
 # Added last on purpose - last-added is outermost, and the client-visible URL
 # prefix must be resolved into scope["root_path"] before any inner middleware
 # or the router inspects the path. Only added when SERVER_ROOT_PATHS is

@@ -1726,6 +1726,7 @@ VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadat
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_usage_based_routing_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+ROUTE_CALL_TYPE_METADATA_KEY: Final = "route_call_type"
 RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
@@ -2361,6 +2362,9 @@ USAGE_MODEL_TOP_KEYS_MAX: Final[int] = 100
 USAGE_CACHE_LEAKAGE_KEYS_DEFAULT: Final[int] = 20
 USAGE_CACHE_LEAKAGE_KEYS_MAX: Final[int] = 100
 USAGE_EXPORT_BATCH_SIZE: Final[int] = 1000
+CALLBACK_CONFIG_METADATA_SLOTS: Final[frozenset[str]] = frozenset(
+    {"logging", "callback_settings", "secret_manager_settings"}
+)
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
