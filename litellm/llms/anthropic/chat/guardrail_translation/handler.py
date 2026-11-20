@@ -16,7 +16,7 @@ import json
 from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from itertools import chain, filterfalse, repeat
+from itertools import accumulate, chain, filterfalse, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload, runtime_checkable
 
@@ -544,6 +544,17 @@ def _rewritten_event(event: Mapping[str, object], rewrite_event: _SSEEventRewrit
     return {**event, rewrite.section: {**section, rewrite.field: rewrite.value}}
 
 
+def _tool_call_text_offsets(texts_before_messages: int, extracted: Sequence[ExtractedInput]) -> tuple[int, ...]:
+    texts_through_message: Final = tuple(
+        accumulate((len(one_message.scanned) for one_message in extracted), initial=texts_before_messages)
+    )[1:]
+    return tuple(
+        chain.from_iterable(
+            repeat(offset, len(one_message.tool_calls)) for one_message, offset in zip(extracted, texts_through_message)
+        )
+    )
+
+
 def _in_stream_block_order(
     tool_calls: Sequence[ChatCompletionMessageToolCall], blocks: Sequence[tuple[int, Mapping[str, object]]]
 ) -> tuple[ChatCompletionMessageToolCall, ...]:
@@ -974,7 +985,14 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_to_check:
-            inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+            inputs: Final = (
+                GenericGuardrailAPIInputs(
+                    texts=texts_to_check,
+                    tool_call_text_offsets=_tool_call_text_offsets(len(top_level_system_scanned), extracted),
+                )
+                if tool_calls_to_check
+                else GenericGuardrailAPIInputs(texts=texts_to_check)
+            )
             if images_to_check:
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
