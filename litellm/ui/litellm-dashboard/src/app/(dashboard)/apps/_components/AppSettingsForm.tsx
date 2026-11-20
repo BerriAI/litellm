@@ -17,7 +17,7 @@ import { CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDi
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
 import { appSurchargeField, appSurchargeValue, type App, type AppResource } from "./appForms";
 import { invalidateAppBudgets } from "./appApi";
-import AppBudgetEditor from "./AppBudgetEditor";
+import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
 
 const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default_budgets"]) => {
   const customSource = app?.budget ? "custom" : "inherit";
@@ -109,18 +109,26 @@ export default function AppSettingsForm({
       saveLabel={t("apps.save")}
       label={t("apps.defaultsFor", { alias: resource.alias })}
     >
-      <AppBudgetEditor
-        modelScope={resource}
+      <CustomerBudgetEditor
         title={t("apps.appBudget")}
         description={t("apps.appBudgetHint")}
         id="app-budget"
-        fields={fields.budget}
-        onChange={(value) => update("budget", value)}
-        disabled={pending}
+        budget={{
+          fields: fields.budget,
+          onChange: (value) => update("budget", value),
+          disabled: pending,
+          modelScope: resource,
+        }}
         source={{
           profiles,
           value: fields.budgetSource,
           onChange: changeBudgetSource,
+          title: t("apps.appBudget"),
+          disabled: pending,
+          inheritedOption: {
+            label: t("customerPortal.createDialog.noLimit"),
+            summary: t("apps.noAdditionalLimits"),
+          },
         }}
       />
       <a href={`${uiHref("customers/settings")}?tab=overall-app`} className="text-xs text-primary hover:underline">

@@ -1,9 +1,8 @@
 import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
-import { customerUsagePresets, CUSTOMER_USAGE_MAX_RANGE_DAYS } from "./customerUsageRange";
+import { CustomerUsageDatePicker } from "./CustomerUsageSummary";
 import type { CustomerHierarchyUsage, CustomerUsageScope } from "./customerUsageApi";
 import { CustomerDetailHeader } from "./CustomerDetailLayout";
 
@@ -59,7 +58,6 @@ export default function CustomerUsageHeader({
   onTeamClick,
   onDateRangeChange,
 }: CustomerUsageHeaderProps) {
-  const { t } = useTranslation();
   const entity = data?.member ?? data?.team ?? data?.organization;
   const label = entity?.label ?? scope.member ?? scope.team ?? scope.org;
   return (
@@ -74,17 +72,7 @@ export default function CustomerUsageHeader({
         />
       }
       actions={
-        <AdvancedDatePicker
-          value={dateValue}
-          presetShortLabel={preset}
-          label={t("customerPortal.range.label")}
-          showTimeRange={false}
-          presets={customerUsagePresets}
-          maxRangeDays={CUSTOMER_USAGE_MAX_RANGE_DAYS}
-          onValueChange={onDateRangeChange}
-          compact
-          className="max-w-sm"
-        />
+        <CustomerUsageDatePicker value={dateValue} presetShortLabel={preset} onValueChange={onDateRangeChange} />
       }
     />
   );

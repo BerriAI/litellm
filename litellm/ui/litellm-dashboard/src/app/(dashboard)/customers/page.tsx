@@ -6,11 +6,10 @@ import { Plus } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { queryOptions, skipToken, useQuery } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overview/UsageStatStrip";
 import { overviewTotals } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
+import { CustomerUsageDatePicker, CustomerUsageStats } from "./_components/CustomerUsageSummary";
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -27,13 +26,7 @@ import {
 } from "./_components/customerOrganizations";
 import { mergeCustomerActivityPages } from "./_components/customerUsageData";
 import { customerUsageTotals } from "./_components/customerUsageTotals";
-import {
-  calendarDate,
-  CUSTOMER_USAGE_MAX_RANGE_DAYS,
-  customerPresetRange,
-  customerUsagePresets,
-  useCustomerUsageRange,
-} from "./_components/customerUsageRange";
+import { calendarDate, customerPresetRange, useCustomerUsageRange } from "./_components/customerUsageRange";
 
 const EMPTY_USAGE = mergeCustomerActivityPages([]);
 
@@ -103,17 +96,7 @@ function CustomerOrganizations() {
       <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <h2 className="pb-2.5 text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
-          <AdvancedDatePicker
-            value={dateValue}
-            onValueChange={onDateChange}
-            presetShortLabel={preset}
-            presets={customerUsagePresets}
-            maxRangeDays={CUSTOMER_USAGE_MAX_RANGE_DAYS}
-            label={t("customerPortal.range.label")}
-            showTimeRange={false}
-            compact
-            className="max-w-sm"
-          />
+          <CustomerUsageDatePicker value={dateValue} onValueChange={onDateChange} presetShortLabel={preset} />
         </div>
         {organizations.isError || usage.isError ? (
           <ErrorState
@@ -121,13 +104,10 @@ function CustomerOrganizations() {
             onRetry={() => void (organizations.isError ? organizations.refetch() : usage.refetch())}
           />
         ) : (
-          <UsageStatStrip
+          <CustomerUsageStats
             results={activity.results}
             totals={totals}
             loading={organizations.isPending || usage.isPending}
-            requestCountsPending={organizations.isPending || usage.isPending}
-            budget={null}
-            showBudgetHint={false}
           />
         )}
       </section>

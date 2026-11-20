@@ -1,7 +1,6 @@
-import { chooseAppOption } from "./appTestUtils";
+import { appFixture, chooseAppOption, mockAppRequests } from "./appTestUtils";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import { uiHref } from "@/utils/uiHref";
 import {
   jsonResponse as json,
@@ -10,11 +9,10 @@ import {
   screen,
   waitFor,
   within,
-  testQueryClient,
 } from "../../../../../tests/test-utils";
 import AppsManager from "./AppsManager";
 import AppSettingsPage from "../settings/page";
-import type { App } from "./appForms";
+import type { App, AppResource, Budget } from "./appForms";
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -23,17 +21,8 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: () => ({ data: { data: [] }, isLoading: false, isError: false }),
 }));
-const fetchMock = vi.fn<typeof fetch>();
-const resource = { resource_type: "team", resource_id: "team-chat", alias: "chat", app_id: null };
-const app = {
-  ...resource,
-  app_id: "app-chat",
-  spend: 0,
-  created_at: "",
-  updated_at: "",
-  created_by: "",
-  updated_by: "",
-};
+const resource: AppResource = { resource_type: "team", resource_id: "team-chat", alias: "chat", app_id: null };
+const app = appFixture();
 const overallPreset: BudgetGroups["default_budgets"][number] = {
   budget_id: "overall-standard",
   name: "App Standard",
@@ -45,46 +34,46 @@ const overallPreset: BudgetGroups["default_budgets"][number] = {
   budget_limits: [{ max_budget: 1200, budget_duration: "12mo" }],
 };
 const yearly = { max_budget: 1200, budget_duration: "12mo", reset_at: "2027-01-01T00:00:00Z" };
-const paginatedResources = Array.from({ length: 30 }, (_, index) => ({
+const paginatedResources: AppResource[] = Array.from({ length: 30 }, (_, index) => ({
   resource_type: "team",
   resource_id: `team-${index}`,
   alias: `app-${String(index).padStart(2, "0")}`,
   app_id: null,
 }));
 let definition: { resource_type: string | null };
-let configuredApps: unknown[];
+let configuredApps: App[];
 let overallPresets: BudgetGroups["default_budgets"];
-let resources: unknown[];
+let resources: AppResource[];
 let requests: Request[];
+let network: ReturnType<typeof mockAppRequests>;
 
 beforeEach(() => {
   definition = { resource_type: "team" };
   configuredApps = [];
   overallPresets = [overallPreset];
   resources = [resource];
-  requests = [];
-  testQueryClient.clear();
-  registerBaseUrlGetter(() => "http://localhost");
-  fetchMock.mockReset();
-  fetchMock.mockImplementation(async (input) => {
-    const request = new Request(input);
-    requests.push(request.clone());
-    const path = new URL(request.url).pathname;
-    if (path.endsWith("/apps/definition")) {
-      if (request.method === "PUT") definition = await request.clone().json();
-      return json(definition);
-    }
-    if (path.endsWith("/apps/resources")) return json(resources);
-    if (path.endsWith("/apps/app-chat")) return json(configuredApps[0]);
-    if (path.endsWith("/app_budget_groups"))
-      return json({ default_budgets: overallPresets, budget_groups_revision: "a".repeat(64) });
-    if (path.endsWith("/apps") && request.method === "POST") {
+  const routes: Parameters<typeof mockAppRequests>[0] = {
+    "GET /management/v1/apps/definition": () => definition,
+    "PUT /management/v1/apps/definition": async (request) => {
+      definition = await request.json();
+      return definition;
+    },
+    "GET /management/v1/apps/resources": () => resources,
+    "GET /management/v1/apps/app-chat": () => configuredApps[0],
+    "PATCH /management/v1/apps/app-chat": async (request) => {
+      configuredApps = [{ ...configuredApps[0], ...(await request.json()) }];
+      return configuredApps[0];
+    },
+    "GET /management/v1/app_budget_groups": () => ({
+      default_budgets: overallPresets,
+      budget_groups_revision: "a".repeat(64),
+    }),
+    "POST /management/v1/apps": async (request) => {
       const created = { ...app, ...(await request.clone().json()) };
-      configuredApps = [created];
-      resources = [{ ...resource, app_id: app.app_id }];
-      return json(created);
-    }
-    if (path.endsWith("/daily/activity")) {
+      configureApp(created);
+      return created;
+    },
+    "GET /management/v1/customer_organizations/daily/activity": (request) => {
       const url = new URL(request.url);
       const metrics = {
         spend: url.searchParams.has("app_id") ? 12.5 : 50,
@@ -93,24 +82,27 @@ beforeEach(() => {
         completion_tokens: 500,
         api_requests: 3,
       };
-      return json({
+      return {
         results: [{ date: url.searchParams.get("start_date"), metrics }],
         metadata: { has_more: false, total_pages: 1 },
-      });
-    }
-    if (path.endsWith("/apps")) return json(configuredApps);
-    if (path.endsWith("/models")) return json({ data: [] });
-    throw new Error(`Unexpected request ${path}`);
-  });
-  vi.stubGlobal("fetch", fetchMock);
+      };
+    },
+    "GET /management/v1/apps": () => configuredApps,
+    "GET /models": () => ({ data: [] }),
+    "GET /management/v1/apps/resources/team/team-chat/models": () => [],
+  };
+  network = mockAppRequests(routes);
+  requests = network.requests;
 });
 afterEach(() => vi.unstubAllGlobals());
 
+function configureApp(settings: Partial<App>) {
+  resources = [{ ...resource, app_id: app.app_id }];
+  configuredApps = [{ ...app, ...settings }];
+}
+
 async function openAppSettings(settings?: Partial<App>) {
-  if (settings) {
-    resources = [{ ...resource, app_id: app.app_id }];
-    configuredApps = [{ ...app, ...settings }];
-  }
+  if (settings) configureApp(settings);
   const user = userEvent.setup();
   render(<AppsManager />);
   await user.click(await screen.findByRole("button", { name: "Edit chat" }));
@@ -118,15 +110,7 @@ async function openAppSettings(settings?: Partial<App>) {
 }
 
 it("saves the selected app on its Settings page and keeps member defaults untouched", async () => {
-  const fallback = fetchMock.getMockImplementation()!;
-  let currentApp = { ...app, auto_create_customers: true, customer_margin: 0.025 };
-  fetchMock.mockImplementation(async (input) => {
-    const request = new Request(input);
-    if (!new URL(request.url).pathname.endsWith("/apps/app-chat")) return fallback(input);
-    requests.push(request.clone());
-    if (request.method === "PATCH") currentApp = { ...currentApp, ...(await request.clone().json()) };
-    return json(currentApp);
-  });
+  configureApp({ auto_create_customers: true, customer_margin: 0.025 });
   const user = userEvent.setup();
   render(<AppSettingsPage />, { searchParams: "?app_id=app-chat" });
   const form = within(await screen.findByRole("form", { name: "Defaults for chat" }));
@@ -151,10 +135,17 @@ async function saveAppSettings(user: UserEvent, method: "PATCH" | "POST" = "PATC
   await user.click(screen.getByRole("button", { name: "Save app settings" }));
   await waitFor(() => expect(requests.filter((request) => request.method === method)).toHaveLength(index + 1));
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  return requests
-    .filter((request) => request.method === method)
-    [index].clone()
-    .json();
+  const request = requests.filter((request) => request.method === method)[index];
+  expect(new URL(request.url).pathname).toBe(`/management/v1/apps${method === "PATCH" ? "/app-chat" : ""}`);
+  return request.clone().json();
+}
+
+async function expectSavedBudget(user: UserEvent, budget: Budget, index = 0) {
+  expect(await saveAppSettings(user, "PATCH", index)).toEqual({
+    budget,
+    auto_create_customers: true,
+    customer_margin: null,
+  });
 }
 
 describe("Gateway app definition", () => {
@@ -204,7 +195,10 @@ describe("Gateway app definition", () => {
   );
 
   it("changes app rates without persisting unchanged caps or overwriting member defaults", async () => {
-    const user = await openAppSettings({ budget: overallPreset, default_customer_member_budget: overallPreset });
+    const user = await openAppSettings({
+      budget: overallPreset,
+      default_customer_member_budget: overallPreset,
+    });
     const overall = within(await screen.findByRole("region", { name: "Overall app budget" }));
     expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
     fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
@@ -212,9 +206,7 @@ describe("Gateway app definition", () => {
       "href",
       `${uiHref("customers/settings")}?tab=app-member`,
     );
-    const body = await saveAppSettings(user);
-    expect(body.budget).toEqual({ rpm_limit: 0 });
-    expect(body).not.toHaveProperty("default_customer_member_budget");
+    await expectSavedBudget(user, { rpm_limit: 0 });
   });
 
   it("keeps overall presets linked until a custom edit", async () => {
@@ -242,10 +234,7 @@ describe("Gateway app definition", () => {
     );
     expect(customEditor.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
     fireEvent.change(customEditor.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
-    const custom = await saveAppSettings(user, "PATCH", 1);
-    expect(custom.budget).toEqual({ max_budget: 150, budget_duration: "1mo", rpm_limit: 0 });
-    expect(custom).not.toHaveProperty("budget_id");
-    expect(custom).not.toHaveProperty("default_customer_member_budget");
+    await expectSavedBudget(user, { max_budget: 150, budget_duration: "1mo", rpm_limit: 0 }, 1);
   });
 
   it("clears an overall preset with No limit without changing member defaults", async () => {
@@ -288,18 +277,14 @@ describe("Gateway app definition", () => {
     await chooseAppOption(user, source, /^No limit/);
     await chooseAppOption(user, source, "Enter custom limits instead");
     expect(overall.getByRole("spinbutton", { name: "Requests per minute" })).toHaveValue(0);
-    const expected = {
-      budget: {
-        ...copiedPolicy,
-        budget_duration: "1mo",
-        soft_budget: null,
-        rpm_limit: 0,
-        model_rpm_limit: null,
-      },
-      auto_create_customers: true,
-      customer_margin: null,
+    const expectedBudget: Budget = {
+      ...copiedPolicy,
+      budget_duration: "1mo",
+      soft_budget: null,
+      rpm_limit: 0,
+      model_rpm_limit: null,
     };
-    expect(await saveAppSettings(user)).toEqual(expected);
+    await expectSavedBudget(user, expectedBudget);
   });
 
   it("recalculates the reset when changing a stored app spend period", async () => {
@@ -321,10 +306,8 @@ describe("Gateway app definition", () => {
       "/ year",
       "Custom period",
     ]);
-    await user.click(screen.getByRole("option", { name: "/ month", exact: true }));
-    const body = await saveAppSettings(user);
-    expect(body.budget).toEqual({ budget_limits: [{ ...yearly, budget_duration: "1mo", reset_at: null }] });
-    expect(body).not.toHaveProperty("default_customer_member_budget");
+    await user.click(screen.getByRole("option", { name: "/ month" }));
+    await expectSavedBudget(user, { budget_limits: [{ ...yearly, budget_duration: "1mo", reset_at: null }] });
   });
 
   it.each(["clear", "remove"])("removes only the selected app spend window using %s", async (action) => {
@@ -336,7 +319,7 @@ describe("Gateway app definition", () => {
     const user = await openAppSettings({ budget, default_customer_member_budget: budget });
     const editor = within(await screen.findByRole("region", { name: "Overall app budget" }));
     await user.click(editor.getAllByRole("combobox", { name: "Reset period" })[1]);
-    expect(await screen.findByRole("option", { name: "/ year", exact: true })).toHaveAttribute("aria-disabled", "true");
+    expect(await screen.findByRole("option", { name: "/ year" })).toHaveAttribute("aria-disabled", "true");
     await user.keyboard("{Escape}");
     const amount = editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })[0];
     expect(amount).toHaveAttribute("placeholder", "No limit");
@@ -346,15 +329,10 @@ describe("Gateway app definition", () => {
     if (action === "clear") {
       fireEvent.change(amount, { target: { value: "" } });
       await user.click(editor.getAllByRole("combobox", { name: "Reset period" })[2]);
-      expect(await screen.findByRole("option", { name: "/ month", exact: true })).toHaveAttribute(
-        "aria-disabled",
-        "true",
-      );
+      expect(await screen.findByRole("option", { name: "/ month" })).toHaveAttribute("aria-disabled", "true");
       await user.keyboard("{Escape}");
     } else await user.click(editor.getAllByRole("button", { name: "Remove limit" })[0]);
-    const body = await saveAppSettings(user);
-    expect(body.budget).toEqual({ budget_limits: [yearly] });
-    expect(body).not.toHaveProperty("default_customer_member_budget");
+    await expectSavedBudget(user, { budget_limits: [yearly] });
   });
 
   it("adds multiple spend limits and can add again after removing every additional row", async () => {
@@ -370,7 +348,7 @@ describe("Gateway app definition", () => {
     expect(editor.getByText("Additional spend limit (USD)")).toBeInTheDocument();
     expect(editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveLength(2);
     await user.click(editor.getAllByRole("combobox", { name: "Reset period" })[2]);
-    await user.click(await screen.findByRole("option", { name: "Custom period", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "Custom period" }));
     const duplicatePeriod = editor.getByRole("textbox", { name: "Custom period" });
     fireEvent.change(duplicatePeriod, { target: { value: "30d" } });
     expect(duplicatePeriod).toBeInvalid();
@@ -388,7 +366,7 @@ describe("Gateway app definition", () => {
     fireEvent.change(editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })[1], {
       target: { value: "9000" },
     });
-    expect((await saveAppSettings(user)).budget).toEqual({
+    await expectSavedBudget(user, {
       budget_limits: [
         { max_budget: 1300, budget_duration: "1mo" },
         { max_budget: 9000, budget_duration: "12mo" },
@@ -455,7 +433,7 @@ describe("Gateway app definition", () => {
     await screen.findByRole("button", { name: "1,500 total tokens. View breakdown" });
     const table = screen.getByRole("table", { name: "Applications" });
     const [chat, search] = within(table).getAllByRole("row").slice(1);
-    expect(within(chat).getByRole("link", { name: "chat", exact: true })).toHaveAttribute(
+    expect(within(chat).getByRole("link", { name: "chat" })).toHaveAttribute(
       "href",
       `${uiHref("apps/usage")}?app_id=app-chat`,
     );
@@ -470,14 +448,8 @@ describe("Gateway app definition", () => {
   });
 
   it("does not label a linked budget Custom when its catalog is unavailable", async () => {
-    resources = [{ ...resource, app_id: app.app_id }];
-    configuredApps = [{ ...app, budget_id: overallPreset.budget_id, budget: overallPreset }];
-    const serve = fetchMock.getMockImplementation()!;
-    fetchMock.mockImplementation((input, init) =>
-      (input instanceof Request ? input.url : String(input)).endsWith("/app_budget_groups")
-        ? Promise.resolve(json({ detail: "Catalog unavailable" }, 503))
-        : serve(input, init),
-    );
+    configureApp({ budget_id: overallPreset.budget_id, budget: overallPreset });
+    network.routes["GET /management/v1/app_budget_groups"] = () => json({ detail: "Catalog unavailable" }, 503);
     render(<AppsManager />);
     await screen.findByRole("button", { name: "Edit chat" });
     expect(within(screen.getByRole("table", { name: "Applications" })).queryByText("Custom")).not.toBeInTheDocument();
@@ -485,12 +457,8 @@ describe("Gateway app definition", () => {
 
   it("finishes saving app settings while monthly usage is still loading", async () => {
     const activity = Promise.withResolvers<void>();
-    const serve = fetchMock.getMockImplementation()!;
-    fetchMock.mockImplementation((input, init) =>
-      (input instanceof Request ? input.url : String(input)).includes("/daily/activity")
-        ? activity.promise.then(() => json({ results: [], metadata: { has_more: false, total_pages: 1 } }))
-        : serve(input, init),
-    );
+    network.routes["GET /management/v1/customer_organizations/daily/activity"] = () =>
+      activity.promise.then(() => ({ results: [], metadata: { has_more: false, total_pages: 1 } }));
     try {
       const user = await openAppSettings({ budget_id: overallPreset.budget_id, budget: overallPreset });
       fireEvent.change(await screen.findByRole("spinbutton", { name: "Surcharge on customer requests (%)" }), {
@@ -503,18 +471,14 @@ describe("Gateway app definition", () => {
   });
 
   it("should show the current budget window's spend and cap instead of lifetime spend", async () => {
-    resources = [{ ...resource, app_id: "app-chat" }];
-    configuredApps = [
-      {
-        ...app,
-        spend: 900,
-        budget: { max_budget: 1000, budget_limits: [{ budget_duration: "1mo", max_budget: 100 }] },
-        budget_usage: [
-          { source: "scalar", budget_duration: null, max_budget: 1000, spend: 900, reset_at: null },
-          { source: "window", budget_duration: "1mo", max_budget: 100, spend: 40, reset_at: null },
-        ],
-      },
-    ];
+    configureApp({
+      spend: 900,
+      budget: { max_budget: 1000, budget_limits: [{ budget_duration: "1mo", max_budget: 100 }] },
+      budget_usage: [
+        { source: "scalar", budget_duration: null, max_budget: 1000, spend: 900, reset_at: null },
+        { source: "window", budget_duration: "1mo", max_budget: 100, spend: 40, reset_at: null },
+      ],
+    });
     render(<AppsManager />);
     await screen.findByRole("link", { name: "chat" });
     const usage = within(screen.getByRole("table", { name: "Applications" })).getByRole("progressbar");
@@ -523,22 +487,17 @@ describe("Gateway app definition", () => {
     expect(within(screen.getByRole("table", { name: "Applications" })).queryByText("$900.00")).not.toBeInTheDocument();
   });
 
-  it("should show one page of applications at a time and move to the next page", async () => {
+  it.each(["next page", "page 2 link"])("shows the second page of applications through %s", async (navigation) => {
+    resources = paginatedResources;
     const user = userEvent.setup();
-    resources = paginatedResources;
-    render(<AppsManager />);
-    await screen.findByRole("button", { name: "Edit app-00", exact: true });
-    expect(screen.queryByRole("button", { name: "Edit app-25", exact: true })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Go to next page" }));
-    expect(await screen.findByRole("button", { name: "Edit app-25", exact: true })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Edit app-00", exact: true })).not.toBeInTheDocument();
-  });
-
-  it("should open the second page of applications from a link that says page 2", async () => {
-    resources = paginatedResources;
-    render(<AppsManager />, { searchParams: "?page=2" });
-    expect(await screen.findByRole("button", { name: "Edit app-25", exact: true })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Edit app-00", exact: true })).not.toBeInTheDocument();
+    render(<AppsManager />, { searchParams: navigation === "page 2 link" ? "?page=2" : "" });
+    if (navigation === "next page") {
+      await screen.findByRole("button", { name: "Edit app-00" });
+      expect(screen.queryByRole("button", { name: "Edit app-25" })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    }
+    expect(await screen.findByRole("button", { name: "Edit app-25" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit app-00" })).not.toBeInTheDocument();
   });
 
   it("should open the edit modal from an application link", async () => {
@@ -559,15 +518,15 @@ describe("Gateway app definition", () => {
     "should still list applications when the URL carries %s",
     async (searchParams) => {
       render(<AppsManager />, { searchParams });
-      expect(await screen.findByRole("button", { name: "Edit chat", exact: true })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Edit chat" })).toBeInTheDocument();
     },
   );
 
   it("should narrow the list with the search box and say when nothing matches", async () => {
     render(<AppsManager />);
-    await screen.findByRole("button", { name: "Edit chat", exact: true });
+    await screen.findByRole("button", { name: "Edit chat" });
     fireEvent.change(screen.getByRole("textbox", { name: "Search applications" }), { target: { value: "billing" } });
-    expect(screen.queryByRole("button", { name: "Edit chat", exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit chat" })).not.toBeInTheDocument();
     expect(screen.getByText("No applications match your search.")).toBeInTheDocument();
   });
 
@@ -580,7 +539,7 @@ describe("Gateway app definition", () => {
 
   it("should show definition failures without presenting an empty resource list", async () => {
     definition = { resource_type: null };
-    fetchMock.mockResolvedValue(json({ detail: "Definition unavailable" }, 503));
+    network.routes["GET /management/v1/apps/definition"] = () => json({ detail: "Definition unavailable" }, 503);
     render(<AppsManager />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Definition unavailable");
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();

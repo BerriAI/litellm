@@ -11,9 +11,8 @@ import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { loadApps, loadOrganizationApp, organizationAppKey } from "./appApi";
 import { appBaseBudget, type App, type AppMember } from "./appForms";
-import CustomerBudgetCompactFields from "../../customers/_components/CustomerBudgetCompactFields";
 import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
-import { CustomerBudgetDialog, CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
+import { CustomerBudgetDialog, CustomerBudgetFormDialog } from "../../customers/_components/CustomerBudgetDialog";
 import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
 import { customerBudgetPatch, hasLegacyCustomerBudget } from "../../customers/_components/customerBudgetForm";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -205,39 +204,25 @@ function MemberBudgetForm({
   });
   const { fields, setFields, update, pending, error, save } = form;
   return (
-    <CustomerBudgetDialog
+    <CustomerBudgetFormDialog
       title={t("apps.editMemberBudget", { alias: app.alias })}
       description={t("apps.memberOverrideHint")}
       pending={pending}
       onClose={onCancel}
+      form={{ error, onSubmit: save, saveLabel: t("apps.saveMemberBudget") }}
     >
-      <CustomerBudgetForm
-        pending={pending}
-        error={error}
-        onSubmit={save}
-        onClose={onCancel}
-        saveLabel={t("apps.saveMemberBudget")}
-      >
-        <CustomerBudgetEditor
-          id={`app-member-${app.app_id}`}
-          source={{
-            profiles: [],
-            value: fields.budgetEnabled ? "custom" : "inherit",
-            title: t("apps.source"),
-            disabled: pending,
-            inheritedOption: { label: t("apps.inheritedBudget"), summary: t("apps.inheritMemberHint") },
-            onChange: (value) => update("budgetEnabled", value === "custom"),
-          }}
-        >
-          <CustomerBudgetCompactFields
-            modelScope={app}
-            id={`app-member-${app.app_id}`}
-            fields={fields}
-            disabled={pending}
-            onChange={setFields}
-          />
-        </CustomerBudgetEditor>
-      </CustomerBudgetForm>
-    </CustomerBudgetDialog>
+      <CustomerBudgetEditor
+        id={`app-member-${app.app_id}`}
+        budget={{ modelScope: app, fields, disabled: pending, onChange: setFields }}
+        source={{
+          profiles: [],
+          value: fields.budgetEnabled ? "custom" : "inherit",
+          title: t("apps.source"),
+          disabled: pending,
+          inheritedOption: { label: t("apps.inheritedBudget"), summary: t("apps.inheritMemberHint") },
+          onChange: (value) => update("budgetEnabled", value === "custom"),
+        }}
+      />
+    </CustomerBudgetFormDialog>
   );
 }

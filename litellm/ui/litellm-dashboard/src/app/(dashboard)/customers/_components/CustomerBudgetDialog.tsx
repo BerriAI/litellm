@@ -1,4 +1,4 @@
-import type { FormEventHandler, ReactNode } from "react";
+import type { ComponentProps, FormEventHandler, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
@@ -91,5 +91,21 @@ export function CustomerBudgetForm({
         </DialogFooter>
       </div>
     </form>
+  );
+}
+
+export function CustomerBudgetFormDialog({
+  form,
+  children,
+  ...dialog
+}: ComponentProps<typeof CustomerBudgetDialog> & {
+  form: Omit<ComponentProps<typeof CustomerBudgetForm>, "pending" | "onClose" | "children" | "layout">;
+}) {
+  return (
+    <CustomerBudgetDialog {...dialog}>
+      <CustomerBudgetForm {...form} pending={dialog.pending} onClose={dialog.onClose}>
+        {children}
+      </CustomerBudgetForm>
+    </CustomerBudgetDialog>
   );
 }

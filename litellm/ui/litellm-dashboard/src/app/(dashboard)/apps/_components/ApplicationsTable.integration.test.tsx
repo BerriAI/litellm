@@ -1,41 +1,20 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
-import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import { uiHref } from "@/utils/uiHref";
-import {
-  fireEvent,
-  jsonResponse,
-  renderWithProviders,
-  screen,
-  testQueryClient,
-  waitFor,
-  within,
-} from "../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import type { ApplicationRow } from "./applications";
 import ApplicationsTable from "./ApplicationsTable";
+import { appFixture, mockAppRequests } from "./appTestUtils";
 
 const rows: ApplicationRow[] = Array.from({ length: 30 }, (_, index) => {
-  const resource = {
+  const app = appFixture({
     resource_id: `resource-${index}`,
     app_id: `app-${index}`,
-    resource_type: "team" as const,
     alias: `App ${String(index).padStart(2, "0")}`,
-  };
-  return {
-    resource,
-    app: {
-      ...resource,
-      spend: 0,
-      auto_create_customers: true,
-      created_at: "",
-      updated_at: "",
-      created_by: "",
-      updated_by: "",
-    },
-  };
+  });
+  return { resource: app, app };
 });
 const onOpen = vi.fn();
-const fetchMock = vi.fn<typeof fetch>();
 const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
 const visibleNames = () =>
   within(screen.getByRole("table"))
@@ -44,21 +23,20 @@ const visibleNames = () =>
 const latestParams = () => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
 
 beforeEach(() => {
-  testQueryClient.clear();
   onOpen.mockClear();
   onUrlUpdate.mockClear();
-  registerBaseUrlGetter(() => "http://localhost");
-  fetchMock.mockReset().mockImplementation(async (input) => {
-    const url = new URL(new Request(input).url);
-    if (url.pathname.endsWith("/app_budget_groups")) return jsonResponse({ default_budgets: [] });
-    const index = Number(url.searchParams.get("app_id")?.replace("app-", ""));
-    const metrics = { spend: index, total_tokens: index * 1000, api_requests: 1 };
-    return jsonResponse({
-      results: [{ date: url.searchParams.get("start_date"), metrics }],
-      metadata: { has_more: false, total_pages: 1 },
-    });
+  mockAppRequests({
+    "GET /management/v1/app_budget_groups": () => ({ default_budgets: [] }),
+    "GET /management/v1/customer_organizations/daily/activity": (request) => {
+      const url = new URL(request.url);
+      const index = Number(url.searchParams.get("app_id")?.replace("app-", ""));
+      const metrics = { spend: index, total_tokens: index * 1000, api_requests: 1 };
+      return {
+        results: [{ date: url.searchParams.get("start_date"), metrics }],
+        metadata: { has_more: false, total_pages: 1 },
+      };
+    },
   });
-  vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => vi.unstubAllGlobals());
 

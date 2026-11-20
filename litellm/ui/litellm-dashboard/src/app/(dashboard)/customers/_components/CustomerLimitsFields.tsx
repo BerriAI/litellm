@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Fragment, type ComponentProps, type ReactNode } from "react";
 import { CustomerBudgetFields } from "./CustomerBudgetFields";
+import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
 import type { BudgetFields } from "./customerBudgetForm";
 import { rateFields } from "./CustomerRateLimits";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -152,6 +153,7 @@ export function CustomerBudgetEditor({
   source,
   error,
   children,
+  budget,
   className = "space-y-4",
 }: {
   title?: string;
@@ -159,9 +161,14 @@ export function CustomerBudgetEditor({
   id: string;
   source?: ComponentProps<typeof CustomerBudgetSourceSelect>;
   error?: ReactNode;
-  children: ReactNode;
   className?: string;
-}) {
+} & (
+  | { children: ReactNode; budget?: never }
+  | {
+      budget: (Omit<ComponentProps<typeof CustomerBudgetCompactFields>, "id"> & { id?: string }) | null;
+      children?: never;
+    }
+)) {
   return (
     <section className={className} aria-labelledby={title ? `${id}-limits-heading` : undefined}>
       {title && (
@@ -174,7 +181,8 @@ export function CustomerBudgetEditor({
       )}
       {source && <CustomerBudgetSourceSelect {...source} />}
       {error}
-      {(!source || source.value === "custom") && children}
+      {(!source || source.value === "custom") &&
+        (budget ? <CustomerBudgetCompactFields id={id} {...budget} /> : children)}
     </section>
   );
 }

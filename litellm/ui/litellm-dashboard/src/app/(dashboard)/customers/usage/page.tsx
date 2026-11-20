@@ -1,7 +1,6 @@
 "use client";
 
 import { useTranslation } from "react-i18next";
-import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overview/UsageStatStrip";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -10,7 +9,7 @@ import CustomerUsageHeader from "../_components/CustomerUsageHeader";
 import { CustomerDetailLayout } from "../_components/CustomerDetailLayout";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "../_components/CustomerHierarchyNavigation";
 import CustomerBudgetSummary from "../_components/CustomerBudgetSummary";
-import CustomerSurchargeBreakdown from "../_components/CustomerSurchargeBreakdown";
+import { CustomerUsageStats } from "../_components/CustomerUsageSummary";
 import CustomerUsageRankings from "../_components/CustomerUsageRankings";
 import CustomerUsageTrend from "../_components/CustomerUsageTrend";
 import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage";
@@ -100,25 +99,16 @@ export default function CustomerHierarchyUsagePage() {
         />
       ) : (
         <>
-          <UsageStatStrip
+          <CustomerUsageStats
             results={results}
             totals={totals}
             loading={usage.isPending}
-            requestCountsPending={usage.isPending}
-            budget={null}
-            showBudgetHint={false}
-            spendDetails={
-              <>
-                <CustomerSurchargeBreakdown
-                  spend={totals.spend}
-                  surcharge={data?.metadata.total_customer_margin_spend}
-                />
-                {budgetEntity && (
-                  <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} scope={scope} />
-                )}
-              </>
-            }
-          />
+            surcharge={data?.metadata.total_customer_margin_spend}
+          >
+            {budgetEntity && (
+              <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} scope={scope} />
+            )}
+          </CustomerUsageStats>
           {isOrganizationScope && (
             <CustomerOrganizationApps
               key={scope.org}

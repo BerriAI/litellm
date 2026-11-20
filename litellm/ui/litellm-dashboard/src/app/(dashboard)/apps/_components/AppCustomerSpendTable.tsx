@@ -3,10 +3,8 @@
 import { useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Pencil } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TableCell, TableHead, TableRow } from "@/components/ui/table";
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -18,6 +16,7 @@ import {
   CustomerSpendIdentity,
   CustomerSpendTier,
 } from "../../customers/_components/CustomerSpendCells";
+import { CustomerUsageEditButton, CustomerUsageTable } from "../../customers/_components/CustomerUsageTable";
 import CustomerTokenTotal from "../../customers/_components/CustomerTokenTotal";
 import { customerHierarchyHref } from "../../customers/_components/CustomerHierarchyNavigation";
 import type { CustomerUsageRow } from "../../customers/_components/customerUsageData";
@@ -113,95 +112,85 @@ export default function AppCustomerSpendTable({
             onChange={(event) => setSearch(event.target.value)}
           />
         </div>
-        <Table aria-label={t("customerPortal.list.title")}>
-          <TableHeader>
-            <TableRow>
+        <CustomerUsageTable
+          label={t("customerPortal.list.title")}
+          columnCount={7 + Number(canEdit)}
+          message={visible.length === 0 ? t("customerPortal.analytics.empty") : undefined}
+          headers={
+            <>
               <TableHead className="px-4">{t("customerPortal.list.columns.customer")}</TableHead>
               <TableHead className="px-4">{t("apps.profile")}</TableHead>
               <CustomerSpendHeaders usageLayout showYearly={false} shareLabel={shareLabel}>
                 <TableHead className="px-4">{t("customerPortal.hierarchy.maxBudget")}</TableHead>
               </CustomerSpendHeaders>
               {canEdit && <TableHead className="px-4 text-right">{t("apps.actions")}</TableHead>}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {tableRows.map(({ customer, association, error, unavailable, loading, entity }) => {
-              return (
-                <TableRow key={customer.id}>
-                  <TableCell className="px-4 py-5">
-                    {isAdmin && customer.id ? (
-                      <CustomerSpendIdentity
-                        entity={entity}
-                        usageLayout
-                        href={customerHierarchyHref(
-                          "usage",
-                          { org: customer.id, team: null, member: null },
-                          { app_id: app.app_id, from: startDate, to: endDate },
-                        )}
+            </>
+          }
+        >
+          {tableRows.map(({ customer, association, error, unavailable, loading, entity }) => {
+            return (
+              <TableRow key={customer.id}>
+                <TableCell className="px-4 py-5">
+                  {isAdmin && customer.id ? (
+                    <CustomerSpendIdentity
+                      entity={entity}
+                      usageLayout
+                      href={customerHierarchyHref(
+                        "usage",
+                        { org: customer.id, team: null, member: null },
+                        { app_id: app.app_id, from: startDate, to: endDate },
+                      )}
+                    />
+                  ) : (
+                    <span className="font-medium">{customer.label}</span>
+                  )}
+                </TableCell>
+                <CustomerSpendTier
+                  entity={unavailable ? { ...entity, budgetGroup: t("customerPortal.analytics.unknownSpend") } : entity}
+                />
+                <CustomerSpendCells
+                  entity={entity}
+                  monthlySpend={monthly ? monthly.get(customer.id)?.spend ?? 0 : null}
+                  yearlySpend={null}
+                  tokens={customer.tokens}
+                  tokenContent={<CustomerTokenTotal usage={selected.get(customer.id) ?? null} />}
+                  shareSpend={customer.spend}
+                  organizationSpend={totalSpend}
+                  shareLabel={shareLabel}
+                  usageLayout
+                  showYearly={false}
+                  budgetUnavailable={
+                    unavailable &&
+                    (error ? (
+                      <ErrorState
+                        message={extractProxyErrorMessage(error)}
+                        onRetry={() =>
+                          void Promise.all([association.refetch(), ...(isAdmin ? [groups.refetch()] : [])])
+                        }
                       />
                     ) : (
-                      <span className="font-medium">{customer.label}</span>
+                      <span className="text-sm text-muted-foreground">
+                        {t(loading ? "apps.loading" : "customerPortal.analytics.budgetUsageUnavailable")}
+                      </span>
+                    ))
+                  }
+                />
+                {canEdit && (
+                  <TableCell className="px-4 text-right">
+                    {customer.id && (
+                      <CustomerUsageEditButton
+                        aria-label={t("apps.editBudgetFor", { alias: customer.label })}
+                        onClick={() => setEditing(customer)}
+                      >
+                        {t("apps.edit")}
+                      </CustomerUsageEditButton>
                     )}
                   </TableCell>
-                  <CustomerSpendTier
-                    entity={
-                      unavailable ? { ...entity, budgetGroup: t("customerPortal.analytics.unknownSpend") } : entity
-                    }
-                  />
-                  <CustomerSpendCells
-                    entity={entity}
-                    monthlySpend={monthly ? monthly.get(customer.id)?.spend ?? 0 : null}
-                    yearlySpend={null}
-                    tokens={customer.tokens}
-                    tokenContent={<CustomerTokenTotal usage={selected.get(customer.id) ?? null} />}
-                    shareSpend={customer.spend}
-                    organizationSpend={totalSpend}
-                    shareLabel={shareLabel}
-                    usageLayout
-                    showYearly={false}
-                    budgetUnavailable={
-                      unavailable &&
-                      (error ? (
-                        <ErrorState
-                          message={extractProxyErrorMessage(error)}
-                          onRetry={() =>
-                            void Promise.all([association.refetch(), ...(isAdmin ? [groups.refetch()] : [])])
-                          }
-                        />
-                      ) : (
-                        <span className="text-sm text-muted-foreground">
-                          {t(loading ? "apps.loading" : "customerPortal.analytics.budgetUsageUnavailable")}
-                        </span>
-                      ))
-                    }
-                  />
-                  {canEdit && (
-                    <TableCell className="px-4 text-right">
-                      {customer.id && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          aria-label={t("apps.editBudgetFor", { alias: customer.label })}
-                          onClick={() => setEditing(customer)}
-                        >
-                          <Pencil aria-hidden="true" className="size-3.5" />
-                          {t("apps.edit")}
-                        </Button>
-                      )}
-                    </TableCell>
-                  )}
-                </TableRow>
-              );
-            })}
-            {visible.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={7 + Number(canEdit)} className="py-8 text-center text-muted-foreground">
-                  {t("customerPortal.analytics.empty")}
-                </TableCell>
+                )}
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
+            );
+          })}
+        </CustomerUsageTable>
         <DataTablePagination
           page={page}
           pageSize={pageSize}

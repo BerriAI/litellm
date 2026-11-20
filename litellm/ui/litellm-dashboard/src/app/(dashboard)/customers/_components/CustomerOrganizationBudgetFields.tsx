@@ -2,7 +2,6 @@ import { useTranslation } from "react-i18next";
 import { $api } from "@/lib/http/api";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { CustomerBudgetEditor } from "./CustomerLimitsFields";
-import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
 import { BUDGET_EDITOR_FIELDS, type BudgetEditorFields } from "./customerBudgetForm";
 import { customerHierarchyFields, type CustomerHierarchyFields, type Organization } from "./customerHierarchyForms";
 
@@ -59,22 +58,22 @@ export default function CustomerOrganizationBudgetFields({
         loading: groups.isPending,
       }}
       error={groups.isError && <ErrorState onRetry={() => void groups.refetch()} />}
-    >
-      {budgetReady && (
-        <CustomerBudgetCompactFields
-          fields={{
-            ...fields,
-            maxBudget: fields.budgetEnabled ? fields.maxBudget : "",
-            softBudget: fields.budgetEnabled ? fields.softBudget : "",
-            tpm: fields.budgetEnabled ? fields.tpm : "",
-            rpm: fields.budgetEnabled ? fields.rpm : "",
-            allowedModels: fields.budgetEnabled ? fields.allowedModels : [],
-          }}
-          id={idPrefix}
-          disabled={false}
-          onChange={updateBudgetFields}
-        />
-      )}
-    </CustomerBudgetEditor>
+      budget={
+        budgetReady
+          ? {
+              fields: {
+                ...fields,
+                maxBudget: fields.budgetEnabled ? fields.maxBudget : "",
+                softBudget: fields.budgetEnabled ? fields.softBudget : "",
+                tpm: fields.budgetEnabled ? fields.tpm : "",
+                rpm: fields.budgetEnabled ? fields.rpm : "",
+                allowedModels: fields.budgetEnabled ? fields.allowedModels : [],
+              },
+              disabled: false,
+              onChange: updateBudgetFields,
+            }
+          : null
+      }
+    />
   );
 }

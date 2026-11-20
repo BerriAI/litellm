@@ -1,29 +1,24 @@
 import { useTranslation } from "react-i18next";
 import type { SortingState } from "@tanstack/react-table";
-import { Pencil } from "lucide-react";
 import { createSerializer, parseAsString } from "nuqs";
-import { Button } from "@/components/ui/button";
-import { SortableTableHead } from "@/components/shared/DataTable/SortableTableHead";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { cn } from "@/lib/cva.config";
+import { TableCell, TableRow } from "@/components/ui/table";
 import { uiHref } from "@/utils/uiHref";
 import { $api } from "@/lib/http/api";
-import CustomerBudgetSpend, { CustomerBudgetWindow } from "./CustomerBudgetSpend";
 import { customerOrganizationBudgetSource, type CustomerOrganizationRow } from "./customerOrganizations";
-import { CustomerBudgetLimitCell } from "./CustomerBudgetColumn";
-import { customerBudgetPeriod } from "./customerBudgetUsage";
+import { CustomerSpendCells, CustomerSpendIdentity, CustomerSpendTier } from "./CustomerSpendCells";
 import CustomerTokenTotal from "./CustomerTokenTotal";
 import { EMPTY_CUSTOMER_USAGE, type CustomerUsageTotals } from "./customerUsageTotals";
+import { CustomerUsageEditButton, CustomerUsageTable, CustomerUsageTableHeaders } from "./CustomerUsageTable";
 
 const usageHref = createSerializer({ org: parseAsString, from: parseAsString, to: parseAsString });
 const COLUMNS = [
-  { id: "customer", label: "customerPortal.list.columns.customer" },
+  { id: "customer", label: "customerPortal.list.columns.customer", defaultDescending: false },
   { id: "group", label: "customerPortal.list.columns.tier" },
-  { id: "spend", label: "customerPortal.list.columns.monthlySpend" },
-  { id: "budget", label: "customerPortal.hierarchy.maxBudget" },
-  { id: "share", label: "customerPortal.list.columns.overallSpendShare" },
-  { id: "tokens", label: "customerPortal.list.columns.tokens", numeric: true },
-  { id: "status", label: "customerPortal.list.columns.status" },
+  { id: "spend", label: "customerPortal.list.columns.monthlySpend", defaultDescending: true },
+  { id: "budget", label: "customerPortal.hierarchy.maxBudget", defaultDescending: false },
+  { id: "share", label: "customerPortal.list.columns.overallSpendShare", defaultDescending: true },
+  { id: "tokens", label: "customerPortal.list.columns.tokens" },
+  { id: "status", label: "customerPortal.list.columns.status", defaultDescending: true },
   { id: "actions", label: "apps.actions" },
 ] as const;
 
@@ -52,182 +47,65 @@ export default function CustomerOrganizationsTable({
 }) {
   const { t } = useTranslation();
   const groups = $api.useQuery("get", "/management/v1/customer_organization_budget_groups", {});
+  const emptyMessage =
+    rows.length === 0 ? t(searching ? "customerPortal.list.noMatches" : "customerPortal.list.empty") : undefined;
   return (
-    <Table aria-label={t("customerPortal.list.title")}>
-      <TableHeader>
-        <TableRow>
-          {COLUMNS.map((column) => {
-            const { id, label } = column;
-            if (id === "group" || id === "actions" || "numeric" in column) {
-              return (
-                <TableHead
-                  key={id}
-                  className={cn(
-                    "px-4",
-                    "numeric" in column && "text-right whitespace-normal",
-                    id === "actions" && "text-right",
-                  )}
+    <CustomerUsageTable
+      label={t("customerPortal.list.title")}
+      columnCount={COLUMNS.length}
+      headers={<CustomerUsageTableHeaders columns={COLUMNS} sorting={sorting} onSort={onSort} />}
+      message={loading ? t("customerPortal.list.loading") : emptyMessage}
+    >
+      {!loading &&
+        rows.map(({ organization, entity, monthlySpend, totalMonthlySpend }) => {
+          const budgetSource = customerOrganizationBudgetSource(organization, groups.data?.default_budgets);
+          const customLabel =
+            budgetSource?.kind === "custom" ? t("customerPortal.organizationGroups.customBadge") : null;
+          const budgetGroup =
+            budgetSource?.kind === "group"
+              ? budgetSource.name ?? t("customerPortal.organizationGroups.groupBadge")
+              : customLabel;
+          const usage = usageTotals ? usageTotals.get(organization.customer_org_id) ?? EMPTY_CUSTOMER_USAGE : null;
+          return (
+            <TableRow key={organization.customer_org_id}>
+              <TableCell className="px-4 py-5">
+                <CustomerSpendIdentity
+                  entity={entity}
+                  usageLayout
+                  nameClassName="max-w-40 hover:underline"
+                  idClassName="max-w-40"
+                  href={usageHref(uiHref("customers/usage"), {
+                    org: organization.customer_org_id,
+                    from: startDate,
+                    to: endDate,
+                  })}
+                />
+              </TableCell>
+              <CustomerSpendTier entity={{ ...entity, budgetGroup: budgetGroup ?? "-" }} />
+              <CustomerSpendCells
+                entity={entity}
+                monthlySpend={monthlySpend}
+                yearlySpend={null}
+                tokens={usage?.tokens ?? null}
+                tokenContent={<CustomerTokenTotal usage={usage} />}
+                organizationSpend={totalMonthlySpend > 0 ? totalMonthlySpend : 0}
+                shareLabel={t("customerPortal.list.columns.overallSpendShare")}
+                usageLayout
+                showYearly={false}
+                spendClassName="max-w-lg"
+              />
+              <TableCell className="px-4 text-right">
+                <CustomerUsageEditButton
+                  type="button"
+                  disabled={!canManage}
+                  onClick={() => onEdit(organization.customer_org_id)}
                 >
-                  {t(label)}
-                </TableHead>
-              );
-            }
-            return (
-              <SortableTableHead
-                key={id}
-                id={id}
-                sorting={sorting}
-                onSort={onSort}
-                defaultDescending={id !== "customer" && id !== "budget"}
-                className={cn("px-4", id === "spend" && "w-[30%] min-w-80", id === "status" && "text-right")}
-                buttonClassName={id === "share" ? "h-auto min-h-8 py-1 text-left whitespace-normal" : undefined}
-              >
-                {t(label)}
-              </SortableTableHead>
-            );
-          })}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {loading && (
-          <TableRow>
-            <TableCell colSpan={COLUMNS.length} className="py-8 text-center text-muted-foreground">
-              {t("customerPortal.list.loading")}
-            </TableCell>
-          </TableRow>
-        )}
-        {!loading && rows.length === 0 && (
-          <TableRow>
-            <TableCell colSpan={COLUMNS.length} className="py-8 text-center text-muted-foreground">
-              {t(searching ? "customerPortal.list.noMatches" : "customerPortal.list.empty")}
-            </TableCell>
-          </TableRow>
-        )}
-        {!loading &&
-          rows.map(({ organization, monthlySpend, monthlyBudgets, budgetLimit, share, status }) => {
-            const label = organization.alias || organization.customer_org_id;
-            const percentage = Math.max(0, Math.min(100, share * 100));
-            const shareLabel = t("format.number", { val: share, style: "percent", maximumFractionDigits: 1 });
-            const budgetSource = customerOrganizationBudgetSource(organization, groups.data?.default_budgets);
-            const customLabel =
-              budgetSource?.kind === "custom" ? t("customerPortal.organizationGroups.customBadge") : null;
-            const budgetGroup =
-              budgetSource?.kind === "group"
-                ? budgetSource.name ?? t("customerPortal.organizationGroups.groupBadge")
-                : customLabel;
-            const usage = usageTotals ? usageTotals.get(organization.customer_org_id) ?? EMPTY_CUSTOMER_USAGE : null;
-            return (
-              <TableRow key={organization.customer_org_id}>
-                <TableCell className="px-4 py-5">
-                  <div className="flex items-center gap-3">
-                    <span
-                      aria-hidden="true"
-                      className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium"
-                    >
-                      {label
-                        .split(/\s+/)
-                        .slice(0, 2)
-                        .map((part) => part.charAt(0))
-                        .join("")
-                        .toLocaleUpperCase()}
-                    </span>
-                    <div className="min-w-0">
-                      <a
-                        className="block max-w-40 truncate font-medium hover:text-primary hover:underline"
-                        title={label}
-                        href={usageHref(uiHref("customers/usage"), {
-                          org: organization.customer_org_id,
-                          from: startDate,
-                          to: endDate,
-                        })}
-                      >
-                        {label}
-                      </a>
-                      {label !== organization.customer_org_id && (
-                        <p
-                          className="max-w-40 truncate font-mono text-[11px] text-muted-foreground"
-                          title={organization.customer_org_id}
-                        >
-                          {organization.customer_org_id}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="px-4 text-muted-foreground">
-                  <span className="block max-w-48 truncate" title={budgetGroup ?? undefined}>
-                    {budgetGroup ?? "-"}
-                  </span>
-                </TableCell>
-                <TableCell className="px-4">
-                  <div className="max-w-lg space-y-3">
-                    {monthlyBudgets.map((budget) => (
-                      <CustomerBudgetWindow
-                        key={`${budget.source}-${budget.budget_duration}`}
-                        budget={budget}
-                        showReset={monthlyBudgets.length > 1}
-                      />
-                    ))}
-                    {monthlyBudgets.length === 0 && (
-                      <CustomerBudgetSpend
-                        spend={monthlySpend}
-                        limit={null}
-                        label={t("customerPortal.analytics.monthlySpend")}
-                        showLimit={
-                          !organization.budget?.budget_limits?.some(
-                            (window) => customerBudgetPeriod(window.budget_duration) === "other",
-                          )
-                        }
-                      />
-                    )}
-                  </div>
-                </TableCell>
-                <CustomerBudgetLimitCell limit={budgetLimit} rateLimits={organization.budget} />
-                <TableCell className="px-4">
-                  <div className="flex items-center gap-3">
-                    <div
-                      role="meter"
-                      aria-label={t("customerPortal.list.columns.overallSpendShare")}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={percentage}
-                      aria-valuetext={shareLabel}
-                      className="h-2 w-14 overflow-hidden rounded-full bg-muted"
-                    >
-                      <div className="h-full rounded-full bg-primary/60" style={{ width: `${percentage}%` }} />
-                    </div>
-                    <span className="text-xs tabular-nums text-muted-foreground">{shareLabel}</span>
-                  </div>
-                </TableCell>
-                <TableCell className="px-4 text-right tabular-nums">
-                  <CustomerTokenTotal usage={usage} />
-                </TableCell>
-                <TableCell className="px-4 text-right">
-                  <span
-                    className={cn(
-                      "inline-flex whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-xs",
-                      status === "customerPortal.analytics.reachedLimit" && "bg-destructive/10 text-destructive",
-                    )}
-                  >
-                    {t(status)}
-                  </span>
-                </TableCell>
-                <TableCell className="px-4 text-right">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={!canManage}
-                    onClick={() => onEdit(organization.customer_org_id)}
-                  >
-                    <Pencil aria-hidden="true" className="size-3.5" />
-                    {t("customerPortal.common.edit")}
-                  </Button>
-                </TableCell>
-              </TableRow>
-            );
-          })}
-      </TableBody>
-    </Table>
+                  {t("customerPortal.common.edit")}
+                </CustomerUsageEditButton>
+              </TableCell>
+            </TableRow>
+          );
+        })}
+    </CustomerUsageTable>
   );
 }

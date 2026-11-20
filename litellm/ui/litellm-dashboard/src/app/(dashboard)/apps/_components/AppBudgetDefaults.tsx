@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { CustomerBudgetSourceSelect } from "../../customers/_components/CustomerLimitsFields";
-import { CustomerBudgetDialog, CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
+import { CustomerBudgetFormDialog } from "../../customers/_components/CustomerBudgetDialog";
 import CustomerBudgetCompactFields from "../../customers/_components/CustomerBudgetCompactFields";
 import {
   budgetChanges,
@@ -86,28 +86,21 @@ function MemberDefaultDialog({
     if (parsed.value) onApply(parsed.value);
   };
   return (
-    <CustomerBudgetDialog
+    <CustomerBudgetFormDialog
       title={t("apps.memberDefaultFor", { alias: row.resource.alias })}
       description={t("apps.memberDefaultsHint")}
       pending={false}
       onClose={onClose}
+      form={{ error, onSubmit: apply, saveLabel: t("apps.applyDefault") }}
     >
-      <CustomerBudgetForm
-        pending={false}
-        error={error}
-        onSubmit={apply}
-        onClose={onClose}
-        saveLabel={t("apps.applyDefault")}
-      >
-        <CustomerBudgetCompactFields
-          fields={fields}
-          onChange={setFields}
-          id="app-member-default"
-          modelScope={row.resource}
-          disabled={false}
-        />
-      </CustomerBudgetForm>
-    </CustomerBudgetDialog>
+      <CustomerBudgetCompactFields
+        fields={fields}
+        onChange={setFields}
+        id="app-member-default"
+        modelScope={row.resource}
+        disabled={false}
+      />
+    </CustomerBudgetFormDialog>
   );
 }
 

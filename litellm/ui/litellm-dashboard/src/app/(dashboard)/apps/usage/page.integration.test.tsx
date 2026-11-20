@@ -1,71 +1,60 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import { uiHref } from "@/utils/uiHref";
-import {
-  fireEvent,
-  jsonResponse,
-  renderWithProviders,
-  screen,
-  testQueryClient,
-  waitFor,
-  within,
-} from "../../../../../tests/test-utils";
+import { fireEvent, jsonResponse, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import { calendarDate, customerPresetRange } from "../../customers/_components/customerUsageRange";
 import AppUsagePage from "./page";
+import { appFixture, mockAppRequests } from "../_components/appTestUtils";
 
-const fetchMock = vi.fn<typeof fetch>();
-const app = { app_id: "app-chat", alias: "Assistant app", resource_type: "team", resource_id: "team-a" };
+const app = appFixture({ alias: "Assistant app", resource_id: "team-a" });
 const initialUrl = "?app_id=app-chat&from=2026-11-01&to=2026-11-03";
-const urls = () => fetchMock.mock.calls.map(([input]) => new URL((input as Request).url));
+const urls = () => network.requests.map((request) => new URL(request.url));
 let budgetFailed: boolean;
 let budgetAmount: number;
 let customerCount: number;
 let unassigned: boolean;
-let writes: { path: string; body: unknown }[];
+let network: ReturnType<typeof mockAppRequests>;
+
+async function customerBudget(request: Request) {
+  if (budgetFailed) return jsonResponse({ detail: "Customer budget unavailable" }, 503);
+  if (request.method === "PUT") budgetAmount = (await request.json()).budget.max_budget;
+  const orgId = new URL(request.url).pathname.split("/").at(-1);
+  const budget =
+    orgId === "org-1" ? { max_budget: budgetAmount, budget_duration: "1mo", tpm_limit: 1000, rpm_limit: 50 } : null;
+  return {
+    app_id: app.app_id,
+    customer_org_id: orgId,
+    spend: 500,
+    budget,
+    effective_budget: budget,
+    budget_usage: budget
+      ? [
+          { source: "scalar", budget_duration: "1mo", max_budget: budgetAmount, spend: 80 },
+          { source: "window", budget_duration: "12mo", max_budget: 1000, spend: 500 },
+        ]
+      : [],
+  };
+}
 
 beforeEach(() => {
-  testQueryClient.clear();
-  registerBaseUrlGetter(() => "http://localhost");
   budgetFailed = false;
   budgetAmount = 100;
   customerCount = 2;
   unassigned = false;
-  writes = [];
-  fetchMock.mockReset();
-  fetchMock.mockImplementation(async (input) => {
-    const request = input as Request;
-    const url = new URL(request.url);
-    if (url.pathname.endsWith("/apps/app-chat")) return jsonResponse(app);
-    if (url.pathname.endsWith("/app_customer_organization_budget_groups")) return jsonResponse({ default_budgets: [] });
-    if (url.pathname.endsWith("/models")) return jsonResponse({ data: [] });
-    if (url.pathname.includes("/apps/app-chat/customer_organizations/")) {
-      if (budgetFailed) return jsonResponse({ detail: "Customer budget unavailable" }, 503);
-      if (request.method === "PUT") {
-        const body = await request.clone().json();
-        writes.push({ path: url.pathname, body });
-        budgetAmount = body.budget.max_budget;
-      }
-      const orgId = url.pathname.split("/").at(-1);
-      const budget =
-        orgId === "org-1" ? { max_budget: budgetAmount, budget_duration: "1mo", tpm_limit: 1000, rpm_limit: 50 } : null;
-      const association = {
-        app_id: app.app_id,
-        customer_org_id: orgId,
-        spend: 500,
-        budget,
-        effective_budget: budget,
-        budget_usage: budget
-          ? [
-              { source: "scalar", budget_duration: "1mo", max_budget: budgetAmount, spend: 80 },
-              { source: "window", budget_duration: "12mo", max_budget: 1000, spend: 500 },
-            ]
-          : [],
-      };
-      return jsonResponse(association);
-    }
-    if (url.pathname.endsWith("/customer_organizations/daily/activity")) {
+  const routes: Parameters<typeof mockAppRequests>[0] = {
+    "GET /management/v1/apps/app-chat": () => app,
+    "GET /management/v1/app_customer_organization_budget_groups": () => ({ default_budgets: [] }),
+    "GET /management/v1/apps/resources/team/team-a/models": () => [],
+    ...Object.fromEntries(
+      Array.from({ length: 6 }, (_, index) => [
+        `GET /management/v1/apps/app-chat/customer_organizations/org-${index + 1}`,
+        customerBudget,
+      ]),
+    ),
+    "PUT /management/v1/apps/app-chat/customer_organizations/org-1": customerBudget,
+    "GET /management/v1/customer_organizations/daily/activity": (request) => {
+      const url = new URL(request.url);
       const page = Number(url.searchParams.get("page"));
       const month = url.searchParams.get("end_date") !== "2026-11-03";
       const metrics = {
@@ -79,7 +68,7 @@ beforeEach(() => {
       };
       const isUnassigned = unassigned && page === 2;
       const entity = { metrics, metadata: isUnassigned ? {} : { alias: `Customer ${page}` }, api_key_breakdown: {} };
-      return jsonResponse({
+      return {
         results: [
           {
             date: "2026-11-01",
@@ -96,11 +85,10 @@ beforeEach(() => {
           has_more: page < customerCount,
           total_pages: customerCount,
         },
-      });
-    }
-    throw new Error(`Unexpected request ${url.pathname}`);
-  });
-  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => fetchMock(new Request(input, init)));
+      };
+    },
+  };
+  network = mockAppRequests(routes);
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -156,14 +144,11 @@ it("edits only the selected app and customer budget and refreshes its table row"
   const amount = await dialog.findByRole("spinbutton", { name: "Spend limit (USD)" });
   fireEvent.change(amount, { target: { value: "120" } });
   await user.click(dialog.getByRole("button", { name: "Save app budget" }));
-  await waitFor(() =>
-    expect(writes).toEqual([
-      {
-        path: "/management/v1/apps/app-chat/customer_organizations/org-1",
-        body: { budget: { max_budget: 120, budget_duration: "1mo" } },
-      },
-    ]),
-  );
+  await waitFor(() => expect(network.writes).toHaveLength(1));
+  const [request] = network.writes;
+  expect(request.method).toBe("PUT");
+  expect(new URL(request.url).pathname).toBe("/management/v1/apps/app-chat/customer_organizations/org-1");
+  expect(await request.json()).toEqual({ budget: { max_budget: 120, budget_duration: "1mo" } });
   expect(await screen.findByText("$80.00 / $120.00")).toBeInTheDocument();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(urls().some((url) => url.pathname === "/management/v1/customer_organizations/org-1")).toBe(false);
@@ -212,11 +197,11 @@ it("loads budgets only for visible customers and loads the next page on demand",
 it("does not fetch unscoped customer usage when no app is selected", () => {
   renderWithProviders(<AppUsagePage />);
   expect(screen.getByRole("heading", { name: "Select an app" })).toBeInTheDocument();
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 it("shows an app access error instead of an empty usage report", async () => {
-  fetchMock.mockResolvedValue(jsonResponse({ detail: "App access denied" }, 403));
+  network.routes["GET /management/v1/apps/app-chat"] = () => jsonResponse({ detail: "App access denied" }, 403);
   renderWithProviders(<AppUsagePage />, { searchParams: initialUrl });
   expect(await screen.findByRole("alert")).toHaveTextContent("App access denied");
   expect(urls().every((url) => url.pathname.endsWith("/apps/app-chat"))).toBe(true);

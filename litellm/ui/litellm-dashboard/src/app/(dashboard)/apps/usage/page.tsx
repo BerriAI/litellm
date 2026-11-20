@@ -9,11 +9,9 @@ import { useTranslation } from "react-i18next";
 import useAuthorized from "../../hooks/useAuthorized";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { ErrorState } from "@/components/shared/ErrorState";
-import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import UsageStatStrip from "../../usage/_components/components/overview/UsageStatStrip";
 import UsageBreakdownChart from "../../usage/_components/components/overview/UsageBreakdownChart";
 import { overviewTotals } from "../../usage/_components/components/overview/overviewData";
-import CustomerSurchargeBreakdown from "../../customers/_components/CustomerSurchargeBreakdown";
+import { CustomerUsageDatePicker, CustomerUsageStats } from "../../customers/_components/CustomerUsageSummary";
 import { customerAppUsageCall } from "../../customers/_components/customerUsageApi";
 import { customerUsageTotals } from "../../customers/_components/customerUsageTotals";
 import {
@@ -24,8 +22,6 @@ import {
 import {
   calendarDate,
   customerPresetRange,
-  CUSTOMER_USAGE_MAX_RANGE_DAYS,
-  customerUsagePresets,
   useCustomerUsageRange,
 } from "../../customers/_components/customerUsageRange";
 
@@ -83,35 +79,17 @@ function AppUsage({ app }: { app: App }) {
     <>
       <header className="flex flex-wrap items-end justify-between gap-4">
         <p className="text-sm text-muted-foreground">{t("apps.usage.hint")}</p>
-        <AdvancedDatePicker
-          value={dateValue}
-          onValueChange={onDateChange}
-          presetShortLabel={preset}
-          presets={customerUsagePresets}
-          maxRangeDays={CUSTOMER_USAGE_MAX_RANGE_DAYS}
-          label={t("customerPortal.range.label")}
-          showTimeRange={false}
-          compact
-          className="max-w-sm"
-        />
+        <CustomerUsageDatePicker value={dateValue} onValueChange={onDateChange} presetShortLabel={preset} />
       </header>
       {failed && <ErrorState message={extractProxyErrorMessage(usage.error)} onRetry={() => void usage.refetch()} />}
       {!failed && (
         <>
           <section aria-label={t("apps.usage.totals")}>
-            <UsageStatStrip
+            <CustomerUsageStats
               results={data.results}
               totals={totals}
               loading={loading}
-              requestCountsPending={loading}
-              budget={null}
-              showBudgetHint={false}
-              spendDetails={
-                <CustomerSurchargeBreakdown
-                  spend={totals.spend}
-                  surcharge={data.metadata.total_customer_margin_spend}
-                />
-              }
+              surcharge={data.metadata.total_customer_margin_spend}
             />
           </section>
           <section className="space-y-4">

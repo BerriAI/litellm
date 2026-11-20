@@ -7,7 +7,6 @@ import {
   type Organization,
 } from "./customerHierarchyForms";
 import { BUDGET_EDITOR_FIELDS, type BudgetEditorFields } from "./customerBudgetForm";
-import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
 import CustomerOrganizationBudgetFields from "./CustomerOrganizationBudgetFields";
 import { CustomerBudgetEditor } from "./CustomerLimitsFields";
 
@@ -61,6 +60,7 @@ export default function CustomerHierarchyBudgetFields({
       description={t(
         kind === "member" ? "customerPortal.hierarchy.memberBudgetHint" : "customerPortal.hierarchy.budgetHint",
       )}
+      budget={{ fields, onChange: updateCompact, disabled: false }}
       source={
         kind !== "member"
           ? undefined
@@ -78,8 +78,6 @@ export default function CustomerHierarchyBudgetFields({
               onChange: selectSource,
             }
       }
-    >
-      <CustomerBudgetCompactFields fields={fields} onChange={updateCompact} disabled={false} id={idPrefix} />
-    </CustomerBudgetEditor>
+    />
   );
 }

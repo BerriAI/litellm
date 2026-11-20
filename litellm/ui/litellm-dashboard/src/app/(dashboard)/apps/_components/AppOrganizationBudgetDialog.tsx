@@ -10,7 +10,6 @@ import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { CustomerBudgetDialog, CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
 import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
-import CustomerBudgetCompactFields from "../../customers/_components/CustomerBudgetCompactFields";
 import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
 import {
   compactBudgetEditorFields,
@@ -255,6 +254,13 @@ function OrganizationAppForm({
         id="app-budget-source"
         title={t("apps.source")}
         description={t("apps.customerAppLimitHint")}
+        budget={{
+          modelScope: resource,
+          fields: fields.budget,
+          onChange: (value) => update("budget", value),
+          disabled: pending,
+          id: "org-app-override",
+        }}
         source={{
           profiles: groups,
           value: fields.source,
@@ -268,15 +274,7 @@ function OrganizationAppForm({
             summary: t("apps.legacyOrganizationGroupHint"),
           },
         }}
-      >
-        <CustomerBudgetCompactFields
-          modelScope={resource}
-          fields={fields.budget}
-          onChange={(value) => update("budget", value)}
-          disabled={pending}
-          id="org-app-override"
-        />
-      </CustomerBudgetEditor>
+      />
       <p className="text-xs text-muted-foreground">
         {t("apps.onlyThisPair", { customer: organizationAlias || organizationId, alias: resource.alias })}
       </p>

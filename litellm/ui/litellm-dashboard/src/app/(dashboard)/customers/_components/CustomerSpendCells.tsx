@@ -31,9 +31,13 @@ export function CustomerSpendIdentity({
   onClick,
   href,
   usageLayout = false,
+  nameClassName,
+  idClassName,
 }: {
   entity: CustomerUsageEntity;
   usageLayout?: boolean;
+  nameClassName?: string;
+  idClassName?: string;
 } & ({ href: string; onClick?: never } | { href?: never; onClick: () => void })) {
   const Name = href ? "a" : "button";
   return (
@@ -57,13 +61,19 @@ export function CustomerSpendIdentity({
           type={href ? undefined : "button"}
           href={href}
           title={member.label}
-          className="block max-w-52 truncate text-left font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+          className={cn(
+            "block max-w-52 truncate text-left font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring",
+            nameClassName,
+          )}
           onClick={onClick}
         >
           {member.label}
         </Name>
         {member.label !== member.id && (
-          <span className="block max-w-52 truncate font-mono text-[11px] text-muted-foreground" title={member.id}>
+          <span
+            className={cn("block max-w-52 truncate font-mono text-[11px] text-muted-foreground", idClassName)}
+            title={member.id}
+          >
             {member.id}
           </span>
         )}
@@ -114,6 +124,7 @@ export function CustomerSpendCells({
   shareLabel,
   shareSpend = monthlySpend,
   budgetUnavailable,
+  spendClassName,
 }: {
   entity: CustomerUsageEntity;
   monthlySpend: number | null;
@@ -127,6 +138,7 @@ export function CustomerSpendCells({
   shareLabel?: string;
   shareSpend?: number | null;
   budgetUnavailable?: ReactNode;
+  spendClassName?: string;
 }) {
   const { t } = useTranslation();
   const budgets = budgetUnavailable ? [] : customerBudgetUsage(member);
@@ -141,9 +153,13 @@ export function CustomerSpendCells({
   return (
     <>
       <TableCell className={cn("pr-4", usageLayout && "px-4")}>
-        <div className="space-y-3">
+        <div className={cn("space-y-3", spendClassName)}>
           {monthlyBudgets.map((budget) => (
-            <CustomerBudgetWindow key={budget.source} budget={budget} showReset={monthlyBudgets.length > 1} />
+            <CustomerBudgetWindow
+              key={`${budget.source}-${budget.budget_duration}`}
+              budget={budget}
+              showReset={monthlyBudgets.length > 1}
+            />
           ))}
           {monthlyBudgets.length === 0 && (
             <CustomerBudgetSpend
@@ -175,7 +191,7 @@ export function CustomerSpendCells({
           <div className="space-y-2">
             {yearlyBudgets.map((budget) => (
               <CustomerBudgetWindow
-                key={budget.source}
+                key={`${budget.source}-${budget.budget_duration}`}
                 budget={budget}
                 showReset={yearlyBudgets.length > 1}
                 stacked={usageLayout}

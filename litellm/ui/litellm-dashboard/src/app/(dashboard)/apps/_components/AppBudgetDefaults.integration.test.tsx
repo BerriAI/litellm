@@ -1,8 +1,6 @@
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
-import { registerBaseUrlGetter } from "@/lib/http/runtime";
-import type { components } from "@/lib/http/schema";
 import {
   act,
   fireEvent,
@@ -17,112 +15,125 @@ import {
 import AppBudgetDefaults from "./AppBudgetDefaults";
 import AppBudgetGroupsPage from "../budget-groups/page";
 import type { App, Budget } from "./appForms";
+import { appFixture, mockAppRequests } from "./appTestUtils";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
 const auth = vi.hoisted(() => ({ accessToken: "test-session", userId: "user-1", userRole: "Admin" }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => auth }));
 const resources = ["Chat", "Support", "Search"].map((alias) => ({
-  resource_type: "team",
+  resource_type: "team" as const,
   resource_id: alias.toLowerCase(),
   alias,
 }));
-type AppFixture = (typeof resources)[number] &
-  Pick<
-    App,
-    "app_id" | "default_tier_budget_id" | "default_customer_member_budget_id" | "default_customer_member_budget"
-  >;
-const writes: Request[] = [];
-const catalog = (groups: Record<string, string>) =>
-  json({ default_budgets: Object.entries(groups).map(([budget_id, name]) => ({ budget_id, name })) });
-let apps: AppFixture[];
-let staleApps: AppFixture[] | null;
+const catalog = (groups: Record<string, string>) => ({
+  default_budgets: Object.entries(groups).map(([budget_id, name]) => ({ budget_id, name })),
+});
+let apps: App[];
+let staleApps: App[] | null;
 let rejectedIds: Set<string>;
+let network: ReturnType<typeof mockAppRequests>;
+let writes: Request[];
+
+async function saveDefault(request: Request) {
+  const body: Pick<
+    App,
+    "default_tier_budget_id" | "default_customer_member_budget_id" | "default_customer_member_budget"
+  > & { resource_id?: string } = await request.json();
+  const id = body.resource_id ?? apps.find((app) => request.url.endsWith(`/${app.app_id}`))?.resource_id;
+  if (!id) throw new Error(`Unknown app ${request.url}`);
+  if (rejectedIds.has(id)) return json({ detail: "Could not save the default group." }, 503);
+  const previous = apps.find((app) => app.resource_id === id);
+  const app = {
+    ...appFixture(previous),
+    ...resources.find((resource) => resource.resource_id === id)!,
+    app_id: `app-${id}`,
+    ...body,
+    ...(body.default_customer_member_budget && {
+      default_customer_member_budget_id: `private-${id}`,
+      default_customer_member_budget: {
+        ...previous?.default_customer_member_budget,
+        ...body.default_customer_member_budget,
+      },
+    }),
+    ...(body.default_customer_member_budget_id === null && { default_customer_member_budget: null }),
+  };
+  apps = [...apps.filter((existing) => existing.app_id !== app.app_id), app];
+  return app;
+}
 
 beforeEach(() => {
   auth.userRole = "Admin";
   apps = resources.slice(0, 2).map((resource, index) => ({
-    ...resource,
+    ...appFixture(resource),
     app_id: `app-${resource.resource_id}`,
     default_tier_budget_id: `tier-${index + 1}`,
     default_customer_member_budget_id: `member-${index + 1}`,
   }));
   staleApps = null;
   rejectedIds = new Set(["chat"]);
-  writes.length = 0;
   vi.mocked(toast.success).mockClear();
-  testQueryClient.clear();
-  registerBaseUrlGetter(() => "http://localhost");
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input, init) => {
-      const request = new Request(input, init);
-      const path = new URL(request.url).pathname;
-      if (request.method !== "GET") {
-        writes.push(request.clone());
-        const body: components["schemas"]["AppPatch"] & { resource_id?: string } = await request.json();
-        const id = body.resource_id ?? apps.find((app) => path.endsWith(`/${app.app_id}`))?.resource_id;
-        if (!id) throw new Error(`Unknown app ${path}`);
-        if (rejectedIds.has(id)) return json({ detail: "Could not save the default group." }, 503);
-        const previous = apps.find((app) => app.resource_id === id);
-        const app = {
-          ...previous,
-          ...resources.find((resource) => resource.resource_id === id)!,
-          app_id: `app-${id}`,
-          ...body,
-          ...(body.default_customer_member_budget && {
-            default_customer_member_budget_id: `private-${id}`,
-            default_customer_member_budget: {
-              ...previous?.default_customer_member_budget,
-              ...body.default_customer_member_budget,
-            },
-          }),
-          ...(body.default_customer_member_budget_id === null && { default_customer_member_budget: null }),
-        };
-        apps = [...apps.filter((existing) => existing.app_id !== app.app_id), app];
-        return json(app);
-      }
-      const listed = staleApps ?? apps;
-      if (path.endsWith("/apps/definition")) return json({ resource_type: "team" });
-      if (path.endsWith("/apps/resources"))
-        return json(
-          resources.map((resource) => ({
-            ...resource,
-            app_id: listed.find((app) => app.resource_id === resource.resource_id)?.app_id ?? null,
-          })),
-        );
-      if (path.endsWith("/apps")) return json(listed);
-      if (path.endsWith("/apps/app-chat")) return json(listed.find((app) => app.app_id === "app-chat"));
-      if (path === "/models") return json({ data: [{ id: "model-a" }] });
-      if (path.endsWith("/models")) return json(["model-a"]);
-      if (path.endsWith("/app_customer_member_budget_groups"))
-        return catalog({ "member-1": "Member 1", "member-2": "Member 2" });
-      if (path.endsWith("/app_customer_organization_budget_groups"))
-        return catalog({ "tier-1": "Tier 1", "tier-2": "Tier 2" });
-      if (path.endsWith("/customer_organization_budget_groups"))
-        return catalog({ "org-standard": "Standard", "org-enterprise": "Enterprise" });
-      throw new Error(`Unexpected request ${request.method} ${path}`);
-    }),
-  );
+  const routes: Parameters<typeof mockAppRequests>[0] = {
+    "GET /management/v1/apps/definition": () => ({ resource_type: "team" }),
+    "GET /management/v1/apps/resources": () =>
+      resources.map((resource) => ({
+        ...resource,
+        app_id: (staleApps ?? apps).find((app) => app.resource_id === resource.resource_id)?.app_id ?? null,
+      })),
+    "GET /management/v1/apps": () => staleApps ?? apps,
+    "GET /management/v1/apps/app-chat": () => (staleApps ?? apps).find((app) => app.app_id === "app-chat"),
+    "POST /management/v1/apps": saveDefault,
+    ...Object.fromEntries(
+      resources.map(({ resource_id }) => [`PATCH /management/v1/apps/app-${resource_id}`, saveDefault]),
+    ),
+    "GET /models": () => ({ data: [{ id: "model-a" }] }),
+    "GET /management/v1/apps/resources/team/chat/models": () => ["model-a"],
+    "GET /management/v1/app_customer_member_budget_groups": () =>
+      catalog({ "member-1": "Member 1", "member-2": "Member 2" }),
+    "GET /management/v1/app_customer_organization_budget_groups": () =>
+      catalog({ "tier-1": "Tier 1", "tier-2": "Tier 2" }),
+    "GET /management/v1/customer_organization_budget_groups": () =>
+      catalog({ "org-standard": "Standard", "org-enterprise": "Enterprise" }),
+  };
+  network = mockAppRequests(routes);
+  writes = network.writes;
 });
 afterEach(() => vi.unstubAllGlobals());
+
+async function defaultGroup(alias: string) {
+  const row = await screen.findByRole("group", { name: `Defaults for ${alias}` });
+  const group = within(row).getByRole("combobox", { name: "Budget group" });
+  await waitFor(() => expect(group).toBeEnabled());
+  return { row, group };
+}
+
+async function retryDefaults(user: UserEvent, element: HTMLElement, label: string) {
+  const row = within(element);
+  const save = screen.getByRole("button", { name: "Save changes" });
+  await user.click(save);
+  expect(await row.findByRole("alert")).toHaveTextContent("Could not save the default group.");
+  expect(row.getByRole("combobox", { name: "Budget group" })).toHaveTextContent(label);
+  rejectedIds.clear();
+  await waitFor(() => expect(save).toBeEnabled());
+  await user.click(save);
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith("App settings saved."));
+  expect(save).toBeDisabled();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  return save;
+}
 
 it("changes only the current app's member default from its Budget groups page without loading other apps", async () => {
   rejectedIds.clear();
   const user = userEvent.setup();
   render(<AppBudgetGroupsPage />, { searchParams: "?app_id=app-chat" });
-  const chat = within(await screen.findByRole("group", { name: "Defaults for Chat" }));
-  const select = chat.getByRole("combobox", { name: "Budget group" });
-  await waitFor(() => expect(select).toBeEnabled());
-  await chooseSelectOption(user, select, /^Member 2/);
+  const { group } = await defaultGroup("Chat");
+  await chooseSelectOption(user, group, /^Member 2/);
   const defaults = within(screen.getByRole("region", { name: "Default per-member budget" }));
   await user.click(defaults.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(toast.success).toHaveBeenCalledWith("App settings saved."));
   await expectWrites([["PATCH", "chat", "member-2"]], "default_customer_member_budget_id");
   expect(screen.queryByRole("group", { name: "Defaults for Support" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Add app default" })).not.toBeInTheDocument();
-  const paths = vi
-    .mocked(fetch)
-    .mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : input).pathname);
+  const paths = network.requests.map((request) => new URL(request.url).pathname);
   expect(paths).toEqual(
     expect.arrayContaining(["/management/v1/apps/app-chat", "/management/v1/app_customer_member_budget_groups"]),
   );
@@ -130,13 +141,8 @@ it("changes only the current app's member default from its Budget groups page wi
 });
 
 it("edits shared app-member templates from the app page without changing the app's assignment", async () => {
-  const fallback = vi.mocked(fetch).getMockImplementation()!;
-  vi.mocked(fetch).mockImplementation(async (input, init) => {
-    const request = new Request(input, init);
-    if (request.method !== "PATCH") return fallback(request);
-    writes.push(request.clone());
-    return catalog({ "member-1": "Member 1", "member-2": "Member 2" });
-  });
+  network.routes["PATCH /management/v1/app_customer_member_budget_groups"] =
+    network.routes["GET /management/v1/app_customer_member_budget_groups"];
   const user = userEvent.setup();
   render(<AppBudgetGroupsPage />, { searchParams: "?app_id=app-chat" });
   const row = within(await screen.findByRole("row", { name: "Member 1" }));
@@ -167,7 +173,7 @@ async function expectWrites(
     const request = writes[index];
     expect(request.method).toBe(method);
     expect(new URL(request.url).pathname).toBe(`/management/v1/apps${method === "PATCH" ? `/app-${resource}` : ""}`);
-    expect(await request.json()).toEqual({
+    expect(await request.clone().json()).toEqual({
       [field]: default_tier_budget_id,
       ...(method === "POST" ? { resource_id: resource, resource_type: "team" } : {}),
     });
@@ -192,18 +198,13 @@ it.each([
     });
     const user = userEvent.setup();
     render(<AppBudgetDefaults scope={scope} />);
-    const support = within(await screen.findByRole("group", { name: "Defaults for Support" }));
-    await waitFor(() =>
-      expect(support.getByRole("combobox", { name: "Budget group" })).toHaveTextContent(
-        scope === "member" ? "Member 2" : "Tier 2",
-      ),
-    );
+    const { group: supportGroup } = await defaultGroup("Support");
+    await waitFor(() => expect(supportGroup).toHaveTextContent(scope === "member" ? "Member 2" : "Tier 2"));
     if (method === "POST") {
       await user.click(screen.getByRole("button", { name: "Add app default" }));
       await chooseSelectOption(user, screen.getByRole("combobox", { name: "Select an app" }), "Chat");
     }
-    const chat = within(await screen.findByRole("group", { name: "Defaults for Chat" }));
-    const group = chat.getByRole("combobox", { name: "Budget group" });
+    const { row, group } = await defaultGroup("Chat");
     if (scope === "member") {
       await user.click(group);
       expect(await screen.findByRole("option", { name: /^Member 1/ })).toBeInTheDocument();
@@ -224,19 +225,10 @@ it.each([
       await testQueryClient.invalidateQueries({ queryKey: ["apps"] });
     });
     expect(group).toHaveTextContent(label);
-    await waitFor(() => expect(support.getByRole("combobox", { name: "Budget group" })).toHaveTextContent("No limit"));
-    const save = screen.getByRole("button", { name: "Save changes" });
-    await user.click(save);
-    expect(await chat.findByRole("alert")).toHaveTextContent("Could not save the default group.");
+    await waitFor(() => expect(supportGroup).toHaveTextContent("No limit"));
+    await retryDefaults(user, row, label);
     expect(group).toHaveTextContent(label);
-    rejectedIds.clear();
-    await waitFor(() => expect(save).toBeEnabled());
-    await user.click(save);
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("App settings saved."));
-    expect(save).toBeDisabled();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(group).toHaveTextContent(label);
-    expect(support.getByRole("combobox", { name: "Budget group" })).toHaveTextContent("No limit");
+    expect(supportGroup).toHaveTextContent("No limit");
     await expectWrites(
       [
         [method, "chat", id],
@@ -267,9 +259,8 @@ it.each(["private-chat", "member-1", null])(
     );
     const user = userEvent.setup();
     render(<AppBudgetDefaults scope="member" />);
-    const chat = within(await screen.findByRole("group", { name: "Defaults for Chat" }));
-    const group = chat.getByRole("combobox", { name: "Budget group" });
-    await waitFor(() => expect(group).toBeEnabled());
+    const { row, group } = await defaultGroup("Chat");
+    const chat = within(row);
     await chooseSelectOption(user, group, "Enter custom limits instead");
     if (initial === "private-chat") {
       await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Apply" }));
@@ -292,13 +283,8 @@ it.each(["private-chat", "member-1", null])(
     expect(reopened.getByRole("spinbutton", { name: "Tokens per minute" })).toHaveValue(0);
     fireEvent.change(reopened.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "99" } });
     await user.click(reopened.getByRole("button", { name: "Cancel" }));
-    const save = screen.getByRole("button", { name: "Save changes" });
-    await user.click(save);
-    expect(await chat.findByRole("alert")).toHaveTextContent("Could not save the default group.");
-    rejectedIds.clear();
-    await waitFor(() => expect(save).toBeEnabled());
-    await user.click(save);
-    await waitFor(() => expect(save).toBeDisabled());
+    const save = await retryDefaults(user, row, "Custom");
+    expect(writes).toHaveLength(2);
     for (const request of writes) {
       expect(await request.json()).toEqual({
         default_customer_member_budget: {
@@ -326,9 +312,7 @@ it.each(["support", "search"])(
     rejectedIds = new Set([rejected]);
     const user = userEvent.setup();
     render(<AppBudgetDefaults />);
-    const support = within(await screen.findByRole("group", { name: "Defaults for Support" }));
-    const supportGroup = support.getByRole("combobox", { name: "Budget group" });
-    await waitFor(() => expect(supportGroup).toBeEnabled());
+    const { group: supportGroup } = await defaultGroup("Support");
     await chooseSelectOption(user, supportGroup, /^Tier 1/);
     for (const alias of ["Chat", "Search"]) {
       await user.click(screen.getByRole("button", { name: "Add app default" }));
