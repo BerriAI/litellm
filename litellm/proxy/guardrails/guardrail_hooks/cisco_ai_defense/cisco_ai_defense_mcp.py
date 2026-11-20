@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Final, Optional
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import MCP_SERVER_GUARDRAILS_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
@@ -123,6 +124,7 @@ class _CiscoAIDefenseMcpMixin:
             "litellm_metadata",
             "mcp_tool_call_metadata",
             "guardrails",
+            MCP_SERVER_GUARDRAILS_KEY,
         ):
             if key in kwargs and kwargs[key] is not None:
                 request_data[key] = kwargs[key]

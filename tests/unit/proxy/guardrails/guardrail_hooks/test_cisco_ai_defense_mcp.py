@@ -1,3 +1,4 @@
+from litellm.integrations.custom_guardrail import MCP_SERVER_GUARDRAILS_KEY
 from tests.unit.proxy.guardrails.guardrail_hooks._cisco_ai_defense_test_utils import (
     Any,
     AsyncMock,
@@ -311,6 +312,23 @@ class TestCiscoAIDefenseMCPMode:
             "was configured. Per product decision, pre_mcp_call means "
             "'guard the MCP call' — request AND response."
         )
+
+    @pytest.mark.parametrize(("server_guardrails", "expect_scan"), [(["t"], True), ([], False)])
+    @pytest.mark.asyncio
+    async def test_mcp_response_hook_runs_when_only_the_server_lists_it(self, server_guardrails, expect_scan):
+        g = _make_guardrail(inspection_type="mcp", event_hook="pre_mcp_call", default_on=False)
+        response_obj = _mcp_response(SimpleNamespace(content=[{"type": "text", "text": "tool output"}]))
+
+        post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
+        with _patch_inspection_post(g, post_mock):
+            await g.async_post_mcp_tool_call_hook(
+                kwargs={"name": "lookup", "arguments": {}, MCP_SERVER_GUARDRAILS_KEY: server_guardrails},
+                response_obj=response_obj,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+
+        assert post_mock.called is expect_scan
 
     @pytest.mark.parametrize(
         "cisco_response_kind,expected_block",

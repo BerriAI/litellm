@@ -72,6 +72,7 @@ from litellm.constants import (
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.integrations.custom_guardrail import MCP_SERVER_GUARDRAILS_KEY, CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -293,6 +294,7 @@ _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 _ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
 _LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
 _UNTYPED_VALUE: Final = TypeAdapter(object)
+_GUARDRAIL_NAMES: Final[TypeAdapter[tuple[str, ...] | None]] = TypeAdapter(tuple[str, ...] | None)
 _TOOLSET_PERMISSIONS: Final[TypeAdapter[dict[str, list[str]] | None]] = TypeAdapter(dict[str, list[str]] | None)
 
 
@@ -444,6 +446,7 @@ class MCPServerConfig(TypedDict, total=False):
     allowed_tools: _StringList
     disallowed_tools: _StringList
     allowed_params: _ToolParamMap
+    guardrails: ReadOnly[_StringList]
     access_groups: _StringList
     static_headers: _StringMap
     env_vars: _EnvVarList
@@ -1812,6 +1815,22 @@ def _warn_overlapping_tool_policies(server: MCPServer) -> None:
         )
 
 
+def _warn_unknown_server_guardrails(server: MCPServer) -> None:
+    loaded: Final = frozenset(
+        callback.guardrail_name
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
+        if isinstance(callback, CustomGuardrail)
+    )
+    unknown: Final = tuple(name for name in server.guardrails or () if name not in loaded)
+    if unknown:
+        verbose_logger.warning(
+            "MCP server %s lists guardrails that are not loaded: %s. They will not run for this server "
+            "until a guardrail with that name exists. Guardrails added through the UI load after this check.",
+            server.name,
+            ", ".join(unknown),
+        )
+
+
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
     """Point legacy delegated OAuth configurations at the client-forwarded replacements."""
     if not is_legacy_upstream_delegate(server):
@@ -2957,6 +2976,7 @@ class MCPServerManager:
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
                 pinned_tools=server_config.get("pinned_tools", None),
+                guardrails=_GUARDRAIL_NAMES.validate_python(server_config.get("guardrails")),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
                 env_vars=server_config.get("env_vars", None),
@@ -3004,6 +3024,7 @@ class MCPServerManager:
             )
             self.assign_unique_short_prefix(new_server)
             _warn_overlapping_tool_policies(new_server)
+            _warn_unknown_server_guardrails(new_server)
             _warn_legacy_delegate_auth_if_applicable(new_server, source="config")
             _warn_config_id_jag_server_outruns_sso(new_server)
             self.invalidate_server_definition_caches(server_id)
@@ -6582,6 +6603,7 @@ class MCPServerManager:
                 else {}
             ),
             "litellm_logging_obj": litellm_logging_obj,
+            MCP_SERVER_GUARDRAILS_KEY: list(server.guardrails or ()),
         }
 
         try:
@@ -6629,6 +6651,7 @@ class MCPServerManager:
         start_time: datetime.datetime,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
+        server_guardrails: tuple[str, ...] = (),
     ):
         """Create and return a during hook task for MCP tool calls.
 
@@ -6658,6 +6681,7 @@ class MCPServerManager:
         # Seeded for the same reason as in ``pre_call_tool_check``.
         synthetic_llm_data: Final = proxy_logging_obj.convert_mcp_to_llm_format(request_obj, during_hook_kwargs)
         synthetic_llm_data["litellm_logging_obj"] = litellm_logging_obj
+        synthetic_llm_data[MCP_SERVER_GUARDRAILS_KEY] = list(server_guardrails)
 
         # Wrapped so the bridge runs inside the task: the caller only holds the task and
         # gathers it later, so there is no other point that still sees a block here.
@@ -7439,6 +7463,7 @@ class MCPServerManager:
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
                 guardrail_context=guardrail_context,
+                server_guardrails=tuple(mcp_server.guardrails or ()),
             )
             tasks.append(during_hook_task)
 

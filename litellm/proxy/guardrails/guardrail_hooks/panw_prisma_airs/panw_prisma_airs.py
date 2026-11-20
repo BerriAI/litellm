@@ -321,10 +321,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if super().should_run_guardrail(data, event_type):
             return True
         compat: Final = self._MCP_COMPAT_MAP.get(event_type)
-        if compat is not None:
-            if super().should_run_guardrail(data, compat):
-                return True
-        return False
+        if compat is None:
+            return False
+        if self._attached_to_mcp_server(data, event_type) and self._event_hook_is_event_type(compat):
+            return self.stream_scope_allows(data, compat)
+        return super().should_run_guardrail(data, compat)
 
     def _extract_text_from_messages(self, messages: Sequence[Mapping[str, object]]) -> str:
         """Extract text content from messages array."""
