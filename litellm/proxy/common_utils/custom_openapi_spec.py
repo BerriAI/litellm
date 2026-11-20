@@ -417,6 +417,34 @@ class CustomOpenAPISpec:
             return openapi_schema
 
     @staticmethod
+    def add_config_yaml_schema(openapi_schema: JsonObject, description: str) -> JsonObject:
+        from litellm.proxy._types import ConfigYAML
+
+        schema: Final = CustomOpenAPISpec.get_pydantic_schema(ConfigYAML)
+        if schema is None:
+            return openapi_schema
+        CustomOpenAPISpec.add_schema_to_components(openapi_schema, "ConfigYAML", schema)
+        paths: Final = CustomOpenAPISpec._as_object(openapi_schema.setdefault("paths", {}))
+        path_item: Final = CustomOpenAPISpec._as_object(paths.setdefault("/config/yaml", {}))
+        _ = path_item.setdefault(
+            "get",
+            {
+                "tags": ["config.yaml"],
+                "summary": "Config Yaml Endpoint",
+                "description": description,
+                "operationId": "config_yaml_endpoint_config_yaml_get",
+                "requestBody": {
+                    "required": True,
+                    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConfigYAML"}}},
+                },
+                "responses": {
+                    "200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}
+                },
+            },
+        )
+        return openapi_schema
+
+    @staticmethod
     def add_llm_api_request_schema_body(
         openapi_schema: JsonObject,
     ) -> JsonObject:

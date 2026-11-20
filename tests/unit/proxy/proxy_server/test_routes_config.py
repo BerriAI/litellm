@@ -2025,6 +2025,7 @@ def test_openapi_config_yaml_schema_keeps_router_model_info_component_name(app, 
         components["Deployment"]["properties"]["model_info"],
         *components["Deployment"]["properties"]["model_info"].get("anyOf", ()),
     )
-    config_model_info: Final = components["ModelParams"]["properties"]["model_info"]
+    config_model_info_ref: Final = components["ModelParams"]["properties"]["model_info"]["$ref"]
+    config_model_info: Final = components[config_model_info_ref.removeprefix("#/components/schemas/")]
     assert set(config_model_info["properties"]) == set(ProxyModelInfo.model_fields)
     assert not {name for name in model_info_components if "__" in name}

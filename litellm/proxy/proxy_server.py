@@ -2386,6 +2386,9 @@ def _build_openapi_schema(inputs: _OpenAPIInputs) -> OpenAPISchema:
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+    openapi_schema = CustomOpenAPISpec.add_config_yaml_schema(
+        openapi_schema, inspect.cleandoc(config_yaml_endpoint.__doc__ or "")
+    )
 
     # Stub unloaded lazy features so they appear as Swagger sections.
     from litellm.proxy._lazy_features import inject_lazy_stubs
@@ -22800,6 +22803,7 @@ async def get_config(
     "/config/yaml",
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def config_yaml_endpoint(config_info: ConfigYAML):
     """
