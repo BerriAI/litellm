@@ -9,6 +9,8 @@ import {
 } from "../key_team_helpers/budgetAlertEmails";
 import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
 import type { ModelMaxBudget } from "../key_team_helpers/ModelMaxBudgetEditor";
+import { authProfileGrantEntry } from "../mcp_server_management/mcpAuthProfileGrants";
+import type { MCPServer } from "../mcp_tools/types";
 import { tagRowsToLimits, type TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 
 export interface KeyLoggingSetting {
@@ -36,6 +38,7 @@ export interface KeyCreateInput {
   readonly tagRateLimits: TagRateLimitEntry[];
   readonly budgetFallbacks: Record<string, string[]>;
   readonly modelMaxBudget: ModelMaxBudget;
+  readonly mcpServers?: readonly MCPServer[];
 }
 
 export type KeyPayloadResult =
@@ -130,15 +133,20 @@ interface PermissionSources {
   readonly extraMcpAccessGroups: unknown[] | undefined;
   readonly agents: AgentSelection | undefined;
   readonly skills: unknown[] | undefined;
+  readonly authProfiles: { readonly mcp_auth_profiles?: readonly string[] };
 }
 
-const readPermissionSources = (values: Record<string, unknown>): PermissionSources => ({
+const readPermissionSources = (values: Record<string, unknown>, input: KeyCreateInput): PermissionSources => ({
   vectorStores: nonEmptyList(values.allowed_vector_store_ids),
   mcp: readMcpSelection(values.allowed_mcp_servers_and_groups),
   toolPermissions: readToolPermissions(values.mcp_tool_permissions),
   extraMcpAccessGroups: nonEmptyList(values.allowed_mcp_access_groups),
   agents: readAgentSelection(values.allowed_agents_and_groups),
   skills: nonEmptyList(values.allowed_skills),
+  authProfiles: authProfileGrantEntry({
+    grants: values.mcp_auth_profiles as readonly string[] | undefined,
+    servers: input.mcpServers,
+  }),
 });
 
 const buildObjectPermission = ({
@@ -148,6 +156,7 @@ const buildObjectPermission = ({
   extraMcpAccessGroups,
   agents,
   skills,
+  authProfiles,
 }: PermissionSources): Record<string, unknown> | undefined => {
   const permission: Record<string, unknown> = {
     ...(vectorStores && { vector_stores: vectorStores }),
@@ -159,6 +168,7 @@ const buildObjectPermission = ({
     ...(agents?.agents && { agents: agents.agents }),
     ...(agents?.accessGroups && { agent_access_groups: agents.accessGroups }),
     ...(skills && { skills }),
+    ...authProfiles,
   };
   return Object.keys(permission).length > 0 ? permission : undefined;
 };
@@ -169,6 +179,7 @@ const consumedSourceKeys = (
 ): ReadonlySet<string> =>
   new Set<string>([
     "mcp_tool_permissions",
+    "mcp_auth_profiles",
     "allowed_skills",
     KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
     ...(values.disable_global_guardrails ? [] : ["disable_global_guardrails"]),
@@ -199,7 +210,7 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
 
   const values = input.formValues;
 
-  const sources = readPermissionSources(values);
+  const sources = readPermissionSources(values, input);
   const objectPermission = buildObjectPermission(sources);
   const dropped = consumedSourceKeys(values, sources);
 

@@ -25,14 +25,31 @@ vi.mock("./mcp_server_management/MCPServerSelector", () => ({
   }: {
     onChange: (selection: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
   }) => (
-    <button
-      type="button"
-      data-testid="select-mcp-toolset"
-      onClick={() => onChange({ servers: [], accessGroups: [], toolsets: ["ts-1"] })}
-    >
-      Select MCP toolset
-    </button>
+    <>
+      <button
+        type="button"
+        data-testid="select-mcp-toolset"
+        onClick={() => onChange({ servers: [], accessGroups: [], toolsets: ["ts-1"] })}
+      >
+        Select MCP toolset
+      </button>
+      <button
+        type="button"
+        data-testid="select-mcp-server"
+        onClick={() => onChange({ servers: ["srv-1"], accessGroups: [], toolsets: [] })}
+      >
+        Select MCP server
+      </button>
+    </>
   ),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
+  useMCPServers: () => ({
+    data: [
+      { server_id: "srv-1", server_name: "deploy", additional_auth: [{ id: "deploy-bots", auth_type: "api_key" }] },
+    ],
+  }),
 }));
 
 vi.mock("./skills/SkillSelector", () => ({
@@ -1402,6 +1419,40 @@ describe("Teams - the exact bytes the create call sends", () => {
     expect(payload.object_permission).toStrictEqual({ mcp_toolsets: ["ts-1"] });
   });
 
+  it("sends the chosen auth profile of a selected server in object_permission", async () => {
+    await openCreateModal();
+    await openSection("MCP Settings", /Allowed MCP Servers/);
+    fireEvent.click(screen.getByTestId("select-mcp-server"));
+    await userEvent.click(await screen.findByLabelText("deploy"));
+    await userEvent.click(await screen.findByRole("option", { name: "deploy-bots" }));
+
+    const payload = await submit();
+
+    expect(payload.object_permission).toStrictEqual({ mcp_servers: ["srv-1"], mcp_auth_profiles: ["deploy-bots"] });
+    expect(payload).not.toHaveProperty("mcp_auth_profiles");
+  });
+
+  it("sends an auth profile chosen without selecting its server", async () => {
+    await openCreateModal();
+    await openSection("MCP Settings", /Allowed MCP Servers/);
+    await userEvent.click(await screen.findByLabelText("deploy"));
+    await userEvent.click(await screen.findByRole("option", { name: "deploy-bots" }));
+
+    const payload = await submit();
+
+    expect(payload.object_permission).toStrictEqual({ mcp_auth_profiles: ["deploy-bots"] });
+  });
+
+  it("sends no auth profile key when a server is selected and the default profile is kept", async () => {
+    await openCreateModal();
+    await openSection("MCP Settings", /Allowed MCP Servers/);
+    fireEvent.click(screen.getByTestId("select-mcp-server"));
+
+    const payload = await submit();
+
+    expect(payload.object_permission).toStrictEqual({ mcp_servers: ["srv-1"] });
+  });
+
   it.each([
     ["MCP Settings", /Allowed MCP Servers/, ["allowed_mcp_servers_and_groups", "mcp_tool_permissions"]],
     ["Agent Settings", /Allowed Agents/, ["allowed_agents_and_groups"]],
@@ -1815,6 +1866,29 @@ describe("Teams - disable_global_guardrails switch gating", () => {
 
     expect(screen.queryByRole("switch", { name: /Disable Global Guardrails/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /Require Trace ID/i })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["Internal User", false],
+    ["Admin", true],
+  ])("offers the MCP auth profile choice to %s: %s", async (userRole, offered) => {
+    mockUseOrganizations.mockReturnValue({
+      data: [
+        {
+          organization_id: "org-1",
+          organization_alias: "Org 1",
+          models: [],
+          members: [{ user_id: "user-123", user_role: "org_admin" }],
+        },
+      ],
+    });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole={userRole} />);
+    await openCreateModal();
+
+    fireEvent.click(screen.getByText("MCP Settings"));
+
+    expect((await screen.findAllByText(/Allowed MCP Servers/)).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText("deploy") !== null).toBe(offered);
   });
 
   it("shows the Disable Global Guardrails switch to a proxy admin", async () => {

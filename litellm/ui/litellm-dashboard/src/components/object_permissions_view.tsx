@@ -90,6 +90,7 @@ export function ObjectPermissionsView({
         mcpAccessGroups={mcpAccessGroups}
         mcpToolPermissions={mcpToolPermissions}
         mcpToolsets={mcpToolsets}
+        mcpAuthProfiles={objectPermission?.mcp_auth_profiles ?? []}
         inheritedMcpServers={inheritedMcpServers}
         accessToken={accessToken}
       />

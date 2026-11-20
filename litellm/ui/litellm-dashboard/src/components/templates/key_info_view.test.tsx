@@ -16,7 +16,9 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 
 const editViewMocks = vi.hoisted(() => ({
-  onSubmit: undefined as ((v: Record<string, any>) => Promise<void>) | undefined,
+  onSubmit: undefined as
+    | ((v: Record<string, any>, dirtyFields?: readonly string[], servers?: readonly unknown[]) => Promise<void>)
+    | undefined,
   editingMemberKeyAsTeamAdmin: undefined as boolean | undefined,
 }));
 
@@ -31,7 +33,7 @@ vi.mock("./key_edit_view", () => ({
     onSubmit,
     editingMemberKeyAsTeamAdmin,
   }: {
-    onSubmit: (v: Record<string, any>) => Promise<void>;
+    onSubmit: (v: Record<string, any>, dirtyFields?: readonly string[], servers?: readonly unknown[]) => Promise<void>;
     editingMemberKeyAsTeamAdmin?: boolean;
   }) => {
     editViewMocks.onSubmit = onSubmit;
@@ -93,6 +95,7 @@ vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
   useMCPToolsets: vi.fn(() => ({ data: MCP_TOOLSETS })),
 }));
 
+import { toast } from "@/lib/toast";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 
@@ -1346,6 +1349,139 @@ describe("KeyInfoView", () => {
       });
 
       expect(submittedToolPermissions()).toEqual({});
+    });
+
+    describe("auth profile grants", () => {
+      const CATALOG_WITH_PROFILES = [
+        { ...MCP_CATALOG[0], additional_auth: [{ id: "deploy-bots", auth_type: "api_key" }] },
+        MCP_CATALOG[1],
+      ];
+      const KEY_WITH_GRANT = {
+        ...KEY_WITH_TOOL_PERMISSIONS,
+        object_permission: { ...KEY_WITH_TOOL_PERMISSIONS.object_permission, mcp_auth_profiles: ["deploy-bots"] },
+      } as KeyResponse;
+      const submittedPermission = () =>
+        (vi.mocked(keyUpdateCall).mock.calls.at(-1)?.[1] as { object_permission: Record<string, unknown> })
+          .object_permission;
+      const submit = (
+        keyData: KeyResponse,
+        values: Record<string, unknown>,
+        servers: readonly unknown[] | null = CATALOG_WITH_PROFILES,
+      ) => {
+        const submitted = {
+          key: keyData.token,
+          token: keyData.token,
+          mcp_servers_and_groups: { servers: ["srv-1"], accessGroups: [], toolsets: [] },
+          mcp_tool_permissions: {},
+          ...values,
+        };
+        return editViewMocks.onSubmit!(submitted, [], servers ?? undefined);
+      };
+
+      beforeEach(() => {
+        vi.mocked(useMCPServers).mockReturnValue({ data: CATALOG_WITH_PROFILES } as unknown as ReturnType<
+          typeof useMCPServers
+        >);
+      });
+
+      it("clears a grant on a server that only the edit form's server list has", async () => {
+        vi.mocked(useMCPServers).mockReturnValue({ data: MCP_CATALOG } as unknown as ReturnType<typeof useMCPServers>);
+        await enterEditMode(KEY_WITH_GRANT);
+        await submit(KEY_WITH_GRANT, { mcp_auth_profiles: [] });
+
+        expect(submittedPermission().mcp_auth_profiles).toEqual([]);
+      });
+
+      it("sends a grant the admin added", async () => {
+        await enterEditMode(KEY_WITH_TOOL_PERMISSIONS);
+        await submit(KEY_WITH_TOOL_PERMISSIONS, { mcp_auth_profiles: ["deploy-bots"] });
+
+        expect(submittedPermission().mcp_auth_profiles).toEqual(["deploy-bots"]);
+      });
+
+      it("an unrelated save keeps a grant on a team-inherited server", async () => {
+        const teamInherited = {
+          ...KEY_WITH_GRANT,
+          object_permission: { mcp_servers: [], mcp_auth_profiles: ["deploy-bots"] },
+        } as KeyResponse;
+        await enterEditMode(teamInherited);
+        await submit(teamInherited, {
+          mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+          mcp_auth_profiles: ["deploy-bots"],
+        });
+
+        expect(submittedPermission()).not.toHaveProperty("mcp_auth_profiles");
+      });
+
+      it.each([
+        { picked: [], servers: [MCP_CATALOG[1]], sent: undefined },
+        { picked: ["deploy-bots"], servers: undefined, sent: undefined },
+        {
+          picked: ["incident-bots"],
+          servers: [{ ...MCP_CATALOG[1], additional_auth: [{ id: "incident-bots", auth_type: "api_key" }] }],
+          sent: ["incident-bots", "deploy-bots"],
+        },
+      ])(
+        "keeps the stored grant when the key moves to another team, sending $sent for picks $picked",
+        async ({ picked, servers, sent }) => {
+          const inTeamA = {
+            ...KEY_WITH_GRANT,
+            team_id: "team-a",
+            object_permission: { mcp_servers: [], mcp_auth_profiles: ["deploy-bots"] },
+          } as KeyResponse;
+          await enterEditMode(inTeamA);
+          await submit(
+            inTeamA,
+            {
+              team_id: "team-b",
+              mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+              mcp_auth_profiles: picked,
+            },
+            servers ?? null,
+          );
+
+          expect(submittedPermission().mcp_auth_profiles).toEqual(sent);
+        },
+      );
+
+      it("sends an empty list when the admin cleared the grant, so a stored one cannot echo back", async () => {
+        await enterEditMode(KEY_WITH_GRANT);
+        await submit(KEY_WITH_GRANT, { mcp_auth_profiles: [] });
+
+        expect(submittedPermission().mcp_auth_profiles).toEqual([]);
+      });
+
+      it("keeps the grant when its server was deselected", async () => {
+        await enterEditMode(KEY_WITH_GRANT);
+        await submit(KEY_WITH_GRANT, {
+          mcp_servers_and_groups: { servers: ["srv-2"], accessGroups: [], toolsets: [] },
+          mcp_auth_profiles: ["deploy-bots"],
+        });
+
+        expect(submittedPermission()).not.toHaveProperty("mcp_auth_profiles");
+      });
+
+      it("refuses a grant change it cannot compute without the server catalog", async () => {
+        await enterEditMode(KEY_WITH_GRANT);
+        await submit(KEY_WITH_GRANT, { mcp_auth_profiles: [] }, null);
+
+        expect(keyUpdateCall).not.toHaveBeenCalled();
+        expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("MCP server or toolset list is unavailable"));
+      });
+
+      it("saves an unrelated edit while the server catalog is unavailable", async () => {
+        await enterEditMode(KEY_WITH_GRANT);
+        await submit(KEY_WITH_GRANT, { mcp_auth_profiles: ["deploy-bots"] }, null);
+
+        expect(submittedPermission()).not.toHaveProperty("mcp_auth_profiles");
+      });
+
+      it("adds no key for a key that never had a grant", async () => {
+        await enterEditMode(KEY_WITH_TOOL_PERMISSIONS);
+        await submit(KEY_WITH_TOOL_PERMISSIONS, {});
+
+        expect(submittedPermission()).not.toHaveProperty("mcp_auth_profiles");
+      });
     });
 
     it("drops only the deselected server and keeps the one still granted", async () => {

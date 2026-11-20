@@ -46,6 +46,7 @@ import {
   KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
 } from "../key_team_helpers/budgetAlertEmails";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import type { MCPServer } from "../mcp_tools/types";
 import LoggingSettingsView from "../logging_settings_view";
 import { toast } from "@/lib/toast";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
@@ -56,6 +57,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
+import { authProfileGrantEntry, grantChangeNeedsServers } from "../mcp_server_management/mcpAuthProfileGrants";
 import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
@@ -232,7 +234,11 @@ export default function KeyInfoView({
   };
   const editingMemberKeyAsTeamAdmin = isTeamAdminEditingMemberKey(memberKeyEditContext);
 
-  const handleKeyUpdate = async (formValues: Record<string, any>, dirtyFields: readonly string[] = []) => {
+  const handleKeyUpdate = async (
+    formValues: Record<string, any>,
+    dirtyFields: readonly string[] = [],
+    authProfileServers?: readonly MCPServer[],
+  ) => {
     try {
       if (!accessToken) return;
 
@@ -319,8 +325,28 @@ export default function KeyInfoView({
           ...mcpEntitlement,
         };
       }
+      const authProfileRequest = {
+        grants: formValues.mcp_auth_profiles,
+        servers: authProfileServers,
+        loadedGrants: currentKeyData.object_permission?.mcp_auth_profiles ?? [],
+      };
+      if (grantChangeNeedsServers(authProfileRequest)) {
+        toast.error(t("keyDetail.keyInfoView.toasts.mcpListUnavailable"));
+        return;
+      }
+      const authProfileEntry = authProfileGrantEntry(authProfileRequest);
+      if (Object.keys(authProfileEntry).length > 0) {
+        formValues.object_permission = {
+          ...(formValues.object_permission ?? currentKeyData.object_permission),
+          ...authProfileEntry,
+        };
+      } else if (formValues.object_permission) {
+        const { mcp_auth_profiles: _storedGrant, ...withoutStoredGrant } = formValues.object_permission;
+        formValues.object_permission = withoutStoredGrant;
+      }
       delete formValues.mcp_servers_and_groups;
       delete formValues.mcp_tool_permissions;
+      delete formValues.mcp_auth_profiles;
 
       // Handle agent permissions
       if (formValues.agents_and_groups !== undefined) {

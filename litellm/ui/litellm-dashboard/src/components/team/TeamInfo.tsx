@@ -96,6 +96,8 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
+import McpAuthProfilePicker from "../mcp_server_management/McpAuthProfilePicker";
+import { authProfileGrantEntry } from "../mcp_server_management/mcpAuthProfileGrants";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import {
@@ -472,6 +474,7 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) => {
       })
       .optional(),
     mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+    mcp_auth_profiles: z.array(z.string()).optional(),
     agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
     object_permission_search_tools: z.array(z.string()).optional(),
     object_permission_skills: z.array(z.string()).optional(),
@@ -605,6 +608,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     toolsets: info.object_permission?.mcp_toolsets || [],
   },
   mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
+  mcp_auth_profiles: info.object_permission?.mcp_auth_profiles ?? undefined,
   agents_and_groups: {
     agents: info.object_permission?.agents || [],
     accessGroups: info.object_permission?.agent_access_groups || [],
@@ -1249,8 +1253,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (toolsets) {
         updateData.object_permission.mcp_toolsets = toolsets;
       }
+      const authProfileRequest = {
+        grants: values.mcp_auth_profiles,
+        servers: allMcpServers,
+        loadedGrants: loadedObjectPermission.mcp_auth_profiles ?? [],
+      };
+      Object.assign(updateData.object_permission, authProfileGrantEntry(authProfileRequest));
       delete values.mcp_servers_and_groups;
       delete values.mcp_tool_permissions;
+      delete values.mcp_auth_profiles;
 
       // Handle agent permissions
       const { agents, accessGroups: agentAccessGroups } = values.agents_and_groups || {
@@ -2332,6 +2343,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
                     />
                   </div>
+
+                  {isProxyAdminRole(userRole) && (
+                    <FormField control={form.control} name="mcp_auth_profiles" className="mb-6">
+                      {({ value, onChange }) => (
+                        <McpAuthProfilePicker value={value} onChange={onChange} servers={allMcpServers} />
+                      )}
+                    </FormField>
+                  )}
 
                   <FormField
                     control={form.control}

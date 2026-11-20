@@ -43,7 +43,10 @@ import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "./common_components/RouterSettingsAccordion";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import type { Team } from "./key_team_helpers/key_list";
+import McpAuthProfilePicker from "./mcp_server_management/McpAuthProfilePicker";
+import { authProfileGrantEntry } from "./mcp_server_management/mcpAuthProfileGrants";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -111,6 +114,7 @@ const buildTeamCreateFieldsSchema = (t: TFunction) =>
       })
       .optional(),
     mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+    mcp_auth_profiles: z.array(z.string()).optional(),
     allowed_agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
     object_permission_search_tools: z.array(z.string()).optional(),
     object_permission_skills: z.array(z.string()).optional(),
@@ -143,6 +147,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   allowed_passthrough_routes: undefined,
   allowed_mcp_servers_and_groups: undefined,
   mcp_tool_permissions: {},
+  mcp_auth_profiles: undefined,
   allowed_agents_and_groups: undefined,
   object_permission_search_tools: undefined,
   object_permission_skills: undefined,
@@ -163,7 +168,7 @@ const ADDITIONAL_SETTINGS_FIELDS = [
   "allowed_vector_store_ids",
   "allowed_passthrough_routes",
 ] as const;
-const MCP_SETTINGS_FIELDS = ["allowed_mcp_servers_and_groups", "mcp_tool_permissions"] as const;
+const MCP_SETTINGS_FIELDS = ["allowed_mcp_servers_and_groups", "mcp_tool_permissions", "mcp_auth_profiles"] as const;
 const AGENT_SETTINGS_FIELDS = ["allowed_agents_and_groups"] as const;
 const SEARCH_TOOL_SETTINGS_FIELDS = ["object_permission_search_tools"] as const;
 const SKILL_SETTINGS_FIELDS = ["object_permission_skills"] as const;
@@ -270,6 +275,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   const watchedOrganizationId = form.watch("organization_id");
   const watchedMcpSelection = form.watch("allowed_mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
+  const { data: allMcpServers } = useMCPServers();
 
   const resetDetailState = useResetDetailState();
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
@@ -465,6 +471,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
           }
         }
 
+        const authProfileEntry = authProfileGrantEntry({
+          grants: formValues.mcp_auth_profiles,
+          servers: allMcpServers,
+        });
         const hasSearchTools =
           Array.isArray(formValues.object_permission_search_tools) &&
           formValues.object_permission_search_tools.length > 0;
@@ -503,6 +513,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
             delete formValues.mcp_tool_permissions;
           }
         }
+        if (authProfileEntry.mcp_auth_profiles !== undefined) {
+          formValues.object_permission = { ...formValues.object_permission, ...authProfileEntry };
+        }
+        delete formValues.mcp_auth_profiles;
 
         // Transform allowed_mcp_access_groups into object_permission
         if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
@@ -1215,6 +1229,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                           onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
                         />
                       </div>
+
+                      {userRole != null && isProxyAdminRole(userRole) && (
+                        <FormField control={form.control} name="mcp_auth_profiles" className="mt-6">
+                          {({ value, onChange }) => (
+                            <McpAuthProfilePicker value={value} onChange={onChange} servers={allMcpServers} />
+                          )}
+                        </FormField>
+                      )}
                     </CollapsibleContent>
                   </Collapsible>
 

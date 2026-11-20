@@ -1,21 +1,24 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "../key_team_helpers/ModelMaxBudgetEditor";
 import i18n from "@/i18n/i18n";
 import {
   fetchMCPServers,
+  fetchMCPToolsets,
   getPassThroughEndpointsCall,
   getPoliciesList,
   getUiSettings,
   getPromptsList,
   listMCPTools,
   modelAvailableCall,
+  teamInfoCall,
   vectorStoreListCall,
 } from "../networking";
 import { toast } from "@/lib/toast";
+import { teamKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { KeyEditView } from "./key_edit_view";
 import { teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
 
@@ -25,9 +28,11 @@ vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
 }));
 
 vi.mock("../networking", async () => {
-  const actual = await vi.importActual("../networking");
+  const actual = await vi.importActual<typeof import("../networking")>("../networking");
   return {
     ...actual,
+    fetchMCPToolsets: vi.fn(actual.fetchMCPToolsets),
+    teamInfoCall: vi.fn(actual.teamInfoCall),
     getUiSettings: vi.fn().mockResolvedValue({ values: {} }),
     getPromptsList: vi.fn().mockResolvedValue({
       prompts: [{ prompt_id: "prompt-1" }, { prompt_id: "prompt-2" }],
@@ -188,6 +193,8 @@ const optionByContent = (label: string): HTMLElement | undefined =>
   visibleOptions().find((el) => el.textContent === label);
 
 describe("KeyEditView", () => {
+  const anyServerList = expect.toBeOneOf([undefined, expect.any(Array)]);
+
   const MOCK_KEY_DATA: KeyResponse = {
     token: "test-token-123",
     token_id: "test-token-123",
@@ -315,6 +322,7 @@ describe("KeyEditView", () => {
             }),
           }),
           expect.any(Array),
+          anyServerList,
         );
       });
     });
@@ -336,6 +344,7 @@ describe("KeyEditView", () => {
             }),
           }),
           expect.any(Array),
+          anyServerList,
         );
       });
     });
@@ -666,6 +675,7 @@ describe("KeyEditView", () => {
       expect(onSubmitMock).toHaveBeenCalledWith(
         expect.objectContaining({ throttle_on_budget_exceeded: true }),
         expect.any(Array),
+        anyServerList,
       );
     });
   });
@@ -699,6 +709,7 @@ describe("KeyEditView", () => {
       expect(onSubmitMock).toHaveBeenCalledWith(
         expect.objectContaining({ enable_prompt_caching: true }),
         expect.any(Array),
+        anyServerList,
       );
     });
   });
@@ -1072,7 +1083,9 @@ describe("KeyEditView", () => {
       metadata: JSON.stringify({ note: "new" }, null, 2),
       vector_stores: ["store-new"],
     };
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Array)));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Array), anyServerList),
+    );
     const [, dirtyFields] = onSubmit.mock.calls[0];
     expect(dirtyFields).toContain("max_budget");
     expect(dirtyFields).not.toContain("rpm_limit");
@@ -1175,7 +1188,11 @@ describe("KeyEditView", () => {
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() =>
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ max_budget: 25 }), expect.any(Array)),
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ max_budget: 25 }),
+        expect.any(Array),
+        anyServerList,
+      ),
     );
   });
 
@@ -1202,7 +1219,11 @@ describe("KeyEditView", () => {
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() =>
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ max_budget: 25 }), expect.any(Array)),
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ max_budget: 25 }),
+        expect.any(Array),
+        anyServerList,
+      ),
     );
   });
 
@@ -1875,6 +1896,117 @@ describe("KeyEditView", () => {
       expect(selector).toHaveAttribute("data-user-id", "owner-7");
     });
 
+    it("labels a team key's empty auth profile choice as following the team", async () => {
+      vi.mocked(fetchMCPServers).mockResolvedValue([
+        {
+          server_id: "srv-a",
+          server_name: "team-wiki",
+          url: "https://srv-a.example",
+          transport: "http",
+          auth_type: "none",
+          additional_auth: [{ id: "wiki-bots", auth_type: "api_key" }],
+          created_at: "",
+          created_by: "",
+          updated_at: "",
+          updated_by: "",
+        },
+      ]);
+      testQueryClient.clear();
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, team_id: "group-maple" }}
+          onCancel={() => {}}
+          onSubmit={vi.fn()}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      expect(await screen.findByLabelText("team-wiki")).toHaveTextContent("None (team or default)");
+      vi.mocked(fetchMCPServers).mockResolvedValue([]);
+    });
+
+    describe("auth profile picker reach", () => {
+      const ticketsServer = {
+        server_id: "tickets",
+        server_name: "tickets",
+        url: "https://tickets.example",
+        transport: "http",
+        auth_type: "none",
+        additional_auth: [{ id: "tickets-bots", auth_type: "api_key" }],
+        created_at: "",
+        created_by: "",
+        updated_at: "",
+        updated_by: "",
+      };
+      const ticketsRead = {
+        toolset_id: "tickets-read",
+        toolset_name: "tickets-read",
+        tools: [{ server_id: "tickets", tool_name: "list_tickets" }],
+      };
+      const renderKey = (objectPermission: KeyResponse["object_permission"], userRole = "Admin") =>
+        renderWithProviders(
+          <KeyEditView
+            keyData={{ ...MOCK_KEY_DATA, team_id: "group-maple", object_permission: objectPermission }}
+            onCancel={() => {}}
+            onSubmit={vi.fn()}
+            accessToken=""
+            userID=""
+            userRole={userRole}
+            premiumUser={false}
+          />,
+        );
+
+      beforeEach(() => {
+        testQueryClient.clear();
+        vi.mocked(fetchMCPServers).mockImplementation(async (_token, teamId) => (teamId ? [] : [ticketsServer]));
+        vi.mocked(fetchMCPToolsets).mockResolvedValue([ticketsRead]);
+      });
+
+      afterEach(() => {
+        vi.mocked(fetchMCPServers).mockResolvedValue([]);
+        testQueryClient.setQueryDefaults(teamKeys.detail("group-maple"), {
+          staleTime: Infinity,
+          refetchOnMount: false,
+        });
+      });
+
+      it("shows the profile choice of a server the key reaches only through its toolset", async () => {
+        renderKey({ mcp_toolsets: ["tickets-read"], mcp_auth_profiles: ["tickets-bots"] });
+
+        expect(await screen.findByLabelText("tickets")).toHaveTextContent("tickets-bots");
+      });
+
+      it.each([false, true])(
+        "shows the profile choice of a server the key's team reaches only through its toolset (team list cached: %s)",
+        async (teamListCached) => {
+          if (teamListCached) {
+            testQueryClient.setQueryData(teamKeys.list({}), [{ team_id: "group-maple", team_alias: "maple" }]);
+            testQueryClient.setQueryDefaults(teamKeys.detail("group-maple"), { staleTime: 0, refetchOnMount: true });
+          }
+          vi.mocked(teamInfoCall).mockResolvedValueOnce({
+            team_info: { team_id: "group-maple", object_permission: { mcp_toolsets: ["tickets-read"] } },
+          });
+          renderKey({ mcp_auth_profiles: ["tickets-bots"] });
+
+          expect(await screen.findByLabelText("tickets")).toHaveTextContent("tickets-bots");
+        },
+      );
+
+      it.each([
+        ["Admin", true],
+        ["Internal User", false],
+      ])("offers the profile choice of a directly granted server to %s: %s", async (userRole, offered) => {
+        renderKey({ mcp_servers: ["tickets"], mcp_auth_profiles: ["tickets-bots"] }, userRole);
+
+        await waitFor(() => expect(testQueryClient.isFetching()).toBe(0));
+        expect(screen.getByTestId("mcp-server-selector")).toBeInTheDocument();
+        expect(screen.queryByLabelText("tickets") !== null).toBe(offered);
+      });
+    });
+
     it("keeps a saved MCP grant editable when it falls outside the key's team scope", async () => {
       const server = (server_id: string, server_name: string) => ({
         server_id,
@@ -1912,15 +2044,28 @@ describe("KeyEditView", () => {
       vi.mocked(fetchMCPServers).mockResolvedValue([]);
     });
 
-    it("rescopes the MCP server selector and drops stale MCP grants when the team is changed before saving", async () => {
+    it("keeps the auth profile control of a server granted only to the key and saves against the same list", async () => {
+      const keyServer = {
+        server_id: "srv-key",
+        server_name: "key-wiki",
+        url: "https://srv-key.example",
+        transport: "http",
+        auth_type: "none",
+        additional_auth: [{ id: "key-bots", auth_type: "api_key" }],
+        created_at: "",
+        created_by: "",
+        updated_at: "",
+        updated_by: "",
+      };
+      vi.mocked(fetchMCPServers).mockImplementation(async (_token, teamId) => (teamId ? [] : [keyServer]));
+      testQueryClient.clear();
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       renderWithProviders(
         <KeyEditView
           keyData={{
             ...MOCK_KEY_DATA,
-            organization_id: "org-1",
             team_id: "group-maple",
-            object_permission: { mcp_servers: ["srv-a"], mcp_tool_permissions: { "srv-a": ["read"] } },
+            object_permission: { mcp_servers: ["srv-key"], mcp_auth_profiles: ["key-bots"] },
           }}
           onCancel={() => {}}
           onSubmit={onSubmit}
@@ -1931,26 +2076,60 @@ describe("KeyEditView", () => {
         />,
       );
 
-      const selector = await screen.findByTestId("mcp-server-selector");
-      expect(selector).toHaveAttribute("data-team-id", "group-maple");
-      await waitFor(() => {
-        expect(screen.getAllByRole("button", { name: "Clear" })).toHaveLength(2);
-      });
-      await userEvent.click(screen.getAllByRole("button", { name: "Clear" })[1]);
-
-      await waitFor(() => {
-        expect(screen.getByTestId("mcp-server-selector")).toHaveAttribute("data-team-id", "");
-      });
+      expect(await screen.findByLabelText("key-wiki")).toHaveTextContent("key-bots");
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
-
-      await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalled();
-      });
-      expect(onSubmit.mock.calls[0][0]).toMatchObject({
-        mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
-        mcp_tool_permissions: {},
-      });
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][2]).toEqual([keyServer]);
+      vi.mocked(fetchMCPServers).mockResolvedValue([]);
     });
+
+    it.each(["Admin", "Internal User"])(
+      "rescopes the MCP server selector, drops stale MCP grants and keeps the auth profile grant on a team change by %s",
+      async (userRole) => {
+        const onSubmit = vi.fn().mockResolvedValue(undefined);
+        renderWithProviders(
+          <KeyEditView
+            keyData={{
+              ...MOCK_KEY_DATA,
+              organization_id: "org-1",
+              team_id: "group-maple",
+              object_permission: {
+                mcp_servers: ["srv-a"],
+                mcp_tool_permissions: { "srv-a": ["read"] },
+                mcp_auth_profiles: ["maple-bots"],
+              },
+            }}
+            onCancel={() => {}}
+            onSubmit={onSubmit}
+            accessToken=""
+            userID=""
+            userRole={userRole}
+            premiumUser={false}
+          />,
+        );
+
+        const selector = await screen.findByTestId("mcp-server-selector");
+        expect(selector).toHaveAttribute("data-team-id", "group-maple");
+        await waitFor(() => {
+          expect(screen.getAllByRole("button", { name: "Clear" })).toHaveLength(2);
+        });
+        await userEvent.click(screen.getAllByRole("button", { name: "Clear" })[1]);
+
+        await waitFor(() => {
+          expect(screen.getByTestId("mcp-server-selector")).toHaveAttribute("data-team-id", "");
+        });
+        await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(onSubmit).toHaveBeenCalled();
+        });
+        expect(onSubmit.mock.calls[0][0]).toMatchObject({
+          mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+          mcp_tool_permissions: {},
+          mcp_auth_profiles: ["maple-bots"],
+        });
+      },
+    );
 
     it("keeps the team change's cleared MCP grants when the same key refreshes before saving", async () => {
       const onSubmit = vi.fn().mockResolvedValue(undefined);
@@ -2018,6 +2197,7 @@ describe("KeyEditView", () => {
         expect(onSubmit).toHaveBeenCalledWith(
           expect.objectContaining({ organization_id: null, team_id: null }),
           expect.any(Array),
+          anyServerList,
         );
       });
       expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toMatchObject({
@@ -2064,7 +2244,11 @@ describe("KeyEditView", () => {
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
       const expectedDetach = { project_id: null, organization_id: "org-1", team_id: "group-maple", models: key.models };
       await waitFor(() =>
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach), expect.any(Array)),
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining(expectedDetach),
+          expect.any(Array),
+          anyServerList,
+        ),
       );
       expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
       view.rerender(<></>);
@@ -2368,6 +2552,7 @@ describe("KeyEditView", () => {
         expect(onSubmit).toHaveBeenCalledWith(
           expect.objectContaining({ end_user_budget_id: "svc-b-budget" }),
           expect.any(Array),
+          anyServerList,
         );
       });
     });
@@ -2380,7 +2565,11 @@ describe("KeyEditView", () => {
       await save();
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "" }), expect.any(Array));
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ end_user_budget_id: "" }),
+          expect.any(Array),
+          anyServerList,
+        );
       });
     });
 
@@ -3035,6 +3224,7 @@ describe("KeyEditView", () => {
         expect(onSubmitMock).toHaveBeenCalledWith(
           expect.objectContaining({ team_id: null, organization_id: "org-1" }),
           expect.any(Array),
+          anyServerList,
         );
       });
     });

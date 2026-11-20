@@ -31,6 +31,7 @@ export interface Team {
   access_group_agent_ids?: string[];
   // Parent org's model ceiling. undefined = no org / not loaded; [] or ["all-proxy-models"] = no ceiling.
   organization_models?: string[] | null;
+  object_permission?: ObjectPermission | null;
 }
 
 export interface KeyResponse {
