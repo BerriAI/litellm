@@ -26199,7 +26199,9 @@
         "litellm_provider": "cohere",
         "max_input_tokens": 512,
         "mode": "embedding",
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 384,
+        "supports_embedding_image_input": true
     },
     "embed-english-v3.0": {
         "input_cost_per_image": 0.0001,
@@ -26211,6 +26213,7 @@
         },
         "mode": "embedding",
         "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
         "supports_embedding_image_input": true,
         "supports_image_input": true
     },
@@ -26220,6 +26223,7 @@
         "max_input_tokens": 512,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
         "supports_embedding_image_input": true
     },
     "embed-multilingual-light-v3.0": {
@@ -26228,6 +26232,7 @@
         "max_input_tokens": 512,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
+        "output_vector_size": 384,
         "supports_embedding_image_input": true
     },
     "eu.amazon.nova-lite-v1:0": {
@@ -32655,6 +32660,7 @@
         ],
         "supports_function_calling": false,
         "supports_logprobs": false,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
@@ -46361,6 +46367,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_reasoning": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "cache_read_input_token_cost": 2e-07
@@ -46466,6 +46473,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_reasoning": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "cache_read_input_token_cost": 1e-07
@@ -46489,6 +46497,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "cache_read_input_token_cost": 5e-08
     },
@@ -46500,6 +46509,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "cache_read_input_token_cost": 1e-07
     },
@@ -46535,6 +46545,7 @@
         "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_vision": true,
         "cache_read_input_token_cost": 1e-07
     },
     "nebius/zai-org/GLM-5.1": {
@@ -105648,6 +105659,7 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     "fal_ai/fal-ai/pixverse/extend": {
