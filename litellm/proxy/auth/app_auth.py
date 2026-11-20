@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Final
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -173,7 +174,10 @@ async def resolve_app_hierarchy(
             else ()
         ),
     )
-    app_hierarchy: Final = await current_customer_spend(CustomerHierarchyAuth(scopes=app_scopes), get_current_spend)
+    app_hierarchy: Final = await current_customer_spend(
+        CustomerHierarchyAuth(scopes=app_scopes),
+        partial(get_current_spend, recheck_recorded_spend=True),
+    )
     base: Final = hierarchy or CustomerHierarchyAuth(scopes=())
     combined: Final = base.model_copy(
         update={

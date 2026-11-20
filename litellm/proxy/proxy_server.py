@@ -3587,6 +3587,7 @@ async def get_current_spend(
     fallback_authoritative: bool = False,
     *,
     require_authoritative_window: bool = False,
+    recheck_recorded_spend: bool = False,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3640,7 +3641,7 @@ async def get_current_spend(
     # source too, so a counter that is stale-low at the same time as the caller's
     # cached spend cannot slip through; the 5s cache keeps that bounded.
     is_window: Final = window_start is not None
-    if fallback_spend > current or is_window or _fail_closed_budget_enforcement():
+    if fallback_spend > current or is_window or recheck_recorded_spend or _fail_closed_budget_enforcement():
         authoritative: Final = await _authoritative_floor_spend(
             counter_key=counter_key,
             window_entity_type=window_entity_type,

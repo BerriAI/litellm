@@ -13,14 +13,12 @@ from fastapi import HTTPException
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.app_auth import app_scope, resolve_app_hierarchy
-from litellm.proxy.auth.auth_checks import virtual_key_max_budget_check
 from litellm.proxy.auth.customer_hierarchy_auth import CustomerBudgetExceededError, check_customer_hierarchy_budget
 from litellm.proxy.auth.customer_spend import customer_spend_counter
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
 from litellm.proxy.spend_tracking.customer_cost_margin import key_customer_cost_margin, request_customer_cost_margin
-from litellm.proxy.utils import ProxyLogging
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerScopeAuth,
@@ -129,9 +127,10 @@ async def test_cached_app_auth_preserves_identity_and_enforcement_during_databas
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("strict", (False, True))
 @pytest.mark.parametrize("scope_key", ("app", "app_customer_org", "app_customer_member"))
-async def test_cached_app_spend_follows_api_key_budget_enforcement(
-    scope_key: str, monkeypatch: pytest.MonkeyPatch
+async def test_cached_app_spend_rechecks_exhausted_budgets_and_preserves_outage_policy(
+    scope_key: str, strict: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.proxy import proxy_server
 
@@ -156,7 +155,7 @@ async def test_cached_app_spend_follows_api_key_budget_enforcement(
     monkeypatch.setattr(proxy_server, "prisma_client", connection)
     monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
     monkeypatch.setattr(proxy_server, "spend_counter_store", spend.store())
-    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": strict})
 
     async def resolve(db: object = database) -> CustomerHierarchyAuth:
         result: Final = await resolve_app_hierarchy(
@@ -176,29 +175,22 @@ async def test_cached_app_spend_follows_api_key_budget_enforcement(
     }[scope_key]
     for identity, row in tuple(table.rows.items()):
         table.rows[identity] = row.model_copy(update={"spend": 12.0})
-    await database.litellm_verificationtoken.update(where={"token": "token-a"}, data={"spend": 12.0})
-    redis.update({counter: 5.0, "spend:key:token-a": 5.0})
-    key: Final = UserAPIKeyAuth(token="token-a", spend=0, max_budget=10)
-    logger: Final = ProxyLogging(user_api_key_cache=cache)
-
-    # Default API-key policy trusts Redis; strict mode also checks the DB when both cached totals are stale.
-    await virtual_key_max_budget_check(key, logger)
-    default: Final = await resolve()
-    assert next(scope.spend for scope in default.scopes if scope.key == scope_key) == 5
-    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
-    with pytest.raises(litellm.BudgetExceededError):
-        await virtual_key_max_budget_check(key, logger)
+    redis[counter] = 5.0
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
     with pytest.raises(CustomerBudgetExceededError):
         await resolve()
-    assert redis[counter] == redis["spend:key:token-a"] == 12
+    assert redis[counter] == 12
 
-    # A healthy shared counter still works offline; losing both stores rejects the same cached policy.
     offline: Final = UnavailableAppDatabase()
     monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=offline))
+    with pytest.raises(CustomerBudgetExceededError):
+        await resolve(offline)
     monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
     redis[counter] = 5.0
     spend.memory.clear()
-    assert await resolve(offline)
+    admitted: Final = await resolve(offline)
+    assert next(scope.spend for scope in admitted.scopes if scope.key == scope_key) == 5
+    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
     spend.fail = True
     with pytest.raises(HTTPException) as rejected:
         await resolve(offline)
