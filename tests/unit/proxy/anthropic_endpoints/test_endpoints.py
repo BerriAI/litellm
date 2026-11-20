@@ -26,21 +26,21 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 @pytest.mark.parametrize(
     ("configured", "requested", "cacheable"),
     [
-        ({}, {}, False),
-        ({}, {"store": True}, False),
+        ({}, {}, True),
+        ({}, {"store": True}, True),
         ({}, {"store": False}, True),
-        ({}, {"store": False, "extra_body": {"store": True}}, False),
+        ({}, {"store": False, "extra_body": {"store": True}}, True),
         ({}, {"store": True, "extra_body": {"store": False}}, True),
-        ({}, {"store": False, "additional_drop_params": ["store"]}, False),
+        ({}, {"store": False, "additional_drop_params": ["store"]}, True),
         ({}, {"store": False, "previous_response_id": "resp_previous"}, False),
         ({}, {"store": False, "extra_body": {"conversation": "conv_previous"}}, False),
         ({}, {"store": False, "extra_body": {"truncation": "auto"}}, False),
         ({"store": False}, {}, True),
-        ({"store": False}, {"store": None}, False),
-        ({"extra_body": {"store": False}}, {"extra_body": None}, False),
+        ({"store": False}, {"store": None}, True),
+        ({"extra_body": {"store": False}}, {"extra_body": None}, True),
     ],
 )
-def test_messages_count_tokens_respects_effective_store_and_continuation(
+def test_messages_count_tokens_keeps_instructions_only_for_a_continuation(
     monkeypatch: pytest.MonkeyPatch,
     configured: dict[str, object],
     requested: dict[str, object],

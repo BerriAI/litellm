@@ -9,6 +9,7 @@ from typing import Final, TypeAlias
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
     AllAnthropicToolsValues,
@@ -43,16 +44,9 @@ SYSTEM_PLACEMENT_PARAMS: Final = (
 
 def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
     extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
-    dropped: Final = request_params.get("additional_drop_params")
-    top_level_store: Final = None if isinstance(dropped, list) and "store" in dropped else request_params.get("store")
-    placement_fields: Final = ("store", "previous_response_id", "conversation", "truncation")
-    top_level: Final = {key: top_level_store if key == "store" else request_params.get(key) for key in placement_fields}
-    sent: Final = {key: extra_body.get(key, top_level[key]) for key in placement_fields}
-    return (
-        sent["store"] is not False
-        or bool(sent["previous_response_id"] or sent["conversation"])
-        or sent["truncation"] == "auto"
-    )
+    placement_fields: Final = ("previous_response_id", "conversation", "truncation")
+    sent: Final = {key: extra_body.get(key, request_params.get(key)) for key in placement_fields}
+    return bool(sent["previous_response_id"] or sent["conversation"]) or sent["truncation"] == "auto"
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -222,24 +216,26 @@ class LiteLLMMessagesToResponsesAPIHandler:
         output_format: AnthropicOutputSchema | None = None,
         **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
-        responses_kwargs: Final = _build_responses_kwargs(
-            max_tokens=max_tokens,
-            messages=messages,
-            model=model,
-            context_management=context_management,
-            metadata=metadata,
-            output_config=output_config,
-            stop_sequences=stop_sequences,
-            stream=stream,
-            system=system,
-            temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
-            top_k=top_k,
-            top_p=top_p,
-            output_format=output_format,
-            extra_kwargs=kwargs,
+        responses_kwargs: Final = await awithout_stored_instructions(
+            _build_responses_kwargs(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                context_management=context_management,
+                metadata=metadata,
+                output_config=output_config,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                output_format=output_format,
+                extra_kwargs=kwargs,
+            )
         )
 
         result: Final = await litellm.aresponses(**responses_kwargs)
@@ -304,24 +300,26 @@ class LiteLLMMessagesToResponsesAPIHandler:
             )
 
         # Sync path
-        responses_kwargs: Final = _build_responses_kwargs(
-            max_tokens=max_tokens,
-            messages=messages,
-            model=model,
-            context_management=context_management,
-            metadata=metadata,
-            output_config=output_config,
-            stop_sequences=stop_sequences,
-            stream=stream,
-            system=system,
-            temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
-            top_k=top_k,
-            top_p=top_p,
-            output_format=output_format,
-            extra_kwargs=kwargs,
+        responses_kwargs: Final = without_stored_instructions(
+            _build_responses_kwargs(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                context_management=context_management,
+                metadata=metadata,
+                output_config=output_config,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                output_format=output_format,
+                extra_kwargs=kwargs,
+            )
         )
 
         result: Final = litellm.responses(**responses_kwargs)
