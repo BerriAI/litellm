@@ -15,10 +15,12 @@ These are distinct from the A2A agent registry at /v1/agents.
 """
 
 import json
-from typing import Final
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -29,6 +31,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_get_request_query_params,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
 
 router: Final = APIRouter(tags=["gemini managed agents"])
 
@@ -111,7 +118,21 @@ def _merge_query_params_into_data(data: dict, request: Request) -> dict:
     return data
 
 
-def _proxy_server_imports():
+class _ProxyServerGlobals(TypedDict):
+    general_settings: ReadOnly[dict[str, object]]  # mutable-ok: base_process_llm_request takes a dict
+    llm_router: ReadOnly["Router | None"]
+    proxy_config: ReadOnly["ProxyConfig"]
+    proxy_logging_obj: ReadOnly["ProxyLogging"]
+    select_data_generator: ReadOnly[Callable[..., object] | None]
+    user_api_base: ReadOnly[str | None]
+    user_max_tokens: ReadOnly[int | None]
+    user_model: ReadOnly[str | None]
+    user_request_timeout: ReadOnly[float | None]
+    user_temperature: ReadOnly[float | None]
+    version: ReadOnly[str | None]
+
+
+def _proxy_server_imports() -> _ProxyServerGlobals:
     from litellm.proxy.proxy_server import (  # noqa: PLC0415
         general_settings,
         llm_router,
@@ -126,7 +147,7 @@ def _proxy_server_imports():
         version,
     )
 
-    return dict(
+    return _ProxyServerGlobals(
         general_settings=general_settings,
         llm_router=llm_router,
         proxy_config=proxy_config,

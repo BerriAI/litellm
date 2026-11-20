@@ -148,6 +148,9 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         Check if the request is a streaming request
         """
 
+    def required_custom_llm_provider(self) -> str | None:
+        return None
+
     def logged_request(self, endpoint: str, request_data: Mapping[str, object]) -> LoggedPassthroughRequest | None:
         """The prompt and settings of a provider-native request body, for providers whose body shape is known."""
         return None

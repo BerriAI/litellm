@@ -635,6 +635,7 @@ async def test_allm_passthrough_route_429_streaming_raises():
         None,
     )
     mock_provider_config.is_streaming_request.return_value = True
+    mock_provider_config.required_custom_llm_provider.return_value = None
 
     mock_429_response = _make_429_streaming_response()
 
@@ -731,6 +732,7 @@ def test_llm_passthrough_route_sync_streaming_error_maps_upstream_status():
         None,
     )
     mock_provider_config.is_streaming_request.return_value = True
+    mock_provider_config.required_custom_llm_provider.return_value = None
     mock_provider_config.get_error_class.side_effect = lambda error_message, status_code, headers: BaseLLMException(
         status_code=status_code, message=error_message, headers=headers
     )

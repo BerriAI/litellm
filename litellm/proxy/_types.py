@@ -393,6 +393,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search",
         "/search/{search_tool_name}",
         "/v1/search/{search_tool_name}",
+        "/alpha/search",
+        "/v1/alpha/search",
         "/decisions",
         "/v1/decisions",
         "/systemone",

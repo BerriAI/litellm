@@ -293,3 +293,93 @@ def test_list_search_tools_reads_the_router_search_tools(monkeypatch: pytest.Mon
 
     assert response.status_code == 200
     assert response.json()["data"] == [{"search_tool_name": "search-a", "search_provider": "tavily"}]
+
+
+OPENAI_ALPHA_SEARCH_URL: Final = "https://api.openai.com/v1/alpha/search"
+ALPHA_SEARCH_COMMANDS: Final = {"search_query": [{"q": "LiteLLM documentation", "recency": None, "domains": None}]}
+
+
+@pytest.fixture
+def upstream(monkeypatch: pytest.MonkeyPatch) -> Iterator[respx.MockRouter]:
+    monkeypatch.setattr(  # test-quality-ok: respx needs HTTPX enabled to fake the provider HTTP boundary.
+        litellm,
+        "disable_aiohttp_transport",
+        True,
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=False) as mock:
+        yield mock
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def _alpha_search_client(monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, str]) -> TestClient:
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "codex-alias", "litellm_params": litellm_params}], num_retries=0),
+    )
+    return _client(UserAPIKeyAuth(api_key="sk-caller", user_role=LitellmUserRoles.PROXY_ADMIN))
+
+
+@pytest.mark.parametrize("path", ["/v1/alpha/search", "/alpha/search"])
+@pytest.mark.parametrize(
+    "litellm_params, upstream_url",
+    [
+        ({"model": "openai/gpt-6.2-sol", "api_key": "sk-openai-test"}, OPENAI_ALPHA_SEARCH_URL),
+        (
+            {"model": "openai/gpt-6.2-sol", "api_key": "sk-openai-test", "api_base": "https://gateway.example/v1"},
+            "https://gateway.example/v1/alpha/search",
+        ),
+    ],
+)
+def test_alpha_search_relays_codex_search_to_the_openai_deployment_behind_the_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    upstream: respx.MockRouter,
+    path: str,
+    litellm_params: dict[str, str],
+    upstream_url: str,
+) -> None:
+    openai_answer: Final = {"output": "LiteLLM's docs are at docs.litellm.ai", "encrypted_output": "gAAAA"}
+    search_route: Final = upstream.post(upstream_url).respond(200, json=openai_answer)
+
+    response: Final = _alpha_search_client(monkeypatch, litellm_params).post(
+        path, json={"id": "search-1", "model": "codex-alias", "commands": ALPHA_SEARCH_COMMANDS}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == openai_answer
+    assert search_route.call_count == 1
+    sent: Final = search_route.calls.last.request
+    assert sent.headers["authorization"] == "Bearer sk-openai-test"
+    assert orjson.loads(sent.content) == {"id": "search-1", "model": "gpt-6.2-sol", "commands": ALPHA_SEARCH_COMMANDS}
+
+
+def test_alpha_search_refuses_a_deployment_that_is_not_openai(
+    monkeypatch: pytest.MonkeyPatch, upstream: respx.MockRouter
+) -> None:
+    any_upstream: Final = upstream.route()
+
+    response: Final = _alpha_search_client(
+        monkeypatch, {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-ant-test"}
+    ).post("/v1/alpha/search", json={"model": "codex-alias", "commands": ALPHA_SEARCH_COMMANDS})
+
+    assert response.status_code == 400, response.text
+    assert (
+        "alpha/search only works with `openai` deployments, but model `claude-sonnet-5-5` routes to `anthropic`"
+        in response.json()["error"]["message"]
+    )
+    assert any_upstream.call_count == 0
+
+
+@pytest.mark.parametrize("body", [{"commands": ALPHA_SEARCH_COMMANDS}, {"model": "", "commands": ALPHA_SEARCH_COMMANDS}])
+def test_alpha_search_without_a_model_is_a_400(
+    monkeypatch: pytest.MonkeyPatch, upstream: respx.MockRouter, body: dict[str, object]
+) -> None:
+    any_upstream: Final = upstream.route()
+
+    response: Final = _alpha_search_client(
+        monkeypatch, {"model": "openai/gpt-6.2-sol", "api_key": "sk-openai-test"}
+    ).post("/v1/alpha/search", json=body)
+
+    assert response.status_code == 400, response.text
+    assert any_upstream.call_count == 0

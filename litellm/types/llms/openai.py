@@ -2845,3 +2845,17 @@ class OpenAIVideoObject(LiteLLMBaseModel):
             return self.model_dump(**kwargs)
         except Exception:
             return self.dict()
+
+
+class OpenAIAlphaSearchRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    model: str = Field(min_length=1)
+    id: str | None = None
+
+
+class OpenAIAlphaSearchResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    output: str
+    encrypted_output: str | None = None

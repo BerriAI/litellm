@@ -16,6 +16,7 @@ import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFiles
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
@@ -348,6 +349,17 @@ async def allm_passthrough_route(
 
         if provider_config is None:
             raise Exception(f"Provider {custom_llm_provider} not found")
+
+        required_provider: Final = provider_config.required_custom_llm_provider()
+        if required_provider is not None and custom_llm_provider != required_provider:
+            raise BadRequestError(
+                message=(
+                    f"{endpoint} only works with `{required_provider}` deployments, "
+                    f"but model `{model}` routes to `{custom_llm_provider}`"
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
         func: Final = partial(
             llm_passthrough_route,

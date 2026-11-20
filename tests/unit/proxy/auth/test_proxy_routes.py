@@ -111,6 +111,8 @@ def test_routes_on_litellm_proxy():
         ("/v1/rag/ingest", True),
         ("/rag/query", True),
         ("/v1/rag/query", True),
+        ("/alpha/search", True),
+        ("/v1/alpha/search", True),
     ],
 )
 def test_is_llm_api_route(route: str, expected: bool):

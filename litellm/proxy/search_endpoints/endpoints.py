@@ -1,18 +1,27 @@
 #### Search Endpoints #####
 
-from typing import Final
+from typing import Annotated, Final
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
+from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.openai.passthrough.transformation import OpenAIPassthroughConfig
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
+from litellm.types.llms.openai import OpenAIAlphaSearchRequest, OpenAIAlphaSearchResponse
 
 router: Final = APIRouter()
+
+_ALPHA_SEARCH_REQUEST_BODY: Final = inline_request_body(
+    OpenAIAlphaSearchRequest,
+    {"id": "search-1", "model": "gpt-6.2-sol", "commands": {"search_query": [{"q": "LiteLLM documentation"}]}},
+)
 
 
 @router.post(
@@ -286,3 +295,83 @@ async def list_search_tools(
 
         verbose_proxy_logger.exception("Error listing search tools: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/v1/alpha/search",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["search"],
+    openapi_extra={"requestBody": _ALPHA_SEARCH_REQUEST_BODY},
+    responses={200: {"model": OpenAIAlphaSearchResponse}},
+)
+@router.post(
+    "/alpha/search",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["search"],
+    openapi_extra={"requestBody": _ALPHA_SEARCH_REQUEST_BODY},
+    responses={200: {"model": OpenAIAlphaSearchResponse}},
+)
+async def alpha_search(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """
+    OpenAI's standalone web search, which Codex CLI calls for its built-in web search tool.
+
+    The body's `model` picks the deployment, which has to be an OpenAI one. The proxy sends the body to that
+    deployment's `{api_base}/alpha/search` with the deployment's key and returns OpenAI's response as is.
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    try:
+        search_request: Final = OpenAIAlphaSearchRequest.model_validate_json(await request.body())
+    except ValidationError as e:
+        raise ProxyException(
+            message=f"Invalid /alpha/search request: {e}", type="invalid_request_error", param=None, code=400
+        ) from e
+
+    processor: Final = ProxyBaseLLMRequestProcessing(
+        data={
+            "model": search_request.model,
+            "method": "POST",
+            "endpoint": "alpha/search",
+            "json": search_request.model_dump(exclude_unset=True),
+            "provider_config": OpenAIPassthroughConfig(),
+        }
+    )
+    try:
+        return await processor.base_passthrough_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            model=search_request.model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:  # noqa: BLE001  # every failure is mapped to the proxy's OpenAI-shaped error
+        raise await processor.handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )

@@ -1074,6 +1074,29 @@ export interface paths {
         patch: operations["update_alert_alerts__alert_id__patch"];
         trace?: never;
     };
+    "/alpha/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Alpha Search
+         * @description OpenAI's standalone web search, which Codex CLI calls for its built-in web search tool.
+         *
+         *     The body's `model` picks the deployment, which has to be an OpenAI one. The proxy sends the body to that
+         *     deployment's `{api_base}/alpha/search` with the deployment's key and returns OpenAI's response as is.
+         */
+        post: operations["alpha_search_alpha_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/anthropic/{endpoint}": {
         parameters: {
             query?: never;
@@ -21301,6 +21324,29 @@ export interface paths {
          *     ```
          */
         post: operations["make_agent_public_v1_agents__agent_id__make_public_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/alpha/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Alpha Search
+         * @description OpenAI's standalone web search, which Codex CLI calls for its built-in web search tool.
+         *
+         *     The body's `model` picks the deployment, which has to be an OpenAI one. The proxy sends the body to that
+         *     deployment's `{api_base}/alpha/search` with the deployment's key and returns OpenAI's response as is.
+         */
+        post: operations["alpha_search_v1_alpha_search_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -43331,6 +43377,15 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** OpenAIAlphaSearchResponse */
+        OpenAIAlphaSearchResponse: {
+            /** Encrypted Output */
+            encrypted_output?: string | null;
+            /** Output */
+            output: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** OpenAIBoxAnswer */
         OpenAIBoxAnswer: {
             box: components["schemas"]["DecisionsBox"];
@@ -57854,6 +57909,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    alpha_search_alpha_search_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "commands": {
+                 *         "search_query": [
+                 *           {
+                 *             "q": "LiteLLM documentation"
+                 *           }
+                 *         ]
+                 *       },
+                 *       "id": "search-1",
+                 *       "model": "gpt-6.2-sol"
+                 *     }
+                 */
+                "application/json": {
+                    /** Id */
+                    id?: string | null;
+                    /** Model */
+                    model: string;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenAIAlphaSearchResponse"];
                 };
             };
         };
@@ -86756,6 +86855,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    alpha_search_v1_alpha_search_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "commands": {
+                 *         "search_query": [
+                 *           {
+                 *             "q": "LiteLLM documentation"
+                 *           }
+                 *         ]
+                 *       },
+                 *       "id": "search-1",
+                 *       "model": "gpt-6.2-sol"
+                 *     }
+                 */
+                "application/json": {
+                    /** Id */
+                    id?: string | null;
+                    /** Model */
+                    model: string;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenAIAlphaSearchResponse"];
                 };
             };
         };

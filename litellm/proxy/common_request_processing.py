@@ -4493,9 +4493,9 @@ class ProxyBaseLLMRequestProcessing:
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
         proxy_logging_obj: ProxyLogging,
-        general_settings: dict,
+        general_settings: dict[str, object],
         proxy_config: ProxyConfig,
-        select_data_generator: Callable,
+        select_data_generator: Callable[..., object] | None = None,
         llm_router: Router | None = None,
         model: str | None = None,
         user_model: str | None = None,
@@ -4504,7 +4504,7 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: int | None = None,
         user_api_base: str | None = None,
         version: str | None = None,
-    ):
+    ) -> Response:
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             HttpPassThroughEndpointHelpers,
         )
