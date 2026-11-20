@@ -344,3 +344,18 @@ async def test_streamed_chat_completions_tool_call_arguments_are_scanned_as_outp
 @pytest.mark.asyncio
 async def test_streamed_chat_completions_tool_call_arguments_are_not_scanned_by_default():
     assert SECRET not in await _scanned_chat_completions_stream(scan_tool_calls=False)
+
+
+@pytest.mark.asyncio
+async def test_custom_tool_call_input_is_scanned():
+    guardrail: Final = _guardrail(scan_tool_calls=True)
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock, return_value=PASS) as mock_api:
+        await guardrail.apply_guardrail(
+            inputs={
+                "texts": [],
+                "tool_calls": [{"id": "call_1", "type": "custom", "custom": {"name": "exec", "input": SECRET}}],
+            },
+            request_data={},
+            input_type="request",
+        )
+    assert _scanned_input_text(mock_api) == f"exec\n{SECRET}"

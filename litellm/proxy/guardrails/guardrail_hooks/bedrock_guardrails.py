@@ -313,8 +313,8 @@ def _tool_call_arguments_as_text(arguments: object) -> str | None:
 
 def _tool_call_as_text(tool_call: object) -> str | None:
     """Name and decoded arguments of a tool call, or None when the arguments cannot be scanned."""
-    function: Final = _tool_call_field(tool_call, "function")
-    source: Final = tool_call if function is None else function
+    wrapped: Final = _tool_call_field(tool_call, "function") or _tool_call_field(tool_call, "custom")
+    source: Final = tool_call if wrapped is None else wrapped
     name: Final = _tool_call_field(source, "name")
     arguments: Final = next(
         (value for key in ("arguments", "input") if (value := _tool_call_field(source, key)) is not None), None
