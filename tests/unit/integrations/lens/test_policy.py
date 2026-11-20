@@ -3,6 +3,8 @@ from typing import Final
 import pytest
 
 from litellm.integrations.lens.policy import (
+    LENS_LOGGING_POLICY_PARAM,
+    LensLoggingPolicy,
     lens_logging_enabled,
     lens_logging_enabled_for_call,
     lens_logging_metadata_error,
@@ -41,6 +43,35 @@ def test_caller_labels_cannot_enable_lens_for_a_disabled_authenticated_key(metad
                     }
                 },
                 "standard_logging_object": {"metadata": {"lens_enabled": True}},
+            }
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize("enabled", (False, True))
+def test_server_policy_carrier_controls_calls_without_exposing_auth(enabled: bool) -> None:
+    assert (
+        lens_logging_enabled_for_call(
+            {"litellm_params": {LENS_LOGGING_POLICY_PARAM: LensLoggingPolicy(enabled=enabled)}}
+        )
+        is enabled
+    )
+
+
+@pytest.mark.parametrize("enabled", (False, True))
+def test_json_cannot_impersonate_a_trusted_server_policy(enabled: bool) -> None:
+    assert lens_logging_enabled_for_call({"litellm_params": {LENS_LOGGING_POLICY_PARAM: {"enabled": enabled}}}) is True
+
+
+def test_authenticated_key_policy_precedes_the_effective_policy_carrier() -> None:
+    assert (
+        lens_logging_enabled_for_call(
+            {
+                "litellm_params": {
+                    LENS_LOGGING_POLICY_PARAM: LensLoggingPolicy(enabled=True),
+                    "metadata": {"user_api_key_auth": UserAPIKeyAuth(metadata={"lens_enabled": False})},
+                }
             }
         )
         is False

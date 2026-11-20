@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
@@ -7,6 +8,12 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 LENS_ENABLED_METADATA_KEY: Final = "lens_enabled"
+LENS_LOGGING_POLICY_PARAM: Final = "_lens_logging_policy"
+
+
+@dataclass(frozen=True, slots=True)
+class LensLoggingPolicy:
+    enabled: bool
 
 
 class LensLoggingSettings(BaseModel):
@@ -59,4 +66,9 @@ def _authenticated_key(metadata: object) -> UserAPIKeyAuth | None:
 def lens_logging_enabled_for_call(kwargs: Mapping[str, object]) -> bool:
     params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
     auth: Final = _authenticated_key(params.get("metadata")) or _authenticated_key(params.get("litellm_metadata"))
-    return lens_logging_enabled(auth) if auth is not None else True
+    if auth is not None:
+        return lens_logging_enabled(auth)
+    policy: Final = params.get(LENS_LOGGING_POLICY_PARAM)
+    if isinstance(policy, LensLoggingPolicy):
+        return policy.enabled
+    return True

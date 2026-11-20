@@ -398,6 +398,32 @@ class _LensTraceLogger(OpenTelemetryV2):
             super().log_pre_api_call(model, messages, kwargs)
 
     @override
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        if not lens_logging_enabled_for_call(kwargs):
+            self._close_llm_call(kwargs, start_time, end_time)
+            return
+        await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+
+    @override
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        if not lens_logging_enabled_for_call(kwargs):
+            self._close_llm_call(kwargs, start_time, end_time)
+            return
+        await super().async_log_failure_event(kwargs, response_obj, start_time, end_time)
+
+    @override
     def _close_llm_call(
         self,
         kwargs: Mapping[str, object],
@@ -469,6 +495,9 @@ async def export_traces(connection: LensConnection) -> AsyncGenerator[None, None
     trace_logger.tracer_provider.add_span_processor(_CallFactsProcessor())
     manager: Final = litellm.logging_callback_manager
     manager.add_litellm_callback(trace_logger)
+    manager.add_litellm_input_callback(trace_logger)
+    manager.add_litellm_async_success_callback(trace_logger)
+    manager.add_litellm_async_failure_callback(trace_logger)
     try:
         yield None
     finally:
