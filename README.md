@@ -357,6 +357,8 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 
 ### Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
 
+Ollama decision models support images through `litellm.systemone(model="ollama/<model>", state=..., questions=..., images=...)` and `litellm.decisions` image inputs. Pass image data URLs, remote image URLs, or `{"content_type": "image/png", "base64": "..."}` objects to System One. LiteLLM sends raw base64 image strings to Ollama's native `/v1/systemone` endpoint. This requires an Ollama version and decision model that support images.
+
 | Provider                                                                            | `/chat/completions` | `/messages` | `/responses` | `/embeddings` | `/image/generations` | `/audio/transcriptions` | `/audio/speech` | `/moderations` | `/batches` | `/rerank` |
 |-------------------------------------------------------------------------------------|---------------------|-------------|--------------|---------------|----------------------|-------------------------|-----------------|----------------|-----------|-----------|
 | [Abliteration (`abliteration`)](https://docs.litellm.ai/docs/providers/abliteration) | ✅ |  |  |  |  |  |  |  |  |  |
