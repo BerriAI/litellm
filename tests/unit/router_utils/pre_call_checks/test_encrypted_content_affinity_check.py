@@ -2105,6 +2105,75 @@ async def test_real_router_selection_keeps_origin_reasoning_and_strips_foreign_o
 
 
 @pytest.mark.asyncio
+async def test_real_router_pin_strips_unmarked_reasoning_beside_the_origins_marked_reasoning():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-mantle",
+                "litellm_params": {
+                    "model": "bedrock_mantle/openai.gpt-oss-120b",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"id": "dep-mantle"},
+            },
+            {
+                "model_name": "gpt-openai",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1-codex",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "key-openai",
+                },
+                "model_info": {"id": "dep-openai"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    openai_item_id = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-openai", "rs-openai")
+    openai_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-openai", "dep-openai")
+    request_kwargs = {
+        "input": [
+            {"type": "message", "role": "user", "content": "first question"},
+            {
+                "type": "reasoning",
+                "id": "rs-unmarked",
+                "encrypted_content": "blob-unmarked",
+                "summary": [{"type": "summary_text", "text": "unmarked summary"}],
+            },
+            {"type": "message", "role": "user", "content": "second question"},
+            {
+                "type": "reasoning",
+                "id": openai_item_id,
+                "encrypted_content": openai_wrapped,
+                "summary": [{"type": "summary_text", "text": "openai summary"}],
+            },
+            {"type": "message", "role": "user", "content": "third question"},
+        ],
+        "store": False,
+    }
+    try:
+        deployment = await router.async_get_available_deployment(
+            model="gpt-openai", request_kwargs=request_kwargs, input=request_kwargs["input"]
+        )
+
+        assert deployment["model_info"]["id"] == "dep-openai"
+        assert request_kwargs["input"] == [
+            {"type": "message", "role": "user", "content": "first question"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "unmarked summary"}]},
+            {"type": "message", "role": "user", "content": "second question"},
+            {
+                "type": "reasoning",
+                "id": openai_item_id,
+                "encrypted_content": openai_wrapped,
+                "summary": [{"type": "summary_text", "text": "openai summary"}],
+            },
+            {"type": "message", "role": "user", "content": "third question"},
+        ]
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
 async def test_affinity_pin_yields_to_the_fallback_hops_target_order_and_strips_the_origins_reasoning():
     router = litellm.Router(
         model_list=[
@@ -2217,7 +2286,7 @@ async def test_affinity_keeps_mixed_origins_on_the_same_encryption_boundary():
 
 
 @pytest.mark.asyncio
-async def test_boundary_pin_strips_reasoning_from_a_different_origin():
+async def test_boundary_pin_strips_reasoning_from_a_different_or_unmarked_origin():
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -2249,6 +2318,12 @@ async def test_boundary_pin_strips_reasoning_from_a_different_origin():
                 ),
                 "summary": [{"type": "summary_text", "text": "origin B summary"}],
             },
+            {
+                "type": "reasoning",
+                "id": "rs_unmarked",
+                "encrypted_content": "blob-unmarked",
+                "summary": [{"type": "summary_text", "text": "unmarked summary"}],
+            },
         ]
     }
     check = EncryptedContentAffinityCheck(ctx=mock_ctx)
@@ -2270,6 +2345,7 @@ async def test_boundary_pin_strips_reasoning_from_a_different_origin():
             "summary": [{"type": "summary_text", "text": "origin A summary"}],
         },
         {"type": "reasoning", "summary": [{"type": "summary_text", "text": "origin B summary"}]},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "unmarked summary"}]},
     ]
 
 
@@ -2331,7 +2407,7 @@ async def test_affinity_keeps_only_anthropic_reasoning_from_the_pinned_origin():
 
 
 @pytest.mark.asyncio
-async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_content():
+async def test_affinity_pin_strips_unknown_and_unmarked_origins_but_keeps_their_summaries():
     from unittest.mock import MagicMock
 
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
@@ -2379,11 +2455,7 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
     assert request_kwargs["input"] == [
         openai_item,
         {"type": "reasoning", "summary": [{"type": "summary_text", "text": "removed origin"}]},
-        {
-            "type": "reasoning",
-            "encrypted_content": "raw-encrypted-content",
-            "summary": [{"type": "summary_text", "text": "unmarked content"}],
-        },
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "unmarked content"}]},
     ]
 
 
