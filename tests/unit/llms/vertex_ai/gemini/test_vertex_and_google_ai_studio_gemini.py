@@ -5485,43 +5485,72 @@ def test_vertex_ai_service_tier_in_map_openai_params():
     assert "service_tier" not in result_auto_upper
 
 
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_vertex_ai_unknown_service_tier_answers_400_unless_drop_params(drop_params: bool) -> None:
+    def map_turbo() -> dict:
+        return VertexGeminiConfig().map_openai_params(
+            non_default_params={"service_tier": "turbo"},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=drop_params,
+        )
+
+    if not drop_params:
+        with pytest.raises(litellm.UnsupportedParamsError, match="Invalid `service_tier`: 'turbo'"):
+            map_turbo()
+        return
+    assert "service_tier" not in map_turbo()
+
+
+_GENERATE_CONTENT_RESPONSE: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "Hi"}]}, "finishReason": "STOP"}],
+    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+}
+
+
+@pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
-    "service_tier, provider, expect_headers",
+    ("model", "service_tier", "shared_request_type", "body_service_tier"),
     [
-        ("priority", "vertex_ai", True),
-        ("flex", "vertex_ai", True),
-        ("priority", "vertex_ai_beta", True),
-        ("priority", "gemini", False),
-        ("flex", "gemini", False),
-        ("auto", "vertex_ai", False),
-        ("standard", "vertex_ai", False),
+        ("vertex_ai/gemini-2.5-flash", "priority", "priority", None),
+        ("vertex_ai/gemini-2.5-flash", "FLEX", "flex", None),
+        ("vertex_ai/gemini-2.5-flash", "SERVICE_TIER_PRIORITY", "priority", None),
+        ("vertex_ai/gemini-2.5-flash", "standard", None, None),
+        ("vertex_ai/gemini-2.5-flash", "default", None, None),
+        ("vertex_ai/gemini-2.5-flash", "auto", None, None),
+        ("vertex_ai_beta/gemini-2.5-flash", "flex", "flex", None),
+        ("gemini/gemini-2.5-flash", "PRIORITY", None, "priority"),
+        ("gemini/gemini-2.5-flash", "standard", None, "standard"),
+        ("gemini/gemini-2.5-flash", "auto", None, None),
+        ("gemini/gemini-2.5-flash", "default", None, None),
     ],
 )
-def test_vertex_ai_validate_environment_service_tier_headers(
-    service_tier, provider, expect_headers
-):
-    """validate_environment should inject Vertex AI tier headers for priority/flex
-    on Vertex AI only, not Google AI Studio."""
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
+def test_service_tier_reaches_vertex_as_headers_and_ai_studio_as_body(
+    respx_mock: respx.MockRouter,
+    model: str,
+    service_tier: str,
+    shared_request_type: str | None,
+    body_service_tier: str | None,
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://(aiplatform|generativelanguage)\.googleapis\.com/.*:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
 
-    v = VertexGeminiConfig()
-    headers = v.validate_environment(
-        headers=None,
-        model="gemini-3.5-flash-lite",
-        messages=[],
-        optional_params={"service_tier": service_tier},
-        litellm_params={"custom_llm_provider": provider},
-        api_key="test-key",
-    )
+    with patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")):
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello"}],
+            service_tier=service_tier,
+            api_key="test-api-key" if model.startswith("gemini/") else None,
+            vertex_project="fake-project",
+            vertex_location="global",
+            client=HTTPHandler(),
+        )
 
-    if expect_headers:
-        assert headers["X-Vertex-AI-LLM-Request-Type"] == "shared"
-        assert headers["X-Vertex-AI-LLM-Shared-Request-Type"] == service_tier
-    else:
-        assert "X-Vertex-AI-LLM-Request-Type" not in headers
-        assert "X-Vertex-AI-LLM-Shared-Request-Type" not in headers
+    sent: Final = route.calls.last.request
+    assert json.loads(sent.content).get("serviceTier") == body_service_tier
+    assert sent.headers.get("X-Vertex-AI-LLM-Shared-Request-Type") == shared_request_type
+    assert sent.headers.get("X-Vertex-AI-LLM-Request-Type") == ("shared" if shared_request_type else None)
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():
