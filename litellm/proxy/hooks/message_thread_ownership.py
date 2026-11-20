@@ -30,6 +30,18 @@ _MAX_SCANNED_BYTES: Final = 65536
 _UNOWNED_THREAD_MESSAGE: Final = (
     "message thread not found for this key. Send the full conversation to start a new thread"
 )
+_UNOWNED_DIAGNOSTICS_BODY: Final = json.dumps(
+    {
+        "type": "error",
+        "error": {
+            "type": "permission_error",
+            "message": (
+                "diagnostics.previous_message_id names a message this key did not create. "
+                "Send previous_message_id null to start a new comparison"
+            ),
+        },
+    }
+)
 
 _MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
@@ -155,6 +167,26 @@ def _sends_thread(data: Mapping[str, object]) -> bool:
     return any(thread is not None for thread in _threads(data))
 
 
+def _diagnostics(data: Mapping[str, object]) -> tuple[object, object]:
+    extra_body: Final = _as_mapping(data.get("extra_body")) or {}
+    return data.get("diagnostics"), extra_body.get("diagnostics")
+
+
+def _records_owner(data: Mapping[str, object]) -> bool:
+    return _sends_thread(data) or any(diagnostics is not None for diagnostics in _diagnostics(data))
+
+
+def _compared_message_id(diagnostics: object) -> str | None:
+    fields: Final = _as_mapping(diagnostics)
+    message_id: Final = None if fields is None else fields.get("previous_message_id")
+    return message_id if isinstance(message_id, str) and message_id else None
+
+
+def _compared_message_ids(data: Mapping[str, object]) -> tuple[str, ...]:
+    compared: Final = (_compared_message_id(diagnostics) for diagnostics in _diagnostics(data))
+    return tuple(message_id for message_id in compared if message_id is not None)
+
+
 def _continued_message_ids(data: Mapping[str, object]) -> tuple[str, ...]:
     continued: Final = (continued_message_id(thread) for thread in _threads(data))
     return tuple(message_id for message_id in continued if message_id is not None)
@@ -240,14 +272,19 @@ class MessageThreadOwnership(CustomLogger):
         data: Mapping[str, object],
         call_type: CallTypesLiteral,
     ) -> dict[str, object] | None:  # mutable-ok: the proxy swaps in a pre-call hook's result only when it is a dict
+        owner: Final = _owner(user_api_key_dict)
+        pass_through: Final = call_type == _PASS_THROUGH_CALL_TYPE
+        compared: Final = tuple(
+            [await self._binding(message_id, user_api_key_dict) for message_id in _compared_message_ids(data)]
+        )
+        if not all(_may_continue(binding, owner, pass_through) for binding in compared):
+            raise HTTPException(status_code=403, detail=_UNOWNED_DIAGNOSTICS_BODY)
         previous_message_ids: Final = _continued_message_ids(data)
         if not previous_message_ids:
             return None
         bindings: Final = tuple(
             [await self._binding(message_id, user_api_key_dict) for message_id in previous_message_ids]
         )
-        owner: Final = _owner(user_api_key_dict)
-        pass_through: Final = call_type == _PASS_THROUGH_CALL_TYPE
         if not all(_may_continue(binding, owner, pass_through) for binding in bindings):
             raise HTTPException(status_code=404, detail=message_thread_not_found_body(_UNOWNED_THREAD_MESSAGE))
         anthropic_beta: Final = next(
@@ -267,7 +304,7 @@ class MessageThreadOwnership(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
-        message_id: Final = _response_message_id(response) if _sends_thread(data) else None
+        message_id: Final = _response_message_id(response) if _records_owner(data) else None
         if message_id is not None:
             await self._record_owner(message_id, user_api_key_dict, _sent_anthropic_beta(data))
         return response
@@ -278,7 +315,7 @@ class MessageThreadOwnership(CustomLogger):
         response: AsyncIterable[object],
         request_data: Mapping[str, object],
     ) -> AsyncGenerator[object, None]:
-        scanner: Final = _StreamedMessageIdScanner(finished=not _sends_thread(request_data))
+        scanner: Final = _StreamedMessageIdScanner(finished=not _records_owner(request_data))
         async for chunk in response:
             yield chunk
             if not scanner.finished and (message_id := scanner.scan(chunk)) is not None:
