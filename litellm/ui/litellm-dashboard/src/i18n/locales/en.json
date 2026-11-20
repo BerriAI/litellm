@@ -1,5 +1,6 @@
 {
   "apps": {
+    "editSettings": "Edit {{alias}}",
     "title": "Applications",
     "list": {
       "title": "All applications",
@@ -37,7 +38,7 @@
       "saveFailed": "Access was not saved. Try again."
     },
     "grantedHint": "The applications you have been given access to, with their spend and budget.",
-    "settingsHint": "Every application in your Gateway, with its spend, budget, customer surcharge and whether it may create new customers. Open one to change its settings.",
+    "settingsHint": "View each app’s budget, monthly customer usage, and limits. Select Edit to change its budget, customer surcharge, or new-customer access.",
     "alias": "App",
     "edit": "Edit",
     "cancel": "Cancel",

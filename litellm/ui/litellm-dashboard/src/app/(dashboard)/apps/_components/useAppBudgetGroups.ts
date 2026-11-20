@@ -2,8 +2,8 @@
 
 import { $api } from "@/lib/http/api";
 
-export function useOverallAppBudgetGroups() {
-  return $api.useQuery("get", "/management/v1/app_budget_groups", {});
+export function useOverallAppBudgetGroups(enabled = true) {
+  return $api.useQuery("get", "/management/v1/app_budget_groups", {}, { enabled });
 }
 
 export function useAppMemberBudgetGroups(enabled = true) {

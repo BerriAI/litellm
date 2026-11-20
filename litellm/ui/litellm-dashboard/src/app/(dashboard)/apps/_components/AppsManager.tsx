@@ -8,7 +8,6 @@ import {
 
 import { useMemo, useState } from "react";
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
-import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { DataTablePagination } from "@/components/shared/DataTable";
@@ -31,6 +30,7 @@ import AppDefinitionSetting from "./AppDefinitionSetting";
 import { useOverallAppBudgetGroups } from "./useAppBudgetGroups";
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
 import { uiHref } from "@/utils/uiHref";
+import { CustomerBudgetDialog, CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
 
 const APPLICATIONS_PAGE_SIZE = 25;
 
@@ -48,7 +48,7 @@ function GranteeApps() {
   if (granted.hasGrant) return <GrantedApps apps={granted.apps.data ?? []} />;
   if (!granted.failed) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
   return (
-    <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6">
+    <main className="mx-auto w-full max-w-[1920px] px-4 py-6 sm:px-6">
       <ErrorState message={extractProxyErrorMessage(granted.apps.error)} onRetry={() => void granted.apps.refetch()} />
     </main>
   );
@@ -61,35 +61,21 @@ function ManagedApps() {
   const resource = resources.data?.find((row) => row.resource_id === selected);
   if (selected && [definition, resources].some((query) => query.isLoading))
     return <p role="status">{t("apps.loading")}</p>;
-  if (selected && resource)
-    return (
-      <main className="mx-auto w-full max-w-[1200px] space-y-6 px-4 py-6 sm:px-6">
-        <header className="space-y-1">
-          <h1 className="text-lg font-semibold">{resource.alias}</h1>
-          <p className="font-mono text-xs text-muted-foreground">{resource.resource_id}</p>
-        </header>
-        <ResourceDefaults
-          key={`${resource.resource_type}:${resource.resource_id}:${resource.app_id ?? "new"}`}
-          resource={resource}
-        />
-        <Button
-          variant="link"
-          size="sm"
-          className="h-auto p-0 text-xs text-muted-foreground"
-          onClick={() => void setSelected(null)}
-        >
-          {t("apps.list.back")}
-        </Button>
-      </main>
-    );
   return (
-    <main className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
+    <main className="mx-auto w-full max-w-[1920px] space-y-6 px-4 py-6 sm:px-6">
       <header>
         <h1 className="text-lg font-semibold">{t("apps.title")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t("apps.settingsHint")}</p>
       </header>
       {resourceType && (
         <ApplicationsList resources={resources} apps={apps} onOpen={(resourceId) => void setSelected(resourceId)} />
+      )}
+      {resource && (
+        <ResourceDefaults
+          key={`${resource.resource_type}:${resource.resource_id}:${resource.app_id ?? "new"}`}
+          resource={resource}
+          onClose={() => void setSelected(null)}
+        />
       )}
       <section className={resourceType ? "border-t pt-6" : undefined}>
         <AppDefinitionSetting />
@@ -101,7 +87,7 @@ function ManagedApps() {
 function GrantedApps({ apps }: { apps: readonly App[] }) {
   const { t } = useTranslation();
   return (
-    <main className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
+    <main className="mx-auto w-full max-w-[1920px] space-y-6 px-4 py-6 sm:px-6">
       <header>
         <h1 className="text-lg font-semibold">{t("apps.title")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t("apps.grantedHint")}</p>
@@ -180,8 +166,9 @@ function ApplicationsList({
   );
 }
 
-function ResourceDefaults({ resource }: { resource: AppResource }) {
+function ResourceDefaults({ resource, onClose }: { resource: AppResource; onClose: () => void }) {
   const { t } = useTranslation();
+  const [pending, setPending] = useState(false);
   const groups = useOverallAppBudgetGroups();
   const app = useQuery({
     queryKey: ["app", resource.app_id],
@@ -193,12 +180,35 @@ function ResourceDefaults({ resource }: { resource: AppResource }) {
     },
     enabled: resource.app_id !== null,
   });
-  if (groups.isPending || (resource.app_id && app.isPending)) return <p role="status">{t("apps.loading")}</p>;
-  if (groups.isError)
-    return <ErrorState message={extractProxyErrorMessage(groups.error)} onRetry={() => void groups.refetch()} />;
-  if (app.isError)
-    return <ErrorState message={extractProxyErrorMessage(app.error)} onRetry={() => void app.refetch()} />;
-  return <AppDefaultsForm resource={resource} app={app.data} profiles={groups.data.default_budgets} />;
+  const loading = groups.isPending || (resource.app_id && app.isPending);
+  const failed = groups.isError || app.isError;
+  const ready = !loading && !failed;
+  return (
+    <CustomerBudgetDialog title={t("apps.editSettings", { alias: resource.alias })} pending={pending} onClose={onClose}>
+      {loading && (
+        <p role="status" className="p-6">
+          {t("apps.loading")}
+        </p>
+      )}
+      {!loading && failed && (
+        <div className="p-6">
+          <ErrorState
+            message={extractProxyErrorMessage(groups.error ?? app.error)}
+            onRetry={() => void (groups.isError ? groups.refetch() : app.refetch())}
+          />
+        </div>
+      )}
+      {ready && groups.data && (
+        <AppDefaultsForm
+          resource={resource}
+          app={app.data}
+          profiles={groups.data.default_budgets}
+          onClose={onClose}
+          onPendingChange={setPending}
+        />
+      )}
+    </CustomerBudgetDialog>
+  );
 }
 
 const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default_budgets"]) => {
@@ -218,47 +228,52 @@ function AppDefaultsForm({
   resource,
   app,
   profiles,
+  onClose,
+  onPendingChange,
 }: {
   resource: AppResource;
   app?: App;
   profiles: BudgetGroups["default_budgets"];
+  onClose: () => void;
+  onPendingChange: (pending: boolean) => void;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [saved, setSaved] = useState(false);
-  const { fields, setFields, update, pending, error, save } = useCustomerBudgetForm({
-    initial: appDefaultsFields(app, profiles),
-    parse: (fields) => {
-      const budget =
-        fields.budgetSource === "custom"
-          ? permanentBudgetEditorValue(fields.budget, app?.budget)
-          : ({ ok: true, value: null } as const);
-      if (!budget.ok) return { ok: false, error: t("customerPortal.hierarchy.invalidNumber") };
-      const margin = appSurchargeValue(fields.surcharge);
-      if (!margin.ok) return { ok: false, error: t("apps.surchargeInvalid") };
-      return {
-        ok: true,
-        value: {
-          ...(fields.budgetSource === "custom"
-            ? { budget: { ...budget.value, ...budgetPolicyChanges(fields.policy, app?.budget) } }
-            : { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null }),
-          auto_create_customers: fields.autoCreate,
-          customer_margin: margin.value,
-        },
-      };
+  const { fields, setFields, update, pending, error, save } = useCustomerBudgetForm(
+    {
+      initial: appDefaultsFields(app, profiles),
+      parse: (fields) => {
+        const budget =
+          fields.budgetSource === "custom"
+            ? permanentBudgetEditorValue(fields.budget, app?.budget)
+            : ({ ok: true, value: null } as const);
+        if (!budget.ok) return { ok: false, error: t("customerPortal.hierarchy.invalidNumber") };
+        const margin = appSurchargeValue(fields.surcharge);
+        if (!margin.ok) return { ok: false, error: t("apps.surchargeInvalid") };
+        return {
+          ok: true,
+          value: {
+            ...(fields.budgetSource === "custom"
+              ? { budget: { ...budget.value, ...budgetPolicyChanges(fields.policy, app?.budget) } }
+              : { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null }),
+            auto_create_customers: fields.autoCreate,
+            customer_margin: margin.value,
+          },
+        };
+      },
+      write: async (body) => {
+        const response = app
+          ? await fetchClient.PATCH("/management/v1/apps/{app_id}", { params: { path: { app_id: app.app_id } }, body })
+          : await fetchClient.POST("/management/v1/apps", {
+              body: { ...body, resource_id: resource.resource_id, resource_type: resource.resource_type },
+            });
+        if (response.data) setFields(appDefaultsFields(response.data, profiles));
+        await invalidateAppBudgets(queryClient);
+        onClose();
+      },
     },
-    write: async (body) => {
-      setSaved(false);
-      const response = app
-        ? await fetchClient.PATCH("/management/v1/apps/{app_id}", { params: { path: { app_id: app.app_id } }, body })
-        : await fetchClient.POST("/management/v1/apps", {
-            body: { ...body, resource_id: resource.resource_id, resource_type: resource.resource_type },
-          });
-      if (response.data) setFields(appDefaultsFields(response.data, profiles));
-      await invalidateAppBudgets(queryClient);
-      setSaved(true);
-    },
-  });
+    onPendingChange,
+  );
   const changeBudgetSource = (source: string | null) => {
     if (!source) return;
     setFields((current) => {
@@ -275,7 +290,14 @@ function AppDefaultsForm({
     });
   };
   return (
-    <form onSubmit={save} className="space-y-6" aria-label={t("apps.defaultsFor", { alias: resource.alias })}>
+    <CustomerBudgetForm
+      pending={pending}
+      error={error}
+      onSubmit={save}
+      onClose={onClose}
+      saveLabel={t("apps.save")}
+      label={t("apps.defaultsFor", { alias: resource.alias })}
+    >
       <AppBudgetEditor
         modelScope={resource}
         title={t("apps.appBudget")}
@@ -325,19 +347,6 @@ function AppDefaultsForm({
         />
         <p className="text-xs text-muted-foreground">{t("apps.surchargeHint")}</p>
       </div>
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      {saved && (
-        <p role="status" className="text-sm">
-          {t("apps.saved")}
-        </p>
-      )}
-      <Button type="submit" disabled={pending}>
-        {t("apps.save")}
-      </Button>
-    </form>
+    </CustomerBudgetForm>
   );
 }

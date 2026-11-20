@@ -13,8 +13,10 @@ import { Input } from "@/components/ui/input";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
+import { isProxyAdminRole } from "@/utils/roles";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
 import CustomerDetail from "./_components/CustomerDetail";
+import CustomerEntityBudgetDialog from "./_components/CustomerEntityBudgetDialog";
 import CustomerOrganizationsTable from "./_components/CustomerOrganizationsTable";
 import {
   CUSTOMER_ORGANIZATION_TABLE,
@@ -43,8 +45,11 @@ export default function CustomersPage() {
 
 function CustomerOrganizations() {
   const { t } = useTranslation();
-  const { accessToken, userId } = useAuthorized();
+  const { accessToken, userId, userRole, isViewOnly, isLoading } = useAuthorized();
+  const authenticatedAdmin = Boolean(accessToken && isProxyAdminRole(userRole) && !isLoading);
+  const canManage = authenticatedAdmin && !isViewOnly;
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
   const { dateValue, onDateChange, preset } = useCustomerUsageRange();
   const { search, setSearch, sorting, onSortingChange, pagination, onPaginationChange } =
     useUrlTableState(CUSTOMER_ORGANIZATION_TABLE);
@@ -154,6 +159,8 @@ function CustomerOrganizations() {
             startDate={startDate}
             endDate={endDate}
             usageTotals={usageTotals}
+            canManage={canManage}
+            onEdit={setEditingOrganizationId}
           />
         )}
         <DataTablePagination
@@ -166,6 +173,13 @@ function CustomerOrganizations() {
         />
       </div>
       <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} />
+      {canManage && editingOrganizationId && (
+        <CustomerEntityBudgetDialog
+          key={editingOrganizationId}
+          organizationId={editingOrganizationId}
+          onClose={() => setEditingOrganizationId(null)}
+        />
+      )}
     </div>
   );
 }

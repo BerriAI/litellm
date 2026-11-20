@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import type { SortingState } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Pencil } from "lucide-react";
 import { createSerializer, parseAsString } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -24,6 +24,7 @@ const COLUMNS = [
   { id: "share", label: "customerPortal.list.columns.overallSpendShare" },
   { id: "tokens", label: "customerPortal.list.columns.tokens", numeric: true },
   { id: "status", label: "customerPortal.list.columns.status" },
+  { id: "actions", label: "apps.actions" },
 ] as const;
 
 export default function CustomerOrganizationsTable({
@@ -35,6 +36,8 @@ export default function CustomerOrganizationsTable({
   startDate,
   endDate,
   usageTotals,
+  canManage,
+  onEdit,
 }: {
   rows: readonly CustomerOrganizationRow[];
   sorting: SortingState;
@@ -44,6 +47,8 @@ export default function CustomerOrganizationsTable({
   startDate: string;
   endDate: string;
   usageTotals: CustomerUsageTotals | null;
+  canManage: boolean;
+  onEdit: (organizationId: string) => void;
 }) {
   const { t } = useTranslation();
   const groups = $api.useQuery("get", "/management/v1/customer_organization_budget_groups", {});
@@ -53,9 +58,16 @@ export default function CustomerOrganizationsTable({
         <TableRow>
           {COLUMNS.map((column) => {
             const { id, label } = column;
-            if (id === "group" || "numeric" in column) {
+            if (id === "group" || id === "actions" || "numeric" in column) {
               return (
-                <TableHead key={id} className={cn("px-4", "numeric" in column && "text-right whitespace-normal")}>
+                <TableHead
+                  key={id}
+                  className={cn(
+                    "px-4",
+                    "numeric" in column && "text-right whitespace-normal",
+                    id === "actions" && "text-right",
+                  )}
+                >
                   {t(label)}
                 </TableHead>
               );
@@ -208,6 +220,18 @@ export default function CustomerOrganizationsTable({
                   >
                     {t(status)}
                   </span>
+                </TableCell>
+                <TableCell className="px-4 text-right">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!canManage}
+                    onClick={() => onEdit(organization.customer_org_id)}
+                  >
+                    <Pencil aria-hidden="true" className="size-3.5" />
+                    {t("customerPortal.common.edit")}
+                  </Button>
                 </TableCell>
               </TableRow>
             );

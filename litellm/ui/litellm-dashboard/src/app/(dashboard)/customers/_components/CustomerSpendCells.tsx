@@ -104,6 +104,8 @@ export function CustomerSpendCells({
   usageLayout = false,
   tokenContent,
   shareContent,
+  showYearly = true,
+  shareLabel,
 }: {
   entity: CustomerUsageEntity;
   monthlySpend: number | null;
@@ -113,6 +115,8 @@ export function CustomerSpendCells({
   usageLayout?: boolean;
   tokenContent?: ReactNode;
   shareContent?: ReactNode;
+  showYearly?: boolean;
+  shareLabel?: string;
 }) {
   const { t } = useTranslation();
   const budgets = customerBudgetUsage(member);
@@ -151,31 +155,29 @@ export function CustomerSpendCells({
         </div>
       </TableCell>
       <CustomerBudgetLimitCell limit={customerBudgetLimit(member)} rateLimits={member.rateLimits} />
-      <TableCell className={cn("text-right tabular-nums", usageLayout && "px-4")}>
-        <div className="space-y-2">
-          {yearlyBudgets.map((budget) => (
-            <CustomerBudgetWindow
-              key={budget.source}
-              budget={budget}
-              showReset={yearlyBudgets.length > 1}
-              stacked={usageLayout}
-            />
-          ))}
-          {yearlyBudgets.length === 0 && (
-            <CustomerBudgetSpend
-              spend={yearlySpend}
-              limit={null}
-              label={t("customerPortal.analytics.yearlySpend")}
-              showLimit={!customWindows}
-            />
-          )}
-        </div>
-      </TableCell>
+      {showYearly && (
+        <TableCell className={cn("text-right tabular-nums", usageLayout && "px-4")}>
+          <div className="space-y-2">
+            {yearlyBudgets.map((budget) => (
+              <CustomerBudgetWindow
+                key={budget.source}
+                budget={budget}
+                showReset={yearlyBudgets.length > 1}
+                stacked={usageLayout}
+              />
+            ))}
+            {yearlyBudgets.length === 0 && (
+              <CustomerBudgetSpend spend={yearlySpend} limit={null} label={t("customerPortal.analytics.yearlySpend")} showLimit={!customWindows} />
+            )}
+          </div>
+        </TableCell>
+      )}
       <CustomerSpendMetricsCells
         monthlySpend={monthlySpend}
         organizationSpend={organizationSpend}
         usageLayout={usageLayout}
         shareContent={shareContent}
+        shareLabel={shareLabel}
         tokenContent={tokenContent ?? (tokens === null ? "—" : formatCompact(tokens))}
       />
       <TableCell className={cn("text-right", usageLayout && "px-4")}>
@@ -211,16 +213,23 @@ export function CustomerSpendMetricsCells({
   usageLayout = false,
   tokenContent,
   shareContent,
+  shareLabel,
 }: {
   monthlySpend: number | null;
   organizationSpend: number | null;
   usageLayout?: boolean;
   tokenContent: ReactNode;
   shareContent?: ReactNode;
+  shareLabel?: string;
 }) {
   return (
     <>
-      <CustomerSpendShare monthlySpend={monthlySpend} organizationSpend={organizationSpend} usageLayout={usageLayout}>
+      <CustomerSpendShare
+        monthlySpend={monthlySpend}
+        organizationSpend={organizationSpend}
+        usageLayout={usageLayout}
+        label={shareLabel}
+      >
         {shareContent}
       </CustomerSpendShare>
       <TableCell className={cn("text-right tabular-nums", usageLayout && "px-4")}>{tokenContent}</TableCell>
@@ -233,11 +242,13 @@ function CustomerSpendShare({
   organizationSpend,
   usageLayout,
   children,
+  label,
 }: {
   monthlySpend: number | null;
   organizationSpend: number | null;
   usageLayout: boolean;
   children?: ReactNode;
+  label?: string;
 }) {
   const { t } = useTranslation();
   const spendShare = organizationSpend && monthlySpend !== null ? (monthlySpend / organizationSpend) * 100 : 0;
@@ -255,7 +266,7 @@ function CustomerSpendShare({
           <div className={usageLayout ? "flex items-center gap-3" : undefined}>
             <div
               role="meter"
-              aria-label={t("customerPortal.analytics.customerSpendShare")}
+              aria-label={label ?? t("customerPortal.analytics.customerSpendShare")}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={sharePercentage}
