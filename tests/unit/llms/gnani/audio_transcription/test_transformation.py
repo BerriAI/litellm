@@ -390,19 +390,36 @@ def test_drop_params_drops_keywords_prisma_v25_cannot_boost(respx_mock: MockRout
     }
 
 
-def test_extra_headers_reach_gnani_as_headers_without_replacing_the_key(respx_mock: MockRouter) -> None:
+@pytest.mark.parametrize("key_header", ["X-API-Key-ID", "x-api-key-id", "X-Api-Key-Id"])
+def test_extra_headers_reach_gnani_as_headers_without_replacing_the_key(
+    respx_mock: MockRouter, key_header: str
+) -> None:
     route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
     litellm.transcription(
         model=_MODEL,
         file=_AUDIO,
         api_key="request-key",
         api_base=_BASE,
-        extra_headers={"X-API-Request-ID": "trace-1", "X-API-Key-ID": "other-key"},
+        extra_headers={"X-API-Request-ID": "trace-1", key_header: "other-key"},
     )
     request: Final = route.calls.last.request
     assert request.headers["X-API-Request-ID"] == "trace-1"
-    assert request.headers["X-API-Key-ID"] == "request-key"
+    assert request.headers.get_list("X-API-Key-ID") == ["request-key"]
     assert "extra_headers" not in _form(request)
+
+
+def test_non_string_extra_header_values_reach_gnani_as_text(respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(
+        model=_MODEL,
+        file=_AUDIO,
+        api_key="request-key",
+        api_base=_BASE,
+        extra_headers={"X-Num": 1, "X-Flag": True, "X-Unset": None},
+    )
+    request: Final = route.calls.last.request
+    assert (request.headers["X-Num"], request.headers["X-Flag"]) == ("1", "true")
+    assert "X-Unset" not in request.headers
 
 
 def test_prisma_v25_rejects_more_than_one_openai_language(respx_mock: MockRouter) -> None:

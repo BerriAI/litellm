@@ -41,6 +41,7 @@ _NOT_FORWARDED: Final = frozenset(
 _REGION_CODE: Final = re.compile(r"([A-Za-z]{2})-([A-Za-z]{2})")
 _STRING_LIST: Final = TypeAdapter(list[str])
 _V25_RECOMMENDED_BIAS_SCORE: Final = 1.0
+_KEY_HEADER: Final = "X-API-Key-ID"
 
 
 class _PrismaTranscript(BaseModel):
@@ -150,8 +151,16 @@ def _with_keywords_as_terms(fields: Mapping[str, object], model: str, drops_unsu
     return _with_keywords_as_keyterms(fields, terms)
 
 
-def _form_value(value: object) -> str:
+def _as_text(value: object) -> str:
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def _caller_headers(headers: Mapping[str, object]) -> Mapping[str, str]:
+    return {
+        name: _as_text(value)
+        for name, value in headers.items()
+        if value is not None and name.lower() != _KEY_HEADER.lower()
+    }
 
 
 def _with_prompt_as_previous_text(fields: Mapping[str, object]) -> Mapping[str, object]:
@@ -214,7 +223,7 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 message="Set GNANI_API_KEY or pass api_key for Gnani transcription", llm_provider="gnani", model=model
             )
         extra_headers: Final = as_str_mapping(optional_params.get("extra_headers")) or {}
-        return {**headers, **extra_headers, "X-API-Key-ID": key}
+        return {**_caller_headers({**headers, **extra_headers}), _KEY_HEADER: key}
 
     def get_complete_url(
         self,
@@ -263,7 +272,7 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         forwarded: Final = {
             key: value for key, value in fields.items() if key not in _NOT_FORWARDED and key not in incompatible
         }
-        form: Final = {key: _form_value(value) for key, value in forwarded.items() if value is not None}
+        form: Final = {key: _as_text(value) for key, value in forwarded.items() if value is not None}
         return AudioTranscriptionRequestData(
             data={**form, "model": model, "language_code": language_code},
             files={"audio_file": (Path(audio.filename).name, audio.file_content, audio.content_type)},
