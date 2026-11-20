@@ -1207,5 +1207,7 @@ async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call
         "gen_ai.tool.call.result": "a.txt",
         "gen_ai.conversation.id": "session-1",
         "gen_ai.agent.name": "claude-code",
+        "langsmith.metadata.ls_integration": "claude-code",
+        "lens.task": "list the files",
     }
     assert tool_step.start_time_unix_nano == tool_step.end_time_unix_nano

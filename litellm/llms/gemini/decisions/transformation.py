@@ -24,8 +24,8 @@ from litellm.types.decisions import (
     DecisionsIRResponse,
     DecisionsIRScoreQuestion,
     DecisionsIRState,
-    OpenAIDecisionContentPart,
     OpenAIDecisionInputImage,
+    OpenAIDecisionInputJSON,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
     UnsupportedDecisionsRequest,
@@ -104,7 +104,7 @@ def _media(
     return {"type": kind, "data": data, "mime_type": header.removeprefix("data:").split(";", 1)[0]}
 
 
-def _part(part: OpenAIDecisionContentPart) -> Mapping[str, object]:
+def _part(part: OpenAIDecisionInputText | OpenAIDecisionInputImage) -> Mapping[str, object]:
     match part:
         case OpenAIDecisionInputText():
             return {"type": "text", "text": part.text}
@@ -117,7 +117,7 @@ def _part(part: OpenAIDecisionContentPart) -> Mapping[str, object]:
 def _message_parts(message: OpenAIDecisionInputMessage) -> tuple[Mapping[str, object], ...]:
     if isinstance(message.content, str):
         return ({"type": "text", "text": message.content},)
-    return tuple(_part(part) for part in message.content)
+    return tuple(_part(part) for part in message.content if not isinstance(part, OpenAIDecisionInputJSON))
 
 
 def _input_parts(input_: DecisionsIRState | DecisionsIRMessages) -> tuple[Mapping[str, object], ...]:
