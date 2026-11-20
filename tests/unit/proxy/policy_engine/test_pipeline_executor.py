@@ -1519,6 +1519,51 @@ def _two_choice_chat_chunks():
     return [chunk(0, "pers"), chunk(1, "pers"), chunk(0, "immon", "stop"), chunk(1, "immon", "stop")]
 
 
+class _TextMaskingNamelessToolCallGuardrail(CustomGuardrail):
+    def __init__(self):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        return {
+            "texts": ["[MASKED]" for _ in inputs.get("texts") or []],
+            "tool_calls": [{"type": "function"} for _ in inputs.get("tool_calls") or []],
+        }
+
+
+def _chat_text_and_tool_call_chunks():
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function, ModelResponseStream, StreamingChoices
+
+    def chunk(delta, finish_reason=None):
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+        )
+
+    tool_call = ChatCompletionDeltaToolCall(
+        id="call_1", type="function", index=0, function=Function(name="lookup", arguments='{"ssn": "123"}')
+    )
+    return [chunk(Delta(content="my ssn is 123")), chunk(Delta(tool_calls=[tool_call]), "tool_calls")]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_text_masks_when_a_same_count_tool_call_rewrite_is_malformed(monkeypatch, caplog):
+    from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+
+    monkeypatch.setattr(litellm, "callbacks", [_TextMaskingNamelessToolCallGuardrail()])
+    chunks = _chat_text_and_tool_call_chunks()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_streaming_step(OpenAIChatCompletionsHandler(), chunks)
+
+    assert result.terminal_action == "allow"
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+    assert [chunk.choices[0].delta.content for chunk in chunks] == ["[MASKED]", None]
+    assert chunks[1].choices[0].delta.tool_calls[0].function.arguments == '{"ssn": "123"}'
+
+
 @pytest.mark.asyncio
 async def test_streaming_step_delivers_text_rewrites_on_every_choice_of_a_chat_stream(monkeypatch, caplog):
     from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler

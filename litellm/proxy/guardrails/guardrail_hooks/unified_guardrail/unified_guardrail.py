@@ -245,6 +245,59 @@ def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> N
             data["litellm_metadata"] = user_metadata
 
 
+def _route_delivers_ended_stream_rewrites(
+    request_route: str | None, mappings: Mapping[CallTypes, type["BaseTranslation"]]
+) -> bool:
+    call_types: Final = get_call_types_for_route(request_route) if request_route is not None else None
+    translation: Final = mappings.get(call_types[0]) if call_types else None
+    return translation is not None and translation.delivers_ended_stream_rewrites
+
+
+async def _scan_ended_stream(
+    endpoint_translation: "BaseTranslation",
+    *,
+    guardrail_to_apply: CustomGuardrail,
+    responses_so_far: list[object],  # mutable-ok: the translation writes the rewrites into the caller's buffer
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict[str, object],  # mutable-ok: handed through to the translation's dict parameter
+    buffered_items: tuple[object, ...] | None,
+    deliver_rewrites: bool,
+    shield: bool,
+) -> tuple[object, ...] | None:
+    """Run the end-of-stream scan and return the chunks to release to the client.
+
+    A fully withheld stream is scanned the way a policy engine pipeline step scans one, so the guardrail's text and
+    tool-call rewrites are released from ``responses_so_far`` and a rewrite that cannot be written back is discarded
+    in favor of the original chunks.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.policy_engine.pipeline_executor import scan_buffered_stream_with_write_back
+
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    litellm_logging_obj: Final = logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None
+    with anyio.CancelScope(shield=shield):
+        if deliver_rewrites:
+            await scan_buffered_stream_with_write_back(
+                guardrail_to_apply,
+                guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+                endpoint_translation=endpoint_translation,
+                streaming_chunks=responses_so_far,
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_logging_obj=litellm_logging_obj,
+                stream_already_sent=False,
+            )
+            return tuple(responses_so_far)
+        await endpoint_translation.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        )
+    return buffered_items
+
+
 class UnifiedLLMGuardrails(CustomLogger):
     def __init__(
         self,
@@ -1169,30 +1222,45 @@ class UnifiedLLMGuardrails(CustomLogger):
         # path; "incremental_diff" emits them as synthetic deltas (see
         # _run_incremental_transform_stream).
         streaming_transform_mode: Final = _streaming_setting("streaming_transform_mode", "block_only")
-        # Withhold every chunk until end-of-stream moderation passes, then
-        # release the original chunks (clean) or only the block message
-        # (blocked) -- moderating the whole response *before* any content
-        # reaches the client. Only safe for allow/block guardrails: on
-        # release the original chunks are replayed as-is, so a
-        # content-rewriting guardrail (e.g. PII masking) would leak
-        # unredacted content. Guarded below via mask_response_content.
-        buffer_until_moderated: object = _streaming_setting(
+        mappings: Final = load_guardrail_translation_mappings()
+        # Withhold every chunk until end-of-stream moderation passes, then release the chunks
+        # (with the guardrail's rewrite written into them) or only the block message.
+        buffering_requested: Final = _streaming_setting(
             "streaming_buffer_until_moderated", buffer_until_moderated_default
         )
-        release_on_scan: Final = _streaming_setting("streaming_buffer_release_on_scan", False)
-
-        if (
-            buffer_until_moderated
-            and guardrail_to_apply is not None
-            and getattr(guardrail_to_apply, "mask_response_content", False)
-        ):
+        release_on_scan_requested: Final = _streaming_setting("streaming_buffer_release_on_scan", False)
+        masking_guardrail: Final = (
+            guardrail_to_apply
+            if isinstance(guardrail_to_apply, CustomGuardrail)
+            and guardrail_to_apply.mask_response_content
+            and guardrail_to_apply.masks_streamed_responses
+            else None
+        )
+        route_delivers_rewrites: Final = _route_delivers_ended_stream_rewrites(
+            user_api_key_dict.request_route, mappings
+        )
+        # A masking guardrail holds the whole stream wherever the masked output can be written back, as a policy
+        # engine step does, since any chunk released before the end-of-stream scan reaches the client unmasked.
+        holds_masked_stream: Final = (
+            masking_guardrail is not None and route_delivers_rewrites and streaming_transform_mode != "incremental_diff"
+        )
+        if masking_guardrail is not None and holds_masked_stream and release_on_scan_requested:
             verbose_proxy_logger.warning(
-                "UnifiedLLMGuardrails: streaming_buffer_until_moderated is disabled for %s "
-                "because mask_response_content=True -- buffered replay would release "
-                "unredacted original chunks instead of the moderated output.",
-                guardrail_to_apply.guardrail_name,
+                "UnifiedLLMGuardrails: streaming_buffer_release_on_scan is ignored for %s because "
+                "mask_response_content=True, so the stream is held until the end-of-stream scan masks it",
+                masking_guardrail.guardrail_name,
             )
-            buffer_until_moderated = False
+        if masking_guardrail is not None and buffering_requested and not holds_masked_stream:
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: streaming_buffer_until_moderated is disabled for %s because "
+                "mask_response_content=True and route %s with streaming_transform_mode=%s does not write ended-stream "
+                "rewrites back, so buffered replay would release the unredacted original chunks",
+                masking_guardrail.guardrail_name,
+                user_api_key_dict.request_route,
+                streaming_transform_mode,
+            )
+        buffer_until_moderated: Final = holds_masked_stream or bool(buffering_requested and masking_guardrail is None)
+        release_on_scan: Final = release_on_scan_requested and not holds_masked_stream
 
         if buffer_until_moderated and not release_on_scan:
             end_of_stream_only = True
@@ -1218,8 +1286,6 @@ class UnifiedLLMGuardrails(CustomLogger):
             async for item in response:
                 yield item
             return
-
-        mappings: Final = load_guardrail_translation_mappings()
 
         # Streaming text transformation (incremental_diff) diverges enough from the
         # block_only path that it runs as its own iterator. It requires a route we
@@ -1487,19 +1553,25 @@ class UnifiedLLMGuardrails(CustomLogger):
                     return
 
                 try:
-                    with anyio.CancelScope(shield=chunks_yielded):
-                        if pending_scan is not None:
-                            pending_scan.result()  # a failed background scan raises into the handlers below
-                        await endpoint_translation.process_output_streaming_response(
-                            responses_so_far=responses_so_far,
-                            guardrail_to_apply=guardrail_to_apply,
-                            litellm_logging_obj=request_data.get("litellm_logging_obj"),
-                            user_api_key_dict=user_api_key_dict,
-                            request_data=request_data,
-                        )
-                    # Moderation passed: release the withheld original chunks.
-                    if buffered_items is not None:
-                        for buffered_item in buffered_items:
+                    if pending_scan is not None:
+                        pending_scan.result()  # a failed background scan raises into the handlers below
+                    released_items: Final = await _scan_ended_stream(
+                        endpoint_translation,
+                        guardrail_to_apply=guardrail_to_apply,
+                        responses_so_far=responses_so_far,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=request_data,
+                        buffered_items=buffered_items,
+                        deliver_rewrites=bool(
+                            buffer_until_moderated
+                            and end_of_stream_only
+                            and not responses_yielded
+                            and endpoint_translation.delivers_ended_stream_rewrites
+                        ),
+                        shield=chunks_yielded,
+                    )
+                    if released_items is not None:
+                        for buffered_item in released_items:
                             yield buffered_item
                     for pending_item in pending_end_of_stream_items:
                         responses_yielded.append(pending_item)

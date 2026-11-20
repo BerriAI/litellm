@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Mapping
 from datetime import datetime
 from itertools import product
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, ClassVar, Final, Literal
 
 import httpx
 from fastapi import HTTPException
@@ -254,6 +254,8 @@ INPUT_HOOKS: Final = MappingProxyType(
 
 
 class AktoGuardrail(CustomGuardrail):
+    masks_streamed_responses: ClassVar[bool] = False
+
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"]:
         from litellm.types.proxy.guardrails.guardrail_hooks.akto import (

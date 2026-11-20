@@ -399,6 +399,8 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+    # False for a guardrail whose mask_response_content never rewrites a streamed response, so its stream is not held.
+    masks_streamed_responses: ClassVar[bool] = True
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
     scan_tool_descriptions_as_text: bool | None = None
