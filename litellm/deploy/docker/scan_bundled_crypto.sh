@@ -33,13 +33,21 @@ is_elf() {
   [ "$(head -c 4 "$1" 2>/dev/null)" = "$(printf '\177ELF')" ]
 }
 
+# gRPC built on the system OpenSSL still names BoringSSL once, in an error message
+grpcio_on_system_openssl() {
+  if [ "$(normalize "${1#"$site_packages"/}")" != "grpc/_cython/cygrpc.cpython-313-ARCH-linux-gnu.so" ]; then
+    return 1
+  fi
+  if ! objdump -p "$1" 2>/dev/null | grep -Eq 'NEEDED.*libssl\.so\.[34]'; then
+    return 1
+  fi
+  ! tr '\0' '\n' < "$1" | grep -ai 'boringssl' |
+    grep -avqFx 'grpc_tls_identity_pairs_add_pair_with_signer is only supported with BoringSSL.'
+}
+
 crypto_markers() {
   m=""
-  if grep -aq 'BoringSSL' "$1"; then
-    if ! objdump -p "$1" 2>/dev/null | grep -Eq 'NEEDED.*libssl\.so\.[34]'; then
-      m="BoringSSL"
-    fi
-  fi
+  if grep -aq 'BoringSSL' "$1" && ! grpcio_on_system_openssl "$1"; then m="BoringSSL"; fi
   if grep -aq 'AWS-LC' "$1"; then m="${m:+$m,}AWS-LC"; fi
   if grep -Eaq 'OpenSSL [0-9]+\.[0-9]+\.[0-9]+' "$1"; then
     if ! objdump -p "$1" 2>/dev/null | grep -Eq 'NEEDED.*libcrypto\.so\.[34]'; then
