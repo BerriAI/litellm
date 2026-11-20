@@ -133,7 +133,7 @@ export interface ClassifierLLMConfig {
   timeout_ms: number;
   circuit_breaker_enabled?: boolean;
   circuit_breaker_cooldown_seconds?: number;
-  max_output_tokens?: number;
+  max_output_tokens?: number | null;
   reasoning_effort?: ReasoningEffort;
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;

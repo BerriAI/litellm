@@ -1337,7 +1337,7 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     ]);
   });
 
-  it.each([undefined, 1, 64, 8192])("preserves classifier output cap %s when saving edited tiers", (cap) => {
+  it.each([undefined, null, 1, 64, 8192])("preserves classifier output cap %s when saving edited tiers", (cap) => {
     const classifierLlmConfig = {
       model: "classifier",
       timeout_ms: 3000,

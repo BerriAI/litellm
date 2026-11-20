@@ -18088,23 +18088,34 @@ async def test_custom_classifier_failure_preserves_plan_floor_and_direct_default
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured_cap, db_loaded", [(1, False), (64, False), (None, False), (64, True)])
+@pytest.mark.parametrize(
+    "configured_cap, db_loaded, reasoning_effort",
+    [
+        (1, False, None),
+        (64, False, None),
+        ("omitted", False, None),
+        (None, False, None),
+        (64, True, None),
+        ("omitted", False, "high"),
+        (8192, False, "high"),
+    ],
+)
 @pytest.mark.parametrize("deployment_cap", [None, 32])
 @pytest.mark.parametrize("truncated", [False, True])
 async def test_llm_classifier_call_caps_the_output_tokens_bedrock_reserves(
-    configured_cap: int | None,
+    configured_cap: int | None | Literal["omitted"],
     db_loaded: bool,
+    reasoning_effort: Literal["high"] | None,
     deployment_cap: int | None,
     truncated: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression: the llm classifier's call reached Bedrock with no maxTokens, so Bedrock reserved the model's
-    full output limit against the token quota for every routed request and throttled the deployment."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     classifier_llm_config: Final = {
         "model": "classifier",
         "timeout_ms": 2000,
-        **({"max_output_tokens": configured_cap} if configured_cap is not None else {}),
+        **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
+        **({"max_output_tokens": configured_cap} if configured_cap != "omitted" else {}),
     }
     model_list: Final = [
         {
@@ -18123,7 +18134,11 @@ async def test_llm_classifier_call_caps_the_output_tokens_bedrock_reserves(
         {
             "model_name": "classifier",
             "litellm_params": {
-                "model": "bedrock/global.anthropic.claude-haiku-5-5",
+                "model": (
+                    "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"
+                    if reasoning_effort is not None
+                    else "bedrock/global.anthropic.claude-haiku-5-5"
+                ),
                 "aws_region_name": "us-east-1",
                 "aws_access_key_id": "test-key",
                 "aws_secret_access_key": "test-secret",
@@ -18190,8 +18205,20 @@ async def test_llm_classifier_call_caps_the_output_tokens_bedrock_reserves(
 
     assert response is not None and response.model == ("capable" if truncated else "cheap")
     assert response.routing_decision["cause"] == ("default_model_fallback" if truncated else "llm_classifier")
-    expected_cap: Final = configured_cap if configured_cap is not None else 4096
-    assert sent["inferenceConfig"]["maxTokens"] == expected_cap
+    expected_cap: Final = (
+        configured_cap
+        if isinstance(configured_cap, int)
+        else deployment_cap
+        if deployment_cap is not None
+        else 8192
+        if reasoning_effort == "high"
+        else None
+    )
+    assert sent["inferenceConfig"].get("maxTokens") == expected_cap
+    if expected_cap is None:
+        assert "maxTokens" not in sent["inferenceConfig"]
+    if reasoning_effort is not None:
+        assert sent["additionalModelRequestFields"]["thinking"]["budget_tokens"] == 4096
 
 
 @pytest.mark.parametrize("cap", [0, -1])
@@ -18201,9 +18228,9 @@ def test_classifier_output_cap_rejects_nonpositive_values(cap: int) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured_cap", [64, None])
+@pytest.mark.parametrize("configured_cap", [64, None, "omitted"])
 async def test_encrypted_classifier_sends_its_own_output_cap(
-    configured_cap: int | None, native_classifier_http: MagicMock
+    configured_cap: int | None | Literal["omitted"], native_classifier_http: MagicMock
 ) -> None:
     native: Final = Router(
         model_list=[
@@ -18227,7 +18254,7 @@ async def test_encrypted_classifier_sends_its_own_output_cap(
             "classifier_llm_config": {
                 "model": "classifier",
                 "timeout_ms": 5000,
-                **({"max_output_tokens": configured_cap} if configured_cap is not None else {}),
+                **({"max_output_tokens": configured_cap} if configured_cap != "omitted" else {}),
             },
             "default_model": "cheap-model",
             "session_affinity": False,
@@ -18244,5 +18271,8 @@ async def test_encrypted_classifier_sends_its_own_output_cap(
     request: Final = native_classifier_http.call_args.args[0]
     assert request.url.path == "/v1/responses"
     body: Final = json.loads(request.content)
-    assert body["max_output_tokens"] == (configured_cap if configured_cap is not None else 4096)
+    if isinstance(configured_cap, int):
+        assert body["max_output_tokens"] == configured_cap
+    else:
+        assert "max_output_tokens" not in body
     assert "max_tokens" not in body
