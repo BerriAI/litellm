@@ -2,6 +2,7 @@
 import json
 import logging
 import uuid
+from itertools import chain
 from typing import Final
 from unittest.mock import Mock
 
@@ -10,6 +11,7 @@ import pytest
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -619,3 +621,113 @@ def test_a_tool_call_forced_through_extra_body_keeps_a_bare_root_union_tool_as_t
     assert "parameters" in forced_lookup and "parametersJsonSchema" in free_lookup
     assert lookup == (forced_lookup if forced else free_lookup)
     assert weather == forced_weather
+
+
+def _gemini_request_body(messages: list) -> RequestBody:
+    return transformation.transform_request_body(
+        messages=messages,
+        model="gemini-3.8-flash",
+        optional_params={},
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+
+def _conversation_with_a_reminder_after_each_user_turn(user_turns: int) -> list:
+    exchanges: Final = tuple(
+        chain.from_iterable(
+            (
+                {"role": "user", "content": f"question {turn}"},
+                {"role": "system", "content": f"{turn} of 8 turns used"},
+                {"role": "assistant", "content": f"answer {turn}"},
+            )
+            for turn in range(1, user_turns + 1)
+        )
+    )
+    return [{"role": "system", "content": "You are terse."}, *exchanges[:-1]]
+
+
+def test_a_reminder_after_each_user_turn_keeps_the_gemini_prompt_prefix_stable_across_turns():
+    turn_three: Final = _gemini_request_body(_conversation_with_a_reminder_after_each_user_turn(3))
+    turn_four: Final = _gemini_request_body(_conversation_with_a_reminder_after_each_user_turn(4))
+
+    assert turn_three["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert turn_four["system_instruction"] == turn_three["system_instruction"]
+    assert len(turn_four["contents"]) > len(turn_three["contents"])
+    assert turn_four["contents"][: len(turn_three["contents"])] == turn_three["contents"]
+
+
+def test_a_mid_conversation_system_message_reaches_gemini_as_a_user_part_after_the_operator_note():
+    messages: Final = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "system", "content": [{"type": "text", "text": "Answer in "}, {"type": "text", "text": "French."}]},
+        {"role": "user", "content": "question 1"},
+        {"role": "system", "content": "1 of 8 turns used"},
+    ]
+    sent: Final = json.loads(json.dumps(messages))
+
+    body: Final = _gemini_request_body(messages)
+
+    assert body["system_instruction"] == {"parts": [{"text": "You are terse."}, {"text": "Answer in French."}]}
+    assert body["contents"] == [
+        {"role": "user", "parts": [{"text": "question 1"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}]}
+    ]
+    assert messages == sent
+
+
+def test_a_system_message_between_a_tool_call_and_its_result_goes_after_the_function_response():
+    body: Final = _gemini_request_body(
+        [
+            {"role": "user", "content": "weather in Boston?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Boston"}'},
+                    }
+                ],
+            },
+            {"role": "system", "content": "Tool results are authoritative."},
+            {"role": "tool", "tool_call_id": "call_1", "content": "72F"},
+        ]
+    )
+
+    contents: Final = body["contents"]
+    assert "system_instruction" not in body
+    assert [content["role"] for content in contents] == ["user", "model", "user", "user"]
+    assert contents[1]["parts"][0]["function_call"]["name"] == "get_weather"
+    assert contents[2]["parts"][0]["function_response"]["response"] == {"content": "72F"}
+    assert contents[3]["parts"] == [{"text": CONVERTED_SYSTEM_NOTE}, {"text": "Tool results are authoritative."}]
+
+
+def test_reminders_between_parallel_tool_results_go_after_the_last_function_response():
+    def call(call_id: str, name: str) -> dict:
+        return {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+    body: Final = _gemini_request_body(
+        [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "weather and time in Boston?"},
+            {"role": "assistant", "content": None, "tool_calls": [call("a", "get_weather"), call("b", "get_time")]},
+            {"role": "system", "content": "reminder 1"},
+            {"role": "tool", "tool_call_id": "a", "content": "72F"},
+            {"role": "system", "content": "reminder 2"},
+            {"role": "tool", "tool_call_id": "b", "content": "3pm"},
+            {"role": "user", "content": "thanks"},
+        ]
+    )
+
+    contents: Final = body["contents"]
+    assert [content["role"] for content in contents] == ["user", "model", "user", "user"]
+    assert [part["function_response"]["name"] for part in contents[2]["parts"]] == ["get_weather", "get_time"]
+    assert contents[3]["parts"] == [
+        {"text": CONVERTED_SYSTEM_NOTE},
+        {"text": "reminder 1"},
+        {"text": CONVERTED_SYSTEM_NOTE},
+        {"text": "reminder 2"},
+        {"text": "thanks"},
+    ]
