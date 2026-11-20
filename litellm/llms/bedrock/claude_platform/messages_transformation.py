@@ -22,7 +22,7 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
 
-    def anthropic_api_version(self, headers: Mapping[str, object]) -> str | None:
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
         return requested_api_version(headers)
 
     def validate_anthropic_messages_environment(

@@ -30,6 +30,7 @@ use crate::{
 };
 
 const FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: &str = "2026-10-21";
+const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
 
 pub struct AnthropicMessagesConfig;
 
@@ -123,9 +124,13 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     fn request_body(
         &self,
         request: MessagesRequest,
+        url: &str,
         headers: &Headers,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
+        if !is_anthropic_api(url) {
+            return Ok(request);
+        }
         drop_sampling_params_removed_by_version(
             request,
             requested_api_version(headers),
@@ -344,6 +349,10 @@ fn drop_unsupported_params(
     })
 }
 
+fn is_anthropic_api(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| url.host_str() == Some(ANTHROPIC_API_HOST))
+}
+
 fn requested_api_version(headers: &Headers) -> &str {
     header_value(headers, VERSION_HEADER).map_or(API_VERSION, str::trim)
 }
@@ -529,14 +538,28 @@ mod tests {
             .map(|transformed| serde_json::to_value(transformed).unwrap())
     }
 
-    fn versioned_body(
+    fn upstream_body(
+        url: &str,
         version: &[(&str, &str)],
         fields: Value,
         drop_params: bool,
     ) -> Result<Value, Error> {
         ANTHROPIC_MESSAGES_CONFIG
-            .request_body(request(fields), &headers(version), drop_params)
+            .request_body(request(fields), url, &headers(version), drop_params)
             .map(|request| serde_json::to_value(request).unwrap())
+    }
+
+    fn versioned_body(
+        version: &[(&str, &str)],
+        fields: Value,
+        drop_params: bool,
+    ) -> Result<Value, Error> {
+        upstream_body(
+            "https://api.anthropic.com/v1/messages",
+            version,
+            fields,
+            drop_params,
+        )
     }
 
     #[rstest]
@@ -612,6 +635,26 @@ mod tests {
         assert_eq!(
             versioned_body(&[("anthropic-version", "2026-10-21")], json!({}), false),
             Ok(body(json!({})))
+        );
+    }
+
+    #[rstest]
+    #[case::deepseek("https://api.deepseek.com/anthropic/v1/messages")]
+    #[case::minimax("https://api.minimax.io/anthropic/v1/messages")]
+    #[case::anthropic_lookalike_host("https://api.anthropic.com.gateway.test/v1/messages")]
+    fn sampling_params_reach_a_third_party_messages_api_under_any_api_version(
+        #[case] url: &str,
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let fields = json!({"temperature": 0.2, "top_p": 0.9, "top_k": 40});
+        assert_eq!(
+            upstream_body(
+                url,
+                &[("anthropic-version", "2026-10-21")],
+                fields.clone(),
+                drop_params
+            ),
+            Ok(body(fields))
         );
     }
 

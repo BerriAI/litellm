@@ -34,7 +34,7 @@ from ...common_utils import (
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
     strip_unsignable_thinking_blocks_for_claude,
 )
-from .api_versions import requested_api_version, sampling_params_to_drop
+from .api_versions import is_anthropic_api_base, requested_api_version, sampling_params_to_drop
 from .mid_conversation_system import (
     as_system_content_blocks,
     convert_mid_conversation_system_turns,
@@ -574,8 +574,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if thinking_enabled or effort_enabled:
             optional_params.pop("temperature", None)
 
-    def anthropic_api_version(self, headers: Mapping[str, object]) -> str | None:
-        return requested_api_version(headers) if self._resolved_provider == "anthropic" else None
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
+        serves_anthropic_api: Final = self._resolved_provider == "anthropic" and is_anthropic_api_base(
+            AnthropicModelInfo.get_api_base(api_base)
+        )
+        return requested_api_version(headers) if serves_anthropic_api else None
 
     def transform_anthropic_messages_request(
         self,
@@ -631,9 +634,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
+        api_base: Final = getattr(litellm_params, "api_base", None)
         dropped_sampling_params: Final = sampling_params_to_drop(
             anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
-            self.anthropic_api_version(headers),  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+            self.anthropic_api_version(headers, api_base if isinstance(api_base, str) else None),  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
             model=model,
             provider=self._resolved_provider,
             drop_params=drops_unsupported_params(getattr(litellm_params, "drop_params", None)),

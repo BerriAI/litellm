@@ -77,6 +77,7 @@ pub trait BaseMessagesConfig: Sync {
     fn request_body(
         &self,
         request: MessagesRequest,
+        _url: &str,
         _headers: &Headers,
         _drop_params: bool,
     ) -> Result<MessagesRequest, Error> {

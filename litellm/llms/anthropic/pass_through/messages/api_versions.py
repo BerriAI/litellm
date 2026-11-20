@@ -1,6 +1,7 @@
 import re
 from collections.abc import Mapping
 from typing import Final
+from urllib.parse import urlparse
 
 from litellm.exceptions import UnsupportedParamsError
 
@@ -8,6 +9,11 @@ _VERSION_HEADER: Final = "anthropic-version"
 _SAMPLING_PARAMS: Final = ("temperature", "top_p", "top_k")
 _FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: Final = "2026-10-21"
 _DATED_VERSION: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+_ANTHROPIC_API_HOST: Final = "api.anthropic.com"
+
+
+def is_anthropic_api_base(api_base: str | None) -> bool:
+    return api_base is not None and urlparse(api_base).hostname == _ANTHROPIC_API_HOST
 
 
 def requested_api_version(headers: Mapping[str, object]) -> str | None:

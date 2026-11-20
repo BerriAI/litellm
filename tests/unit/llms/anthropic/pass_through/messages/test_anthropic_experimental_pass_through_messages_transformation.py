@@ -15,6 +15,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 from litellm.llms.bedrock.messages.mantle_transformation import AmazonMantleMessagesConfig
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
+from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
@@ -137,16 +138,26 @@ _CLAUDE_ROUTES_ON_ANTHROPIC_API_VERSIONS: Final = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _anthropic_base_url_env_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+
+
 def _request_with_sampling_params(
-    config: AnthropicMessagesConfig, model: str, version: str, drop_params: bool
+    config: AnthropicMessagesConfig, model: str, version: str, drop_params: bool, api_base: str | None = None
 ) -> dict[str, object]:
     return config.transform_anthropic_messages_request(
         model=model,
         messages=[{"role": "user", "content": "Hi"}],
         anthropic_messages_optional_request_params={"max_tokens": 16, **_SAMPLING_PARAMS},
-        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params, api_base=api_base),
         headers={"Anthropic-Version": version},
     )
+
+
+def _sampling_params_in(request: dict[str, object]) -> dict[str, object]:
+    return {name: request.get(name) for name in _SAMPLING_PARAMS}
 
 
 @pytest.mark.parametrize(("config_class", "model"), _CLAUDE_ROUTES_ON_ANTHROPIC_API_VERSIONS)
@@ -208,4 +219,69 @@ def test_sampling_params_reach_an_upstream_whose_api_version_still_takes_them(
 ) -> None:
     request: Final = _request_with_sampling_params(config_class(), model, version, drop_params=False)
 
-    assert {name: request.get(name) for name in _SAMPLING_PARAMS} == _SAMPLING_PARAMS
+    assert _sampling_params_in(request) == _SAMPLING_PARAMS
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("config_class", "model", "api_base"),
+    [
+        pytest.param(
+            AnthropicMessagesConfig, "deepseek-v4-flash", "https://api.deepseek.com/anthropic", id="anthropic-deepseek"
+        ),
+        pytest.param(AnthropicMessagesConfig, "MiniMax-M3", "https://api.minimax.io/anthropic", id="anthropic-minimax"),
+        pytest.param(
+            OpenAILikeAnthropicMessagesConfig,
+            "qwen3-coder",
+            "http://vllm.internal:8000/v1",
+            id="openai_like-passthrough",
+        ),
+    ],
+)
+def test_a_third_party_api_base_keeps_sampling_params_under_anthropic_version_2026_10_21(
+    config_class: type[AnthropicMessagesConfig], model: str, api_base: str, drop_params: bool
+) -> None:
+    request: Final = _request_with_sampling_params(
+        config_class(), model, "2026-10-21", drop_params=drop_params, api_base=api_base
+    )
+
+    assert _sampling_params_in(request) == _SAMPLING_PARAMS
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("base_url_env", ["ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
+def test_a_third_party_env_base_url_keeps_sampling_params_under_anthropic_version_2026_10_21(
+    monkeypatch: pytest.MonkeyPatch, base_url_env: str, drop_params: bool
+) -> None:
+    monkeypatch.setenv(base_url_env, "https://api.deepseek.com/anthropic")
+
+    request: Final = _request_with_sampling_params(
+        AnthropicMessagesConfig(), "deepseek-v4-flash", "2026-10-21", drop_params=drop_params
+    )
+
+    assert _sampling_params_in(request) == _SAMPLING_PARAMS
+
+
+@pytest.mark.parametrize(
+    ("api_base", "base_url_env"),
+    [
+        pytest.param("https://api.anthropic.com", None, id="api_base"),
+        pytest.param("https://api.anthropic.com/v1/messages", None, id="api_base-full-url"),
+        pytest.param(None, "https://api.anthropic.com/", id="env-base-url"),
+        pytest.param("https://api.anthropic.com", "https://api.deepseek.com/anthropic", id="api_base-over-env"),
+    ],
+)
+def test_anthropics_own_api_base_still_gates_sampling_params_under_anthropic_version_2026_10_21(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, base_url_env: str | None
+) -> None:
+    if base_url_env is not None:
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", base_url_env)
+
+    dropped: Final = _request_with_sampling_params(
+        AnthropicMessagesConfig(), "claude-sonnet-4-6", "2026-10-21", drop_params=True, api_base=api_base
+    )
+    assert dropped.keys().isdisjoint(_SAMPLING_PARAMS)
+    with pytest.raises(litellm.UnsupportedParamsError):
+        _request_with_sampling_params(
+            AnthropicMessagesConfig(), "claude-sonnet-4-6", "2026-10-21", drop_params=False, api_base=api_base
+        )
