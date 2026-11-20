@@ -21,7 +21,7 @@ use crate::{
 };
 
 use crate::bedrock::common_utils::{
-    clamp_effort, ensure_bedrock_anthropic_messages_tool_names, is_int,
+    bedrock_base_model, clamp_effort, ensure_bedrock_anthropic_messages_tool_names, is_int,
     normalize_bedrock_opus_output_config_effort, normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     strip_unsupported_bedrock_invoke_output_config_keys,
@@ -39,12 +39,13 @@ pub(super) type Body = Map<String, Value>;
 pub const DEFAULT_BEDROCK_ANTHROPIC_API_VERSION: &str = "bedrock-2023-05-31";
 
 /// Port of Python's `BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS`.
-const BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS: [&str; 17] = [
+const BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS: [&str; 18] = [
     "anthropic_version",
     "max_tokens",
     "messages",
     "anthropic_beta",
     "system",
+    "cache_control",
     "stop_sequences",
     "temperature",
     "top_p",
@@ -437,6 +438,9 @@ fn process_content_list(blocks: &mut [Value], supports_ttl: bool) {
 
 /// Port of Python's `_remove_ttl_from_cache_control`.
 fn remove_ttl_from_cache_control(body: &mut Body, supports_ttl: bool) {
+    if let Some(cache_control) = body.get_mut("cache_control") {
+        sanitize_cache_control(cache_control, supports_ttl);
+    }
     if let Some(Value::Array(tools)) = body.get_mut("tools") {
         process_content_list(tools, supports_ttl);
     }
@@ -450,6 +454,23 @@ fn remove_ttl_from_cache_control(body: &mut Body, supports_ttl: bool) {
             .filter_map(Value::as_array_mut)
             .for_each(|content| process_content_list(content, supports_ttl));
     }
+}
+
+fn supports_automatic_cache_control(model: &str, settings: &InvokeRequestSettings) -> bool {
+    settings.beta_headers_provider == BetaProvider::Bedrock
+        && matches!(
+            bedrock_base_model(model),
+            "anthropic.claude-haiku-4-5"
+                | "anthropic.claude-haiku-4-5-20251001-v1:0"
+                | "anthropic.claude-sonnet-4-6"
+                | "anthropic.claude-opus-4-7"
+                | "anthropic.claude-opus-4-8"
+                | "anthropic.claude-opus-5"
+                | "anthropic.claude-opus-5-5"
+                | "anthropic.claude-sonnet-5"
+                | "anthropic.claude-sonnet-5-5"
+                | "anthropic.claude-haiku-5-5"
+        )
 }
 
 /// The caller's params with their tools shaped as Python's Bedrock invoke transform shapes the
@@ -570,6 +591,9 @@ pub(crate) fn transform_anthropic_messages_request(
         &context.thinking.budgets,
         drops_unknown_thinking,
     )?;
+    if !supports_automatic_cache_control(&model, settings) {
+        body.shift_remove("cache_control");
+    }
     remove_ttl_from_cache_control(&mut body, capabilities.bedrock.supports_prompt_cache_ttl);
     apply_bedrock_invoke_structured_output(&mut body, &model, capabilities.bedrock.native_output)?;
     let ceiling = get_bedrock_output_config_effort_ceiling(capabilities);
@@ -718,6 +742,31 @@ mod tests {
             .unwrap()
             .extend(params.as_object().unwrap().clone());
         request
+    }
+
+    #[rstest]
+    #[case::supported_profile("eu.anthropic.claude-sonnet-5-5", true)]
+    #[case::supported_dated_model("us.anthropic.claude-haiku-4-5-20251001-v1:0", true)]
+    #[case::older_model("us.anthropic.claude-sonnet-4-5-20250929-v1:0", false)]
+    fn automatic_cache_control_reaches_supported_bedrock_models(
+        #[case] model: &str,
+        #[case] supported: bool,
+        #[values(false, true)] stream: bool,
+    ) {
+        let marker = json!({"type": "ephemeral"});
+        let wire = transformed(
+            hello(
+                model,
+                json!({
+                    "stream": stream,
+                    "cache_control": {"type": "ephemeral", "scope": "global"},
+                    "system": [{"type": "text", "text": "Stable instructions", "cache_control": marker}],
+                }),
+            ),
+            MessagesModelCapabilities::default(),
+        );
+        assert_eq!(wire.get("cache_control"), supported.then_some(&marker));
+        assert_eq!(wire["system"][0]["cache_control"], marker);
     }
 
     #[test]

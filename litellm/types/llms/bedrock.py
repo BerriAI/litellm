@@ -1254,6 +1254,7 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # Documented optional fields
     anthropic_beta: list[str]
     system: object  # str or list[TextBlock]
+    cache_control: ReadOnly[Mapping[str, object]]
     stop_sequences: list[str]
     temperature: float
     top_p: float
