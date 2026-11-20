@@ -10,6 +10,7 @@ from __future__ import annotations
 import gzip
 import json
 from collections.abc import Iterator, Mapping
+from itertools import chain
 from pathlib import Path
 from typing import Final
 
@@ -18,6 +19,7 @@ from integration._support import claude_code as cc
 from integration._support.client import Gateway, eventually
 from integration._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans
 from pydantic import BaseModel, JsonValue
 
 _MODEL: Final = "claude-haiku-4-5"
@@ -99,26 +101,22 @@ def _gateway_spans(lens: Wire) -> tuple[tuple[dict[str, str], dict[str, str]], .
         for request in lens.drain()
         if request.target == _TRACE_PATH and request.body
     )
+    resources: Final = tuple(chain.from_iterable(export.resource_spans for export in exports))
+    return tuple(chain.from_iterable(_resource_spans(resource) for resource in resources))
+
+
+def _resource_spans(resource: ResourceSpans) -> tuple[tuple[dict[str, str], dict[str, str]], ...]:
+    resource_attributes: Final = {item.key: _attribute_text(item.value) for item in resource.resource.attributes}
+    spans: Final = chain.from_iterable(scope.spans for scope in resource.scope_spans)
     return tuple(
-        (
-            {item.key: _attribute_text(item.value) for item in span.attributes},
-            {item.key: _attribute_text(item.value) for item in resource.resource.attributes},
-        )
-        for export in exports
-        for resource in export.resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
+        ({item.key: _attribute_text(item.value) for item in span.attributes}, resource_attributes) for span in spans
     )
 
 
 def _forwarded_tool_results(request: Request) -> tuple[str, ...]:
-    return tuple(
-        block.tool_use_id
-        for message in _ForwardedBody.model_validate_json(request.body).messages
-        if isinstance(message.content, tuple)
-        for block in message.content
-        if block.type == "tool_result" and block.tool_use_id
-    )
+    messages: Final = _ForwardedBody.model_validate_json(request.body).messages
+    blocks: Final = chain.from_iterable(message.content for message in messages if isinstance(message.content, tuple))
+    return tuple(block.tool_use_id for block in blocks if block.type == "tool_result" and block.tool_use_id)
 
 
 def _direct_input_tokens(call: _Span) -> int:
