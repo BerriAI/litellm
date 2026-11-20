@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar, Token
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from pydantic import TypeAdapter
 
@@ -304,6 +304,7 @@ def _request_data(value: object) -> dict[str, object]:  # mutable-ok: the reques
 
 
 class ParallelRequestLimiterNativeLogger(RustLogger):
+    inspects_request_content: ClassVar[bool] = False
     limiter: "ParallelRequestLimiterHook"
 
     def __init__(self, native: "NativeParallelRequestLimiter", limiter: "ParallelRequestLimiterHook") -> None:
