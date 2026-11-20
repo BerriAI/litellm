@@ -30465,7 +30465,7 @@ export interface components {
         BudgetLimit: {
             /**
              * Budget Duration
-             * @description Positive duration in s, m, h, d or w, or calendar 1mo / 12mo.
+             * @description Positive duration such as '1h', '7d', '1mo' or '12mo'.
              */
             budget_duration: string;
             /** Max Budget */

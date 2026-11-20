@@ -631,6 +631,14 @@ async def _write_user_windows(prisma_client: PrismaClient, row_id: str, payload:
         )
 
 
+async def _write_budget_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
+    async with db_span("write_budget_windows", "LiteLLM_BudgetTable"):
+        await BudgetRepository(prisma_client).table.update(
+            where={"budget_id": row_id},
+            data={"budget_limits": payload},
+        )
+
+
 async def _write_team_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
     async with db_span("write_budget_windows", "LiteLLM_TeamTable"):
         await TeamRepository(prisma_client).table.update(
@@ -645,11 +653,10 @@ class _WindowSource:
 
     table: str
     id_column: str
-    entity_type: Litellm_EntityType
-    window_counter: Callable[[str, str], str]
     log_subject: str
     retry_subject: str
     write: Callable[[PrismaClient, str, str], Awaitable[None]]
+    counters: tuple[Litellm_EntityType, Callable[[str, str], str]] | None
 
     def page_query(self) -> str:
         """One keyset page, ordered by the primary key so the cursor never repeats a row.
@@ -670,29 +677,34 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
     _WindowSource(
         table="LiteLLM_UserTable",
         id_column="user_id",
-        entity_type=Litellm_EntityType.USER,
-        window_counter=user_window_counter,
         log_subject="users",
         retry_subject="user",
         write=_write_user_windows,
+        counters=(Litellm_EntityType.USER, user_window_counter),
     ),
     _WindowSource(
         table="LiteLLM_VerificationToken",
         id_column="token",
-        entity_type=Litellm_EntityType.KEY,
-        window_counter=key_window_counter,
         log_subject="keys",
         retry_subject="key",
         write=_write_key_windows,
+        counters=(Litellm_EntityType.KEY, key_window_counter),
     ),
     _WindowSource(
         table="LiteLLM_TeamTable",
         id_column="team_id",
-        entity_type=Litellm_EntityType.TEAM,
-        window_counter=team_window_counter,
         log_subject="teams",
         retry_subject="team",
         write=_write_team_windows,
+        counters=(Litellm_EntityType.TEAM, team_window_counter),
+    ),
+    _WindowSource(
+        table="LiteLLM_BudgetTable",
+        id_column="budget_id",
+        log_subject="customer budgets",
+        retry_subject="budget",
+        write=_write_budget_windows,
+        counters=None,
     ),
 )
 
@@ -1879,32 +1891,38 @@ class ResetBudgetJob:
         entity_id: str,
     ) -> bool:
         """Reset a single budget window if expired. Returns True if the window was reset."""
-        reset_at_str: Final = window.get("reset_at")
-        if not reset_at_str:
-            return False
-        budget_duration: Final = window["budget_duration"]
-        annual: Final = isinstance(budget_duration, str) and is_annual_budget_duration(budget_duration)
-        saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
-        if _as_utc(saved_reset_at) > _as_utc(now):
+        next_reset_at: Final = ResetBudgetJob._next_window_reset(window, now, reset_settings)
+        if next_reset_at is None:
             return False
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_store)
         try:
             await spend_counter_store.set(counter_key, new_value)
         except Exception as redis_err:
             verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
-        next_reset_at: Final = compute_budget_reset_at(
-            budget_duration=budget_duration, settings=reset_settings, now=now if annual else None
-        )
         window["reset_at"] = next_reset_at.isoformat()
         await ResetBudgetJob._roll_window_spend_row(
             prisma_client=prisma_client,
             entity_type=entity_type,
             entity_id=entity_id,
-            budget_duration=budget_duration,
+            budget_duration=window["budget_duration"],
             next_reset_at=next_reset_at,
             reset_settings=reset_settings,
         )
         return True
+
+    @staticmethod
+    def _next_window_reset(window: dict, now: datetime, reset_settings: BudgetResetSettings) -> datetime | None:
+        reset_at_str: Final = window.get("reset_at")
+        if not reset_at_str:
+            return None
+        budget_duration: Final = window["budget_duration"]
+        annual: Final = isinstance(budget_duration, str) and is_annual_budget_duration(budget_duration)
+        saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
+        if _as_utc(saved_reset_at) > _as_utc(now):
+            return None
+        return compute_budget_reset_at(
+            budget_duration=budget_duration, settings=reset_settings, now=now if annual else None
+        )
 
     @staticmethod
     async def _roll_window_spend_row(
@@ -2042,15 +2060,21 @@ class ResetBudgetJob:
             windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
             changed = False
             for window in windows:
-                counter_key = source.window_counter(row_id, str(window["budget_duration"]))
+                if source.counters is None:
+                    next_reset_at = ResetBudgetJob._next_window_reset(window, now, self.reset_settings)
+                    if next_reset_at is not None:
+                        window["reset_at"] = next_reset_at.isoformat()
+                        changed = True
+                    continue
+                entity_type, window_counter = source.counters
                 if await ResetBudgetJob._reset_expired_window(
                     window,
-                    counter_key,
+                    window_counter(row_id, str(window["budget_duration"])),
                     spend_counter_store,
                     now,
                     self.reset_settings,
                     prisma_client=self.prisma_client,
-                    entity_type=source.entity_type,
+                    entity_type=entity_type,
                     entity_id=row_id,
                 ):
                     changed = True

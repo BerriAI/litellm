@@ -1,4 +1,4 @@
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Final
 
 from pydantic import ConfigDict
@@ -64,10 +64,7 @@ def get_budget_reset_settings() -> BudgetResetSettings:
 
 
 def compute_budget_reset_at(
-    budget_duration: str,
-    settings: BudgetResetSettings,
-    now: datetime | None = None,
-    reset_at: datetime | None = None,
+    budget_duration: str, settings: BudgetResetSettings, now: datetime | None = None
 ) -> datetime:
     """Compute the next reset time for a budget duration using injected settings."""
     return get_next_standardized_reset_time(
@@ -75,7 +72,6 @@ def compute_budget_reset_at(
         current_time=now if now is not None else datetime.now(timezone.utc),
         timezone_str=settings.timezone,
         reset_time_of_day=settings.reset_time_of_day,
-        reset_at=reset_at,
     )
 
 
@@ -101,9 +97,10 @@ def _is_persistable_budget_duration(budget_duration: str) -> bool:
     from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 
     try:
-        if duration_in_seconds(budget_duration) <= 0:
+        seconds: Final = duration_in_seconds(budget_duration)
+        if seconds <= 0:
             return False
-        get_budget_reset_time(budget_duration=budget_duration)
+        get_budget_reset_time(budget_duration=budget_duration) - timedelta(seconds=seconds)
     except (ValueError, OverflowError):
         return False
     return True

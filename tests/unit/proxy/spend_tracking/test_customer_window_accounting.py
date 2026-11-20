@@ -96,46 +96,6 @@ def test_shared_template_reset_is_not_advanced_by_a_member():
     assert expired.reset_at == datetime(2026, 2, 1, tzinfo=timezone.utc)
 
 
-@pytest.mark.parametrize("limit_type", (BudgetLimit, AppDurationLimit))
-@pytest.mark.parametrize("duration,reset,times,expected", (
-    ("daily", "2026-10-31T05:30:00+00:00",
-     ("2026-11-01T05:30:00+00:00", "2026-11-01T06:15:00+00:00", "2026-11-02T06:30:00+00:00"),
-     ("2026-11-02T06:30:00+00:00", "2026-11-02T06:30:00+00:00", "2026-11-03T06:30:00+00:00")),
-    ("daily", "2026-11-01T05:30:00+00:00",
-     ("2026-11-01T05:30:00+00:00", "2026-11-01T06:15:00+00:00", "2026-11-02T06:30:00+00:00"),
-     ("2026-11-02T06:30:00+00:00", "2026-11-02T06:30:00+00:00", "2026-11-03T06:30:00+00:00")),
-    ("daily", "2026-03-08T05:00:00+00:00",
-     ("2026-03-08T05:00:00+00:00", "2026-03-09T03:59:00+00:00", "2026-03-09T04:00:00+00:00"),
-     ("2026-03-09T04:00:00+00:00", "2026-03-09T04:00:00+00:00", "2026-03-10T04:00:00+00:00")),
-    ("daily", "2026-11-01T04:00:00+00:00",
-     ("2026-11-01T04:00:00+00:00", "2026-11-02T04:59:00+00:00", "2026-11-02T05:00:00+00:00"),
-     ("2026-11-02T05:00:00+00:00", "2026-11-02T05:00:00+00:00", "2026-11-03T05:00:00+00:00")),
-    ("2d", "2026-10-31T13:00:00+00:00",
-     ("2026-10-31T13:00:00+00:00", "2026-11-01T22:00:00+00:00", "2026-11-02T14:00:00+00:00"),
-     ("2026-11-02T14:00:00+00:00", "2026-11-02T14:00:00+00:00", "2026-11-04T14:00:00+00:00")),
-    ("2d", "2026-03-07T14:00:00+00:00",
-     ("2026-03-07T14:00:00+00:00", "2026-03-09T12:30:00+00:00", "2026-03-09T13:00:00+00:00"),
-     ("2026-03-09T13:00:00+00:00", "2026-03-09T13:00:00+00:00", "2026-03-11T13:00:00+00:00")),
-    ("15m", "2026-11-01T05:45:00.123000+00:00",
-     ("2026-11-01T06:00:00.123000+00:00", "2026-11-01T06:10:00+00:00", "2026-11-01T06:15:00.123000+00:00"),
-     ("2026-11-01T06:15:00.123000+00:00", "2026-11-01T06:15:00.123000+00:00", "2026-11-01T06:30:00.123000+00:00")),
-))
-def test_custom_windows_keep_their_reset_anchor_across_days_and_dst(
-    duration: str, reset: str, times: tuple[str, ...], expected: tuple[str, ...],
-    limit_type: type[BudgetLimit] | type[AppDurationLimit],
-) -> None:
-    settings: Final = BudgetResetSettings(timezone="America/New_York", reset_time_of_day=time(9))
-    limit: Final = limit_type(budget_duration=duration, max_budget=0, reset_at=datetime.fromisoformat(reset))
-    counters: Final = tuple(
-        customer_window_counters("customer_member", "member", (limit,),
-                                 now=datetime.fromisoformat(now), reset_settings=settings)[0]
-        for now in times
-    )
-    assert counters[0].counter_key == counters[1].counter_key != counters[2].counter_key
-    assert tuple(counter.reset_at for counter in counters) == tuple(datetime.fromisoformat(value) for value in expected)
-    assert counters[0].window_start == datetime.fromisoformat(times[0])
-    assert counters[2].window_start == counters[0].reset_at
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("duration", ("daily", "weekly", "1w", "01h", "1mo", "12mo", "2d"))
 async def test_accounting_snapshot_keeps_the_admitted_window_key(duration: str) -> None:

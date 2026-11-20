@@ -24,7 +24,7 @@ from pydantic import TypeAdapter
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
-from litellm.models.budget import BudgetLimit, BudgetLimits, initialize_budget_limits
+from litellm.models.budget import BudgetLimit, BudgetLimits, carry_budget_limit_resets, initialize_budget_limits
 from litellm.proxy._types import *
 from litellm.proxy.auth.customer_hierarchy_auth import (
     forget_customer_hierarchies,
@@ -248,10 +248,12 @@ async def update_budget(
         {
             "budget_limits": budget_limit_json(
                 initialize_budget_limits(
-                    budget_obj.budget_limits,
+                    carry_budget_limit_resets(
+                        budget_obj.budget_limits,
+                        (_STORED_LIMITS.validate_python(stored.budget_limits) or ()) if stored is not None else (),
+                    ),
                     get_budget_reset_settings(),
                     datetime.now(timezone.utc),
-                    previous=(_STORED_LIMITS.validate_python(stored.budget_limits) or ()) if stored is not None else (),
                 )
             )
         }

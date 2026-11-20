@@ -647,7 +647,7 @@ def test_budget_windows_reject_invalid_caps(request_type: type[BaseModel], maxim
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
-@pytest.mark.parametrize("first,second", (("1mo", "1mo"), ("monthly", "30d"), ("1w", "7d"), ("hourly", "01h")))
+@pytest.mark.parametrize("first,second", (("1mo", "1mo"), ("2d", "2d")))
 def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel], first: str, second: str) -> None:
     with pytest.raises(ValidationError):
         request_type.model_validate(
@@ -661,20 +661,19 @@ def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel]
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
-@pytest.mark.parametrize("duration", ("", "0s", "-1d", "1y", "2mo", "6mo", "6days", "1.5h",
+@pytest.mark.parametrize("duration", ("", "0s", "-1d", "1y", "1.5h",
                                     "999999999999999999999d", "999999999999999999999h", "999999999999999999999s"))
 def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseModel], duration: str) -> None:
     with pytest.raises(ValidationError):
         request_type.model_validate({"budget_limits": [{"budget_duration": duration, "max_budget": 0}]})
 
 
-@pytest.mark.parametrize("duration,expected", (("30s", "30s"), ("15m", "15m"), ("2h", "2h"), ("6d", "6d"),
-                                             ("2w", "14d"), (" Monthly ", "1mo"), ("01h", "1h")))
-def test_additional_budget_windows_normalize_without_changing_the_scalar(duration: str, expected: str) -> None:
+@pytest.mark.parametrize("duration", ("30s", "15m", "2h", "6d", "2w", "30d", "daily"))
+def test_additional_budget_windows_keep_the_submitted_duration_without_changing_the_scalar(duration: str) -> None:
     budget: Final = Budget(max_budget=50, budget_duration="daily",
                           budget_limits=(BudgetLimit(budget_duration=duration, max_budget=0),))
     assert (budget.max_budget, budget.budget_duration) == (50, "daily")
-    assert tuple(limit.budget_duration for limit in budget.budget_limits or ()) == (expected,)
+    assert tuple(limit.budget_duration for limit in budget.budget_limits or ()) == (duration,)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("elapsed", (1, 3))

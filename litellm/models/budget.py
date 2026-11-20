@@ -7,13 +7,11 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from re import fullmatch
 from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
 from pydantic import AfterValidator, ConfigDict, Field, field_validator, model_validator
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.duration_parser import get_budget_window_start, normalize_duration
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -23,30 +21,19 @@ if TYPE_CHECKING:
 class BudgetLimit(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
-    budget_duration: str = Field(description="Positive duration in s, m, h, d or w, or calendar 1mo / 12mo.")
+    budget_duration: str = Field(description="Positive duration such as '1h', '7d', '1mo' or '12mo'.")
     max_budget: float = Field(ge=0, allow_inf_nan=False)
     reset_at: datetime | None = None
 
     @field_validator("budget_duration")
     @classmethod
-    def valid_duration(cls, value: str) -> str:
+    def persistable_budget_duration(cls, value: str) -> str:
         from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
-        normalized: Final = normalize_duration(value.strip().lower())
-        match: Final = fullmatch(r"([0-9]+)(mo|[smhdw])", normalized)
-        if match is None:
-            raise ValueError("Use a positive duration such as '1h', '7d', '1mo' or '12mo'")
-        amount, unit = match.groups()
-        canonical: Final = f"{int(amount) * 7}d" if unit == "w" else f"{int(amount)}{unit}"
-        duration: Final = "1mo" if canonical == "30d" else canonical
-        error: Final = budget_duration_error(duration)
+        error: Final = budget_duration_error(value)
         if error is not None:
             raise ValueError(error)
-        try:
-            get_budget_window_start(duration, datetime.now(timezone.utc))
-        except (ValueError, OverflowError) as exc:
-            raise ValueError("Budget duration exceeds the supported reset range") from exc
-        return duration
+        return value
 
 
 def unique_budget_limits(limits: tuple[BudgetLimit, ...]) -> tuple[BudgetLimit, ...]:
@@ -58,24 +45,24 @@ def unique_budget_limits(limits: tuple[BudgetLimit, ...]) -> tuple[BudgetLimit, 
 BudgetLimits: TypeAlias = Annotated[tuple[BudgetLimit, ...], AfterValidator(unique_budget_limits)]
 
 
+def carry_budget_limit_resets(
+    limits: tuple[BudgetLimit, ...], previous: tuple[BudgetLimit, ...]
+) -> tuple[BudgetLimit, ...]:
+    resets: Final = {limit.budget_duration: limit.reset_at for limit in previous}
+    return tuple(
+        limit.model_copy(update={"reset_at": resets.get(limit.budget_duration, limit.reset_at)}) for limit in limits
+    )
+
+
 def initialize_budget_limits(
-    limits: tuple[BudgetLimit, ...],
-    settings: "BudgetResetSettings",
-    now: datetime,
-    previous: tuple[BudgetLimit, ...] = (),
+    limits: tuple[BudgetLimit, ...], settings: "BudgetResetSettings", now: datetime
 ) -> tuple[BudgetLimit, ...]:
     from litellm.proxy.common_utils.timezone_utils import compute_budget_reset_at
 
-    resets: Final = {limit.budget_duration: limit.reset_at for limit in previous if limit.reset_at is not None}
     return tuple(
         limit
         if limit.reset_at is not None
-        else limit.model_copy(
-            update={
-                "reset_at": resets.get(limit.budget_duration)
-                or compute_budget_reset_at(limit.budget_duration, settings, now)
-            }
-        )
+        else limit.model_copy(update={"reset_at": compute_budget_reset_at(limit.budget_duration, settings, now)})
         for limit in limits
     )
 

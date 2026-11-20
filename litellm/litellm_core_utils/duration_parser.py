@@ -104,7 +104,6 @@ def get_next_standardized_reset_time(
     current_time: datetime,
     timezone_str: str = "UTC",
     reset_time_of_day: time = time(0, 0),
-    reset_at: datetime | None = None,
 ) -> datetime:
     """
     Get the next standardized reset time based on the duration.
@@ -138,22 +137,6 @@ def get_next_standardized_reset_time(
             duration,
         )
         return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-
-    if reset_at is not None:
-        moment: Final = _budget_window_clock(duration, current_time)
-        anchor: Final = _setup_timezone(normalize_budget_window_start(reset_at), timezone_str)[0].astimezone(
-            moment.tzinfo
-        )
-        if anchor.astimezone(timezone.utc) > moment.astimezone(timezone.utc):
-            return anchor
-        if value > 0 and unit in ("s", "m", "h", "d", "w") and (value, unit) != (30, "d"):
-            period: Final = timedelta(seconds=duration_in_seconds(duration))
-            candidate: Final = anchor + period * max(1, (moment - anchor) // period + 1)
-            return (
-                candidate + period
-                if candidate.astimezone(timezone.utc) <= moment.astimezone(timezone.utc)
-                else candidate
-            )
 
     # Midnight of the current day in the specified timezone
     base_midnight: Final = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -214,15 +197,8 @@ def get_budget_window_end(
     return _shift_budget_window(duration, boundary, 1).astimezone(timezone.utc)
 
 
-def _budget_window_clock(duration: str, moment: datetime) -> datetime:
-    value, unit = _parse_duration(normalize_duration(duration))
-    if value is None or unit not in ("s", "m", "h") or moment.tzinfo is None:
-        return moment
-    return moment.astimezone(timezone.utc) if duration_in_seconds(duration) < 86400 else moment
-
-
 def _shift_budget_window(duration: str, moment: datetime, direction: int) -> datetime:
-    boundary: Final = _budget_window_clock(duration, normalize_budget_window_start(moment))
+    boundary: Final = normalize_budget_window_start(moment)
     value, unit = _parse_duration(normalize_duration(duration))
     if value is None:
         return boundary + timedelta(days=direction)

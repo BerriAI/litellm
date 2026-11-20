@@ -9,7 +9,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from litellm.models.budget import BudgetLimit, BudgetLimits, LiteLLM_BudgetTable, initialize_budget_limits
+from litellm.models.budget import (
+    BudgetLimit,
+    BudgetLimits,
+    LiteLLM_BudgetTable,
+    carry_budget_limit_resets,
+    initialize_budget_limits,
+)
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     get_budget_reset_settings,
@@ -254,14 +260,10 @@ def group_budget_patch(group: BudgetGroupChange, current: OrganizationBudget | N
     patch: Final = Budget.model_validate(group.model_dump(exclude_unset=True, exclude={"budget_id", "name"}))
     if patch.budget_limits is None:
         return patch
-    resets: Final = (
-        {limit.budget_duration: limit.reset_at for limit in (current.budget_limits or ())} if current else {}
-    )
     return patch.model_copy(
         update={
-            "budget_limits": tuple(
-                limit.model_copy(update={"reset_at": resets.get(limit.budget_duration, limit.reset_at)})
-                for limit in patch.budget_limits
+            "budget_limits": carry_budget_limit_resets(
+                patch.budget_limits, (current.budget_limits or ()) if current is not None else ()
             )
         }
     )
@@ -784,7 +786,7 @@ class CustomerHierarchyStore:
                     **(
                         {
                             "budget_limits": initialize_budget_limits(
-                                budget.budget_limits, self.settings, self.now, previous=previous
+                                carry_budget_limit_resets(budget.budget_limits, previous), self.settings, self.now
                             )
                         }
                         if budget.budget_limits is not None
@@ -819,10 +821,12 @@ class CustomerHierarchyStore:
                     **(
                         {
                             "budget_limits": initialize_budget_limits(
-                                budget.budget_limits,
+                                carry_budget_limit_resets(
+                                    budget.budget_limits,
+                                    (current.budget_limits or ()) if current is not None else (),
+                                ),
                                 self.settings,
                                 self.now,
-                                previous=(current.budget_limits or ()) if current is not None else (),
                             )
                         }
                         if budget.budget_limits is not None
