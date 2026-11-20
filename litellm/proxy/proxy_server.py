@@ -6788,8 +6788,8 @@ class ProxyConfig:
         response-cache Redis and over the REDIS_* env fallback. Returns the
         built client (None when the block is absent) for the caller to publish.
         """
-        settings: Final = config.get("general_settings") or {}
-        litellm_settings: Final = config.get("litellm_settings") or {}
+        settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(config.get("general_settings") or {})
+        litellm_settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(config.get("litellm_settings") or {})
         raw_params: Final = settings.get("coordination_redis")
         if raw_params is None:
             return None
@@ -6797,7 +6797,7 @@ class ProxyConfig:
             raise ValueError("general_settings.coordination_redis must be a mapping of Redis connection params")
 
         coordination_params: Final = CoordinationRedisParams.model_validate(
-            _resolve_coordination_redis_env_refs(raw_params)
+            _resolve_coordination_redis_env_refs(_GENERAL_SETTINGS_VIEW.validate_python(raw_params))
         )
         if not coordination_params.has_connection_target():
             raise ValueError(

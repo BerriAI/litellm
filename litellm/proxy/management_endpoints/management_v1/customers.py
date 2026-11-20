@@ -475,6 +475,7 @@ async def delete_customer_organization(
     previous: Final = resolve(await hierarchy.get_organization(customer_org_id))
     resolve(await hierarchy.delete_organization(customer_org_id, cascade=cascade))
     await forget_customer_organization_aliases((previous.alias,), cache)
+    await invalidate_app_auth_policy(cache)
     return Response(status_code=204)
 
 
@@ -552,9 +553,12 @@ async def update_customer_team(
 async def delete_customer_team(
     customer_team_id: str,
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
     cascade: Annotated[bool, Query(description="Also delete this customer team's members.")] = False,
 ) -> Response:
     resolve(await hierarchy.delete_team(customer_team_id, cascade=cascade))
+    if cascade:
+        await invalidate_app_auth_policy(cache)
     return Response(status_code=204)
 
 
@@ -667,6 +671,7 @@ async def delete_customer_member(
 ) -> Response:
     resolve(await hierarchy.delete_member(customer_member_id))
     await forget_customer_hierarchies((customer_member_id,), cache)
+    await invalidate_app_auth_policy(cache)
     return Response(status_code=204)
 
 

@@ -314,6 +314,7 @@ class AppStore:
             data={"param_value": Json({**stored.model_dump(mode="json"), "locked": current.locked})},
         )
         self._definition_cache_dirty = True
+        self._app_auth_policy_dirty = True
         return stored
 
     def resource_table(self, resource_type: AppResourceType) -> tuple[TableActions[PrismaRecord], str]:

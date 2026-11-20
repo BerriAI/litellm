@@ -3180,6 +3180,16 @@ async def _authorize_authenticated_request(
     return (recovered or billing_auth) if billing_auth is not user_api_key_auth_obj else recovered
 
 
+def _require_verified_customer(verified: bool) -> None:
+    if not verified:
+        raise ProxyException(
+            message="Database unavailable. The customer request could not be verified.",
+            type=ProxyErrorTypes.no_db_connection,
+            param=None,
+            code=503,
+        )
+
+
 async def _authorize_authenticated_request_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
@@ -3189,7 +3199,7 @@ async def _authorize_authenticated_request_checks(
     *,
     force_virtual_key_checks: bool = False,
 ) -> UserAPIKeyAuth | None:
-    customer_cache_required = False
+    customer_cache_required = False  # rebind-ok: the exception handler also covers failures before resolving headers
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
     # authorization failures (ProxyException, or plain Exception from
@@ -3234,13 +3244,9 @@ async def _authorize_authenticated_request_checks(
         customer_cache_required = (  # rebind-ok: no customer auth context exists until headers are resolved
             has_customer and user_api_key_cache.customer_auth_store is not None
         )
-        if customer_cache_required and user_api_key_auth_obj.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
-            raise ProxyException(
-                message="Database unavailable. The customer request could not be verified.",
-                type=ProxyErrorTypes.no_db_connection,
-                param=None,
-                code=503,
-            )
+        _require_verified_customer(
+            not customer_cache_required or user_api_key_auth_obj.user_id != DB_UNAVAILABLE_FALLBACK_USER_ID
+        )
         if has_customer or RouteChecks.runs_inference_checks(route):
             key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(
                 getattr(user_api_key_auth_obj, "metadata", None) or {}
@@ -3279,17 +3285,11 @@ async def _authorize_authenticated_request_checks(
                         user_api_key_auth_obj,
                     )
                     user_api_key_auth_obj.customer_hierarchy = app_hierarchy  # rebind-ok: request auth state
-                    if (
-                        user_api_key_auth_obj.customer_auth_db_unavailable
-                        and customer_identity is not None
-                        and unknown_customer_header(customer_identity, app_hierarchy) is not None
-                    ):
-                        raise ProxyException(
-                            message="Database unavailable. The customer request could not be verified.",
-                            type=ProxyErrorTypes.no_db_connection,
-                            param=None,
-                            code=503,
-                        )
+                    _require_verified_customer(
+                        not user_api_key_auth_obj.customer_auth_db_unavailable
+                        or customer_identity is None
+                        or unknown_customer_header(customer_identity, app_hierarchy) is None
+                    )
             except CustomerBudgetExceededError as error:
                 user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
                 raise

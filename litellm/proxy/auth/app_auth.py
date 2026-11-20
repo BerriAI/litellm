@@ -121,7 +121,7 @@ def _check_app_assertion(app: App, assertion: str | None) -> None:
 
 
 def _app_records_key(
-    generation: str | None, resource_type: AppResourceType, resource_id: str, org_id: str, member_id: str | None
+    generation: str, resource_type: AppResourceType, resource_id: str, org_id: str, member_id: str | None
 ) -> str:
     identity: Final = json.dumps((generation, resource_type.value, resource_id, org_id, member_id))
     return "customer_app_records:" + hashlib.sha256(identity.encode()).hexdigest()
@@ -154,7 +154,9 @@ async def _read_app_records(
     if cache is None or hierarchy is None or hierarchy.customer_org_id is None:
         return await _load_app_records(store, resource_type, resource_id, assertion, hierarchy)
 
-    generation: Final = await cache.lease(APP_AUTH_POLICY_KEY)
+    generation: Final = await _app_policy_generation(cache)
+    if generation is None:
+        return await _load_app_records(store, resource_type, resource_id, assertion, hierarchy)
     key: Final = _app_records_key(
         generation, resource_type, resource_id, hierarchy.customer_org_id, hierarchy.customer_member_id
     )
@@ -186,18 +188,33 @@ async def _read_app_records(
                 else ()
             ),
         )
-        await cache.write_back(
-            tuple(
-                (snapshot_key, snapshot.model_dump(mode="json"), ttl)
-                for snapshot_key, snapshot in snapshots
-                if (ttl := _snapshot_ttl(snapshot, store.now, now)) >= 1
-            ),
-            batch=Batch.NONE,
-        )
+        try:
+            await cache.write_back(
+                tuple(
+                    (snapshot_key, snapshot.model_dump(mode="json"), ttl)
+                    for snapshot_key, snapshot in snapshots
+                    if (ttl := _snapshot_ttl(snapshot, store.now, now)) >= 1
+                ),
+                batch=Batch.NONE,
+            )
+        except Exception as error:  # noqa: BLE001  # a Redis write failure must not reject a verified DB result
+            verbose_proxy_logger.warning("Unable to cache customer app records: %s", type(error).__name__)
     return records
 
 
-async def _recover_app_records(cache: "AuthCacheStore", key: str, generation: str | None) -> _AppAuthRecords | None:
+async def _app_policy_generation(cache: "AuthCacheStore") -> str | None:
+    generation: Final = await cache.lease(APP_AUTH_POLICY_KEY)
+    if generation is not None:
+        return generation
+    try:
+        await cache.delete((APP_AUTH_POLICY_KEY,))
+    except Exception as error:  # noqa: BLE001  # without a confirmed generation, use the database only
+        verbose_proxy_logger.warning("Unable to initialize customer app policy generation: %s", type(error).__name__)
+        return None
+    return await cache.lease(APP_AUTH_POLICY_KEY)
+
+
+async def _recover_app_records(cache: "AuthCacheStore", key: str, generation: str) -> _AppAuthRecords | None:
     try:
         payload: Final = (await cache.read_missing((key,), batch=Batch.NONE)).get(key)
         if payload is None or await cache.lease(APP_AUTH_POLICY_KEY) != generation:
