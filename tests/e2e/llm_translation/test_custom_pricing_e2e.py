@@ -39,8 +39,8 @@ pytestmark = pytest.mark.e2e
 
 BACKEND_MODEL = "gemini/gemini-3.8-flash"
 GEMINI_API_KEY = "os.environ/GEMINI_API_KEY"
-CUSTOM_INPUT_RATE = 7.5e-05
-CUSTOM_OUTPUT_RATE = 3.75e-04
+CUSTOM_INPUT_RATE = 5e-05
+CUSTOM_OUTPUT_RATE = 1e-04
 
 
 class _CostBreakdown(BaseModel):
