@@ -25,7 +25,9 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
+from litellm.llms.anthropic.common_utils import anthropic_server_call_fields
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.tool_descriptions import scanned_request_tools
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     MCP_GUARDRAIL_CALL_TYPES,
@@ -142,6 +144,15 @@ def _ends_stream(endpoint_translation: object, item: object) -> bool:
         endpoint_translation, "_check_streaming_has_ended", None
     )
     return has_ended is not None and has_ended((item,))
+
+
+def _passthrough_delta(delta: object) -> Delta:
+    server_call_fields: Final = anthropic_server_call_fields(delta)
+    role: Final = getattr(delta, "role", None)
+    tool_calls: Final = getattr(delta, "tool_calls", None)
+    if not server_call_fields:
+        return Delta(content=None, role=role, tool_calls=tool_calls)
+    return Delta(content=None, role=role, tool_calls=tool_calls, provider_specific_fields=dict(server_call_fields))
 
 
 def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
@@ -296,6 +307,10 @@ class UnifiedLLMGuardrails(CustomLogger):
         _ensure_litellm_metadata(data, user_api_key_dict)
 
         await _scan_request_attachments(guardrail_to_apply, data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
+
+        if event_type is GuardrailEventHooks.pre_call:
+            scanned: Final = await scanned_request_tools(guardrail_to_apply, data, data.get("litellm_logging_obj"))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # hook data is an untyped dict
+            data |= scanned  # pyright: ignore[reportUnknownVariableType]  # hook data is an untyped dict  # rebind-ok: pre_call hooks rewrite the request dict in place
 
         data = await endpoint_translation.process_input_messages(
             data=data,
@@ -974,7 +989,7 @@ class UnifiedLLMGuardrails(CustomLogger):
     def _chunk_has_tool_calls(item: object) -> bool:
         for choice in _chunk_choices(item):
             delta = getattr(choice, "delta", None)
-            if getattr(delta, "tool_calls", None):
+            if getattr(delta, "tool_calls", None) or anthropic_server_call_fields(delta):
                 return True
         return False
 
@@ -1042,11 +1057,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             synthetic_choices.append(
                 StreamingChoices(
                     index=idx,
-                    delta=Delta(
-                        content=None,
-                        role=getattr(delta, "role", None),
-                        tool_calls=getattr(delta, "tool_calls", None),
-                    ),
+                    delta=_passthrough_delta(delta),
                     finish_reason=passthrough_finish,
                 )
             )

@@ -48,7 +48,7 @@ from setup.ramp import step_properties
 from setup.run import run_plan
 from setup.telemetry import read_gateway_telemetry, telemetry_sampler
 
-pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
+pytestmark = pytest.mark.perf
 _SPEND_SAMPLE: Final = 40
 _WARMUP_SECONDS: Final = 60
 
@@ -154,6 +154,7 @@ def test_perf_case(
         redis_after=redis_after,
         redis_commands=monitor.commands,
         gateway_cpu_seconds=cpu.seconds,
+        gateway_cpu_coverage=cpu.coverage,
         telemetry_before=telemetry_before,
         telemetry_after=telemetry_after,
         peak_connections=connections.peak,

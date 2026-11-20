@@ -1527,13 +1527,6 @@ def test_muse_semantic_vad_without_drop_params_is_refused(guardrail_proxy: Owned
         assert _upgrades(observed) == (), observed
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "a push-to-talk Muse session reached by model alone is forced to ENDPOINTING: the first-update injection "
-        "runs before the backend session event flags the session as transcription-only"
-    ),
-)
 def test_muse_push_to_talk_session_without_intent_keeps_push_to_talk(
     guardrail_proxy: OwnedProxy, tls_upstream: str, record_property: RecordProperty
 ) -> None:
@@ -1591,13 +1584,6 @@ def _assert_voice_session_ungated(session: Session, observed: tuple[dict[str, Js
     assert _session_updates(observed) == (VOICE_UPDATE,), _session_updates(observed)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "the realtime route hands the transcript guardrail only the request's guardrails list, so the key and "
-        "team metadata that opts out of a default-on guardrail never reaches it"
-    ),
-)
 def test_key_opted_out_of_the_transcript_guardrail_is_not_gated_by_the_prompt_guardrail(
     guardrail_proxy: OwnedProxy,
 ) -> None:
@@ -1609,13 +1595,6 @@ def test_key_opted_out_of_the_transcript_guardrail_is_not_gated_by_the_prompt_gu
         _assert_voice_session_ungated(session, _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "the realtime route hands the transcript guardrail only the request's guardrails list, so the key and "
-        "team metadata that opts out of a default-on guardrail never reaches it"
-    ),
-)
 def test_team_opted_out_of_the_transcript_guardrail_is_not_gated(guardrail_proxy: OwnedProxy) -> None:
     with guardrail_proxy.gateway.scenario() as scenario:
         handle: Final = _scripted(scenario, _voice_scenario(BLOCKED_TRANSCRIPT))

@@ -7,7 +7,7 @@ Reference: https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
 
 import json
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Union
 
 import httpx
 
@@ -18,6 +18,7 @@ from litellm.llms.base_llm.text_to_speech.transformation import (
     TextToSpeechRequestData,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import POLLY_SESSION_POLICY, WebIdentitySessionPolicy
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -34,6 +35,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
 
     Reference: https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
     """
+
+    supports_streaming = True
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = POLLY_SESSION_POLICY
 
     def __init__(self):
         BaseTextToSpeechConfig.__init__(self)
@@ -82,6 +86,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
+        stream: bool = False,
         **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
@@ -128,6 +133,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             extra_headers=extra_headers,
             client=None,
             _is_async=aspeech,
+            stream=stream,
         )
 
         return response

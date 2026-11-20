@@ -2,9 +2,12 @@
 
 import os
 import subprocess
+from pathlib import Path
 from typing import Final
 
 from litellm._logging import print_startup_message, print_startup_warning, verbose_logger
+
+_PROXY_SCHEMA_PATH: Final = Path(__file__).resolve().parent.parent / "schema.prisma"
 
 
 def extract_sql_commands(diff_output: str) -> list[str]:
@@ -79,7 +82,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
                 "--from-url",
                 db_url,
                 "--to-schema-datamodel",
-                "./schema.prisma",
+                str(_PROXY_SCHEMA_PATH),
                 "--script",
             ],
             timeout=timeout,
