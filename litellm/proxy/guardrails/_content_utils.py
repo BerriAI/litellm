@@ -248,6 +248,10 @@ def _part_text(part: Mapping[str, object]) -> str | None:
     return None
 
 
+def _is_json_part(part: Mapping[str, object]) -> bool:
+    return part.get("type") == "input_json" and "data" in part
+
+
 def _iter_text_parts_in_content(content: object) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
     multimodal list). Non-text parts (images, audio, …) are skipped."""
@@ -255,16 +259,20 @@ def _iter_text_parts_in_content(content: object) -> Iterator[str]:
         if content:
             yield content
     elif isinstance(content, list):
-        for part in content:
+        for part in _object_list(content) or ():
             if isinstance(part, str):
                 # A bare string in a content/input list is itself a text
                 # fragment (Responses-API mixed-list shape).
                 if part:
                     yield part
                 continue
-            if not isinstance(part, dict):
+            fields = _text_object(part)
+            if fields is None:
                 continue
-            text = _part_text(part)
+            if _is_json_part(fields):
+                yield json.dumps(fields["data"], ensure_ascii=False)
+                continue
+            text = _part_text(fields)
             if text is not None:
                 yield text
 
@@ -390,6 +398,8 @@ def walk_user_text(
             return {**rewritten, "content": _rewrite_content(part["content"], native=False)}
         if native and part.get("type") == "tool_use" and "input" in part:
             return {**rewritten, "input": _rewrite_tool(part["input"])}
+        if native and _is_json_part(part):
+            return {**rewritten, "data": _rewrite_tool(part["data"])}
         return rewritten
 
     def _rewrite_content(content: object, native: bool = True) -> object:

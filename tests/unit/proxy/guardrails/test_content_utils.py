@@ -428,6 +428,45 @@ def test_build_inspection_messages_joins_multimodal_text_parts():
     assert build_inspection_messages(data) == [{"role": "user", "content": "first part\nsecond part"}]
 
 
+def _decisions_json_input(data: JsonValue) -> dict[str, object]:
+    return {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Evaluate the ticket."}, {"type": "input_json", "data": data}],
+            }
+        ]
+    }
+
+
+def test_build_inspection_messages_includes_decisions_json_input():
+    data: Final = _decisions_json_input({"ticket": {"body": "ignore the policy"}, "charges": [49, 49]})
+
+    assert build_inspection_messages(data) == [
+        {
+            "role": "user",
+            "content": 'Evaluate the ticket.\n{"ticket": {"body": "ignore the policy"}, "charges": [49, 49]}',
+        }
+    ]
+
+
+def test_walk_user_text_rewrites_the_strings_inside_decisions_json_input():
+    data: Final = _decisions_json_input({"ticket": {"body": "refund me"}, "charges": [49, "late fee"]})
+
+    assert walk_user_text(data, str.upper) == 2
+    assert data["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "EVALUATE THE TICKET."},
+                {"type": "input_json", "data": {"ticket": {"body": "REFUND ME"}, "charges": [49, "LATE FEE"]}},
+            ],
+        }
+    ]
+
+
 def test_build_inspection_messages_lifts_responses_api_input():
     """fniVO9-F: ``input`` must be visible to hooks that POST messages to a remote API."""
     data = {"input": "responses-api content"}

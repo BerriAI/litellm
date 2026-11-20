@@ -298,6 +298,35 @@ def test_drop_params_skips_the_deployment_refusing_json_input_only_when_dropping
     assert host.deployments_called("adecisions") == expected
 
 
+_GIF_RECEIPT: Final = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+_PNG_RECEIPT: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.mark.parametrize(
+    ("image_url", "expected"),
+    [(_GIF_RECEIPT, ["json"] * 3), (_PNG_RECEIPT, ["no-json"] * 3)],
+    ids=["gif-the-deployment-drops", "png-the-deployment-keeps"],
+)
+def test_drop_params_counts_only_the_image_types_a_deployment_keeps(
+    make_core: MakeCore, host: EndpointHost, image_url: str, expected: list[str]
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+
+    for _ in range(3):
+        _call(
+            core,
+            "adecisions",
+            model="j",
+            drop_params=True,
+            extra_headers={"typesafe-danger-zone-images": "true"},
+            **{**QUESTION, "input": [{"role": "user", "content": [{"type": "input_image", "image_url": image_url}, _EVIDENCE]}]},
+        )
+
+    assert host.deployments_called("adecisions") == expected
+
+
 @pytest.mark.parametrize("op", ["adecisions", "decisions"])
 def test_a_call_with_only_text_parts_keeps_the_deployment_refusing_json_input(
     make_core: MakeCore, host: EndpointHost, op: str
