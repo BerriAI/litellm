@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Conversation } from "./types";
+import { displayConversationTitle } from "./conversationTitle";
 
 interface ConversationSearchDialogProps {
   open: boolean;
@@ -32,9 +33,10 @@ const ConversationSearchDialog: React.FC<ConversationSearchDialogProps> = ({
     if (!open) setQuery("");
   }
 
-  const filtered = query.trim()
-    ? conversations.filter((c) => c.title.toLowerCase().includes(query.trim().toLowerCase()))
-    : conversations;
+  const searchTerm = query.trim().toLowerCase();
+  const filtered = conversations
+    .map((conv) => ({ conv, title: displayConversationTitle(conv, t) }))
+    .filter(({ title }) => title.toLowerCase().includes(searchTerm));
 
   const handleSelect = (id: string) => {
     onSelect(id);
@@ -61,7 +63,7 @@ const ConversationSearchDialog: React.FC<ConversationSearchDialogProps> = ({
           {filtered.length === 0 ? (
             <div className="text-center py-6 text-muted-foreground text-sm">{t("chat.conversationList.noResults")}</div>
           ) : (
-            filtered.map((conv) => {
+            filtered.map(({ conv, title }) => {
               return (
                 <Button
                   key={conv.id}
@@ -70,7 +72,7 @@ const ConversationSearchDialog: React.FC<ConversationSearchDialogProps> = ({
                   className="w-full justify-start gap-2 px-2.5"
                 >
                   <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="text-left text-[13px] flex-1 truncate">{conv.title}</span>
+                  <span className="text-left text-[13px] flex-1 truncate">{title}</span>
                   <span className="text-[11px] text-muted-foreground shrink-0 ml-auto">
                     {dayjs(conv.updatedAt).format("MMM D")}
                   </span>

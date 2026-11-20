@@ -6039,6 +6039,7 @@
     },
     "chart": {
       "valuesLabel": "{{title}} 的值",
+      "period": "{{start}} 至 {{end}}（UTC）",
       "category": "类别",
       "valuesUnavailable": "以下项的数值不可用：{{labels}}。",
       "unavailable": "暂无数据",
@@ -6054,7 +6055,16 @@
         "gateway": "网关用量",
         "allTeams": "所有团队",
         "allTags": "所有标签",
-        "yours": "您的用量"
+        "yours": "您的用量",
+        "permittedTeams": "您有权查看的团队用量",
+        "user": "用户 {{id}}",
+        "teams": "团队 {{ids}}",
+        "tags": "标签 {{tags}}"
+      },
+      "units": {
+        "usd": "美元",
+        "requests": "请求",
+        "tokens": "Token"
       },
       "labels": {
         "unknown": "未知",
@@ -9918,6 +9928,7 @@
       "stopFailed": "无法停止运行。请重新连接后再次点击“停止”。"
     },
     "chatHistory": {
+      "newConversation": "新对话",
       "imageConversation": "图像对话"
     },
     "imageHelpers": {

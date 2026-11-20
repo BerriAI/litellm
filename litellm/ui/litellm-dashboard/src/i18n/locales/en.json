@@ -6039,6 +6039,7 @@
     },
     "chart": {
       "valuesLabel": "{{title}} values",
+      "period": "{{start}} to {{end}} (UTC)",
       "category": "Category",
       "valuesUnavailable": "Values unavailable for: {{labels}}.",
       "unavailable": "Unavailable",
@@ -6054,7 +6055,16 @@
         "gateway": "Gateway usage",
         "allTeams": "All teams",
         "allTags": "All tags",
-        "yours": "Your usage"
+        "yours": "Your usage",
+        "permittedTeams": "Your permitted team usage",
+        "user": "User {{id}}",
+        "teams": "Teams {{ids}}",
+        "tags": "Tags {{tags}}"
+      },
+      "units": {
+        "usd": "usd",
+        "requests": "requests",
+        "tokens": "tokens"
       },
       "labels": {
         "unknown": "Unknown",
@@ -9918,6 +9928,7 @@
       "stopFailed": "Could not stop the run. Reconnect and try Stop again."
     },
     "chatHistory": {
+      "newConversation": "New conversation",
       "imageConversation": "Image conversation"
     },
     "imageHelpers": {

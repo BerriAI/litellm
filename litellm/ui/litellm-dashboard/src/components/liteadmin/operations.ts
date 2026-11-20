@@ -8,6 +8,7 @@ import type { components } from "@/lib/http/schema";
 import { generatedKey, projectToolResult, type ResultKind } from "./toolResults";
 import {
   buildUsageChart,
+  formatUsageChartContext,
   usageChartRequestSchema,
   usageChartSource,
   type UsageChart,
@@ -145,7 +146,7 @@ export function createLiteAdminOperations(context: OperationContext) {
       if (!chart)
         return { success: false, message: "No recorded data is available for this chart. Explain that in text." };
       context.onChart(chart);
-      return { success: true, chart };
+      return { success: true, chart: { ...chart, ...formatUsageChartContext(chart, i18n.getFixedT("en")) } };
     },
   };
   const renderChart = zodFunction(chartDefinition);
@@ -212,9 +213,9 @@ export function createLiteAdminOperations(context: OperationContext) {
           const key = name === "key_create" || name === "user_create" ? generatedKey(outcome.value) : undefined;
           if (action) context.onResult(action, { status: "completed", ...(key ? { key } : {}) });
           const result = projectToolResult(kind, outcome.value, [context.accessToken, ...(key ? [key] : [])]);
-          let reportScope: "Gateway usage" | "All teams" | "All tags" = "Gateway usage";
-          if (name === "get_team_usage_data") reportScope = "All teams";
-          if (name === "get_tag_usage_data") reportScope = "All tags";
+          let reportScope: "gateway" | "allTeams" | "allTags" = "gateway";
+          if (name === "get_team_usage_data") reportScope = "allTeams";
+          if (name === "get_tag_usage_data") reportScope = "allTags";
           const source = kind === "usage" ? usageChartSource(result, args, context.access, reportScope) : undefined;
           const sourceId = source ? uuidv4() : undefined;
           if (source && sourceId) usageSources.set(sourceId, source);

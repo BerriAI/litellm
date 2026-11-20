@@ -2,6 +2,7 @@ import { v4 as uuid } from "uuid";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AssistantMessageUpdate, ChatMessage, Conversation } from "./types";
+import { DEFAULT_CONVERSATION_TITLE, isDefaultConversationTitle } from "./conversationTitle";
 import {
   deleteChatImages,
   getConversationImages,
@@ -181,7 +182,7 @@ export function useChatHistory(
     const now = Date.now();
     const newConversation: Conversation = {
       id,
-      title: "New conversation",
+      title: DEFAULT_CONVERSATION_TITLE,
       model,
       messages: [],
       mcpServerNames: [],
@@ -205,17 +206,18 @@ export function useChatHistory(
         const updated = prev.map((conv) => {
           if (conv.id !== conversationId) return conv;
           const updatedMessages = [...conv.messages, newMessage];
-          let title = conv.title;
-          if (
-            title === "New conversation" &&
-            newMessage.role === "user" &&
-            conv.messages.filter((m) => m.role === "user").length === 0
-          ) {
-            title = generateTitle(
-              newMessage.content || newMessage.attachments?.[0]?.name || t("chat.chatHistory.imageConversation"),
-            );
-          }
-          return { ...conv, title, messages: updatedMessages, updatedAt: Date.now() };
+          const title =
+            newMessage.role === "user" && isDefaultConversationTitle(conv)
+              ? generateTitle(
+                  newMessage.content || newMessage.attachments?.[0]?.name || t("chat.chatHistory.imageConversation"),
+                )
+              : undefined;
+          return {
+            ...conv,
+            ...(title === undefined ? {} : { title, hasCustomTitle: true }),
+            messages: updatedMessages,
+            updatedAt: Date.now(),
+          };
         });
         return trimConversations(updated);
       });
@@ -263,7 +265,9 @@ export function useChatHistory(
   const renameConversation = useCallback((id: string, newTitle: string) => {
     setConversations((prev) =>
       trimConversations(
-        prev.map((conv) => (conv.id === id ? { ...conv, title: newTitle, updatedAt: Date.now() } : conv)),
+        prev.map((conv) =>
+          conv.id === id ? { ...conv, title: newTitle, hasCustomTitle: true, updatedAt: Date.now() } : conv,
+        ),
       ),
     );
   }, []);
