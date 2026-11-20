@@ -31,7 +31,7 @@ Python behavior Rust needs but does not own, behind one module per question. Rus
   - `randomness`: the process `random` generator the Python router draws from
   - `redis_events`: reporting native Redis calls and breaker transitions to `ServiceLogging`
   - `redis_credentials`: what a caller's redis-py `CredentialProvider` authenticates with
-  - `model_cost`: where a `register_model` entry lands in the published table and the row it writes, and the generation and provider names a pricing snapshot reads
+  - `model_cost`: where a `register_model` entry lands in the published table and the row it writes, and the generation, cost configs, generalization rules and provider names a pricing snapshot reads
   - `route_groups`: the proxy's `LiteLLMRoutes` groups by name, which the auth core reads at settings build
 - `routes/<route>.py` holds the questions one route asks, under the same function names on every route (`response`, `map_failure`, `connection_defaults`), so Rust names only the module. A question two routes ask goes in a top-level module here instead
 - Each module reuses the Python implementation the Python route runs (`AnthropicModelInfo`, `Logging`). Do not re-derive those rules here or in Rust; one resolver, two callers

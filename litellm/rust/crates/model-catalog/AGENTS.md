@@ -69,10 +69,12 @@ Catalog errors use one opaque `Error` with typed causes and JSON Pointer accesso
 `view.rs` is everything resolving and pricing read from a host. `CostLookup` is the table and the context of one call, and it implements litellm-cost's `CandidateTable` with row facts only (which key a name finds, whether a row declares a rate, what `register_model` wrote)
 
 - `CatalogView` is the whole table interface: exact key, folded key, a row's fields, its `registered_fields`, and `lowered`, whose default lowers the row each time it is asked. A host that keeps lowerings overrides it
-- `PricingContext` is the immutable rest: the capability rules and `KnownNames`, the two lists only Python has, every provider name and the model names `get_model_info` renames
+- `PricingContext` is the immutable rest: the capability rules, `KnownNames` (the two lists only Python has, every provider name and the model names `get_model_info` renames) and litellm-cost's `CostConfig`, the discount and margin config
 - Nothing here versions, caches or swaps a table. A host whose table can change under it (python-bridge over `litellm.model_cost`) does that itself and hands in one view per call
 - `Catalog` is a `CatalogView` with no registrations, which is how the Rust host prices through the same path
 - A row is lowered with `litellm_provider` replaced by the billed provider, as `NativePrices` does
+
+`pricing.rs` makes `CostLookup` litellm-cost's `PricingTable`: each row lowered for its billed provider, `row_at` and the context's `CostConfig`. `LoweredRow` is the core's `LoweredRow`, and its `RowFacts` (mode, max tokens, how main's `float()` reads `provider_specific_entry`, the raw keys the auth checks read) are read off the fields when the row is lowered. Which rows a query reads, and how they bill, is litellm-cost's (`candidates::priced`, `PricingRows`)
 
 ## Copied from main, fix later
 

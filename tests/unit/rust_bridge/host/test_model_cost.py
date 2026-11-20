@@ -3,6 +3,10 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.fallback_generalizations import (
+    get_fallback_generalization_rules,
+    set_fallback_generalizations,
+)
 from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry, write
 from litellm.rust_bridge.host.model_cost import generation, kept, merged, published, resolve
 
@@ -16,26 +20,23 @@ def test_generation_moves_with_a_table_write_and_keeps_the_published_table() -> 
     after: Final = generation()
 
     assert after[0] is published()
-    assert (after[3], after[2]) == (before[3] + 1, before[2] + 1)
+    assert (after[1][2], after[1][1]) == (before[1][2] + 1, before[1][1] + 1)
 
 
-@pytest.mark.parametrize("config", ["cost_discount_config", "cost_margin_config"])
-def test_generation_moves_when_a_cost_config_is_replaced(monkeypatch: pytest.MonkeyPatch, config: str) -> None:
+def test_generation_moves_when_the_generalization_rules_are_installed_again() -> None:
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    rules: Final = [{"name": "probe", "pattern": "^probe-", "model_info": {"input_cost_per_token": 1.0}}]
     before: Final = generation()
+    try:
+        set_fallback_generalizations(rules)
+        replaced: Final = generation()
+        set_fallback_generalizations(rules)
+        reinstalled: Final = generation()
+    finally:
+        set_fallback_generalizations(previous_rules)
 
-    monkeypatch.setattr(litellm, config, {"anthropic": 0.1})
-    replaced: Final = generation()
-
-    assert replaced[1:4] == before[1:4]
-    assert replaced[4:] != before[4:]
-
-
-def test_generation_stays_when_a_cost_config_is_edited_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
-    before: Final = generation()
-
-    monkeypatch.setitem(litellm.cost_discount_config, "anthropic", 0.1)
-
-    assert generation() == before
+    assert len({before[1], replaced[1], reinstalled[1]}) == 3
+    assert replaced[2][2] == rules
 
 
 def test_resolve_lands_on_the_row_a_lookup_in_the_published_table_resolves() -> None:

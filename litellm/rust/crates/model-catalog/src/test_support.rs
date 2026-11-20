@@ -8,6 +8,8 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use crate::store::{Rows, Store};
+use litellm_cost::adjust::CostConfig;
+
 use crate::view::{CatalogView, KnownNames, PricingContext};
 use crate::wire::Fields;
 use crate::{CapabilityRules, CostMap};
@@ -104,6 +106,7 @@ pub(crate) fn context(names: KnownNames) -> PricingContext {
     PricingContext {
         rules: bundled_rules(),
         names,
+        config: Arc::new(CostConfig::default()),
     }
 }
 
