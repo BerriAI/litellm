@@ -1575,6 +1575,8 @@ def _typed_model_info_pricing(
             if COST_MAP_LOOKUP_KEY in incoming_model_info
             and is_server_derived_pricing_key(k)
             and k not in echoed_fields
+            and isinstance(v, (int, float))
+            and not isinstance(v, bool)
             and patched_litellm_params.get(k) == stored_litellm_params.get(k)
         }
     )

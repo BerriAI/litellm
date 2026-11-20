@@ -4678,6 +4678,29 @@ class TestModelInfoServerDerivedPricingFilter:
         }, "only the rates the operator edited become overrides, the unchanged echo does not"
         assert not [k for k in json.loads(result["model_info"]) if "cost" in k]
 
+    def test_a_non_numeric_value_under_a_pricing_key_in_model_info_never_reaches_litellm_params(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        result = update_db_model(
+            db_model=Deployment(
+                model_name="gov-gpt",
+                litellm_params=LiteLLM_Params(model="azure/gpt-5.4"),
+                model_info=ModelInfo(id="dep-gov-2"),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-gov-2",
+                    key="azure/gpt-5.4",
+                    audit_cost_above_1k_tokens="os.environ/LITELLM_MASTER_KEY",
+                )
+            ),
+        )
+
+        assert "audit_cost_above_1k_tokens" not in json.loads(result["litellm_params"])
+
     def test_a_rate_changed_on_litellm_params_beats_the_same_rate_edited_in_model_info(self):
         import litellm
         from litellm.proxy.management_endpoints.model_management_endpoints import (
