@@ -58,6 +58,12 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "axforge": {
+    "base_url": "https://api.axforge.ai/v1",
+    "api_key_env": "AXFORGE_API_KEY",
+    "api_base_env": "AXFORGE_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
   "zerogpu": {
     "base_url": "https://api.zerogpu.ai/v1",
     "api_key_env": "ZEROGPU_API_KEY",
