@@ -22,6 +22,7 @@ import dataclasses
 import inspect
 import itertools
 import json
+import os
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import date, datetime, time
@@ -58,6 +59,7 @@ from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
+    lax_bool,
     without,
 )
 from litellm.litellm_core_utils.routing_common_utils import (
@@ -395,6 +397,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "enable_weighted_failover",
         "fallback_on_unsupported_params",
         "dynamic_queue",
+        "enable_cross_model_group_collision_check",
         # Built host-side as CustomLogger checks (litellm/router_rust/steps/callbacks.py); router-core runs
         # their deployment filters through its callback_filters stage.
         "optional_pre_call_checks",
@@ -710,6 +713,7 @@ class Resolved:
     retry_policy: object = None
     model_group_retry_policy: object = None
     health_routing: HealthRouting = dataclasses.field(default_factory=HealthRouting)
+    enable_cross_model_group_collision_check: bool = False
     dynamic_queue: "DynamicQueueSettings | None" = None
     # `_core_default_deployment`, as assigned (detached).
     default_deployment: object = None
@@ -836,6 +840,9 @@ class Resolved:
             retry_policy=resolved_retry_policy(get("retry_policy")),
             model_group_retry_policy=get("model_group_retry_policy"),
             health_routing=HealthRouting.of(config),
+            enable_cross_model_group_collision_check=_cross_model_group_collision_check(
+                get("enable_cross_model_group_collision_check")
+            ),
             dynamic_queue=_dynamic_queue(get("dynamic_queue"), get("default_priority")),
         )
 
@@ -935,6 +942,7 @@ class Resolved:
             if self.routing_group_members is not None
             else None,
             **self.health_routing.static_document(),
+            "enable_cross_model_group_collision_check": True if self.enable_cross_model_group_collision_check else None,
         }
         kept: Final = {name: value for name, value in values.items() if value is not None}
         # An explicit `routing_strategy=None` reaches the Rust core as "None": no strategy picks.
@@ -1021,6 +1029,16 @@ def _group_selectors(groups: "Sequence[RoutingGroup]") -> Sequence[tuple[str, st
 
 def _optional_bool(value: object) -> bool | None:
     return None if value is None else bool(value)
+
+
+CROSS_MODEL_GROUP_COLLISION_CHECK_ENV: Final = "LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK"
+
+
+def _cross_model_group_collision_check(given: object) -> bool:
+    explicit: Final = lax_bool(given)
+    if explicit is not None:
+        return explicit
+    return lax_bool(os.environ.get(CROSS_MODEL_GROUP_COLLISION_CHECK_ENV)) is True
 
 
 def unsupported_arguments(config: RouterConfig) -> frozenset[str]:

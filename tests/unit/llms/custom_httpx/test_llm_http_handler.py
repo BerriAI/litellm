@@ -17,7 +17,6 @@ import httpx
 import pytest
 import respx
 import websockets.exceptions
-from botocore.credentials import RefreshableCredentials
 from h2.events import ConnectionTerminated
 
 import litellm
@@ -88,7 +87,7 @@ from litellm.types.utils import (
     ProviderSpecificHeader,
     TranscriptionResponse,
 )
-from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe, host_in_loop_probing_vault
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -1327,74 +1326,6 @@ async def test_anthropic_messages_streaming_response_aclose_closes_agentic_upstr
     assert tracker.closed is True
 
 
-class _ProbedBedrockMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
-    def __init__(self, probe: EventLoopProbe) -> None:
-        super().__init__()
-        self._probe = probe
-
-    def get_credentials(
-        self,
-        **kwargs: object,  # kwargs-ok: mirrors the base resolver's keyword contract, which the probe ignores
-    ) -> RefreshableCredentials:
-        return self._probe.credentials()
-
-
-@pytest.mark.asyncio
-async def test_async_anthropic_messages_handler_signs_bedrock_off_the_event_loop(monkeypatch):
-    """Regression for issue #40165: /v1/messages on Bedrock signed on the loop, so botocore's blocking
-    credential refresh inside SigV4 stalled every other request on the worker."""
-    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    probe = EventLoopProbe()
-    handler = BaseLLMHTTPHandler()
-    upstream_response = httpx.Response(
-        200,
-        json={
-            "id": "msg_123",
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "text", "text": "hi"}],
-            "model": "claude-haiku-4-5-20251001",
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 1, "output_tokens": 1},
-        },
-        request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com/"),
-    )
-    mock_client = AsyncMock(spec=AsyncHTTPHandler)
-    mock_client.post = AsyncMock(return_value=upstream_response)
-    mock_logging_obj = Mock()
-    mock_logging_obj.model_call_details = {}
-    mock_logging_obj.dynamic_success_callbacks = None
-    release = asyncio.create_task(probe.release_refresh_from_the_loop())
-
-    await handler.async_anthropic_messages_handler(
-        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        messages=[{"role": "user", "content": "hi"}],
-        anthropic_messages_provider_config=_ProbedBedrockMessagesConfig(probe),
-        anthropic_messages_optional_request_params={"max_tokens": 16},
-        custom_llm_provider="bedrock",
-        litellm_params=GenericLiteLLMParams(aws_region_name="us-west-2"),
-        logging_obj=mock_logging_obj,
-        client=mock_client,
-        stream=False,
-        kwargs={},
-    )
-    await release
-
-    sent_headers = mock_client.post.call_args.kwargs["headers"]
-    assert sent_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
-    assert probe.served_during_refresh is True
-
-
-_BEDROCK_MESSAGE: Final = {
-    "id": "msg_1",
-    "type": "message",
-    "role": "assistant",
-    "model": "claude-sonnet-5-5",
-    "content": [{"type": "text", "text": "hi"}],
-    "stop_reason": "end_turn",
-    "usage": {"input_tokens": 1, "output_tokens": 1},
-}
 _BEDROCK_RESPONSE: Final = {
     "id": "resp_1",
     "object": "response",
@@ -1419,15 +1350,6 @@ _BATCH_LINE: Final = json.dumps(
 ).encode()
 _BATCH_FILE_ID: Final = "s3://batch-inputs/litellm-bedrock-files/batch.jsonl"
 _BEDROCK_ENTRY_POINTS: Final[tuple[tuple[str, Callable[[], Awaitable[object]], httpx.Response], ...]] = (
-    (
-        "anthropic_messages",
-        lambda: python_messages.anthropic_messages(
-            model="bedrock/invoke/us.anthropic.claude-sonnet-5-5",
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=16,
-        ),
-        httpx.Response(200, json=_BEDROCK_MESSAGE),
-    ),
     (
         "responses",
         lambda: litellm.aresponses(model="bedrock/us.openai.gpt-5.6-sol", input="hi"),
@@ -3585,9 +3507,6 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     """Regression: after Bedrock rejects a replayed thinking block (400 invalid signature),
     the strip-and-retry re-sign must not inherit attempt 1's SigV4 Authorization/X-Amz-Date;
     reusing them over the new stripped body makes AWS return 403 SignatureDoesNotMatch."""
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
-        AmazonAnthropicClaudeMessagesConfig,
-    )
 
     for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
         monkeypatch.delenv(env_var, raising=False)

@@ -352,6 +352,7 @@ class StoredBudget(BudgetRecord):
 class BudgetGroupScope(str, Enum):
     ORGANIZATION = "customer_organization_budget_group_ids"
     APP_ORGANIZATION = "app_customer_organization_budget_group_ids"
+    APP = "app_budget_group_ids"
 
 
 _BUDGET_IDS: Final = TypeAdapter(tuple[str, ...])
@@ -1559,13 +1560,8 @@ class CustomerHierarchyStore:
         member_templates: Final = chain.from_iterable(
             _BUDGET_IDS.validate_python(row.model_dump().get("budget_template_ids", ())) for row in organizations
         )
-        groups: Final = frozenset(
-            (
-                *await organization_budget_group_ids(self.config),
-                *await budget_group_ids(self.config, BudgetGroupScope.APP_ORGANIZATION),
-                *member_templates,
-            )
-        )
+        catalogs: Final = tuple([await budget_group_ids(self.config, scope) for scope in BudgetGroupScope])
+        groups: Final = frozenset((*chain.from_iterable(catalogs), *member_templates))
         where: Final[Mapping[str, object]] = {field: {"none": {}} for field in _BUDGET_REFERENCE_FIELDS}
         await delete_many_in(
             self.budgets,

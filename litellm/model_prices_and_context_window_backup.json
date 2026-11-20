@@ -82912,7 +82912,7 @@
         "max_input_tokens": 1049000,
         "max_output_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 5e-07,
+        "output_cost_per_token": 4.7e-07,
         "source": "https://www.coreweave.com/products/coreweave-forge/serverless-inference",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -87147,14 +87147,14 @@
         "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast": {
-        "cache_read_input_token_cost": 4.8e-08,
-        "input_cost_per_token": 2.4e-06,
+        "cache_read_input_token_cost": 2.4e-08,
+        "input_cost_per_token": 1.2e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 9.6e-06,
-        "source": "https://docs.fireworks.ai/serverless/pricing.md",
+        "output_cost_per_token": 4.8e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
@@ -87172,6 +87172,23 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-1017-flex": {
+        "cache_read_input_token_cost": 3e-09,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://docs.fireworks.ai/serverless/serverless-modes.md",
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
@@ -123444,5 +123461,45 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "supports_function_calling": true
+    },
+    "fal_ai/ideogram/v4.6": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One image at 2K or below (up to 4,194,304 pixels) is 8 units at very low quality, 30 at low, 60 at the default medium and 100 at high, and above 2K it is 60 units at low, 120 at medium and 200 at high. The per-image price is the default medium quality at 2K or below, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.001,
+        "output_cost_per_image": 0.06,
+        "source": "https://fal.ai/models/ideogram/v4.6",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/ideogram/v4.6/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One image at 2K or below (up to 4,194,304 pixels) is 8 units at very low quality, 30 at low, 60 at the default medium and 220 at high, and above 2K it is 60 units at low, 200 at medium and 600 at high. The per-image price is the default medium quality at 2K or below, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.001,
+        "output_cost_per_image": 0.06,
+        "source": "https://fal.ai/models/ideogram/v4.6/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "together_ai/tencent/Hy4": {
+        "cache_read_input_token_cost": 4.2e-08,
+        "input_cost_per_token": 8.34e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.501e-06,
+        "source": "https://api.together.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }

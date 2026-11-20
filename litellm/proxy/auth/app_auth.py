@@ -40,6 +40,9 @@ def app_scope(
     return customer_scope(key, entity_id, spend, budget).model_copy(
         update={
             "budget_limits": app_budget_limits(budget),
+            "soft_budget_duration": budget.budget_duration
+            if budget is not None and budget.soft_budget is not None
+            else None,
             **({"max_budget": None} if has_duration else {}),
         }
     )
