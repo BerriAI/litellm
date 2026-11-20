@@ -274,7 +274,7 @@ class AmazonNovaEmbeddingConfig:
         self,
         response_list: list[dict],
         model: str,
-        batch_data: list[dict] | None = None,
+        batch_data: Sequence[Mapping[str, object]] | None = None,
         metered_input_tokens: Sequence[int | None] = (),
     ) -> EmbeddingResponse:
         """
@@ -322,7 +322,7 @@ class AmazonNovaEmbeddingConfig:
                     "singleEmbeddingParams",
                     request_data.get("segmentedEmbeddingParams", {}),
                 )
-                if "image" in params:
+                if isinstance(params, Mapping) and "image" in params:
                     image_count += 1
 
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
