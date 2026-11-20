@@ -1550,7 +1550,7 @@ async def _write_team_update(
     max_budget_guard: _MaxBudgetGuard | None,
     original_windows: Sequence[BudgetLimitEntry] | None,
 ) -> "prisma_models.LiteLLM_TeamTable | None":
-    if "budget_limits" in team_update_data and prisma_client is not None:
+    if ("budget_limits" in team_update_data or "budget_duration" in team_update_data) and prisma_client is not None:
         async with prisma_client.tx() as tx_ctx:
             tx: Final = cast("_TeamUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
             rebased: Final = await rebase_budget_limits_update(

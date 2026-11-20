@@ -1637,7 +1637,7 @@ async def _write_user_update(
     data: Mapping[str, object],
     original: LiteLLM_UserTable | None,
 ) -> Mapping[str, object] | None:
-    if "budget_limits" not in data:
+    if "budget_limits" not in data and "budget_duration" not in data:
         return cast(  # cast-ok: the user branch returns a user_id/data dictionary
             "Mapping[str, object] | None",
             await prisma_client.update_data(user_id=user_id, data=data, table_name="user"),

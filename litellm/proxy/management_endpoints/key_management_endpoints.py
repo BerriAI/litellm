@@ -3114,7 +3114,7 @@ async def _write_key_update(
     existing_key_row: LiteLLM_VerificationToken,
     include: Mapping[str, object] | None = None,
 ) -> "prisma_models.LiteLLM_VerificationToken | None":
-    if "budget_limits" not in data:
+    if "budget_limits" not in data and "budget_duration" not in data:
         return await VerificationTokenRepository(prisma_client).table.update(
             where={"token": hashed_token}, data=data, include=include
         )
@@ -3132,7 +3132,7 @@ async def _update_key_row(
     update_values: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
 ) -> _KeyUpdateResult | None:
-    if "budget_limits" in update_values:
+    if "budget_limits" in update_values or "budget_duration" in update_values:
         hashed_token: Final = hash_token_if_needed(key)
         updated: Final = await _write_key_update(
             prisma_client,

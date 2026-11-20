@@ -20214,3 +20214,30 @@ async def test_team_info_reports_current_spend_per_budget_window():
         window_duration="1d",
         window_start=datetime(2026, 8, 15, 0, 0, tzinfo=timezone.utc),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_duration,stored_reset,expected", [
+    ("5h", "2026-07-15T15:00:00Z", "2026-07-15T10:45:00Z"),
+    ("45m", "2026-07-15T11:30:00Z", "2026-07-15T11:30:00Z"),
+    ("45m", "2026-07-15T10:00:00Z", "2026-07-15T10:00:00Z"),
+])
+async def test_team_duration_edits_use_the_writers_current_schedule(
+    stored_duration: str, stored_reset: str, expected: str,
+) -> None:
+    import time_machine
+    from litellm.proxy.management_endpoints.team_endpoints import _write_team_update
+    from litellm.proxy.utils import PrismaClient
+
+    stored: Final = {"budget_duration": stored_duration, "budget_reset_at": datetime.fromisoformat(stored_reset)}
+    database: Final = MagicMock()
+    database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[stored])
+    transaction.litellm_teamtable.update = AsyncMock(return_value=LiteLLM_TeamTable(team_id="scalar-team"))
+    payload: Final = {"budget_duration": "45m", "budget_reset_at": datetime(2026, 7, 15, 10, 45, tzinfo=timezone.utc)}
+    with time_machine.travel("2026-07-15T10:17:00Z", tick=False):
+        await _write_team_update(database, "scalar-team", payload, None, None)
+    persisted: Final = {**stored, **transaction.litellm_teamtable.update.call_args.kwargs["data"]}
+    assert persisted["budget_duration"] == "45m"
+    assert persisted["budget_reset_at"] == datetime.fromisoformat(expected)

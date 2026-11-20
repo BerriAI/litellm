@@ -2631,6 +2631,10 @@ async def test_user_update_keeps_existing_budget_reset_when_the_duration_is_rese
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
     prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    prisma_client.jsonify_object = PrismaClient.jsonify_object.__get__(prisma_client)
+    transaction: Final = prisma_client.tx.return_value.__aenter__.return_value
+    transaction.query_raw = mocker.AsyncMock(return_value=[saved_user.model_dump()])
+    transaction.litellm_usertable.upsert = mocker.AsyncMock(return_value=saved_user)
     mocker.patch(
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
@@ -2644,7 +2648,7 @@ async def test_user_update_keeps_existing_budget_reset_when_the_duration_is_rese
         user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
-    written: Final = prisma_client.update_data.call_args.kwargs["data"]
+    written: Final = transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]
     reset_at: Final = written.get("budget_reset_at")
     assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
     assert ("budget_reset_at" in written) is moves_reset
@@ -6202,3 +6206,30 @@ async def test_user_info_v2_without_budget_windows_reads_no_window_spend(mocker)
 
     assert response.budget_limits_usage is None
     get_current_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_duration,stored_reset,expected", [
+    ("5h", "2026-07-15T15:00:00Z", "2026-07-15T10:45:00Z"),
+    ("45m", "2026-07-15T11:30:00Z", "2026-07-15T11:30:00Z"),
+    ("45m", "2026-07-15T10:00:00Z", "2026-07-15T10:00:00Z"),
+])
+async def test_user_duration_edits_use_the_writers_current_schedule(
+    stored_duration: str, stored_reset: str, expected: str,
+) -> None:
+    import time_machine
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _write_user_update
+    from litellm.proxy.utils import PrismaClient
+
+    stored: Final = {"budget_duration": stored_duration, "budget_reset_at": datetime.fromisoformat(stored_reset)}
+    database: Final = MagicMock()
+    database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[stored])
+    transaction.litellm_usertable.upsert = AsyncMock(return_value=LiteLLM_UserTable(user_id="scalar-user"))
+    payload: Final = {"budget_duration": "45m", "budget_reset_at": datetime(2026, 7, 15, 10, 45, tzinfo=timezone.utc)}
+    with time_machine.travel("2026-07-15T10:17:00Z", tick=False):
+        await _write_user_update(database, "scalar-user", payload, None)
+    persisted: Final = {**stored, **transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]}
+    assert persisted["budget_duration"] == "45m"
+    assert persisted["budget_reset_at"] == datetime.fromisoformat(expected)
