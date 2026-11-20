@@ -52,7 +52,7 @@ def _endpoint(body, sink=None):
 
 def _recording_persist(sink):
     async def persist(
-        user_id, server_id, access_token, refresh_token, expires_in, scopes, cimd_client_id=None
+        user_id, server_id, access_token, refresh_token, expires_in, scopes, cimd_client_id=None, refreshed_from=None
     ):
         sink.append(
             (user_id, server_id, access_token, refresh_token, expires_in, scopes)
