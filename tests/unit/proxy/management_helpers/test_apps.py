@@ -1,12 +1,15 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from contextlib import asynccontextmanager
+from functools import partial
 from typing import Final
 from uuid import uuid4
 
 import pytest
 from pydantic import TypeAdapter
 
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_id, app_scope_identity
-from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
+from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope, ErrorCode, Failure
 from litellm.types.proxy.management_endpoints.apps import (
     App,
     AppCreate,
@@ -24,6 +27,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     BudgetGroupsUpdate,
     BudgetTemplate,
+    MemberPatch,
 )
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import (
     NOW,
@@ -102,15 +106,41 @@ class CompositeTable(AppTable):
         return await Table.update(self, where, data)
 
 
+class AppConfigTable(Table):
+    def __init__(self, database: Database) -> None:
+        super().__init__("param_name", database)
+        self.read_error: Exception | None = None
+
+    async def find_unique(
+        self, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> Record | None:
+        self.read_count += 1
+        if self.read_error is not None:
+            raise self.read_error
+        return await super().find_unique(where, include)
+
+
 class AppDatabase(Database):
     def __init__(self) -> None:
         super().__init__()
+        self.committed = False
+        self.litellm_config = AppConfigTable(self)
         self.litellm_apptable: Final = AppTable("app_id", self)
         self.litellm_appcustomerorgtable: Final = CompositeTable("app_id_customer_org_id", self)
         self.litellm_appcustomermembertable: Final = CompositeTable("app_id_customer_member_id", self)
         self.litellm_teamtable: Final = AppTable("team_id", self)
         self.litellm_projecttable = AppTable("project_id", self)
         self.litellm_verificationtoken = AppTable("token", self)
+        self.litellm_usertable: Final = AppTable("user_id", self)
+        self.litellm_organizationtable: Final = AppTable("organization_id", self)
+        self.litellm_organizationmembership: Final = AppTable("organization_id", self)
+        self.litellm_objectpermissiontable: Final = AppTable("object_permission_id", self)
+
+    @asynccontextmanager
+    async def tx(self) -> AsyncGenerator["AppDatabase", None]:
+        async with super().tx():
+            yield self
+        self.committed = True
 
     def has_budget_reference(self, budget_id: str, relation: str) -> bool:
         references: Final = {
@@ -121,6 +151,8 @@ class AppDatabase(Database):
                 "default_customer_member_budget_id",
             ),
             "app_org_tiers": (self.litellm_appcustomerorgtable, "tier_budget_id"),
+            "app_org_budgets": (self.litellm_appcustomerorgtable, "budget_id"),
+            "app_member_budgets": (self.litellm_appcustomermembertable, "budget_id"),
             "app_org_overrides": (
                 self.litellm_appcustomerorgtable,
                 "budget_override_id",
@@ -141,6 +173,22 @@ class AppDatabase(Database):
         return any(row.model_dump().get(field) == budget_id for row in table.rows.values())
 
 
+class AppPrismaClient:
+    def __init__(self, db: AppDatabase) -> None:
+        self.db: Final = db
+
+
+class CommitAwareCache(UserApiKeyCache):
+    def __init__(self, database: AppDatabase) -> None:
+        super().__init__()
+        self.database: Final = database
+        self.invalidated_after_commit: bool | None = None
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.invalidated_after_commit = self.database.committed
+        await super().async_delete_cache(key)
+
+
 async def seed_resources(database: AppDatabase) -> None:
     await database.litellm_teamtable.create({"team_id": "chat", "team_alias": "Chat"})
     await database.litellm_teamtable.create({"team_id": "search", "team_alias": "Search"})
@@ -148,19 +196,19 @@ async def seed_resources(database: AppDatabase) -> None:
     await database.litellm_verificationtoken.create({"token": "token-a", "key_alias": "Service key", "key_id": None})
 
 
-async def profile(store: AppStore, name: str, maximum: float) -> str:
+async def profile(
+    store: AppStore, name: str, maximum: float, scope: BudgetGroupScope = BudgetGroupScope.ORGANIZATION
+) -> str:
     from prisma import Json
 
     budget_id: Final = await store.customers.create_budget(BudgetTemplate(name=name, max_budget=maximum), "admin", name)
-    current: Final = await store.customers.config.find_unique(
-        where={"param_name": "customer_organization_budget_group_ids"}
-    )
+    current: Final = await store.customers.config.find_unique(where={"param_name": scope.value})
     ids: Final = TypeAdapter(tuple[str, ...]).validate_python(current.model_dump()["param_value"]) if current else ()
     await store.customers.config.upsert(
-        where={"param_name": "customer_organization_budget_group_ids"},
+        where={"param_name": scope.value},
         data={
             "create": {
-                "param_name": "customer_organization_budget_group_ids",
+                "param_name": scope.value,
                 "param_value": Json([budget_id]),
             },
             "update": {"param_value": Json([*ids, budget_id])},
@@ -200,6 +248,68 @@ async def test_apps_are_opt_in_and_discovery_does_not_configure_a_resource() -> 
 
 
 @pytest.mark.asyncio
+async def test_definition_cache_caches_an_absent_config() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW, cache=UserApiKeyCache())
+
+    assert await store.definition() == AppDefinition()
+    assert await store.definition() == AppDefinition()
+    assert database.litellm_config.read_count == 1
+
+
+@pytest.mark.asyncio
+async def test_definition_cache_is_invalidated_after_a_config_update() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW, cache=UserApiKeyCache())
+    assert await store.definition() == AppDefinition()
+
+    stored: Final = await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    assert stored == AppDefinition(resource_type=AppResourceType.TEAM)
+    await store.invalidate_definition_cache()
+
+    assert await store.definition() == AppDefinition(resource_type=AppResourceType.TEAM)
+    assert await store.definition() == AppDefinition(resource_type=AppResourceType.TEAM)
+    assert database.litellm_config.read_count == 3
+
+
+@pytest.mark.asyncio
+async def test_app_store_dependency_invalidates_after_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.management_v1.apps import get_app_store
+
+    database: Final = AppDatabase()
+    cache: Final = CommitAwareCache(database)
+    monkeypatch.setattr(proxy_server, "prisma_client", AppPrismaClient(database))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    await AppStore(database, NOW, cache=cache).definition()
+
+    dependency: Final = get_app_store()
+    store: Final = await anext(dependency)
+    definition: Final = AppDefinition(resource_type=AppResourceType.TEAM)
+    assert await store.put_definition(definition) == definition
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(dependency)
+
+    assert cache.invalidated_after_commit is True
+    assert await AppStore(database, NOW, cache=cache).definition() == definition
+
+
+@pytest.mark.asyncio
+async def test_definition_cache_does_not_cache_database_errors() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW, cache=UserApiKeyCache())
+    database.litellm_config.read_error = RuntimeError("database read failed")
+
+    with pytest.raises(RuntimeError, match="database read failed"):
+        await store.definition()
+
+    database.litellm_config.read_error = None
+    assert await store.definition() == AppDefinition()
+    assert database.litellm_config.read_count == 2
+
+
+@pytest.mark.asyncio
 async def test_binding_is_idempotent_and_locks_the_gateway_definition(
     app_store: tuple[AppDatabase, AppStore, App],
 ) -> None:
@@ -231,8 +341,10 @@ async def test_unknown_and_wrong_type_resources_cannot_create_policy_records(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("selector", ("tier_budget_id", "budget_id"))
 async def test_org_override_wins_then_shared_profile_then_default(
     app_store: tuple[AppDatabase, AppStore, App],
+    selector: str,
 ) -> None:
     _, store, app = app_store
     default: Final = await profile(store, "Standard", 10)
@@ -242,7 +354,7 @@ async def test_org_override_wins_then_shared_profile_then_default(
     inherited: Final = await store.organization(configured, "org")
     assert inherited.effective_budget == Budget(max_budget=10, allowed_models=())
     assigned: Final = await store.put_organization(
-        app.app_id, "org", AppOrganizationPut(tier_budget_id=selected), "admin"
+        app.app_id, "org", AppOrganizationPut.model_validate({selector: selected, "budget": None}), "admin"
     )
     assert isinstance(assigned, AppOrganization) and assigned.effective_budget == Budget(
         max_budget=20, allowed_models=()
@@ -281,17 +393,32 @@ async def test_shared_profile_edits_are_inherited_without_pooling_app_spend(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("assignment", ("default", "customer"))
+@pytest.mark.parametrize("assignment", ("default", "customer", "app", "member-default", "customer-members", "member"))
 async def test_profiles_in_use_by_apps_cannot_be_removed(
     app_store: tuple[AppDatabase, AppStore, App], assignment: str
 ) -> None:
     database, store, app = app_store
-    group: Final = await profile(store, "Standard", 10)
-    if assignment == "default":
+    scope: Final = (
+        BudgetGroupScope.APP_MEMBER
+        if assignment in ("member-default", "customer-members", "member")
+        else BudgetGroupScope.APP
+        if assignment == "app"
+        else BudgetGroupScope.ORGANIZATION
+    )
+    group: Final = await profile(store, "Standard", 10, scope)
+    if assignment == "app":
+        await store.patch(app.app_id, AppPatch(budget_id=group), "admin")
+    elif assignment == "default":
         await store.patch(app.app_id, AppPatch(default_tier_budget_id=group), "admin")
+    elif assignment == "member-default":
+        await store.patch(app.app_id, AppPatch(default_customer_member_budget_id=group), "admin")
+    elif assignment == "customer-members":
+        await store.put_organization(app.app_id, "org", AppOrganizationPut(customer_member_budget_id=group), "admin")
+    elif assignment == "member":
+        await store.put_member(app.app_id, "member", AppMemberPut(budget_id=group), "admin")
     else:
         await store.put_organization(app.app_id, "org", AppOrganizationPut(tier_budget_id=group), "admin")
-    groups: Final = await store.customers.get_budget_groups(None)
+    groups: Final = await store.customers.get_budget_groups(None, scope=scope)
     assert not isinstance(groups, Failure)
     rejected: Final = await store.customers.configure_templates(
         None,
@@ -301,9 +428,45 @@ async def test_profiles_in_use_by_apps_cannot_be_removed(
             default_budget_template=None,
         ),
         "admin",
+        scope=scope,
     )
     assert rejected == Failure(ErrorCode.TEMPLATE_IN_USE)
     assert group in database.litellm_budgettable.rows
+
+
+@pytest.mark.asyncio
+async def test_app_presets_stay_linked_until_customized_without_changing_other_apps(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, store, app = app_store
+    group: Final = await profile(store, "App Standard", 10, BudgetGroupScope.APP)
+    await store.customers.update_budget(group, Budget(rpm_limit=4, budget_duration="1mo"), "admin")
+    linked: Final = await store.patch(app.app_id, AppPatch(budget_id=group), "admin")
+    second: Final = await store.create(AppCreate(resource_id="search", budget_id=group), "admin")
+    assert isinstance(linked, App) and isinstance(second, App) and linked.budget_id == second.budget_id == group
+    await store.customers.update_budget(group, Budget(max_budget=20), "admin")
+    loaded: Final = await store.get(app.app_id)
+    other: Final = await store.get(second.app_id)
+    expected: Final = Budget(max_budget=20, rpm_limit=4, budget_duration="1mo", allowed_models=())
+    assert isinstance(loaded, App) and isinstance(other, App) and loaded.budget == other.budget == expected
+    unchanged: Final = await store.patch(app.app_id, AppPatch(customer_margin=0.1), "admin")
+    assert isinstance(unchanged, App) and unchanged.budget_id == group
+    forked: Final = await store.patch(app.app_id, AppPatch(budget=Budget(max_budget=30)), "admin")
+    assert isinstance(forked, App) and forked.budget_id is not None and forked.budget_id != group
+    assert forked.budget == expected.model_copy(update={"max_budget": 30})
+    assert await store.budget(group) == expected
+    preset_row: Final = database.litellm_budgettable.rows[group].model_dump()
+    custom_row: Final = database.litellm_budgettable.rows[forked.budget_id].model_dump()
+    assert custom_row["budget_reset_at"] == preset_row["budget_reset_at"]
+    cleared: Final = await store.patch(app.app_id, AppPatch(budget=Budget(max_budget=None)), "admin")
+    assert isinstance(cleared, App) and cleared.budget_id == forked.budget_id
+    assert cleared.budget == expected.model_copy(update={"max_budget": None})
+    restored: Final = await store.patch(app.app_id, AppPatch(budget_id=group), "admin")
+    assert isinstance(restored, App) and restored.budget_id == group and await store.budget(forked.budget_id) is None
+    unlimited: Final = await store.patch(app.app_id, AppPatch(budget_id=None), "admin")
+    assert isinstance(unlimited, App) and unlimited.budget_id is None and unlimited.budget is None
+    await store.patch(second.app_id, AppPatch(budget_id=None), "admin")
+    assert await store.budget(group) == expected
 
 
 @pytest.mark.asyncio
@@ -335,7 +498,7 @@ async def test_member_override_is_scoped_and_can_return_to_the_org_default(
     )
     assert isinstance(override, AppMember) and override.effective_budget == Budget(max_budget=1, allowed_models=())
     assert override.budget_source == AppMemberBudgetSource.MEMBER_OVERRIDE
-    restored: Final = await store.put_member(app.app_id, "member", AppMemberPut(), "admin")
+    restored: Final = await store.put_member(app.app_id, "member", AppMemberPut(budget_override=None), "admin")
     assert isinstance(restored, AppMember) and restored.effective_budget == Budget(max_budget=5, allowed_models=())
 
 
@@ -349,9 +512,7 @@ async def test_arbitrary_budget_rows_are_not_profiles(
         app.app_id, "org", AppOrganizationPut(tier_budget_id=private_budget), "admin"
     )
     default: Final = await store.patch(app.app_id, AppPatch(default_tier_budget_id=private_budget), "admin")
-    created: Final = await store.create(
-        AppCreate(resource_id="search", default_tier_budget_id=private_budget), "admin"
-    )
+    created: Final = await store.create(AppCreate(resource_id="search", default_tier_budget_id=private_budget), "admin")
     assert isinstance(assigned, AppFailure) and assigned.status == 422
     assert isinstance(default, AppFailure) and default.status == 422
     assert isinstance(created, AppFailure) and created.status == 422
@@ -493,7 +654,9 @@ async def test_should_reject_budget_changes_when_the_app_binding_is_unavailable(
         )
     results: Final = (
         await store.patch(app.app_id, AppPatch(budget=Budget(max_budget=7)), "admin"),
-        await store.put_organization(app.app_id, "org", AppOrganizationPut(budget_override=Budget(max_budget=3)), "admin"),
+        await store.put_organization(
+            app.app_id, "org", AppOrganizationPut(budget_override=Budget(max_budget=3)), "admin"
+        ),
         await store.put_member(app.app_id, "member", AppMemberPut(budget_override=Budget(max_budget=1)), "admin"),
     )
     assert all(isinstance(result, AppFailure) and result.status == status for result in results)
@@ -547,9 +710,7 @@ async def test_should_skip_a_key_rotated_during_identity_backfill(monkeypatch: p
     update_many: Final = database.litellm_verificationtoken.update_many
 
     async def rotate_before_backfill(where: Mapping[str, object], data: Mapping[str, object]) -> int:
-        await database.litellm_verificationtoken.update(
-            where={"token": "token-a"}, data={"token": "rotated-token"}
-        )
+        await database.litellm_verificationtoken.update(where={"token": "token-a"}, data={"token": "rotated-token"})
         return await update_many(where=where, data=data)
 
     with monkeypatch.context() as backfill:
@@ -559,3 +720,114 @@ async def test_should_skip_a_key_rotated_during_identity_backfill(monkeypatch: p
     assert len(discovered) == 1 and discovered[0].alias == "Service key"
     assert "rotated-token" not in discovered[0].model_dump_json()
     assert await store.key_resource_id("rotated-token") == discovered[0].resource_id
+
+
+async def put_budget_association(
+    store: AppStore, app: App, scope: str, data: MemberPatch
+) -> AppMember | AppOrganization:
+    values: Final = data.model_dump(exclude_unset=True)
+    result: Final = (
+        await store.put_member(app.app_id, "member", AppMemberPut.model_validate(values), "admin")
+        if scope == "member"
+        else await store.put_organization(app.app_id, "org", AppOrganizationPut.model_validate(values), "admin")
+    )
+    assert isinstance(result, (AppMember, AppOrganization))
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("member", "organization"))
+@pytest.mark.parametrize(
+    "legacy",
+    (None, Budget(max_budget=15, model_rpm_limit={"model": 5}, cap_policy="pause_allow_increase", allowed_models=())),
+)
+async def test_app_custom_policy_survives_edits_grants_and_expiry(
+    app_store: tuple[AppDatabase, AppStore, App], scope: str, legacy: Budget | None
+) -> None:
+    database, store, app = app_store
+    preset: Final = await profile(store, "Standard", 10)
+    policy: Final = Budget(max_budget=10, rpm_limit=4, budget_duration="1mo", allowed_models=("base",))
+    await store.customers.update_budget(preset, policy, "admin")
+    await store.patch(
+        app.app_id, AppPatch(default_tier_budget_id=preset, default_customer_member_budget=policy), "admin"
+    )
+    global_member: Final = database.litellm_customermembertable.rows["member"]
+    put: Final = partial(put_budget_association, store, app, scope)
+    initial: Final = await put(MemberPatch(budget_override=legacy) if legacy else MemberPatch())
+    expected: Final = legacy or policy
+    assert initial.effective_budget == expected
+    created: Final = await put(MemberPatch(budget=Budget(max_budget=20), budget_override=None))
+    assert created.budget == expected.model_copy(update={"max_budget": 20})
+    assert created.budget_id != preset
+    await database.litellm_budgettable.update(
+        where={"budget_id": created.budget_id},
+        data={"temp_budget_increase": 5, "temp_budget_expiry": NOW.replace(year=2027)},
+    )
+    loaded: Final = await put(MemberPatch())
+    assert loaded.budget == created.budget
+    assert loaded.effective_budget == created.budget.model_copy(update={"max_budget": 25})
+    saved: Final = await put(MemberPatch(budget=loaded.budget))
+    assert saved.effective_budget == loaded.effective_budget
+    grant: Final = await put(
+        MemberPatch(budget_override=Budget(max_budget=30), budget_override_expires_at=NOW.replace(year=2027)),
+    )
+    edited: Final = await put(MemberPatch(budget=Budget(rpm_limit=None, model_rpm_limit=None, tpm_limit=0)))
+    assert edited.budget_id == created.budget_id
+    assert edited.budget == created.budget.model_copy(
+        update={"rpm_limit": None, "model_rpm_limit": None, "tpm_limit": 0}
+    )
+    assert edited.budget_override_id == grant.budget_override_id
+    assert edited.effective_budget == edited.budget.model_copy(update={"max_budget": 30})
+    expired: Final = await put_budget_association(AppStore(database, NOW.replace(year=2028)), app, scope, MemberPatch())
+    assert expired.effective_budget == edited.budget
+    assert database.litellm_customermembertable.rows["member"] == global_member
+    assert await store.budget(preset) == policy
+    cleared: Final = await put(MemberPatch(budget=None, budget_override=None))
+    assert cleared.effective_budget == policy
+    assert await store.budget(created.budget_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", (BudgetGroupScope.ORGANIZATION, BudgetGroupScope.APP_ORGANIZATION))
+async def test_app_org_custom_forks_shared_profile_and_expiry_restores_private_budget(
+    app_store: tuple[AppDatabase, AppStore, App], scope: BudgetGroupScope
+) -> None:
+    database, store, app = app_store
+    tier: Final = await profile(store, "Standard", 10, scope)
+    await store.customers.update_budget(tier, Budget(rpm_limit=4, budget_duration="1mo"), "admin")
+    selected: Final = await store.put_organization(app.app_id, "org", AppOrganizationPut(budget_id=tier), "admin")
+    assert isinstance(selected, AppOrganization) and selected.budget_id == tier and selected.budget is None
+    forked: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget=Budget(max_budget=12)), "admin"
+    )
+    assert isinstance(forked, AppOrganization) and forked.budget is not None
+    assert forked.budget_id != tier and forked.budget.rpm_limit == 4 and forked.budget.max_budget == 12
+    assert await store.budget(tier) == selected.effective_budget
+    original_row: Final = await store.customers.budgets.find_unique(where={"budget_id": tier})
+    private_row: Final = await store.customers.budgets.find_unique(where={"budget_id": forked.budget_id})
+    assert original_row is not None and private_row is not None
+    assert private_row.model_dump()["budget_reset_at"] == original_row.model_dump()["budget_reset_at"]
+    patched: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget=Budget(rpm_limit=None)), "admin"
+    )
+    assert isinstance(patched, AppOrganization) and patched.budget is not None
+    assert (
+        patched.budget_id == forked.budget_id and patched.budget.rpm_limit is None and patched.budget.max_budget == 12
+    )
+    increased: Final = await store.put_organization(
+        app.app_id,
+        "org",
+        AppOrganizationPut(budget_override=Budget(max_budget=20), budget_override_expires_at=NOW.replace(year=2027)),
+        "admin",
+    )
+    assert isinstance(increased, AppOrganization) and increased.effective_budget == Budget(
+        max_budget=20, budget_duration="1mo", allowed_models=()
+    )
+    expired: Final = await AppStore(database, NOW.replace(year=2028)).organization(app, "org")
+    assert expired.effective_budget == await store.budget(forked.budget_id)
+    restored: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget_id=tier, budget_override=None), "admin"
+    )
+    assert isinstance(restored, AppOrganization) and restored.budget_id == tier
+    assert await store.budget(forked.budget_id) is None
+    assert await store.budget(tier) is not None

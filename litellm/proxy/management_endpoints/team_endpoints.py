@@ -101,6 +101,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    TEAM_MAX_BUDGET_ALERT_EMAILS_KEY,
     OrganizationNotFoundError,
     _cache_team_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     allowed_route_check_inside_route,
@@ -118,6 +119,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     invalidate_team_member_spend_state,
     jwt_key_mapping_cache_key,
     resolve_effective_team_member_budget,
+    team_max_budget_alert_emails_error,
 )
 from litellm.proxy.auth.auth_utils import (
     enforce_batch_limits_are_admin_only,
@@ -209,6 +211,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     sync_team_access_group_membership,
 )
 from litellm.proxy.management_helpers.audit_logs import with_audit_actor
+from litellm.proxy.management_helpers.budget_limits_usage import build_budget_limits_usage
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
@@ -237,7 +240,7 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
     query_raw_within_statement_timeout,
 )
-from litellm.redis.stores.spend_counters import team_counter
+from litellm.redis.stores.spend_counters import team_counter, team_window_counter
 from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
@@ -302,6 +305,32 @@ class _TeamIdGroupRow(TypedDict):
 
 def _as_object(value: object) -> object:
     return value
+
+
+_TEAM_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _team_metadata_value(metadata: object, key: str) -> object:
+    try:
+        return _TEAM_METADATA_ADAPTER.validate_python(metadata).get(key)
+    except ValidationError:
+        return None
+
+
+def _reject_invalid_team_budget_alert_emails(
+    metadata: object,
+    stored_metadata: object,
+    max_budget: float | None,
+    stored_max_budget: float | None,
+) -> None:
+    alert_emails: Final = _team_metadata_value(metadata, TEAM_MAX_BUDGET_ALERT_EMAILS_KEY)
+    if alert_emails == _team_metadata_value(stored_metadata, TEAM_MAX_BUDGET_ALERT_EMAILS_KEY) and (
+        max_budget == stored_max_budget
+    ):
+        return
+    error: Final = team_max_budget_alert_emails_error(alert_emails, max_budget)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
 
 
 def _as_list(rows: Sequence[_DbRecordT]) -> list[_DbRecordT]:  # mutable-ok: pydantic list[...] fields reject Sequence
@@ -1913,6 +1942,13 @@ async def new_team(
                 if default_budget is not None:
                     data.max_budget = default_budget
 
+        _reject_invalid_team_budget_alert_emails(
+            metadata=_as_object(getattr(data, "metadata", None)),
+            stored_metadata=None,
+            max_budget=data.max_budget,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # legacy default_team_settings is a bare dict
+            stored_max_budget=None,
+        )
+
         # check org key limits - done here to handle inheriting org id from team
         if data.organization_id is not None and prisma_client is not None:
             try:
@@ -2020,6 +2056,7 @@ async def new_team(
         data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
             data_json=data_json,
             prisma_client=prisma_client,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
 
         if TeamMemberBudgetHandler.should_create_budget(
@@ -2710,6 +2747,15 @@ async def update_team(
             license_first=True,
         )
 
+        _reject_invalid_team_budget_alert_emails(
+            metadata=_as_object(getattr(data, "metadata", None))  # pyright: ignore[reportUnknownArgumentType]  # stored Prisma metadata is a bare dict
+            if "metadata" in data.model_fields_set
+            else _existing_team_metadata,
+            stored_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            max_budget=data.max_budget if "max_budget" in data.model_fields_set else existing_team_row.max_budget,
+            stored_max_budget=existing_team_row.max_budget,
+        )
+
         if data.soft_budget is not None:
             max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget
             if max_budget_to_check is not None:
@@ -2947,6 +2993,7 @@ async def update_team(
             updated_kv = await handle_update_object_permission(
                 data_json=updated_kv,
                 existing_team_row=existing_team_row,
+                can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
             )
 
         # update team metadata fields
@@ -3103,7 +3150,9 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_tea
         updated_kv["budget_limits"] = json.dumps(initialized_windows)
 
 
-async def handle_update_object_permission(data_json: dict, existing_team_row: _ObjectPermissionRow) -> dict:
+async def handle_update_object_permission(
+    data_json: dict, existing_team_row: _ObjectPermissionRow, can_grant_apps: bool = False
+) -> dict:
     """
     Handle the update of object permission for a team.
 
@@ -3117,6 +3166,7 @@ async def handle_update_object_permission(data_json: dict, existing_team_row: _O
         data_json=data_json,
         existing_object_permission_id=existing_team_row.object_permission_id,
         prisma_client=prisma_client,
+        can_grant_apps=can_grant_apps,
     )
 
     # Add the object_permission_id to data_json if one was created/updated
@@ -5629,6 +5679,12 @@ async def team_info(
                     entity_id=team_id,
                     model_max_budget=resolved_team_info.model_max_budget,
                     cache=model_max_budget_limiter.dual_cache,
+                ),
+                "budget_limits_usage": await build_budget_limits_usage(
+                    budget_limits=resolved_team_info.budget_limits,
+                    counter_key=lambda duration: team_window_counter(team_id, duration),
+                    entity_type="Team",
+                    entity_id=team_id,
                 ),
                 "caller_edit_access": _caller_edit_access(access_role, _general_settings()),
             }

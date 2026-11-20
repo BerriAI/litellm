@@ -18,8 +18,9 @@ from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KE
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.proxy.db.model_usage_rollup import date_from_start_time, utc_date_from_start_time
-from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.route_llm_request import spend_endpoint
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
+from litellm.proxy.spend_tracking.customer_cache_cost import recorded_customer_cache_cost
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
@@ -213,7 +214,7 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     ):
         return ()
     counters: Final = _daily_counters(row, metadata)
-    endpoint: Final = ROUTE_ENDPOINT_MAPPING.get(_text(row.get("call_type")))
+    endpoint: Final = spend_endpoint(_text(row.get("call_type")), metadata)
     shared_key: Final = (
         ("date", date),
         ("api_key", _text(row.get("api_key"))),
@@ -233,13 +234,22 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
         **({"app_id": entities["app_id"]} if isinstance(entities.get("app_id"), str) else {}),
         **{key: customer[key] or "" for key in ("customer_team_id", "customer_member_id")},
     }
-    return tuple(_daily_rows(daily_row, shared_key, counters))
+    usage: Final = _fields(metadata.get("usage_object"))
+    cache_cost, priced_cache_tokens = recorded_customer_cache_cost(
+        metadata.get("cache_cost_breakdown"), extract_cache_read_tokens(usage), extract_cache_creation_tokens(usage)
+    )
+    return tuple(
+        _daily_rows(
+            daily_row, shared_key, counters, (("cache_cost", cache_cost), ("priced_cache_tokens", priced_cache_tokens))
+        )
+    )
 
 
 def _daily_rows(
     row: Mapping[str, object],
     shared_key: tuple[tuple[str, str], ...],
     counters: tuple[tuple[str, int | float], ...],
+    customer_counters: tuple[tuple[str, int | float], ...],
 ) -> Iterator[Contribution]:
     for entity, table in DAILY_SPEND_TABLES.items():
         customer_date = _utc_date(row) if entity == "customer_member" else None
@@ -263,7 +273,7 @@ def _daily_rows(
                     *daily_key,
                     *((("model_group", _text(row.get("model_group"))),) if table.hashed_identity else ()),
                 ),
-                counters,
+                (*counters, *customer_counters) if entity == "customer_member" else counters,
                 (
                     *(() if table.hashed_identity else model_group),
                     *((("request_id", _text(row.get("request_id"))),) if table.carries_request_id else ()),
@@ -278,7 +288,11 @@ def _window_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
             "LiteLLM_BudgetWindowSpend",
             tuple((column, _text(window[column])) for column in ("entity_type", "entity_id", "window_duration")),
             (("spend", _number(window.get("spend", row.get("spend")))),),
-            (("window_start", _text(window["window_start"])), ("started_at", _text(row.get("startTime")))),
+            (
+                ("window_start", _text(window["window_start"])),
+                ("started_at", _text(row.get("startTime"))),
+                ("reset_at", _text(window.get("reset_at")) or None),
+            ),
         )
         for window in windows
     )

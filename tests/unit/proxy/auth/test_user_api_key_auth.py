@@ -853,8 +853,9 @@ async def test_aaauser_personal_budgets(key_ownership, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("spend,expect_refusal", [(5.0, True), (0.5, False)], ids=["over_budget", "under_budget"])
-async def test_virtual_key_max_budget_decides_a_queued_chat_call(monkeypatch, spend, expect_refusal):
+@pytest.mark.parametrize("oauth", [False, True])
+@pytest.mark.parametrize("spend,expect_refusal", [(5.0, True), (1.0, True), (0.5, False)])
+async def test_virtual_key_max_budget_decides_a_queued_chat_call(monkeypatch, spend, expect_refusal, oauth):
     import time
 
     from fastapi import Request
@@ -864,7 +865,7 @@ async def test_virtual_key_max_budget_decides_a_queued_chat_call(monkeypatch, sp
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
-    route: Final = "/queue/chat/completions"
+    route: Final = "/v1/messages" if oauth else "/queue/chat/completions"
     key: Final = "sk-queued-chat-budget"
     user_api_key_cache.set_cache(
         key=hash_token(key),
@@ -880,7 +881,8 @@ async def test_virtual_key_max_budget_decides_a_queued_chat_call(monkeypatch, sp
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
 
-    request: Final = Request(scope={"type": "http", "method": "POST", "path": route, "headers": []})
+    headers: Final = [(b"authorization", b"Bearer sk-ant-oat-test"), (b"x-litellm-api-key", key.encode())] if oauth else []
+    request: Final = Request(scope={"type": "http", "method": "POST", "path": route, "headers": headers})
     request._url = URL(url=route)
 
     if not expect_refusal:

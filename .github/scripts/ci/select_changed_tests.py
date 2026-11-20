@@ -3,7 +3,9 @@
 
 Reads the changed paths on stdin. A changed `tests/unit/**/test_*.py` file is selected,
 and so is every `tests/unit/<dir>/test_<module>.py` or `test_<module>_*.py` mirroring a
-changed `litellm/<dir>/<module>.py`. Files the unit-core shards already run are left out,
+changed `litellm/<dir>/<module>.py`. Any change inside a package whose tests do not mirror
+its layout, migration SQL included, selects that package's whole test directory, listed in
+`PACKAGE_TESTS`. Files the unit-core shards already run are left out,
 as are files whose full-matrix shard needs settings this lane does not have: serial
 execution or another Python version.
 """
@@ -21,11 +23,12 @@ import yaml
 
 UNIT_ROOT: Final = PurePosixPath("tests/unit")
 SOURCE_ROOT: Final = PurePosixPath("litellm")
+PACKAGE_TESTS: Final = ((PurePosixPath("litellm/proxy-extras"), UNIT_ROOT / "litellm_proxy_extras"),)
 
 
 def _shard_paths(shard: Mapping[str, object]) -> tuple[PurePosixPath, ...]:
     tokens: Final = str(shard.get("test-path", "")).split()
-    return tuple(PurePosixPath(token) for token in tokens if not token.startswith("-"))
+    return tuple(PurePosixPath(token.split("::", 1)[0]) for token in tokens if not token.startswith("-"))
 
 
 def _shards(workflow: Mapping[str, object], job: str) -> tuple[Mapping[str, object], ...]:
@@ -41,8 +44,8 @@ def _incompatible(shard: Mapping[str, object], python: str) -> bool:
     return str(shard.get("workers")) == "0" or str(shard.get("python-version")) != python
 
 
-def exclusions(workflow: Mapping[str, object], python: str) -> tuple[PurePosixPath, ...]:
-    core: Final = _shards(workflow, "unit-core")
+def exclusions(workflow: Mapping[str, object], python: str, include_core: bool = False) -> tuple[PurePosixPath, ...]:
+    core: Final = () if include_core else _shards(workflow, "unit-core")
     special: Final = (shard for shard in _shards(workflow, "unit") if _incompatible(shard, python))
     return tuple(itertools.chain.from_iterable(_shard_paths(shard) for shard in itertools.chain(core, special)))
 
@@ -63,6 +66,12 @@ def _mirrors(path: PurePosixPath, root: Path) -> Iterator[PurePosixPath]:
         yield from (PurePosixPath(match.relative_to(root).as_posix()) for match in root.glob(pattern))
 
 
+def _package_tests(path: PurePosixPath, root: Path) -> Iterator[PurePosixPath]:
+    for source, tests in PACKAGE_TESTS:
+        if path.is_relative_to(source):
+            yield from (PurePosixPath(match.relative_to(root).as_posix()) for match in (root / tests).glob("test_*.py"))
+
+
 def _excluded(path: PurePosixPath, excluded: tuple[PurePosixPath, ...]) -> bool:
     return any(path == entry or path.is_relative_to(entry) for entry in excluded)
 
@@ -71,7 +80,8 @@ def select(changed: Iterable[str], excluded: tuple[PurePosixPath, ...], root: Pa
     paths: Final = tuple(PurePosixPath(line.strip()) for line in changed if line.strip())
     direct: Final = (path for path in paths if _is_unit_test(path))
     mirrored: Final = itertools.chain.from_iterable(_mirrors(path, root) for path in paths)
-    candidates: Final = frozenset(itertools.chain(direct, mirrored))
+    packaged: Final = itertools.chain.from_iterable(_package_tests(path, root) for path in paths)
+    candidates: Final = frozenset(itertools.chain(direct, mirrored, packaged))
     return tuple(
         sorted(path.as_posix() for path in candidates if (root / path).is_file() and not _excluded(path, excluded))
     )
@@ -82,9 +92,10 @@ def main() -> None:
     parser.add_argument("--workflow", type=Path, default=Path(".github/workflows/test-unit.yml"))
     parser.add_argument("--python", default="3.12")
     parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--include-core", action="store_true", help="Select tests normally run by unit-core too")
     args: Final = parser.parse_args()
     workflow: Final = yaml.safe_load(args.workflow.read_text(encoding="utf-8"))
-    selected: Final = select(sys.stdin, exclusions(workflow, args.python), args.root)
+    selected: Final = select(sys.stdin, exclusions(workflow, args.python, args.include_core), args.root)
     sys.stdout.write("".join(f"{path}\n" for path in selected))
 
 

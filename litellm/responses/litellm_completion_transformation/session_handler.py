@@ -329,6 +329,7 @@ class ResponsesSessionHandler:
         stored_turns: StoredTurns | None = None,
         empty_user_turn_text: str | None = None,
         replay_mcp_calls: bool = False,
+        keep_tool_references: bool = False,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -372,6 +373,7 @@ class ResponsesSessionHandler:
             tool_call_provider_fields,
             empty_user_turn_text,
             replay_mcp_calls,
+            keep_tool_references,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
@@ -380,6 +382,7 @@ class ResponsesSessionHandler:
             tool_call_provider_fields,
             empty_user_turn_text,
             replay_mcp_calls,
+            keep_tool_references,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -442,6 +445,7 @@ class ResponsesSessionHandler:
         tool_call_provider_fields: bool,
         empty_user_turn_text: str | None = None,
         replay_mcp_calls: bool = False,
+        keep_tool_references: bool = False,
     ) -> list["SessionMessage"]:
         return reduce(
             lambda history, turn: ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
@@ -452,6 +456,7 @@ class ResponsesSessionHandler:
                 tool_call_provider_fields=tool_call_provider_fields,
                 empty_user_turn_text=empty_user_turn_text,
                 replay_mcp_calls=replay_mcp_calls,
+                keep_tool_references=keep_tool_references,
             ),
             zip(spend_logs, proxy_server_requests, strict=True),
             [],
@@ -472,6 +477,7 @@ class ResponsesSessionHandler:
         tool_call_provider_fields: bool = False,
         empty_user_turn_text: str | None = None,
         replay_mcp_calls: bool = False,
+        keep_tool_references: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -514,6 +520,7 @@ class ResponsesSessionHandler:
                 only_since_compaction=True,
                 replay_tool_search=True,
                 replay_mcp_calls=replay_mcp_calls,
+                keep_tool_references=keep_tool_references,
             )
             input_before_blank_tail: Final = without_blank_user_tail(stored_input)
             inference_continues_the_blank_tail: Final = empty_user_turn_text == "" and len(

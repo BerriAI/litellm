@@ -7,6 +7,7 @@
 
 @plugin '@headlessui/tailwindcss';
 @plugin '@tailwindcss/forms';
+@plugin '../components/publicModelHub/catalogVariant.ts';
 
 @custom-variant dark (&:where(.dark, .dark *));
 

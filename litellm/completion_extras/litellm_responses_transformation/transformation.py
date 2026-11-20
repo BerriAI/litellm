@@ -1385,7 +1385,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> dict:
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         preserve_system_instructions: Final = any(
-            params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
+            params.get("previous_response_id") or params.get("truncation") == "auto"
             for params in (
                 request_params,
                 as_str_mapping(request_params.get("extra_body")) or {},

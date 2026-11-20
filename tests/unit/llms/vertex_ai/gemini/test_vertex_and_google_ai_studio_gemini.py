@@ -7,13 +7,14 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mappin
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, pairwise
+from pathlib import Path
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
 import respx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
@@ -5105,6 +5106,102 @@ def test_logprobs_flag_applies_only_to_the_route_whose_row_carries_it(
     assert _mapped_logprobs(other_config, "gemini-zeta-9", drop_params=True) == _GEMINI_LOGPROBS_FIELDS
 
 
+# Google answered these with a 400 about logprobs, and the same call without logprobs with a 200, on 2026-11-18.
+# The live proof is in the PR that added this list.
+_ROWS_GOOGLE_REFUSES_LOGPROBS_ON: Final = (
+    "gemini/gemini-2.5-flash-image",
+    "gemini/gemini-3-flash-preview",
+    "gemini/gemini-3-pro-image",
+    "gemini/gemini-3-pro-image-preview",
+    "gemini/gemini-3.1-flash-image",
+    "gemini/gemini-3.1-flash-image-preview",
+    "gemini/gemini-3.1-flash-lite",
+    "gemini/gemini-3.1-flash-lite-image",
+    "gemini/gemini-3.1-flash-lite-preview",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini/gemini-3.1-pro-preview-customtools",
+    "gemini/gemini-3.5-flash",
+    "gemini/gemini-3.5-flash-lite",
+    "gemini/gemini-3.6-flash",
+    "gemini/gemini-3.7-flash",
+    "gemini/gemini-3.8-flash",
+    "gemini/gemini-flash-latest",
+    "gemini/gemini-flash-lite-latest",
+    "gemini/gemini-nano-banana-2.1",
+    "gemini/gemini-pro-latest",
+    "gemini/gemini-robotics-er-2-preview",
+    "gemini/nano-banana-pro-preview",
+    "vertex_ai/gemini-2.5-flash-image",
+    "vertex_ai/gemini-3-flash-preview",
+    "vertex_ai/gemini-3-pro-image",
+    "vertex_ai/gemini-3.1-flash-image",
+    "vertex_ai/gemini-3.1-flash-lite",
+    "vertex_ai/gemini-3.1-flash-lite-image",
+    "vertex_ai/gemini-3.1-pro-preview",
+    "vertex_ai/gemini-3.1-pro-preview-customtools",
+    "vertex_ai/gemini-3.5-flash",
+    "vertex_ai/gemini-3.5-flash-lite",
+    "vertex_ai/gemini-3.6-flash",
+    "vertex_ai/gemini-3.7-flash",
+    "vertex_ai/gemini-3.8-flash",
+    "vertex_ai/gemini-4-argon",
+    "vertex_ai/gemini-4-carbon",
+    "vertex_ai/gemini-4-hydrogen",
+    "vertex_ai/gemini-4-neon",
+    "vertex_ai/gemini-nano-banana-2.1",
+    "vertex_ai/gemini-robotics-er-2-preview",
+)
+# The same live run got a 200 with logprobs on these. The gemini-4 family is refused on Vertex and accepted on AI Studio.
+_ROWS_GOOGLE_ACCEPTS_LOGPROBS_ON: Final = (
+    "gemini/gemini-4-argon",
+    "gemini/gemini-4-carbon",
+    "gemini/gemini-4-hydrogen",
+    "gemini/gemini-4-neon",
+    "vertex_ai/gemini-2.5-flash",
+    "vertex_ai/gemini-2.5-flash-lite",
+    "vertex_ai/gemini-2.5-pro",
+)
+_REPO_ROOT: Final = Path(__file__).parents[5]
+_MODEL_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+
+
+def _mapped_logprob_fields(row: str, drop_params: bool) -> Mapping[str, object]:
+    route, _, model = row.partition("/")
+    mapped: Final = _mapped_logprobs("vertex" if route == "vertex_ai" else "studio", model, drop_params)
+    return {field: mapped[field] for field in _GEMINI_LOGPROBS_FIELDS if field in mapped}
+
+
+def _rows_refusing_logprobs(path: Path) -> frozenset[str]:
+    rows: Final = _MODEL_MAP_ADAPTER.validate_json(path.read_bytes())
+    return frozenset(name for name, row in rows.items() if row.get("supports_logprobs") is False)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("row", _ROWS_GOOGLE_REFUSES_LOGPROBS_ON)
+def test_drop_params_removes_logprobs_only_from_rows_google_refuses_them_on(
+    row: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _mapped_logprob_fields(row, drop_params=True) == {}
+    assert _mapped_logprob_fields(row, drop_params=False) == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("row", _ROWS_GOOGLE_ACCEPTS_LOGPROBS_ON)
+def test_drop_params_keeps_logprobs_on_rows_google_accepts_them_on(row: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _mapped_logprob_fields(row, drop_params=True) == _GEMINI_LOGPROBS_FIELDS
+
+
+def test_model_map_and_its_bundled_backup_flag_the_same_logprobs_rows() -> None:
+    published: Final = _rows_refusing_logprobs(_REPO_ROOT / "model_prices_and_context_window.json")
+    bundled: Final = _rows_refusing_logprobs(_REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json")
+
+    assert published == bundled
+
+
 _LEVELS_MODEL: Final = "gemini-zeta-9-flash"
 _DECLARED_LEVELS: Final = ("none", "minimal", "high")
 
@@ -8583,6 +8680,39 @@ def test_non_streamed_content_filter_choice_keeps_google_reason(
     assert resp.choices[0].message.content is None
     assert resp.choices[0].provider_specific_fields == expected_provider_specific_fields
     assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (23, 4, 27)
+
+
+@pytest.mark.parametrize(
+    "google_signal",
+    [
+        {"candidates": [{"finishReason": "IMAGE_SAFETY", "index": 0}]},
+        {"candidates": [{"finishReason": "SAFETY", "index": 0}]},
+        {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}},
+    ],
+)
+def test_non_streamed_content_filter_reply_counts_thinking_tokens(google_signal: dict[str, object]):
+    completion_response: Final = {
+        **google_signal,
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "thoughtsTokenCount": 156,
+            "totalTokenCount": 165,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+        },
+    }
+
+    resp: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-3-pro-image",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (9, 156, 165)
+    assert resp.usage.completion_tokens_details.reasoning_tokens == 156
+    assert resp.usage.prompt_tokens_details.text_tokens == 9
 
 
 @dataclass(frozen=True, slots=True)

@@ -438,3 +438,24 @@ async def test_a_key_with_no_customer_resolves_its_app_but_reserves_no_surcharge
     assert (resolved.app_alias, resolved.customer_org_id, resolved.app_customer_margin) == ("Chat", None, 0.05)
     with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
         assert key_customer_cost_margin(UserAPIKeyAuth(token="plain", team_id="chat"), resolved) is None
+
+
+@pytest.mark.parametrize("duration", ("1mo", "12mo", "7d"))
+@pytest.mark.asyncio
+async def test_soft_only_app_period_is_accounted_without_enforcing_the_warning(duration: str) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.proxy.proxy_server import customer_accounting_counters
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds, customer_budget_scopes_metadata
+
+    scope: Final = app_scope("app", "application", 1000, Budget(soft_budget=5, budget_duration=duration))
+    assert scope.max_budget is None and scope.budget_limits == ()
+    snapshot: Final = customer_budget_scopes_metadata(CustomerHierarchyAuth(app_id="application", scopes=(scope,)))
+    assert snapshot is not None
+    restored: Final = TypeAdapter(tuple[CustomerScopeAuth, ...]).validate_json(snapshot)
+    counters: Final = await customer_accounting_counters(
+        CustomerHierarchyIds(app_id="application"), restored, started_at=NOW
+    )
+    assert tuple((counter.entity_type, counter.entity_id, counter.window_duration) for counter in counters) == (
+        ("app", "application", duration),
+    )

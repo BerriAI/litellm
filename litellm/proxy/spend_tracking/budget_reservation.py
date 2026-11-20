@@ -12,7 +12,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
@@ -260,12 +260,18 @@ async def reserve_budget_for_request(
     fail_closed_budget_enforcement: bool = False,
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
+    request: Request | None = None,
 ) -> dict | None:
     if valid_token is None or not RouteChecks.runs_inference_checks(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
         return None
-    if get_model_from_request(request_body, route, llm_router=llm_router, path_params=path_params) is None:
+    model: Final = get_model_from_request(request_body, route, llm_router=llm_router, path_params=path_params)
+    if model is None:
+        return None
+    if isinstance(model, str) and await _forwards_subscription_oauth(
+        request, model, route, llm_router, valid_token, _WINDOW_OBJECT.validate_python(request_body)
+    ):
         return None
 
     counters: Final = await _get_budget_counters(
@@ -324,6 +330,88 @@ async def reserve_budget_for_request(
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
     )
+
+
+async def _forwards_subscription_oauth(
+    request: Request | None,
+    model: str,
+    route: str,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth,
+    request_body: Mapping[str, object],
+) -> bool:
+    if request is None or not request.scope.get("headers"):
+        return False
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.proxy.litellm_pre_call_utils import (
+        caller_alias_target,
+        forwarded_anthropic_oauth_token,
+        pre_call_served_model,
+    )
+
+    if not any(is_anthropic_oauth_key(request.headers.get(name)) for name in ("authorization", "x-api-key")):
+        return False
+    if route.startswith("/anthropic/"):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            anthropic_route_uses_client_oauth,
+        )
+
+        return await anthropic_route_uses_client_oauth(request, valid_token)
+    if route not in ("/messages", "/v1/messages", "/chat/completions", "/v1/chat/completions"):
+        return False
+    if request_body.get("user_config") is not None:
+        return False
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
+    from litellm.proxy.proxy_server import (
+        general_settings_view,
+        prisma_client,
+        proxy_config,
+        proxy_logging_obj,
+        user_model_view,
+    )
+    from litellm.proxy.route_llm_request import router_settings_override_updates
+
+    hierarchical_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    effective_request: Final = MappingProxyType(
+        {
+            **request_body,
+            **({"router_settings_override": hierarchical_settings} if hierarchical_settings is not None else {}),
+        }
+    )
+    override_updates: Final = router_settings_override_updates(effective_request)
+    if any(
+        field in request_body or field in override_updates
+        for field in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "models", "model_list")
+    ):
+        return False
+    if llm_router is not None:
+        settings: Final = llm_router.settings()
+        if any(
+            _CACHED_VALUE.validate_python(getattr(settings, field))
+            for field in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+        ):
+            return False
+    if forwarded_anthropic_oauth_token(request.headers) is None:
+        return False
+    prepared_model: Final = resolve_inference_model(
+        caller_alias_target(model, valid_token, llm_router), general_settings_view(), user_model_view()
+    )
+    if not isinstance(prepared_model, str):
+        return False
+    served_model: Final = pre_call_served_model(
+        prepared_model,
+        valid_token,
+        hierarchical_settings.get("model_group_alias") if hierarchical_settings is not None else None,
+    )
+    if llm_router is not None:
+        upstreams: Final = llm_router.registry().resolve(served_model, kind="upstreams", team_id=valid_token.team_id)
+        return bool(upstreams) and all(provider == "anthropic" for _, provider in upstreams)
+    try:
+        return litellm.get_llm_provider(model=served_model)[1] == "anthropic"
+    except litellm.BadRequestError:
+        return False
 
 
 async def _native_budget_plan(
