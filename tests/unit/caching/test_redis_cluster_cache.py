@@ -72,6 +72,41 @@ async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
     assert not mock_redis.mget.called
 
 
+def _script_floors(eval_call: object) -> tuple[int, tuple[object, ...]]:
+    numkeys, *keys_and_args = cast(MagicMock, eval_call).call_args.args[1:]
+    return numkeys, tuple(keys_and_args[numkeys + 2 :])
+
+
+@patch("litellm._redis.init_redis_cluster")
+def test_cluster_pick_counts_each_deployment_at_least_at_its_shared_counter(mock_init_redis_cluster):
+    mock_redis = MagicMock()
+    mock_redis.mget_nonatomic.return_value = [b"3", None]
+    mock_redis.eval.return_value = 1
+    mock_init_redis_cluster.return_value = mock_redis
+    cache = RedisClusterCache(startup_nodes=[{"host": "localhost", "port": 6379}])
+
+    picked = cache.reserve_least_loaded("picks", (("a", 1), ("b", 2)), ("count-a", "count-b"), True, 30_000)
+
+    assert picked[0] == 1
+    assert picked[1] is not None and picked[1].endswith(":b")
+    assert _script_floors(mock_redis.eval) == (1, ("a", 3, "b", 2))
+
+
+@pytest.mark.asyncio
+@patch("litellm._redis.init_redis_cluster")
+async def test_async_cluster_pick_counts_each_deployment_at_least_at_its_shared_counter(mock_init_redis_cluster):
+    mock_redis = MagicMock()
+    mock_redis.mget_nonatomic = AsyncMock(return_value=[None, b"4"])
+    mock_redis.eval = AsyncMock(return_value=0)
+    cache = RedisClusterCache(startup_nodes=[{"host": "localhost", "port": 6379}])
+    cache.init_async_client = MagicMock(return_value=mock_redis)
+
+    picked = await cache.async_reserve_least_loaded("picks", (("a", 1), ("b", 2)), ("count-a", "count-b"), False, 1)
+
+    assert picked == (0, None)
+    assert _script_floors(mock_redis.eval) == (1, ("a", 1, "b", 4))
+
+
 @patch("litellm._redis.get_redis_connection_pool")
 @patch("litellm._redis.get_redis_client")
 @patch.object(import_module("litellm.caching.redis_cache").RedisCache, "_setup_health_pings")

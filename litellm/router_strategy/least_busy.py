@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import itertools
 import logging
 import threading
 import time
@@ -15,7 +16,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import log_redis_failure
+from litellm.caching.redis_cache import RedisCache, log_redis_failure
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.attempt_settlement import current_attempt_id, release_in_background, released
@@ -26,6 +27,7 @@ from litellm.types.utils import CallTypes
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
 SELECTION_RESERVATION_TTL_SECONDS: Final = 30.0
 SELECTION_RESERVATION_MAX_KEYS: Final = 20_000
+_SHARED_RESERVATION_TTL_MS: Final = int(SELECTION_RESERVATION_TTL_SECONDS * 1000)
 _RESERVATIONS_LOCK: Final = threading.Lock()
 _PICK_RESERVES: Final[ContextVar[bool]] = ContextVar("least_busy_pick_reserves")
 _PICK_OWNER: Final[ContextVar[str | None]] = ContextVar("least_busy_pick_owner", default=None)
@@ -82,7 +84,8 @@ _MEMORY_COUNTS: Final[TypeAdapter[tuple[float | None, ...] | None]] = TypeAdapte
 _Start: TypeAlias = tuple[float, str | None]
 _STARTS: Final[TypeAdapter[tuple[_Start, ...] | None]] = TypeAdapter(tuple[_Start, ...] | None)
 _STARTED_ATTEMPT: Final[TypeAdapter[tuple[str, str, str] | None]] = TypeAdapter(tuple[str, str, str] | None)
-_Pick: TypeAlias = tuple[float, str | None]
+_SharedPick: TypeAlias = tuple[str, str]
+_Pick: TypeAlias = tuple[float, str | None, _SharedPick | None]
 _PICKS: Final[TypeAdapter[tuple[_Pick, ...] | None]] = TypeAdapter(tuple[_Pick, ...] | None)
 _PICKED_DEPLOYMENTS: Final[TypeAdapter[tuple[str, ...] | None]] = TypeAdapter(tuple[str, ...] | None)
 
@@ -138,6 +141,10 @@ def _reservation_key(deployment_id: str) -> str:
     return f"least_busy_reservations:{deployment_id}"
 
 
+def _shared_reservations_key(model_group: str) -> str:
+    return f"least_busy_picks:{model_group}"
+
+
 def _started_attempts_key(call_id: str, ref: tuple[str, str]) -> str:
     return f"least_busy_started:{call_id}:{_request_count_key(*ref)}"
 
@@ -180,13 +187,17 @@ def _unexpired(picks: Sequence[_Pick], now: float) -> tuple[_Pick, ...]:
     return tuple(pick for pick in picks if now - pick[0] < SELECTION_RESERVATION_TTL_SECONDS)
 
 
-def _without_one_pick(picks: tuple[_Pick, ...], call_id: str | None) -> tuple[_Pick, ...]:
-    tags: Final = tuple(tag for _, tag in picks)
+def _without_one_pick(picks: tuple[_Pick, ...], call_id: str | None) -> tuple[tuple[_Pick, ...], _Pick | None]:
+    tags: Final = tuple(pick[1] for pick in picks)
     owner: Final = next((tag for tag in (call_id, _PICK_OWNER.get()) if tag is not None and tag in tags), None)
     if owner not in tags:
-        return picks
+        return picks, None
     index: Final = tags.index(owner)
-    return (*picks[:index], *picks[index + 1 :])
+    return (*picks[:index], *picks[index + 1 :]), picks[index]
+
+
+def _unmirrored(picks: tuple[_Pick, ...]) -> int:
+    return sum(1 for pick in picks if pick[2] is None)
 
 
 def _least_busy_index(counts: tuple[int, ...]) -> int:
@@ -208,6 +219,15 @@ def _warn_unwritable(key: str, error: Exception) -> None:
         verbose_router_logger,
         logging.WARNING,
         f"least-busy routing could not update the in-flight count under {key}",
+        error,
+    )
+
+
+def _warn_unreleased(key: str, error: Exception) -> None:
+    log_redis_failure(
+        verbose_router_logger,
+        logging.WARNING,
+        f"least-busy routing could not drop its pick reservation under {key}, which lapses on its own",
         error,
     )
 
@@ -239,9 +259,11 @@ def _put(store: _ReservationStore, key: str, values: tuple[object, ...], ttl: fl
         store.set_cache(key, values, ttl=ttl)
 
 
-def _release_call_on(store: _ReservationStore, deployment_id: str, call_id: str) -> None:
-    kept: Final = tuple(pick for pick in _picks(store, deployment_id) if pick[1] != call_id)
+def _release_call_on(store: _ReservationStore, deployment_id: str, call_id: str) -> tuple[_SharedPick | None, ...]:
+    picks: Final = _picks(store, deployment_id)
+    kept: Final = tuple(pick for pick in picks if pick[1] != call_id)
     _put(store, _reservation_key(deployment_id), kept, SELECTION_RESERVATION_TTL_SECONDS)
+    return tuple(pick[2] for pick in picks if pick[1] == call_id)
 
 
 def _end_started_attempt(store: _ReservationStore, attempt_id: str, *, every: bool) -> tuple[str, str, int] | None:
@@ -286,6 +308,38 @@ async def _async_count_shared(cache: DualCache, key: str, delta: int) -> None:
         _warn_unwritable(key, e)
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
+async def _async_forget_shared(redis_cache: RedisCache, picks: tuple[_SharedPick, ...]) -> None:
+    for key, reservation in picks:
+        try:
+            await redis_cache.async_release_reservation(key, reservation)
+        except Exception as e:
+            _warn_unreleased(key, e)
+
+
+def _in_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _forget_shared(cache: DualCache, *picks: _SharedPick | None) -> None:
+    shared: Final = tuple(pick for pick in picks if pick is not None)
+    redis_cache: Final = cache.redis_cache
+    if redis_cache is None or not shared:
+        return
+    if _in_event_loop():
+        release_in_background(_async_forget_shared(redis_cache, shared))
+        return
+    for key, reservation in shared:
+        try:
+            redis_cache.release_reservation(key, reservation)
+        except Exception as e:
+            _warn_unreleased(key, e)
+
+
 def release_started_attempt(store: _ReservationStore, cache: DualCache, attempt_id: str) -> "asyncio.Task[None] | None":
     """End a routed attempt that never reached its success or failure callback (refused, failed
     without logging, or cancelled): its in-flight count drops now, the shared one in the background."""
@@ -298,26 +352,31 @@ def release_started_attempt(store: _ReservationStore, cache: DualCache, attempt_
     return release_in_background(_async_count_shared(cache, _request_count_key(model_group, deployment_id), -count))
 
 
-def release_unstarted_picks(store: _ReservationStore, call_id: str | None) -> None:
+def release_unstarted_picks(store: _ReservationStore, cache: DualCache, call_id: str | None) -> None:
     if call_id is None:
         return
     if not _picked_deployments(store, call_id):
         return
     with _RESERVATIONS_LOCK:
-        for deployment_id in frozenset(_picked_deployments(store, call_id)):
-            _release_call_on(store, deployment_id, call_id)
+        released_picks: Final = tuple(
+            itertools.chain.from_iterable(
+                _release_call_on(store, deployment_id, call_id)
+                for deployment_id in frozenset(_picked_deployments(store, call_id))
+            )
+        )
         store.delete_cache(_picked_deployments_key(call_id))
+    _forget_shared(cache, *released_picks)
 
 
 @contextlib.contextmanager
-def owning_picks(store: _ReservationStore, call_id: str | None) -> Generator[None, None, None]:
+def owning_picks(store: _ReservationStore, cache: DualCache, call_id: str | None) -> Generator[None, None, None]:
     owner: Final = call_id or _PICK_OWNER.get() or uuid.uuid4().hex
     token: Final = _PICK_OWNER.set(owner)
     try:
         yield
     finally:
         _PICK_OWNER.reset(token)
-        release_unstarted_picks(store, owner)
+        release_unstarted_picks(store, cache, owner)
 
 
 class LeastBusyLoggingHandler(CustomLogger):
@@ -346,19 +405,26 @@ class LeastBusyLoggingHandler(CustomLogger):
     def _store_reservations(self, deployment_id: str, picks: tuple[_Pick, ...]) -> None:
         _put(self._reservations, _reservation_key(deployment_id), picks, SELECTION_RESERVATION_TTL_SECONDS)
 
-    def _take_reservation(self, deployment_id: str, call_id: str | None, now: float) -> None:
-        self._store_reservations(deployment_id, _without_one_pick(self._live_reservations(deployment_id, now), call_id))
+    def _take_reservation(self, deployment_id: str, call_id: str | None, now: float) -> _SharedPick | None:
+        kept, taken = _without_one_pick(self._live_reservations(deployment_id, now), call_id)
+        self._store_reservations(deployment_id, kept)
+        return None if taken is None else taken[2]
 
     def _record_pick(self, call_id: str, deployment_id: str) -> None:
         picked: Final = (*_picked_deployments(self._reservations, call_id), deployment_id)
         _put(self._reservations, _picked_deployments_key(call_id), picked, SELECTION_RESERVATION_TTL_SECONDS)
+
+    def _hold(self, deployment_id: str, call_id: str | None, now: float, shared: _SharedPick | None) -> None:
+        tag: Final = call_id if call_id is not None else _PICK_OWNER.get()
+        self._store_reservations(deployment_id, (*self._live_reservations(deployment_id, now), (now, tag, shared)))
+        if tag is not None:
+            self._record_pick(tag, deployment_id)
 
     def _select(
         self,
         healthy_deployments: Sequence[Mapping[str, object]],
         deployment_ids: tuple[str, ...],
         keys: tuple[str, ...],
-        shared: tuple[int, ...] | None,
         reserve: bool,
         call_id: str | None,
     ) -> Mapping[str, object] | None:
@@ -366,23 +432,40 @@ class LeastBusyLoggingHandler(CustomLogger):
             return None
         with _RESERVATIONS_LOCK:
             now: Final = self._clock()
-            counts: Final = (
-                self._this_workers_counts(keys) if shared is None else self._at_least_this_workers(keys, shared)
-            )
+            counts: Final = self._this_workers_counts(keys)
             live: Final = tuple(self._live_reservations(deployment_id, now) for deployment_id in deployment_ids)
             index: Final = _least_busy_index(tuple(count + len(r) for count, r in zip(counts, live, strict=True)))
             if reserve:
-                tag: Final = call_id if call_id is not None else _PICK_OWNER.get()
-                self._store_reservations(deployment_ids[index], (*live[index], (now, tag)))
-                if tag is not None:
-                    self._record_pick(tag, deployment_ids[index])
+                self._hold(deployment_ids[index], call_id, now, None)
         return healthy_deployments[index]
 
-    def _start_attempt(self, ref: tuple[str, str], call_id: str | None) -> None:
+    def _floors(self, deployment_ids: tuple[str, ...], keys: tuple[str, ...]) -> tuple[tuple[str, int], ...]:
+        with _RESERVATIONS_LOCK:
+            now: Final = self._clock()
+            counts: Final = self._this_workers_counts(keys)
+            return tuple(
+                (deployment_id, count + _unmirrored(self._live_reservations(deployment_id, now)))
+                for deployment_id, count in zip(deployment_ids, counts, strict=True)
+            )
+
+    def _picked(
+        self,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        deployment_ids: tuple[str, ...],
+        index: int,
+        call_id: str | None,
+        shared: _SharedPick | None,
+    ) -> Mapping[str, object]:
+        if shared is not None:
+            with _RESERVATIONS_LOCK:
+                self._hold(deployment_ids[index], call_id, self._clock(), shared)
+        return healthy_deployments[index]
+
+    def _start_attempt(self, ref: tuple[str, str], call_id: str | None) -> _SharedPick | None:
         attempt_id: Final = current_attempt_id()
         with _RESERVATIONS_LOCK:
             now: Final = self._clock()
-            self._take_reservation(ref[1], call_id, now)
+            taken: Final = self._take_reservation(ref[1], call_id, now)
             _count_locally(self.router_cache, _request_count_key(*ref), 1)
             if call_id is not None:
                 key: Final = _started_attempts_key(call_id, ref)
@@ -395,6 +478,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                         (call_id, *ref),
                         IN_FLIGHT_COUNT_TTL_SECONDS,
                     )
+        return taken
 
     def _end_attempt(self, ref: tuple[str, str], call_id: str | None) -> tuple[str, str] | None:
         if call_id is None:
@@ -417,8 +501,8 @@ class LeastBusyLoggingHandler(CustomLogger):
                     self._reservations.delete_cache(_started_attempt_key(oldest_attempt))
                 _put(self._reservations, key, started[1:], IN_FLIGHT_COUNT_TTL_SECONDS)
                 _count_locally(self.router_cache, _request_count_key(*ref), -1)
-            else:
-                self._take_reservation(ref[1], call_id, self._clock())
+            unstarted: Final = None if started else self._take_reservation(ref[1], call_id, self._clock())
+        _forget_shared(self.router_cache, unstarted)
         return ref if started else None
 
     @with_service_target(ROUTER_USAGE_TARGET)
@@ -426,8 +510,9 @@ class LeastBusyLoggingHandler(CustomLogger):
         ref: Final = _deployment_ref(kwargs)
         if ref is None:
             return
-        self._start_attempt(ref, call_id_of(kwargs))
+        taken: Final = self._start_attempt(ref, call_id_of(kwargs))
         self._count_shared(_request_count_key(*ref), 1)
+        _forget_shared(self.router_cache, taken)
 
     @with_service_target(ROUTER_USAGE_TARGET)
     def log_success_event(
@@ -472,14 +557,23 @@ class LeastBusyLoggingHandler(CustomLogger):
         deployment_ids: Final = _deployment_ids(healthy_deployments)
         keys: Final = _request_count_keys(model_group, deployment_ids)
         redis_cache: Final = self.router_cache.redis_cache
-        if redis_cache is not None:
-            try:
-                shared: Final = _as_counts(redis_cache.batch_get_counts(list(keys)))
-            except Exception as e:
-                _warn_unreadable(model_group, e)
-            else:
-                return self._select(healthy_deployments, deployment_ids, keys, shared, reserve, call_id)
-        return self._select(healthy_deployments, deployment_ids, keys, None, reserve, call_id)
+        if redis_cache is None or not deployment_ids:
+            return self._select(healthy_deployments, deployment_ids, keys, reserve, call_id)
+        reservations_key: Final = _shared_reservations_key(model_group)
+        try:
+            index, reservation = redis_cache.reserve_least_loaded(
+                reservations_key, self._floors(deployment_ids, keys), keys, reserve, _SHARED_RESERVATION_TTL_MS
+            )
+        except Exception as e:
+            _warn_unreadable(model_group, e)
+            return self._select(healthy_deployments, deployment_ids, keys, reserve, call_id)
+        return self._picked(
+            healthy_deployments,
+            deployment_ids,
+            index,
+            call_id,
+            None if reservation is None else (reservations_key, reservation),
+        )
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def async_get_available_deployments(
@@ -492,14 +586,23 @@ class LeastBusyLoggingHandler(CustomLogger):
         deployment_ids: Final = _deployment_ids(healthy_deployments)
         keys: Final = _request_count_keys(model_group, deployment_ids)
         redis_cache: Final = self.router_cache.redis_cache
-        if redis_cache is not None:
-            try:
-                shared: Final = _as_counts(await redis_cache.async_batch_get_counts(list(keys)))
-            except Exception as e:
-                _warn_unreadable(model_group, e)
-            else:
-                return self._select(healthy_deployments, deployment_ids, keys, shared, reserve, call_id)
-        return self._select(healthy_deployments, deployment_ids, keys, None, reserve, call_id)
+        if redis_cache is None or not deployment_ids:
+            return self._select(healthy_deployments, deployment_ids, keys, reserve, call_id)
+        reservations_key: Final = _shared_reservations_key(model_group)
+        try:
+            index, reservation = await redis_cache.async_reserve_least_loaded(
+                reservations_key, self._floors(deployment_ids, keys), keys, reserve, _SHARED_RESERVATION_TTL_MS
+            )
+        except Exception as e:
+            _warn_unreadable(model_group, e)
+            return self._select(healthy_deployments, deployment_ids, keys, reserve, call_id)
+        return self._picked(
+            healthy_deployments,
+            deployment_ids,
+            index,
+            call_id,
+            None if reservation is None else (reservations_key, reservation),
+        )
 
     def _settle(self, kwargs: Mapping[str, object]) -> None:
         ref: Final = _deployment_ref(kwargs)
@@ -517,9 +620,6 @@ class LeastBusyLoggingHandler(CustomLogger):
 
     def _this_workers_counts(self, keys: tuple[str, ...]) -> tuple[int, ...]:
         return _local_counts(self.router_cache.batch_get_cache(list(keys), local_only=True), keys)
-
-    def _at_least_this_workers(self, keys: tuple[str, ...], shared: tuple[int, ...]) -> tuple[int, ...]:
-        return tuple(max(counts) for counts in zip(shared, self._this_workers_counts(keys), strict=True))
 
     def _count_shared(self, key: str, delta: int) -> None:
         redis_cache: Final = self.router_cache.redis_cache

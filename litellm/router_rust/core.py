@@ -3030,7 +3030,7 @@ class RustCore(
         # `owning_picks`: least-busy frees every pick this request made but never started.
         with (
             request_parent_otel_span(get_parent_otel_span_from_kwargs(request)),
-            owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))),
+            owning_picks(self._selectors.reservations, self._cache, call_id_of(CALL_IDENTITY.validate_python(request))),
         ):
             call, prepared = self._start(plan, request, routed, prepared_already=prepared_already)
             arm_compaction_state(self._port, plan, prepared)  # pyright: ignore[reportArgumentType]  # the call's own dict
@@ -3112,7 +3112,7 @@ class RustCore(
         # The sync routed calls pick with `picks_reserve(True)` inside `owning_picks`.
         with (
             request_parent_otel_span(get_parent_otel_span_from_kwargs(request)),
-            owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))),
+            owning_picks(self._selectors.reservations, self._cache, call_id_of(CALL_IDENTITY.validate_python(request))),
         ):
             call, prepared = self._start(plan, request, overrides)
             with picks_reserve(plan.endpoint not in _UNRESERVED_OPS):

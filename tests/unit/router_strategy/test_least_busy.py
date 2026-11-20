@@ -5,7 +5,8 @@ import datetime
 import json
 import logging
 import threading
-from collections.abc import Callable, Generator
+import uuid
+from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
@@ -48,11 +49,12 @@ def _call_kwargs(deployment_id: str, call_id: str = "call-1") -> dict[str, objec
 
 class SharedRedisCounters:
     """Mirrors what Redis gives the handler: increments clamped at zero, a TTL set once when
-    the key is created, and ordered reads that raise rather than invent a value."""
+    the key is created, and a pick that reads every load and reserves its choice in one step."""
 
     def __init__(self) -> None:
         self.counts: dict[str, int] = {}
         self.ttls: dict[str, int] = {}
+        self.reservations: dict[str, tuple[tuple[str, str], ...]] = {}
 
     def count(self, key: str) -> int | None:
         return self.counts.get(key)
@@ -70,25 +72,75 @@ class SharedRedisCounters:
     async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
         return self.increment_with_floor(key, value, ttl)
 
-    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
-        return tuple(self.counts.get(key) for key in key_list)
+    def _load(self, reservations_key: str, name: str, floor: int, counter_key: str | None) -> int:
+        counted: Final = 0 if counter_key is None else self.counts.get(counter_key, 0)
+        held: Final = self.reservations.get(reservations_key, ())
+        return max(floor, counted) + sum(1 for _, held_name in held if held_name == name)
 
-    async def async_batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
-        return self.batch_get_counts(key_list)
+    def reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
+        counters: Final = tuple(counter_keys) or (None,) * len(floors)
+        loads: Final = tuple(
+            self._load(reservations_key, name, floor, counter)
+            for (name, floor), counter in zip(floors, counters, strict=True)
+        )
+        index: Final = min(range(len(loads)), key=loads.__getitem__)
+        if not reserve:
+            return index, None
+        reservation: Final = f"{uuid.uuid4().hex}:{floors[index][0]}"
+        self.reservations[reservations_key] = (
+            *self.reservations.get(reservations_key, ()),
+            (reservation, floors[index][0]),
+        )
+        return index, reservation
+
+    async def async_reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
+        return self.reserve_least_loaded(reservations_key, floors, counter_keys, reserve, ttl_ms)
+
+    def release_reservation(self, reservations_key: str, reservation: str) -> None:
+        self.reservations[reservations_key] = tuple(
+            held for held in self.reservations.get(reservations_key, ()) if held[0] != reservation
+        )
+
+    async def async_release_reservation(self, reservations_key: str, reservation: str) -> None:
+        self.release_reservation(reservations_key, reservation)
+
+    def held(self) -> int:
+        return sum(len(held) for held in self.reservations.values())
 
 
 class SlowRedisRead(SharedRedisCounters):
-    """Answers a count read with the counts from when the read started, after letting other work run."""
+    """Answers a pick from the loads when it was asked, after letting other work run."""
 
     def __init__(self) -> None:
         super().__init__()
         self.while_reading: Callable[[], None] = lambda: None
 
-    async def async_batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
-        counts_when_asked: Final = self.batch_get_counts(key_list)
+    async def async_reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
+        picked_when_asked: Final = self.reserve_least_loaded(reservations_key, floors, counter_keys, reserve, ttl_ms)
         await asyncio.sleep(0)
         self.while_reading()
-        return counts_when_asked
+        return picked_when_asked
 
 
 def _worker(shared: SharedRedisCounters | None) -> LeastBusyLoggingHandler:
@@ -139,6 +191,183 @@ def test_sync_pick_reads_the_shared_counts() -> None:
     streaming_worker.log_failure_event(_call_kwargs("dep-a"), None, None, None)
 
     assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
+async def test_a_pick_one_worker_reserved_steers_the_next_workers_pick_before_either_call_starts() -> None:
+    shared: Final = SharedRedisCounters()
+    first_worker: Final = _worker(shared)
+    second_worker: Final = _worker(shared)
+
+    assert await first_worker.async_get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1") is (
+        DEPLOYMENT_A
+    )
+    assert await second_worker.async_get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-2") is (
+        DEPLOYMENT_B
+    )
+
+
+def test_sync_picks_in_two_workers_reserve_different_deployments() -> None:
+    shared: Final = SharedRedisCounters()
+    first_worker: Final = _worker(shared)
+    second_worker: Final = _worker(shared)
+
+    assert first_worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1") is DEPLOYMENT_A
+    assert second_worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-2") is DEPLOYMENT_B
+
+
+def test_a_lookup_sees_another_workers_pick_without_reserving_one() -> None:
+    shared: Final = SharedRedisCounters()
+    picking_worker: Final = _worker(shared)
+    looking_worker: Final = _worker(shared)
+
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1") is DEPLOYMENT_A
+
+    assert looking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+    assert looking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+    assert shared.held() == 1
+
+
+def test_a_started_call_hands_its_shared_reservation_to_the_in_flight_count() -> None:
+    shared: Final = SharedRedisCounters()
+    calling_worker: Final = _worker(shared)
+    picking_worker: Final = _worker(shared)
+    assert calling_worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1") is DEPLOYMENT_A
+
+    calling_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "call-1"))
+
+    assert shared.held() == 0
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+    calling_worker.log_success_event(_call_kwargs("dep-a", "call-1"), None, None, None)
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
+async def test_a_call_started_on_an_event_loop_drops_its_shared_reservation() -> None:
+    shared: Final = SharedRedisCounters()
+    calling_worker: Final = _worker(shared)
+    picking_worker: Final = _worker(shared)
+    await calling_worker.async_get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1")
+
+    calling_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "call-1"))
+    await asyncio.sleep(0)
+    await calling_worker.async_log_success_event(_call_kwargs("dep-a", "call-1"), None, None, None)
+
+    assert shared.held() == 0
+    assert await picking_worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+def test_a_call_that_ends_with_its_pick_unstarted_frees_it_for_every_worker() -> None:
+    shared: Final = SharedRedisCounters()
+    calling_worker: Final = _worker(shared)
+    picking_worker: Final = _worker(shared)
+    assert calling_worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1") is DEPLOYMENT_A
+
+    calling_worker.log_failure_event(_call_kwargs("dep-a", "call-1"), None, None, None)
+
+    assert shared.held() == 0
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_ends_frees_its_unstarted_shared_picks() -> None:
+    shared: Final = SharedRedisCounters()
+    reservations: Final = InMemoryCache()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=shared)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    calling_worker: Final = LeastBusyLoggingHandler(router_cache=cache, reservation_store=reservations)
+    picking_worker: Final = _worker(shared)
+
+    with owning_picks(reservations, cache, "call-1"):
+        await calling_worker.async_get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1")
+        assert await picking_worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+    await asyncio.sleep(0)
+
+    assert shared.held() == 0
+    assert await picking_worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+class _ReleaseFails(SharedRedisCounters):
+    def release_reservation(self, reservations_key: str, reservation: str) -> None:
+        raise ConnectionError("redis is down")
+
+    async def async_release_reservation(self, reservations_key: str, reservation: str) -> None:
+        raise ConnectionError("redis is down")
+
+
+def _release_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and f"least_busy_picks:{GROUP}" in record.getMessage()
+    ]
+
+
+def test_a_call_whose_shared_reservation_cannot_be_dropped_still_starts_and_counts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    shared: Final = _ReleaseFails()
+    calling_worker: Final = _worker(shared)
+    picking_worker: Final = _worker(shared)
+    calling_worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        calling_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "call-1"))
+
+    assert shared.count(f"{GROUP}_request_count:dep-a") == 1
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+    assert len(_release_warnings(caplog)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_call_on_an_event_loop_whose_shared_reservation_cannot_be_dropped_still_starts_and_counts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    shared: Final = _ReleaseFails()
+    calling_worker: Final = _worker(shared)
+    await calling_worker.async_get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        calling_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "call-1"))
+        await asyncio.sleep(0)
+
+    assert shared.count(f"{GROUP}_request_count:dep-a") == 1
+    assert len(_release_warnings(caplog)) == 1
+
+
+class _RedisDownForOnePick(SharedRedisCounters):
+    def __init__(self) -> None:
+        super().__init__()
+        self.down = True
+
+    def reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
+        if self.down:
+            self.down = False
+            raise ConnectionError("redis is down")
+        return super().reserve_least_loaded(reservations_key, floors, counter_keys, reserve, ttl_ms)
+
+
+def test_a_pick_made_while_redis_was_down_still_counts_once_it_is_back() -> None:
+    worker: Final = _worker(_RedisDownForOnePick())
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-1") is DEPLOYMENT_A
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="call-2") is DEPLOYMENT_B
+
+
+def test_this_workers_calls_count_while_their_shared_counter_is_gone() -> None:
+    shared: Final = SharedRedisCounters()
+    worker: Final = _worker(shared)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    shared.expire(f"{GROUP}_request_count:dep-a")
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 
 def _routed_through_litellm_metadata(deployment_id: str) -> dict[str, object]:
@@ -219,7 +448,14 @@ class UnavailableRedis(SharedRedisCounters):
     def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
         raise ConnectionError("redis is down")
 
-    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+    def reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
         raise ConnectionError("redis is down")
 
 
@@ -283,7 +519,14 @@ class OpenBreakerRedis(SharedRedisCounters):
     def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
         raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
 
-    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+    def reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
         raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
 
 
@@ -803,7 +1046,7 @@ def test_ending_one_request_frees_only_the_picks_it_never_started() -> None:
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="ended-call") is DEPLOYMENT_A
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="running-call") is DEPLOYMENT_A
 
-    release_unstarted_picks(reservations, "ended-call")
+    release_unstarted_picks(reservations, DualCache(), "ended-call")
 
     assert [worker.get_available_deployments(GROUP, HEALTHY, reserve=True) for _ in range(2)] == [
         DEPLOYMENT_A,
@@ -816,7 +1059,7 @@ def test_a_call_without_a_call_id_turns_its_own_pick_into_its_in_flight_count() 
     worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), reservation_store=reservations)
     worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b", "busy-call"))
 
-    with owning_picks(reservations, None):
+    with owning_picks(reservations, DualCache(), None):
         assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
         worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "attempt-call"))
 
@@ -829,7 +1072,7 @@ def test_another_call_starting_leaves_the_pick_of_a_call_without_a_call_id_reser
     worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b", "busy-call"))
     other_call: Final = contextvars.copy_context()
 
-    with owning_picks(reservations, None):
+    with owning_picks(reservations, DualCache(), None):
         assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
         other_call.run(worker.log_pre_api_call, model="m", messages=[], kwargs=_call_kwargs("dep-a", "other-call"))
 

@@ -18,6 +18,7 @@ import json
 import logging
 import threading
 import time
+import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
@@ -68,6 +69,12 @@ else:
     Span = Any
 
 
+class _SyncRedisCommands(Protocol):
+    def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> object: ...
+
+    def zrem(self, name: str, *values: str) -> object: ...
+
+
 class _AsyncRedisCommands(Protocol):
     """Async redis commands this cache issues.
 
@@ -98,6 +105,8 @@ class _AsyncRedisCommands(Protocol):
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
+
+    def zrem(self, name: str, *values: str) -> Awaitable[int]: ...
 
 
 class _AsyncLuaScript(Protocol):
@@ -155,6 +164,33 @@ _INCREMENT_IF_PRESENT_LUA: Final = (
     "if redis.call('EXISTS', KEYS[1]) == 0 then return false end return redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])"
 )
 
+_RESERVE_LEAST_LOADED_LUA: Final = (
+    "if redis.replicate_commands then redis.replicate_commands() end "
+    "local clock = redis.call('TIME') "
+    "local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000) "
+    "redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now) "
+    "local candidates = (#ARGV - 2) / 2 "
+    "local index_of, loads = {}, {} "
+    "for i = 1, candidates do "
+    "index_of[ARGV[1 + 2 * i]] = i "
+    "loads[i] = tonumber(ARGV[2 + 2 * i]) "
+    "if #KEYS > candidates then "
+    "loads[i] = math.max(loads[i], tonumber(redis.call('GET', KEYS[1 + i]) or '0') or 0) "
+    "end "
+    "end "
+    "for _, member in ipairs(redis.call('ZRANGE', KEYS[1], 0, -1)) do "
+    "local i = index_of[string.sub(member, 34)] "
+    "if i then loads[i] = loads[i] + 1 end "
+    "end "
+    "local best = 1 "
+    "for i = 2, candidates do if loads[i] < loads[best] then best = i end end "
+    "if ARGV[2] ~= '' then "
+    "redis.call('ZADD', KEYS[1], now + tonumber(ARGV[1]), ARGV[2] .. ':' .. ARGV[1 + 2 * best]) "
+    "redis.call('PEXPIRE', KEYS[1], ARGV[1]) "
+    "end "
+    "return best - 1"
+)
+
 _LUA_COUNT: Final = TypeAdapter(int)
 _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
@@ -167,6 +203,14 @@ def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, .
     return _OPTIONAL_COUNTS.validate_python(
         tuple(value.decode("utf-8") if isinstance(value, bytes) else value for value in values)
     )
+
+
+def _least_loaded_args(floors: Sequence[tuple[str, int]], token: str, ttl_ms: int) -> tuple[str | int, ...]:
+    return (ttl_ms, token, *itertools.chain.from_iterable(floors))
+
+
+def _reservation(token: str, floors: Sequence[tuple[str, int]], index: int) -> str | None:
+    return f"{token}:{floors[index][0]}" if token else None
 
 
 def _is_generic_caller_frame(frame: FrameType) -> bool:
@@ -788,6 +832,9 @@ class RedisCache(BaseCache):
         in_memory_llm_clients_cache.set_cache(key=cache_key, value=pubsub_client, litellm_owned_client=True)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped in-memory client cache
         return pubsub_client  # pyright: ignore[reportUnknownVariableType]  # redis generics
 
+    def _sync_commands(self) -> _SyncRedisCommands:
+        return self.redis_client  # pyright: ignore[reportReturnType]  # stubs give RedisCluster no eval or zrem
+
     def _async_commands(self) -> _AsyncRedisCommands:
         return self.init_async_client()
 
@@ -933,9 +980,7 @@ class RedisCache(BaseCache):
         takes traffic. Returns the resulting count.
         """
         namespaced_key: Final = self.check_and_fix_namespace(key=key)
-        count: Final[object] = self.redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue]  # stubs omit eval
-            _INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl
-        )
+        count: Final = self._sync_commands().eval(_INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl)
         return _LUA_COUNT.validate_python(count)
 
     @_redis_circuit_breaker_guard_sync
@@ -954,6 +999,58 @@ class RedisCache(BaseCache):
         """Async twin of ``batch_get_counts``, raising on failure the same way."""
         namespaced_keys: Final = [self.check_and_fix_namespace(key=key) for key in key_list]
         return _decoded_counts(await self._async_run_redis_mget_operation(keys=namespaced_keys))
+
+    @_redis_circuit_breaker_guard_sync
+    def reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
+        """Pick the candidate with the least load in one Lua call: the larger of its floor and its
+        counter in ``counter_keys`` (one per candidate, or none), plus its live reservations under
+        ``reservations_key``. With ``reserve``, the pick gets its own reservation for ``ttl_ms`` in
+        the same call, so callers in any process never pick from the same view. Returns the
+        candidate's index and the reservation to pass to ``release_reservation``."""
+        token: Final = uuid.uuid4().hex if reserve else ""
+        keys: Final = self._least_loaded_keys(reservations_key, counter_keys)
+        index: Final = _LUA_COUNT.validate_python(
+            self._sync_commands().eval(
+                _RESERVE_LEAST_LOADED_LUA, len(keys), *keys, *_least_loaded_args(floors, token, ttl_ms)
+            )
+        )
+        return index, _reservation(token, floors, index)
+
+    @_redis_circuit_breaker_guard
+    async def async_reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
+        token: Final = uuid.uuid4().hex if reserve else ""
+        keys: Final = self._least_loaded_keys(reservations_key, counter_keys)
+        index: Final = _LUA_COUNT.validate_python(
+            await self._async_commands().eval(
+                _RESERVE_LEAST_LOADED_LUA, len(keys), *keys, *_least_loaded_args(floors, token, ttl_ms)
+            )
+        )
+        return index, _reservation(token, floors, index)
+
+    @_redis_circuit_breaker_guard_sync
+    def release_reservation(self, reservations_key: str, reservation: str) -> None:
+        self._sync_commands().zrem(self.check_and_fix_namespace(key=reservations_key), reservation)
+
+    @_redis_circuit_breaker_guard
+    async def async_release_reservation(self, reservations_key: str, reservation: str) -> None:
+        await self._async_commands().zrem(self.check_and_fix_namespace(key=reservations_key), reservation)
+
+    def _least_loaded_keys(self, reservations_key: str, counter_keys: Sequence[str]) -> tuple[str, ...]:
+        return tuple(self.check_and_fix_namespace(key=key) for key in (reservations_key, *counter_keys))
 
     @_redis_circuit_breaker_guard
     async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
@@ -2348,12 +2445,12 @@ class RedisCache(BaseCache):
             if isinstance(result, bytes):
                 try:
                     return result.decode("utf-8")
-                except Exception:
+                except UnicodeDecodeError:
                     return result
             elif isinstance(result, list) and all(isinstance(item, bytes) for item in result):
                 try:
                     return [item.decode("utf-8") for item in result]
-                except Exception:
+                except UnicodeDecodeError:
                     return result
             return result
         except Exception as e:

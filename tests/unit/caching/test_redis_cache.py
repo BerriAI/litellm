@@ -9,6 +9,7 @@ from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeRedis as FakeSyncRedis
 from fakeredis import FakeServer
 from fakeredis.aioredis import FakeRedis
 from redis.asyncio.client import Pipeline
@@ -641,6 +642,24 @@ def test_batch_get_counts_reads_counters_in_order_and_keeps_unset_keys_apart(sto
     cache.redis_client.mget.return_value = [stored, None, b"0"]
 
     assert cache.batch_get_counts(["dep-a", "dep-b", "dep-c"]) == (3, None, 0)
+
+
+@pytest.mark.asyncio
+async def test_releasing_a_pick_reservation_drops_only_that_reservation_under_the_namespace(redis_no_ping: None):
+    server: Final = FakeServer()
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=FakeSyncRedis(server=server)
+    ):
+        cache = RedisCache(host="127.0.0.1", port=_closed_port(), namespace="litellm")
+    async_client: Final = FakeRedis(server=server)
+    cache.redis_client.zadd("litellm:least_busy_picks:g", {"first:dep-a": 1, "second:dep-a": 1, "third:dep-b": 1})
+
+    cache.release_reservation("least_busy_picks:g", "first:dep-a")
+    with patch.object(cache, "init_async_client", return_value=async_client):
+        await cache.async_release_reservation("least_busy_picks:g", "third:dep-b")
+
+    assert cache.redis_client.zrange("litellm:least_busy_picks:g", 0, -1) == [b"second:dep-a"]
+    await async_client.aclose()
 
 
 @pytest.fixture

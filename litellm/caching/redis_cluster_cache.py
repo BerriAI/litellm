@@ -34,6 +34,10 @@ else:
 _T: Final = TypeVar("_T")
 
 
+def _at_least_counted(floors: Sequence[tuple[str, int]], counts: Sequence[int | None]) -> tuple[tuple[str, int], ...]:
+    return tuple((name, max(floor, count or 0)) for (name, floor), count in zip(floors, counts, strict=True))
+
+
 def _connection_limit(max_connections: object) -> int | None:
     try:
         limit: Final = int(max_connections)  # pyright: ignore[reportArgumentType]  # config value, str or int
@@ -138,6 +142,32 @@ class RedisClusterCache(RedisCache):
         """
         async_redis_cluster_client: Final = self.init_async_client()
         return await async_redis_cluster_client.mget_nonatomic(keys=keys)
+
+    def reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
+        counted: Final = (
+            _at_least_counted(floors, self.batch_get_counts(list(counter_keys))) if counter_keys else floors
+        )
+        return super().reserve_least_loaded(reservations_key, counted, (), reserve, ttl_ms)
+
+    async def async_reserve_least_loaded(
+        self,
+        reservations_key: str,
+        floors: Sequence[tuple[str, int]],
+        counter_keys: Sequence[str],
+        reserve: bool,
+        ttl_ms: int,
+    ) -> tuple[int, str | None]:
+        counted: Final = (
+            _at_least_counted(floors, await self.async_batch_get_counts(list(counter_keys))) if counter_keys else floors
+        )
+        return await super().async_reserve_least_loaded(reservations_key, counted, (), reserve, ttl_ms)
 
     async def test_connection(self) -> dict:
         """
