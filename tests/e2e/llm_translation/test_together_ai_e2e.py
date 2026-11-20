@@ -7,9 +7,9 @@ backends are pinned because the registry has no flag for what they prove: ``enab
 and the ``{"reasoning": {"enabled": false}}`` toggle that ``reasoning_effort="none"`` maps
 to are Qwen hybrid-model contracts, and the structured-output case runs on that hybrid
 model with reasoning off, since a reasoning-only model can spend the whole token budget
-thinking and return no content. MiniMax-M3 is the serverless model whose
+thinking and return no content. MiniMax-M3.1-Flash is the serverless model whose
 template renders a replayed ``reasoning_content`` back into the prompt (Qwen and
-DeepSeek silently drop it). MiniMax-M3 honors that replayed field on nearly every call, not
+DeepSeek silently drop it). MiniMax-M3.1-Flash honors that replayed field on nearly every call, not
 every call (one miss in dozens of otherwise identical calls), so the replay case asks
 up to ``REPLAY_ATTEMPTS`` times and fails only when no answer carries the secret, which
 a proxy that strips the field guarantees. Requires TOGETHER_API_KEY on the proxy; no
@@ -56,7 +56,7 @@ from pydantic import BaseModel
 pytestmark = pytest.mark.e2e
 
 HYBRID_REASONING_BACKEND = "together_ai/Qwen/Qwen3.5-9B"
-REASONING_REPLAY_BACKEND = "together_ai/MiniMaxAI/MiniMax-M3"
+REASONING_REPLAY_BACKEND = "together_ai/MiniMaxAI/MiniMax-M3.1-Flash"
 
 SECRET_PROMPT = "Remember this for later and reply with just OK."
 SECRET_REASONING = "The user told me their favorite color is chartreuse. I must remember it."
@@ -166,6 +166,7 @@ def _cheapest_together_chat_model(registry: Mapping[str, CostMapEntry], needs: _
     def qualifies(name: str, entry: CostMapEntry) -> bool:
         return (
             name.startswith("together_ai/")
+            and not name.endswith("-latest")
             and entry.litellm_provider == "together_ai"
             and entry.mode == "chat"
             and (entry.deprecation_date is None or entry.deprecation_date > today)

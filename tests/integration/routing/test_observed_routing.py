@@ -593,7 +593,7 @@ def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_co
                     "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}],
                 }, response_text
                 assert {key: events[1]["error"][key] for key in events[1]["error"] if key != "message"} == {
-                    "type": None,
+                    "type": "internal_server_error",
                     "param": None,
                     "code": "500",
                 }, response_text

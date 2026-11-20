@@ -1,5 +1,4 @@
 import asyncio
-import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -10,11 +9,11 @@ from pydantic import ValidationError
 import litellm
 from litellm.llms.azure_ai.common_utils import (
     AZURE_ENTRA_LITELLM_PARAM_KEYS,
+    foundry_resource_path,
     get_azure_ai_auth_headers,
 )
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, DecisionsInputLimits
 
-_FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
 _AZURE_AI_CREDENTIAL_PARAM_KEYS: Final = AZURE_ENTRA_LITELLM_PARAM_KEYS | frozenset({"azure_ad_token_provider"})
 
 
@@ -25,6 +24,16 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("AZURE_AI_API_KEY",)
     api_base_env = ("AZURE_AI_API_BASE",)
     api_key_required = False
+
+    def get_input_limits(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
+    ) -> DecisionsInputLimits:
+        limits: Final = super().get_input_limits(model, custom_llm_provider, headers)
+        return (
+            limits
+            if limits.max_request_tokens is not None
+            else super().get_input_limits("Microsoft-Decision-1", custom_llm_provider, headers)
+        )
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return "Missing AZURE_AI_API_BASE - set AZURE_AI_API_BASE or pass api_base, e.g. https://<resource>.services.ai.azure.com"
@@ -89,5 +98,5 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         url: Final = httpx.URL(api_base)
-        resource_path: Final = _FOUNDRY_ROUTE_SUFFIX.sub("", url.path.rstrip("/"))
+        resource_path: Final = foundry_resource_path(url)
         return str(url.copy_with(path=f"{resource_path}{self.path}", query=None, fragment=None))

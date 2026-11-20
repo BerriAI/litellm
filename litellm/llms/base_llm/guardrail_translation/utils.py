@@ -4,10 +4,14 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
+from openai.types.responses import ResponseFunctionWebSearch
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.types.llms.anthropic import claude_hosted_web_tool_call
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
+from litellm.types.responses.main import with_hosted_web_tool_arguments
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -24,7 +28,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
 
     events: Final[list[dict]] = []
     for block in chunk.split("\n\n"):
-        for line in block.splitlines():
+        for line in split_sse_lines(block):
             stripped = line.strip()
             if not stripped.startswith("data:"):
                 continue
@@ -134,6 +138,36 @@ def stream_item_field(item: object, field: str) -> object | None:
     return getattr(item, field, None)
 
 
+def web_search_call(item: object) -> ResponseFunctionWebSearch | None:
+    if isinstance(item, ResponseFunctionWebSearch):
+        return item
+    if stream_item_field(item, "type") != "web_search_call":
+        return None
+    try:
+        return ResponseFunctionWebSearch.model_validate(item.model_dump() if isinstance(item, BaseModel) else item)
+    except ValidationError:
+        return None
+
+
+def claude_hosted_web_tool_arguments(item: object) -> str | None:
+    search: Final = web_search_call(item)
+    hosted_call: Final = None if search is None else claude_hosted_web_tool_call(search)
+    return None if hosted_call is None else hosted_call[2]
+
+
+def with_web_search_call_arguments(item: object, arguments: str) -> object:
+    search: Final = web_search_call(item)
+    if search is None:
+        return item
+    action: Final = with_hosted_web_tool_arguments(search.action, arguments)
+    if isinstance(item, ResponseFunctionWebSearch):
+        return item.model_copy(update={"action": action})
+    if isinstance(item, BaseModel):
+        return item.model_copy(update={"action": action.model_dump()})
+    fields: Final = cast("Mapping[str, object]", item)  # cast-ok: a validated web_search_call dict is str-keyed JSON
+    return {**fields, "action": action.model_dump()}
+
+
 def stream_item_fingerprint(item: object) -> str:
     plain: Final = item.model_dump() if isinstance(item, BaseModel) else item
     return json.dumps(plain, sort_keys=True, default=str)
@@ -176,8 +210,9 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
     ``ResponseAPIUsage`` for a synthetic guardrail-blocked /v1/responses stream.
 
     A mid-stream block carries the events received so far as a list; real usage
-    rides on the ``response.completed`` event's response when the upstream sent
-    one. Non-list originals defer to ``blocked_responses_api_usage``.
+    rides on the ``response.completed`` or ``response.incomplete`` event's
+    response when the upstream sent one. Non-list originals defer to
+    ``blocked_responses_api_usage``.
     """
     if not isinstance(original_response, list):
         return blocked_responses_api_usage(original_response)
@@ -185,7 +220,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
         (
             response
             for item in reversed(original_response)
-            if stream_item_field(item, "type") == "response.completed"
+            if stream_item_field(item, "type") in ("response.completed", "response.incomplete")
             and (response := stream_item_field(item, "response")) is not None
         ),
         None,
@@ -245,6 +280,10 @@ def filter_messages_by_skip_flags(
 
 def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -> bool:
     return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
+
+
+def effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply: object) -> bool:
+    return getattr(guardrail_to_apply, "scan_tool_calls_as_text", None) is True
 
 
 def role_out_of_guardrail_scope(
