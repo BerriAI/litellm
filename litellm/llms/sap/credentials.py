@@ -393,12 +393,16 @@ class _TokenResponse(Protocol):
     def json(self) -> _TokenBody: ...
 
 
-def _bearer_token_and_expiry(response: _TokenResponse) -> tuple[str, datetime]:
-    """Read a token response into the Authorization header value and the token's absolute expiry."""
+def _bearer_token_and_lifetime(response: _TokenResponse) -> tuple[str, timedelta]:
+    """Read a token response into the Authorization header value and how long the token stays valid."""
     payload: Final = response.json()
     expires_in: Final = int(payload.get("expires_in", 3600))
     access_token: Final = payload["access_token"]
-    return f"Bearer {access_token}", datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    return f"Bearer {access_token}", timedelta(seconds=expires_in)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _request_token(
@@ -407,7 +411,7 @@ def _request_token(
     timeout: float,
     cert_pair: tuple[str, str] | None = None,
     client_secret: str | None = None,
-) -> tuple[str, datetime]:
+) -> tuple[str, timedelta]:
     data: Final = {"grant_type": "client_credentials", "client_id": client_id}
     if client_secret:
         data["client_secret"] = client_secret
@@ -418,10 +422,10 @@ def _request_token(
             with httpx.Client(cert=cert_pair) as raw_client:
                 handler = HTTPHandler(client=raw_client)
                 resp = handler.post(auth_url, data=data, timeout=timeout)
-                return _bearer_token_and_expiry(resp)
+                return _bearer_token_and_lifetime(resp)
         handler = get_httpx_client()
         resp = handler.post(auth_url, data=data, timeout=timeout)
-        return _bearer_token_and_expiry(resp)
+        return _bearer_token_and_lifetime(resp)
     except Exception as e:
         msg: Final = resp.text if resp is not None else getattr(e, "text", str(e))
         raise RuntimeError(f"Token request failed: {msg}") from e
@@ -433,6 +437,7 @@ def get_token_creator(
     *,
     timeout: float = 30.0,
     expiry_buffer_minutes: int = 60,
+    clock: Callable[[], datetime] = _utc_now,
     **overrides,
 ) -> tuple[Callable[[], str], str, str]:
     """
@@ -488,6 +493,7 @@ def get_token_creator(
         key_file_path,
         timeout,
         expiry_buffer_minutes,
+        clock,
     )
     return token_getter, credentials["base_url"], credentials["resource_group"]
 
@@ -503,12 +509,13 @@ def _cached_token_getter(
     key_file_path: str | None,
     timeout: float,
     expiry_buffer_minutes: int,
+    clock: Callable[[], datetime],
 ) -> Callable[[], str]:
     lock: Final = Lock()
     token: str | None = None
     token_expiry: datetime | None = None
 
-    def _fetch_token() -> tuple[str, datetime]:
+    def _fetch_token() -> tuple[str, timedelta]:
         # Case 1: secret-based auth
         if client_secret:
             return _request_token(
@@ -548,9 +555,10 @@ def _cached_token_getter(
     def get_token() -> str:
         nonlocal token, token_expiry
         with lock:
-            now: Final = datetime.now(timezone.utc)
+            now: Final = clock()
             if token is None or token_expiry is None or token_expiry - now < timedelta(minutes=expiry_buffer_minutes):
-                token, token_expiry = _fetch_token()
+                token, lifetime = _fetch_token()
+                token_expiry = now + lifetime
             return token
 
     return get_token
