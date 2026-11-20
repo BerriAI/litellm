@@ -1346,7 +1346,9 @@ if MCP_AVAILABLE:
             return {
                 name: value
                 for name, value in headers.items()
-                if name.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS and isinstance(value, str)  # pyright: ignore[reportUnnecessaryIsInstance]  # callbacks return any value
+                if name.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS
+                and isinstance(value, str)  # pyright: ignore[reportUnnecessaryIsInstance]  # callbacks return any value
+                and all(ord(char) < 256 for char in value)
             }
 
         try:

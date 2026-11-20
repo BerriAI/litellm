@@ -5318,11 +5318,16 @@ async def test_failed_rest_tool_call_gives_the_headers_callback_the_request_data
 
 @pytest.mark.parametrize(
     "dropped",
-    [{"content-length": "from-callback"}, {"X-Frame-Options": "from-callback"}, {"x-callback-count": 5}],
-    ids=["content-length", "X-Frame-Options", "non_string_value"],
+    [
+        {"content-length": "from-callback"},
+        {"X-Frame-Options": "from-callback"},
+        {"x-callback-count": 5},
+        {"x-callback-label": "中文"},
+    ],
+    ids=["content-length", "X-Frame-Options", "non_string_value", "non_latin1_value"],
 )
 @pytest.mark.parametrize("succeeds", [True, False], ids=["success", "failure"])
-async def test_rest_tool_call_drops_unsafe_and_non_string_callback_response_headers(
+async def test_rest_tool_call_drops_unsafe_and_unencodable_callback_response_headers(
     monkeypatch: pytest.MonkeyPatch, dropped: dict[str, object], succeeds: bool
 ) -> None:
     from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
@@ -5335,7 +5340,7 @@ async def test_rest_tool_call_drops_unsafe_and_non_string_callback_response_head
             response: object,
             request_headers: dict[str, str] | None = None,
         ) -> dict[str, object]:
-            return {**dropped, "x-callback-trace": "trace-1"}
+            return {**dropped, "x-callback-trace": "café-1"}
 
     async def echo() -> str:
         return "filtered-result"
@@ -5367,11 +5372,11 @@ async def test_rest_tool_call_drops_unsafe_and_non_string_callback_response_head
     try:
         if succeeds:
             assert [item.text for item in (await call).content] == ["filtered-result"]
-            assert dict(response.headers) == {**Response().headers, "x-callback-trace": "trace-1"}
+            assert dict(response.headers) == {**Response().headers, "x-callback-trace": "café-1"}
         else:
             with pytest.raises(HTTPException) as error:
                 await call
             assert (error.value.status_code, error.value.detail["error"]) == (400, "missing_parameter")
-            assert error.value.headers == {"x-callback-trace": "trace-1"}
+            assert error.value.headers == {"x-callback-trace": "café-1"}
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("filtered-")
