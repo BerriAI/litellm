@@ -475,6 +475,9 @@ _COVERED_TABLE_SPECS: Final = [
     ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),
     ("search_tools", "litellm_searchtoolstable", ("litellm_params",), ()),
 ]
+_FOLDED_TABLE_SPECS: Final = [
+    ("mcp_server", "litellm_mcpauthprofiletable", ("credentials",), ()),
+]
 
 
 def _iter_encrypted_strings(obj: object):
@@ -522,8 +525,9 @@ async def _scan_one_table(
     db_attr: str,
     json_columns: tuple,
     scalar_columns: tuple,
+    into: LocationReport | None = None,
 ) -> LocationReport:
-    report: Final = LocationReport(location=location)
+    report: Final = into or LocationReport(location=location)
     table: Final[TableActions[object] | None] = getattr(prisma_client.db, db_attr, None)
     if table is None:
         return report
@@ -580,6 +584,9 @@ async def _scan_covered_tables(prisma_client: object) -> list[LocationReport]:
     reports: Final[list[LocationReport]] = []
     for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS:
         reports.append(await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols))
+    by_location: Final = {report.location: report for report in reports}
+    for location, db_attr, json_cols, scalar_cols in _FOLDED_TABLE_SPECS:
+        await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols, into=by_location[location])
     reports.append(await _scan_config_env_vars(prisma_client))
     return reports
 

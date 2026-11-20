@@ -61,6 +61,28 @@ def _violation(fields: str) -> UniqueViolationError:
     )
 
 
+def _matches_server_filter(server: Mapping[str, object], where: Mapping[str, object]) -> bool:
+    if "OR" in where:
+        clauses: Final = where["OR"]
+        assert isinstance(clauses, Sequence) and not isinstance(clauses, (str, bytes)), where
+        for clause in clauses:
+            assert isinstance(clause, Mapping), where
+            if _matches_server_filter(server, clause):
+                return True
+        return False
+    for column, condition in where.items():
+        value: Final = server.get(column)
+        if isinstance(condition, Mapping):
+            assert set(condition) == {"in"}, where
+            allowed: Final = condition["in"]
+            assert isinstance(allowed, Sequence) and not isinstance(allowed, (str, bytes)), where
+            if value not in allowed:
+                return False
+        elif value != condition:
+            return False
+    return True
+
+
 class _ProfileTable:
     def __init__(self, store: "FakeMcpPrisma") -> None:
         self._store = store
@@ -75,6 +97,18 @@ class _ProfileTable:
     ) -> Sequence[FakeRow]:
         if where is None:
             return [self._with_server(row, include) for row in self._store.profiles]
+        if "server" in where:
+            relation: Final = where["server"]
+            assert isinstance(relation, Mapping) and set(relation) == {"is"}, where
+            server_filter: Final = relation["is"]
+            assert isinstance(server_filter, Mapping), where
+            return [
+                self._with_server(row, include)
+                for row in self._store.profiles
+                if _matches_server_filter(
+                    next(s for s in self._store.servers if s["server_id"] == row["server_id"]), server_filter
+                )
+            ]
         assert len(where) == 1, "profile lookups filter on one column"
         column, condition = next(iter(where.items()))
         assert column in ("server_id", "profile_id_normalized"), where

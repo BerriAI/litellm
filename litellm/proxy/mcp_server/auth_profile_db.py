@@ -14,12 +14,16 @@ from litellm.proxy.mcp_server.auth_profiles import (
     MalformedProfile,
     StoredProfileId,
     ValidatedProfiles,
+    describe_refusal,
+    first_duplicate_profile_id,
+    profile_host_refusal,
     profile_missing_credential,
+    stored_profile_ids,
     validate_auth_profiles,
 )
 from litellm.repositories.table_repositories import MCPAuthProfileRepository
 from litellm.types.mcp import MCPAuth
-from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, auth_profile_from_row
+from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPServer, auth_profile_from_row
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -227,9 +231,13 @@ async def stored_profiles_by_server(
     prisma_client: object, server_ids: Sequence[str], *, use_writer: bool = False
 ) -> Mapping[str, tuple[MCPAuthProfile, ...]]:
     try:
-        rows: Final = await MCPAuthProfileRepository(prisma_client, use_writer=use_writer).table.find_many(
-            # bounded-ok: one id per MCP server row the registry loads
-            where={"server_id": {"in": list(server_ids)}}
+        rows: Final = (
+            await MCPAuthProfileRepository(prisma_client, use_writer=use_writer).table.find_many(
+                # bounded-ok: one id per MCP server row the registry loads
+                where={"server_id": {"in": list(server_ids)}}
+            )
+            if server_ids
+            else ()
         )
     except Exception as error:  # noqa: BLE001  # profile storage is additive, a read failure must not fail the server read
         verbose_proxy_logger.warning("could not read MCP auth profiles for %s servers: %s", len(server_ids), error)
@@ -245,3 +253,44 @@ async def with_stored_profiles(
 ) -> LiteLLM_MCPServerTable:
     profiles: Final = await stored_profiles_by_server(prisma_client, (table.server_id,), use_writer=use_writer)
     return table.model_copy(update={"additional_auth": profiles.get(table.server_id)})
+
+
+async def startup_profile_refusal(config_servers: Iterable[MCPServer], prisma_client: object) -> str | None:
+    from litellm.proxy.mcp_server.db import LOADABLE_MCP_SERVER_FILTER
+
+    try:
+        rows: Final = await MCPAuthProfileRepository(prisma_client, use_writer=True).table.find_many(
+            where={"server": {"is": LOADABLE_MCP_SERVER_FILTER}}, include={"server": True}
+        )
+    except Exception as error:  # noqa: BLE001  # a transient read failure must not stop startup; writes still check
+        verbose_proxy_logger.warning(
+            "Skipped the MCP auth profile startup check, the profile table could not be read: %s", error
+        )
+        return None
+    host_refusal: Final = next(
+        (
+            refusal
+            for row in rows
+            if row.server is not None
+            and (
+                refusal := profile_host_refusal(
+                    row.server.server_name or row.server_id,
+                    transport=row.server.transport,
+                    is_byok=row.server.is_byok,
+                    spec_path=row.server.spec_path,
+                )
+            )
+            is not None
+        ),
+        None,
+    )
+    duplicate: Final = host_refusal or first_duplicate_profile_id(
+        (
+            *stored_profile_ids(config_servers),
+            *(
+                StoredProfileId(row.profile_id, (row.server.server_name if row.server else None) or row.server_id)
+                for row in rows
+            ),
+        )
+    )
+    return None if duplicate is None else f"Invalid MCP auth profiles: {describe_refusal(duplicate)}"

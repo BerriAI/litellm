@@ -235,6 +235,12 @@ def profile_host_refusal(
     return None
 
 
+def first_duplicate_profile_id(profiles: Iterable[StoredProfileId]) -> DuplicateProfileId | None:
+    return _first_duplicate(
+        tuple(_Claim(stored.profile_id.lower(), stored.profile_id, stored.server) for stored in profiles)
+    )
+
+
 def stored_profile_ids(servers: Iterable[MCPServer]) -> Iterator[StoredProfileId]:
     for server in servers:
         for profile in server.additional_auth or ():

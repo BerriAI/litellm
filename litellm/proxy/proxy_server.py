@@ -12166,6 +12166,18 @@ class ProxyStartupEvent:
                     misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
 
+        from litellm.proxy.mcp_server.utils import is_mcp_available
+
+        if is_mcp_available() and should_load_db_object("mcp"):
+            from litellm.proxy.mcp_server.auth_profile_db import startup_profile_refusal
+            from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+            profile_refusal: Final = await startup_profile_refusal(
+                global_mcp_server_manager.config_mcp_servers.values(), prisma_client
+            )
+            if profile_refusal is not None:
+                raise RuntimeError(profile_refusal)
+
         heuristic_v1_tuning_baselines = await cls.enforce_heuristic_v1_tuning_baseline(
             prisma_client=prisma_client,
             llm_router=llm_router,

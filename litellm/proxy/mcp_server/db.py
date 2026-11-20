@@ -937,13 +937,15 @@ async def get_all_mcp_servers(
     return list(_readable_mcp_servers(mcp_servers))
 
 
+LOADABLE_MCP_SERVER_FILTER: Final["prisma_db_types.LiteLLM_MCPServerTableWhereInput"] = {
+    "OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]
+}
+
+
 async def get_runtime_mcp_server_rows(
     prisma_client: PrismaClient,
 ) -> Sequence["prisma_db_models.LiteLLM_MCPServerTable"]:
-    where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
-        "OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]
-    }
-    return await MCPServerRepository(prisma_client, use_writer=True).table.find_many(where=where)
+    return await MCPServerRepository(prisma_client, use_writer=True).table.find_many(where=LOADABLE_MCP_SERVER_FILTER)
 
 
 async def get_mcp_server(prisma_client: PrismaClient, server_id: str) -> LiteLLM_MCPServerTable | None:
