@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import count, islice
 from types import MappingProxyType
@@ -8,8 +8,10 @@ from typing import Final
 from typing_extensions import assert_never
 
 from litellm import constants
-from litellm.constants import PTU_SENTINEL_API_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.constants import CALLBACK_CONFIG_METADATA_SLOTS, PTU_SENTINEL_API_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.repositories.daily_activity_buckets import UNATTRIBUTED_API_KEY, UNKNOWN_MODEL_GROUP
+from litellm.repositories.key_metadata_sql import ACTIVE_TOKEN_DIGEST_SQL, DELETED_TOKEN_DIGEST_SQL
+from litellm.types.proxy.management_endpoints.scim_v2 import SCIM_DIRECTORY_METADATA_KEYS
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable, ExportType
 
 _API_KEY_ROLLED_UP_BIT: Final = 32
@@ -42,6 +44,7 @@ PRISMA_TO_PG_TABLE: Final[Mapping[DailyActivityTable, str]] = MappingProxyType(
         DailyActivityTable.TAG: "LiteLLM_DailyTagSpend",
         DailyActivityTable.ORGANIZATION: "LiteLLM_DailyOrganizationSpend",
         DailyActivityTable.CUSTOMER: "LiteLLM_DailyEndUserSpend",
+        DailyActivityTable.CUSTOMER_MEMBER: "LiteLLM_DailyCustomerMemberSpend",
         DailyActivityTable.AGENT: "LiteLLM_DailyAgentSpend",
     }
 )
@@ -75,6 +78,8 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     exclusion_index: Final = entity_index + int(has_entity_array)
     model_index: Final = exclusion_index + int(bool(scope.exclude_entity_ids))
     api_keys_index: Final = model_index + int(bool(scope.model))
+    team_index: Final = api_keys_index + int(bool(scope.api_keys))
+    app_index: Final = team_index + int(scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None)
     conditions: Final = (
         f"date >= ${start_index}",
         f"date <= ${start_index + 1}",
@@ -105,7 +110,16 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             if scope.api_keys
             else ()
         ),
+        *(
+            (
+                f"api_key IN (SELECT api_key FROM ({_customer_key_teams_sql(scope)}) customer_keys "
+                f"WHERE team_id = ANY(${team_index}::text[]))",
+            )
+            if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None
+            else ()
+        ),
     )
+    app_conditions: Final = (*conditions, *((f'"app_id" = ${app_index}',) if scope.app_id is not None else ()))
     params: Final = (
         adjusted_start,
         adjusted_end,
@@ -113,8 +127,86 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((list(scope.exclude_entity_ids),) if scope.exclude_entity_ids else ()),
         *((scope.model,) if scope.model else ()),
         *((list(scope.api_keys),) if scope.api_keys else ()),
+        *((list(scope.team_ids),) if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None else ()),
+        *((scope.app_id,) if scope.app_id is not None else ()),
     )
-    return " AND ".join(conditions), params
+    return " AND ".join(app_conditions), params
+
+
+def _customer_key_teams_sql(scope: DailyActivityScope) -> str:
+    table: Final = PRISMA_TO_PG_TABLE[scope.table]
+    where_clause, _ = build_where_clause(replace(scope, team_ids=None))
+    direct: Final = (
+        "SELECT current_key.token, current_key.team_id FROM ("
+        'SELECT token, team_id, 0 AS priority, NULL::timestamp AS deleted_at FROM "LiteLLM_VerificationToken" '
+        "UNION ALL "
+        'SELECT token, team_id, 1 AS priority, deleted_at FROM "LiteLLM_DeletedVerificationToken"'
+        ") current_key WHERE current_key.token = scoped_keys.api_key "
+        "ORDER BY priority, deleted_at DESC LIMIT 1"
+    )
+    active_digest: Final = ACTIVE_TOKEN_DIGEST_SQL.replace("$1", "ARRAY(SELECT api_key FROM missing)")
+    deleted_digest: Final = DELETED_TOKEN_DIGEST_SQL.replace("$1", "ARRAY(SELECT api_key FROM still_missing)")
+    return f'''WITH scoped_keys AS MATERIALIZED (
+            SELECT DISTINCT api_key FROM "{table}" WHERE {where_clause}
+        ), direct AS MATERIALIZED (
+            SELECT scoped_keys.api_key, current_key.token, current_key.team_id
+            FROM scoped_keys LEFT JOIN LATERAL ({direct}) current_key ON TRUE
+        ), missing AS MATERIALIZED (
+            SELECT api_key FROM direct WHERE token IS NULL AND api_key ~ '^[0-9a-f]{{64}}$'
+        ), active_recovered AS MATERIALIZED (
+            SELECT * FROM ({active_digest}) recovered WHERE EXISTS (SELECT 1 FROM missing)
+        ), still_missing AS MATERIALIZED (
+            SELECT api_key FROM missing WHERE NOT EXISTS (
+                SELECT 1 FROM active_recovered WHERE digest = missing.api_key
+            )
+        ), deleted_recovered AS MATERIALIZED (
+            SELECT * FROM ({deleted_digest}) recovered WHERE EXISTS (SELECT 1 FROM still_missing)
+        )
+        SELECT direct.api_key, COALESCE(NULLIF(
+            CASE WHEN direct.token IS NOT NULL THEN direct.team_id
+            ELSE COALESCE(active_recovered.team_id, deleted_recovered.team_id) END, ''), 'Unassigned') AS team_id
+        FROM direct LEFT JOIN active_recovered ON direct.api_key = active_recovered.digest
+        LEFT JOIN deleted_recovered ON direct.api_key = deleted_recovered.digest'''
+
+
+def build_customer_team_rollup_sql(scope: DailyActivityScope, *, row_ids: tuple[str, ...] | None = None) -> SqlQuery:
+    where_clause, params = build_where_clause(replace(scope, team_ids=None))
+    team_filter: Final = (
+        f" AND customer_keys.team_id = ANY(${len(params) + 1}::text[])" if scope.team_ids is not None else ""
+    )
+    rows_filter: Final = (
+        f" AND id = ANY(${len(params) + int(scope.team_ids is not None) + 1}::text[])" if row_ids is not None else ""
+    )
+    return SqlQuery(
+        sql=f'''WITH customer_keys AS MATERIALIZED ({_customer_key_teams_sql(scope)})
+            SELECT date, NULL::text AS api_key, customer_team_id AS team_id,
+            (SELECT team_alias FROM "LiteLLM_TeamTable" WHERE team_id = scoped.customer_team_id) AS team_alias,
+            {_rollup_metric_select(scope.table)}
+            FROM (SELECT daily.*, customer_keys.team_id AS customer_team_id
+                FROM "{PRISMA_TO_PG_TABLE[scope.table]}" daily JOIN customer_keys USING (api_key)
+                WHERE {where_clause}{team_filter}{rows_filter}) scoped
+            GROUP BY date, customer_team_id''',
+        params=(
+            *params,
+            *((list(scope.team_ids),) if scope.team_ids is not None else ()),
+            *((list(row_ids),) if row_ids is not None else ()),
+        ),
+    )
+
+
+def build_customer_daily_rows_sql(scope: DailyActivityScope, *, page: int, page_size: int) -> SqlQuery:
+    where_clause, params = build_where_clause(scope)
+    return SqlQuery(
+        sql=f'''WITH filtered AS MATERIALIZED (
+                SELECT * FROM "{PRISMA_TO_PG_TABLE[scope.table]}" WHERE {where_clause}
+            )
+            SELECT (SELECT COUNT(*) FROM filtered)::bigint AS total_count,
+                COALESCE((SELECT jsonb_agg(page_rows) FROM (
+                    SELECT * FROM filtered ORDER BY date DESC, id ASC
+                    OFFSET ${len(params) + 1} LIMIT ${len(params) + 2}
+                ) page_rows), '[]'::jsonb) AS rows''',
+        params=(*params, (page - 1) * page_size, page_size),
+    )
 
 
 def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) -> str:
@@ -124,6 +216,10 @@ def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) 
 
 
 def _rollup_metric_select(table: DailyActivityTable) -> str:
+    cache_cost: Final = "SUM(cache_cost)::float" if table is DailyActivityTable.CUSTOMER_MEMBER else "0::float"
+    priced_cache_tokens: Final = (
+        "SUM(priced_cache_tokens)::bigint" if table is DailyActivityTable.CUSTOMER_MEMBER else "0::bigint"
+    )
     return f"""
             SUM(spend)::float AS spend,
             {_ptu_flat_cost_select(table)},
@@ -131,11 +227,15 @@ def _rollup_metric_select(table: DailyActivityTable) -> str:
             SUM(completion_tokens)::bigint AS completion_tokens,
             SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
             SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
+            {cache_cost} AS cache_cost,
+            {priced_cache_tokens} AS priced_cache_tokens,
             SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
             SUM(compression_savings_spend)::float AS compression_savings_spend,
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
             SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
             SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
+            SUM(guardrail_spend)::float AS guardrail_spend,
+            SUM(customer_margin_spend)::float AS customer_margin_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests,
@@ -447,11 +547,16 @@ def build_cache_leakage_keys_sql(scope: DailyActivityScope, *, limit: int) -> Sq
 
 
 def build_export_sql(
-    scope: DailyActivityScope, *, export_type: ExportType, after: ExportCursor | None, batch_size: int
+    scope: DailyActivityScope,
+    *,
+    export_type: ExportType,
+    after: ExportCursor | None,
+    batch_size: int,
+    include_metadata: bool = False,
 ) -> SqlQuery:
     _bounded_limit(batch_size)
     where_clause, where_params = build_where_clause(scope)
-    group_key, output_key, user_fields, type_joins = _export_grouping(export_type)
+    group_key, output_key, user_fields, type_joins = _export_grouping(export_type, include_metadata=include_metadata)
     grouping_keys: Final = (
         f"scoped.date, COALESCE(scoped.\"{scope.entity_id_field}\", '')",
         *((group_key,) if export_type is not ExportType.DAILY else ()),
@@ -520,12 +625,32 @@ def build_export_sql(
     )
 
 
-def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str, ...]]:
+def _metadata_object_field(expression: str, redacted_keys: frozenset[str], alias: str) -> str:
+    redacted: Final = " - ".join((expression, *(f"'{key}'" for key in sorted(redacted_keys))))
+    return (
+        f"COALESCE(MIN(CASE WHEN jsonb_typeof({expression}) = 'object' THEN ({redacted})::text END), '{{}}')::jsonb "
+        f"AS {alias}"
+    )
+
+
+_EMPTY_KEY_METADATA_FIELD: Final = "'{}'::jsonb AS key_metadata"
+_EMPTY_USER_METADATA_FIELD: Final = "'{}'::jsonb AS user_metadata"
+_EMPTY_METADATA_FIELDS: Final = f", {_EMPTY_KEY_METADATA_FIELD}, {_EMPTY_USER_METADATA_FIELD}"
+EXPORT_METADATA_DROPPED_KEYS: Final[frozenset[str]] = CALLBACK_CONFIG_METADATA_SLOTS | SCIM_DIRECTORY_METADATA_KEYS
+_USER_METADATA_FIELD: Final = _metadata_object_field("u.metadata", EXPORT_METADATA_DROPPED_KEYS, "user_metadata")
+_KEY_METADATA_FIELD: Final = _metadata_object_field(
+    "COALESCE(vt.metadata, dvt.metadata)", EXPORT_METADATA_DROPPED_KEYS, "key_metadata"
+)
+
+
+def _export_grouping(export_type: ExportType, *, include_metadata: bool) -> tuple[str, str, str, tuple[str, ...]]:
+    key_metadata: Final = _KEY_METADATA_FIELD if include_metadata else _EMPTY_KEY_METADATA_FIELD
+    user_metadata: Final = _USER_METADATA_FIELD if include_metadata else _EMPTY_USER_METADATA_FIELD
     if export_type is ExportType.DAILY:
         return (
             "''",
             "NULL::text",
-            "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email",
+            "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email" + _EMPTY_METADATA_FIELDS,
             (),
         )
     if export_type is ExportType.DAILY_WITH_KEYS:
@@ -534,11 +659,12 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
             _API_KEY_EXPR,
             "MAX(CASE WHEN scoped.api_key = '' THEN 'Unattributed' "
             "ELSE COALESCE(vt.key_alias, dvt.key_alias) END) AS key_alias, "
-            "MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email",
+            f"MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email, "
+            f"{key_metadata}, {user_metadata}",
             (
                 "LEFT JOIN \"LiteLLM_VerificationToken\" vt ON vt.token = scoped.api_key AND scoped.api_key <> ''",
                 """LEFT JOIN LATERAL (
-                    SELECT key_alias, user_id
+                    SELECT key_alias, user_id, metadata
                     FROM "LiteLLM_DeletedVerificationToken"
                     WHERE token = scoped.api_key
                     ORDER BY deleted_at DESC
@@ -551,7 +677,7 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
         return (
             _MODEL_EXPR,
             "NULL::text",
-            "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email",
+            "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email" + _EMPTY_METADATA_FIELDS,
             (),
         )
     if export_type is ExportType.DAILY_WITH_USERS:
@@ -559,11 +685,11 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
             "COALESCE(vt.user_id, dvt.user_id, '')",
             "NULL::text",
             "NULL::text AS key_alias, MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, "
-            "MAX(u.user_email) AS user_email",
+            f"MAX(u.user_email) AS user_email, {_EMPTY_KEY_METADATA_FIELD}, {user_metadata}",
             (
                 'LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = scoped.api_key',
                 """LEFT JOIN LATERAL (
-                    SELECT key_alias, user_id
+                    SELECT key_alias, user_id, metadata
                     FROM "LiteLLM_DeletedVerificationToken"
                     WHERE token = scoped.api_key
                     ORDER BY deleted_at DESC

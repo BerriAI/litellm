@@ -7,11 +7,15 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from prisma import models as prisma_models
 from prisma.builder import QueryBuilder
 from pydantic import ValidationError
+from litellm.repositories import rust_database
+from litellm.repositories.table_repositories import SpendLogOwner, SpendLogsRepository
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 from litellm.models.base import DomainModel
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -2520,3 +2524,40 @@ class TestSubscriptionAccountRepository:
         )
         assert (label_cleared.monthly_fee, label_cleared.label, label_cleared.updated_by) == (30.0, None, "admin-c")
         assert missing is None
+
+
+class TestSpendLogsWindowSpend:
+    """``SpendLogsRepository.window_spend`` hands the Rust repository the bound the Prisma ``group_by`` used."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("owner", list(SpendLogOwner))
+    @pytest.mark.parametrize(
+        "since",
+        [
+            datetime(2026, 8, 1, 0, 0, 0, 123000),
+            datetime(2026, 8, 1, 0, 0, 0, 123000, tzinfo=timezone.utc),
+            datetime(2026, 7, 31, 20, 0, 0, 123999, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2026, 8, 1, 2, 0, 0, 123456, tzinfo=timezone(timedelta(hours=2))),
+        ],
+        ids=["naive_is_utc", "utc", "named_zone", "fixed_offset_microseconds"],
+    )
+    async def test_reads_the_rust_repository_from_the_utc_millisecond(self, monkeypatch, owner, since):
+        stores = install_rust_auth_stores(monkeypatch)
+        stores.spend_log.totals[(owner.value, "owner-1")] = 2.5
+
+        spend = await SpendLogsRepository(MagicMock()).window_spend(owner, "owner-1", since)
+
+        assert spend == 2.5
+        assert stores.spend_log.lookups == [
+            (owner.value, "owner-1", datetime(2026, 8, 1, 0, 0, 0, 123000, tzinfo=timezone.utc))
+        ]
+        assert stores.spend_log.lookups[0][2].tzinfo is timezone.utc
+
+    @pytest.mark.asyncio
+    async def test_without_a_rust_database_is_no_db_connected(self, monkeypatch):
+        monkeypatch.setattr(rust_database, "repository", lambda kind: None)
+
+        with pytest.raises(rust_database.NoDatabaseConnected):
+            await SpendLogsRepository(MagicMock()).window_spend(
+                SpendLogOwner.KEY, "owner-1", datetime(2026, 8, 1, tzinfo=timezone.utc)
+            )

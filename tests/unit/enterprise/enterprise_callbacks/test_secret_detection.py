@@ -12,6 +12,7 @@ Covers the three defects from the ticket:
 
 import cProfile
 import json
+import re
 import sys
 import tempfile
 import time
@@ -29,6 +30,7 @@ from litellm_enterprise.enterprise_callbacks.secret_detection import (
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import hash_token
+from litellm.types.responses.main import build_web_search_call
 
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 OPENAI_KEY = "sk-test-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
@@ -112,6 +114,51 @@ async def test_deeply_nested_tool_arguments_are_redacted():
     await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
     rewritten = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
     assert json.loads(rewritten) == json.loads(arguments.replace(AWS_KEY, "[REDACTED]"))
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_server_tool_call_cannot_forward_unredacted_credentials():
+    arguments = json.dumps({"query": f"AWS_ACCESS_KEY_ID={AWS_KEY}"})
+    server_call = {"id": "srvtoolu_1", "type": "function", "function": {"name": "web_search", "arguments": arguments}}
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "Searching.",
+                "provider_specific_fields": {"server_tool_calls": [server_call]},
+            }
+        ]
+    }
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    rewritten = data["messages"][0]["provider_specific_fields"]["server_tool_calls"][0]["function"]["arguments"]
+    assert json.loads(rewritten) == {"query": "AWS_ACCESS_KEY_ID=[REDACTED]"}
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_server_web_search_keeps_no_credentials_in_its_hosted_copy():
+    query = f"AWS_ACCESS_KEY_ID={AWS_KEY}"
+    server_call = {
+        "id": "srvtoolu_1",
+        "type": "function",
+        "function": {"name": "web_search", "arguments": json.dumps({"query": query})},
+    }
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "Searching.",
+                "provider_specific_fields": {
+                    "server_tool_calls": [server_call],
+                    "web_search_calls": [
+                        build_web_search_call("srvtoolu_1", {"query": query}, {"content": []}).model_dump()
+                    ],
+                },
+            }
+        ]
+    }
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    hosted = json.loads(json.dumps(data["messages"][0]["provider_specific_fields"]["web_search_calls"]))
+    assert [call["action"]["query"] for call in hosted] == ["AWS_ACCESS_KEY_ID=[REDACTED]"]
 
 
 @pytest.mark.parametrize("password", ("hunter2\\brahms9x", "hunter2\tbrahms9x"))
@@ -223,6 +270,77 @@ async def test_pre_call_hook_records_secrets_found_only_in_tool_payloads():
     recorded = _recorded(data)
     assert recorded["guardrail_response"] == "mask"
     assert recorded["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_redacts_credentials_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the deploy config."},
+                    {"type": "input_json", "data": {"deploy": {"env": f"AWS_ACCESS_KEY_ID={AWS_KEY}"}, "replicas": 2}},
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {"deploy": {"env": "AWS_ACCESS_KEY_ID=[REDACTED]"}, "replicas": 2}
+    assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_redacts_secret_keys_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the key usage."},
+                    {"type": "input_json", "data": {"usage": {AWS_KEY: {"calls": 3}}}},
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {"usage": {"[REDACTED]": {"calls": 3}}}
+    assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_keeps_every_value_when_secret_keys_redact_to_the_same_name():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_json",
+                        "data": {AWS_KEYS[0]: {"calls": 3}, AWS_KEYS[1]: {"calls": 5}, "[REDACTED]": {"calls": 7}},
+                    },
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][0]["data"] == {
+        "[REDACTED] (2)": {"calls": 3},
+        "[REDACTED] (3)": {"calls": 5},
+        "[REDACTED]": {"calls": 7},
+    }
 
 
 @pytest.mark.parametrize(
@@ -940,7 +1058,10 @@ def _assignment_flood(n: int) -> str:
     return f"api_key: '{OPENAI_KEY}'\n" + "\n".join(f"password{i}=aB3dE6gH9jK2mN5p{i}" for i in range(n))
 
 
-def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
+_MEASUREMENTS: Final = 3
+
+
+def _profiled_calls(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
     previous_profiler: Final = sys.getprofile()
     profile: Final = cProfile.Profile()
     try:
@@ -948,6 +1069,24 @@ def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> in
     finally:
         sys.setprofile(previous_profiler)
     return sum(entry.callcount for entry in profile.getstats())
+
+
+def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
+    """Fewest calls over repeated runs, which leaves out a one-off recompile of patterns evicted from the `re` cache."""
+    return min(_profiled_calls(guardrail, content) for _ in range(_MEASUREMENTS))
+
+
+def test_calls_to_redact_ignores_a_regex_cache_eviction() -> None:
+    guardrail: Final = _guardrail()
+    content: Final = _quote_run(1_000)
+    guardrail.redact_text(content)
+    warm: Final = _calls_to_redact(guardrail, content)
+
+    re.purge()
+
+    evicted: Final = _calls_to_redact(guardrail, content)
+
+    assert evicted <= 1.25 * warm, (warm, evicted)
 
 
 @pytest.mark.parametrize(
