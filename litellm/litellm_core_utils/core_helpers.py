@@ -9,6 +9,7 @@ from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -33,6 +34,21 @@ else:
 
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
+
+
+def redact_url_origin(url: str | None) -> str | None:
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        parts: Final = urlsplit(url)
+        hostname: Final = parts.hostname
+        port: Final = parts.port
+    except ValueError:
+        return None
+    if not hostname:
+        return None
+    netloc: Final = f"{hostname}:{port}" if port else hostname
+    return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
 def is_codex_user_agent(user_agent: str) -> bool:

@@ -2807,6 +2807,49 @@ async def test_optional_discovery_allows_exhaustion_at_page_cap(method: str, mon
     )
 
 
+@pytest.mark.asyncio
+async def test_standalone_tool_listing_does_not_require_fastapi(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "fastapi", None)
+    monkeypatch.delitem(sys.modules, "litellm.proxy.mcp_server.oauth_utils", raising=False)
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": (payload.params or {})["protocolVersion"],
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "standalone", "version": "1"},
+                    },
+                },
+            )
+        assert payload.method == "tools/list"
+        continuation: Final = bool((payload.params or {}).get("cursor"))
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    "tools": [{"name": "second" if continuation else "first", "inputSchema": {"type": "object"}}],
+                    "nextCursor": None if continuation else "page-two",
+                },
+            },
+        )
+
+    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp")
+    tools: Final = await client.list_tools()
+    assert [tool.name for tool in tools] == ["first", "second"]
+
+
 def test_standalone_client_request_does_not_require_proxy_dependencies():
     import textwrap
 
