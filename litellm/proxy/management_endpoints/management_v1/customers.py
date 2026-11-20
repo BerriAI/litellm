@@ -16,6 +16,7 @@ from litellm.proxy.list_api.common import (
     reject_unknown_query_params,
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
+from litellm.proxy.management_helpers.apps import invalidate_app_auth_policy
 from litellm.proxy.management_helpers.customer_hierarchy import (
     BudgetGroupScope,
     BudgetSort,
@@ -297,8 +298,11 @@ async def configure_app_customer_organization_budget_groups(
     data: BudgetGroupsUpdate,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> BudgetGroups:
-    return await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP_ORGANIZATION)
+    groups: Final = await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP_ORGANIZATION)
+    await invalidate_app_auth_policy(cache)
+    return groups
 
 
 @router.get(
@@ -326,8 +330,11 @@ async def configure_app_budget_groups(
     data: BudgetGroupsUpdate,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> BudgetGroups:
-    return await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP)
+    groups: Final = await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP)
+    await invalidate_app_auth_policy(cache)
+    return groups
 
 
 @router.get(
@@ -358,8 +365,11 @@ async def configure_app_customer_member_budget_groups(
     data: BudgetGroupsUpdate,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> BudgetGroups:
-    return await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP_MEMBER)
+    groups: Final = await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP_MEMBER)
+    await invalidate_app_auth_policy(cache)
+    return groups
 
 
 @router.get(

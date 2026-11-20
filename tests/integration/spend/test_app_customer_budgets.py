@@ -2,8 +2,10 @@ import json
 import uuid
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from math import isclose
+from pathlib import Path
 from typing import Final
 
 import httpx
@@ -24,7 +26,10 @@ from tests.integration._support.client import (
     eventually,
     string_value,
 )
+from tests.integration._support.database import read_rows, scratch_database
+from tests.integration._support.database_relay import dropped_connection_relay, plaintext_database_url
 from tests.integration._support.process import owned_proxy
+from tests.integration._support.redis_process import owned_redis
 from tests.integration._support.wire import Reply, Request, wire_server
 
 _APPS: Final = "/management/v1/apps"
@@ -231,6 +236,7 @@ def _chat(
     *,
     member: str | None = None,
     asserted_app: str | None = None,
+    include_member: bool = True,
 ) -> httpx.Response:
     return gateway.request(
         "POST",
@@ -243,7 +249,7 @@ def _chat(
         key=key,
         headers={
             "x-litellm-customer-org-alias": customer.alias,
-            "x-litellm-customer-member-id": member or customer.member,
+            **({"x-litellm-customer-member-id": member or customer.member} if include_member else {}),
             **({"x-litellm-app": asserted_app} if asserted_app is not None else {}),
         },
     )
@@ -253,6 +259,94 @@ def _blocked(response: httpx.Response) -> None:
     assert response.status_code in (422, 429), response.text
     error: Final = JSON_OBJECT.validate_python(JSON_OBJECT.validate_json(response.content)["error"])
     assert error["type"] == "budget_exceeded", response.text
+
+
+def test_known_app_customer_uses_shared_cache_when_its_database_read_fails(
+    session_gateway: Gateway, tmp_path: Path
+) -> None:
+    config: Final = tmp_path / "app-outage.yaml"
+    config.write_text(
+        json.dumps(
+            {
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "store_model_in_db": True,
+                    "allow_requests_on_db_unavailable": True,
+                    "coordination_redis": {"host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
+                },
+                "litellm_settings": {"enable_redis_customer_auth_cache": True, "enable_redis_auth_cache": True},
+            }
+        )
+    )
+    with ExitStack() as stack:
+        database: Final = stack.enter_context(scratch_database())
+        redis: Final = stack.enter_context(owned_redis(tmp_path))
+        redis_env: Final = {"REDIS_HOST": redis.host, "REDIS_PORT": str(redis.port)}
+        relay, relayed = stack.enter_context(dropped_connection_relay(database, None))
+        wire: Final = stack.enter_context(wire_server(_reply))
+        primary: Final = stack.enter_context(
+            owned_proxy(session_gateway, tmp_path, {**redis_env, "DATABASE_URL": database}, config=config)
+        )
+        client_dir: Final = tmp_path / "client"
+        client_dir.mkdir()
+        secondary: Final = stack.enter_context(
+            owned_proxy(
+                session_gateway,
+                client_dir,
+                {**redis_env, "DATABASE_URL": plaintext_database_url(relayed)},
+                config=config,
+            )
+        )
+        setup: Final = primary.request("PUT", f"{_APPS}/definition", {"resource_type": "team"})
+        assert setup.status_code == 200, setup.text
+        scenario: Final = stack.enter_context(replace(primary, database_url=database).scenario())
+        model: Final = scenario.model(
+            api_base=f"{wire.url}/v1", input_cost_per_token=0.001, output_cost_per_token=0.002
+        )
+        app_id, key = _app(scenario, model, "outage")
+        customer: Final = _customer(scenario)
+        warm: Final = _chat(primary, key, model, customer, asserted_app=app_id)
+        assert warm.status_code == 200, warm.text
+        relay.arm()
+        try:
+            served: Final = _chat(secondary, key, model, customer, asserted_app=app_id)
+            assert served.status_code == 200, served.text
+            assert relay.dropped.is_set(), "The second proxy did not encounter the database fault"
+            org_only: Final = _chat(secondary, key, model, customer, include_member=False)
+            assert org_only.status_code == 200, org_only.text
+            refused: Final = _chat(secondary, key, model, customer, asserted_app="other-app")
+            assert refused.status_code == 403, refused.text
+            unknown: Final = _chat(secondary, key, model, customer, member=customer.other_member, asserted_app=app_id)
+            assert unknown.status_code == 503, unknown.text
+        finally:
+            relay.disarm()
+        recovered: Final = _chat(secondary, key, model, customer, asserted_app=app_id)
+        assert recovered.status_code == 200, recovered.text
+        served_id: Final = string_value(JSON_OBJECT.validate_json(served.content)["id"])
+        recovered_id: Final = string_value(JSON_OBJECT.validate_json(recovered.content)["id"])
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id IN (%s, %s)',
+                (served_id, recovered_id),
+                database_url=database,
+            ),
+            lambda results: {"request_id": recovered_id} in results,
+            seconds=70,
+        )
+        assert rows == [{"request_id": recovered_id}]
+        assert not read_rows(
+            'SELECT 1 FROM "LiteLLM_AppCustomerMemberTable" WHERE app_id = %s AND customer_member_id = %s',
+            (app_id, customer.other_member),
+            database_url=database,
+        )
+        changed: Final = primary.request("PATCH", f"{_APPS}/{app_id}", {"budget": {"max_budget": 1}})
+        assert changed.status_code == 200, changed.text
+        relay.arm()
+        try:
+            stale: Final = _chat(secondary, key, model, customer, asserted_app=app_id)
+            assert stale.status_code == 503, stale.text
+        finally:
+            relay.disarm()
 
 
 def _spend(row: Mapping[str, JsonValue]) -> float:

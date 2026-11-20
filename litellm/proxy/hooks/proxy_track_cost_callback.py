@@ -737,7 +737,8 @@ class _ProxyDBLogger(CustomLogger):
         )
         accounting_rows: Final = tuple((cost, dict(row)) for cost, row in spend_rows)
         charged: Final = [
-            await self._spend_writer().update_database(
+            user_api_key_dict.customer_auth_db_unavailable
+            or await self._spend_writer().update_database(
                 token=token,
                 response_cost=row_cost,
                 user_id=user_api_key_dict.user_id,
@@ -1511,7 +1512,9 @@ async def _update_database_and_spend_counters_in_batch(
         )
         if accounting is not None:
             accounting.write_started = True
-        charged: Final = await writer.update_database(
+        metadata: Final = _str_keyed_fields(get_litellm_metadata_from_kwargs(kwargs=kwargs))
+        outage: Final = metadata.get("user_api_key_customer_auth_db_unavailable") is True
+        charged: Final = outage or await writer.update_database(
             token=user_api_key,
             response_cost=response_cost,
             user_id=user_id,
@@ -1546,7 +1549,7 @@ async def _update_database_and_spend_counters_in_batch(
 
     try:
         await settle_customer_spend(
-            _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs)),
+            metadata,
             response_cost,
             spend_counter_store,
         )

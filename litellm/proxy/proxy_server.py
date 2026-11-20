@@ -3551,6 +3551,7 @@ async def get_current_spend(
     fallback_authoritative: bool = False,
     *,
     require_authoritative_window: bool = False,
+    require_verified_spend: bool = False,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3617,7 +3618,7 @@ async def get_current_spend(
             if authoritative > current:
                 await _repair_stale_spend_counter(counter_key=counter_key, db_spend=authoritative)
                 return authoritative
-        elif fallback_spend > current:
+        elif fallback_spend > current and (verified or not require_verified_spend):
             # nothing to read (tag counters, an end user without a row or a DB client, a
             # failed read); fallback_spend is the authoritative recorded value loaded in auth.
             return fallback_spend
@@ -3626,7 +3627,7 @@ async def get_current_spend(
     # only from a per-pod cache (Redis and DB both unreadable), reject rather
     # than admit on an unverifiable budget. No-op unless the flag is set, so
     # default behavior is unchanged.
-    if not verified and _fail_closed_budget_enforcement():
+    if not verified and (require_verified_spend or _fail_closed_budget_enforcement()):
         _raise_budget_unverifiable(counter_key)
 
     return current
@@ -5712,7 +5713,9 @@ def _build_redis_usage_cache_from_environment() -> RedisCache | None:
     return build_redis_usage_cache(litellm._redis._redis_kwargs_from_environment())
 
 
-def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: bool) -> None:
+def _attach_redis_usage_cache(
+    redis_cache: RedisCache, enable_redis_auth_cache: bool, enable_redis_customer_auth_cache: bool = False
+) -> None:
     """
     Wires an established coordination Redis into the proxy-level caches that
     consume it directly: the spend counter cache, the CLI SSO login-session
@@ -5757,6 +5760,8 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
             "litellm_settings.enable_redis_auth_cache: true to share "
             "the auth cache across workers and reduce DB load."
         )
+    if enable_redis_customer_auth_cache:
+        user_api_key_cache.attach_customer_auth_store(redis_cache)
     litellm_config_cache.redis_cache = redis_cache
 
 
@@ -6804,6 +6809,7 @@ class ProxyConfig:
         _attach_redis_usage_cache(
             coordination_redis_cache,
             enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+            enable_redis_customer_auth_cache=litellm_settings.get("enable_redis_customer_auth_cache") is True,
         )
         verbose_proxy_logger.info(
             "coordination_redis: using a standalone Redis from general_settings "
@@ -6860,6 +6866,7 @@ class ProxyConfig:
         _attach_redis_usage_cache(
             env_coordination_redis_cache,
             enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+            enable_redis_customer_auth_cache=litellm_settings.get("enable_redis_customer_auth_cache") is True,
         )
         verbose_proxy_logger.info(
             "coordination_redis: using a standalone Redis built from REDIS_* "
@@ -6872,6 +6879,7 @@ class ProxyConfig:
         self,
         cache_params: Mapping[str, Any],
         enable_redis_auth_cache: bool = False,
+        enable_redis_customer_auth_cache: bool = False,
     ) -> RedisCache | None:
         """
         Initializes the response cache and resolves the coordination Redis.
@@ -6909,7 +6917,7 @@ class ProxyConfig:
         if resolved_usage_cache is not None:
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
-            _attach_redis_usage_cache(resolved_usage_cache, enable_redis_auth_cache)
+            _attach_redis_usage_cache(resolved_usage_cache, enable_redis_auth_cache, enable_redis_customer_auth_cache)
         elif litellm_config_cache.redis_cache is None:
             verbose_proxy_logger.info("litellm_config_cache: no Redis configured; cluster-wide cache sharing disabled.")
         return resolved_usage_cache
@@ -7308,6 +7316,8 @@ class ProxyConfig:
                         self.init_cache(
                             cache_params=cache_params,
                             enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+                            enable_redis_customer_auth_cache=litellm_settings.get("enable_redis_customer_auth_cache")
+                            is True,
                         )
                     )
                     if litellm.cache is not None:
@@ -11618,6 +11628,7 @@ class ProxyStartupEvent:
         _attach_redis_usage_cache(
             coordination_redis_cache,
             enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+            enable_redis_customer_auth_cache=litellm_settings.get("enable_redis_customer_auth_cache") is True,
         )
         if llm_router is not None and llm_router.health().store.redis_cache is None:
             llm_router.apply(ChangeSet(redis_cache=coordination_redis_cache))

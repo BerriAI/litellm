@@ -45,6 +45,7 @@ async def get_app_store() -> AsyncIterator[AppStore]:
         store: Final = AppStore(db, cache=user_api_key_cache)
         yield store
     await store.invalidate_definition_cache()
+    await store.invalidate_auth_policy()
 
 
 Store: TypeAlias = Annotated[AppStore, Depends(get_app_store)]

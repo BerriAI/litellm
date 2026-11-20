@@ -1,6 +1,14 @@
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Final
 
+from pydantic import BaseModel
+
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import Batch
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
@@ -8,19 +16,23 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     customer_scope,
 )
 from litellm.proxy.auth.customer_spend import current_customer_spend
-from litellm.proxy.management_helpers.apps import AppStore, app_scope_id
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.management_helpers.apps import APP_AUTH_POLICY_KEY, AppStore, app_scope_id
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerScopeAuth,
     CustomerScopeKey,
     app_budget_limits,
 )
-from litellm.types.proxy.management_endpoints.apps import AppFailure, AppResourceType
+from litellm.types.proxy.management_endpoints.apps import App, AppFailure, AppMember, AppOrganization, AppResourceType
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+    from litellm.redis.stores.auth_cache import AuthCacheStore
     from litellm.router_api import RegistryReader
+
+_APP_AUTH_SNAPSHOT_TTL: Final = 60.0
 
 
 def selected_app_assertion(headers: Mapping[str, object]) -> str | None:
@@ -66,7 +78,134 @@ async def authenticated_resource_id(
         case AppResourceType.PROJECT:
             return authenticated.project_id
         case AppResourceType.VIRTUAL_KEY:
-            return await store.key_resource_id(authenticated.token)
+            return authenticated.key_id or await store.key_resource_id(authenticated.token)
+
+
+class _AppAuthRecords(BaseModel, frozen=True):
+    app: App
+    organization: AppOrganization | None = None
+    member: AppMember | None = None
+
+
+async def _load_app_records(
+    store: AppStore,
+    resource_type: AppResourceType,
+    resource_id: str,
+    assertion: str | None,
+    hierarchy: CustomerHierarchyAuth | None,
+) -> _AppAuthRecords | None:
+    app: Final = await store.by_resource(resource_type, resource_id)
+    if app is None:
+        if assertion is not None and assertion != resource_id:
+            resource: Final = await store.resource(resource_type, resource_id)
+            if isinstance(resource, AppFailure) or assertion != resource.alias:
+                raise_app_failure(AppFailure(403, "The app header does not match the authenticated resource."))
+        return None
+    _check_app_assertion(app, assertion)
+    org: Final = (
+        await store.organization(app, hierarchy.customer_org_id)
+        if hierarchy is not None and hierarchy.customer_org_id
+        else None
+    )
+    member: Final = (
+        await store.member(app, hierarchy.customer_member_id, org)
+        if hierarchy is not None and hierarchy.customer_member_id and org is not None
+        else None
+    )
+    return _AppAuthRecords(app=app, organization=org, member=member)
+
+
+def _check_app_assertion(app: App, assertion: str | None) -> None:
+    if assertion is not None and assertion not in (app.app_id, app.resource_id, app.alias):
+        raise_app_failure(AppFailure(403, "The app header does not match the authenticated resource."))
+
+
+def _app_records_key(
+    generation: str | None, resource_type: AppResourceType, resource_id: str, org_id: str, member_id: str | None
+) -> str:
+    identity: Final = json.dumps((generation, resource_type.value, resource_id, org_id, member_id))
+    return "customer_app_records:" + hashlib.sha256(identity.encode()).hexdigest()
+
+
+def _snapshot_ttl(records: _AppAuthRecords, read_at: datetime, now: datetime) -> float:
+    return min(
+        (
+            _APP_AUTH_SNAPSHOT_TTL,
+            *(
+                (record.budget_override_expires_at - now).total_seconds()
+                for record in (records.organization, records.member)
+                if record is not None
+                and record.budget_override_expires_at is not None
+                and record.budget_override_expires_at > read_at
+            ),
+        )
+    )
+
+
+async def _read_app_records(
+    store: AppStore,
+    resource_type: AppResourceType,
+    resource_id: str,
+    assertion: str | None,
+    hierarchy: CustomerHierarchyAuth | None,
+    cache: "AuthCacheStore | None",
+    authenticated: UserAPIKeyAuth,
+) -> _AppAuthRecords | None:
+    if cache is None or hierarchy is None or hierarchy.customer_org_id is None:
+        return await _load_app_records(store, resource_type, resource_id, assertion, hierarchy)
+
+    generation: Final = await cache.lease(APP_AUTH_POLICY_KEY)
+    key: Final = _app_records_key(
+        generation, resource_type, resource_id, hierarchy.customer_org_id, hierarchy.customer_member_id
+    )
+    try:
+        records: Final = await _load_app_records(store, resource_type, resource_id, assertion, hierarchy)
+    except Exception as error:
+        fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(error)
+        if fault is None:
+            raise
+        if (
+            PrismaDBExceptionHandler.is_permanent_database_fault(fault)
+            or not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+        ):
+            raise PrismaDBExceptionHandler.service_unavailable_proxy_exception(error) from error
+        cached: Final = await _recover_app_records(cache, key, generation)
+        if cached is None:
+            raise PrismaDBExceptionHandler.service_unavailable_proxy_exception(error) from error
+        _check_app_assertion(cached.app, assertion)
+        authenticated.customer_auth_db_unavailable = True  # rebind-ok: request-local auth state
+        return cached
+    if records is not None:
+        now: Final = datetime.now(timezone.utc)
+        org_key: Final = _app_records_key(generation, resource_type, resource_id, hierarchy.customer_org_id, None)
+        snapshots: Final = (
+            (key, records),
+            *(
+                ((org_key, _AppAuthRecords(app=records.app, organization=records.organization)),)
+                if org_key != key
+                else ()
+            ),
+        )
+        await cache.write_back(
+            tuple(
+                (snapshot_key, snapshot.model_dump(mode="json"), ttl)
+                for snapshot_key, snapshot in snapshots
+                if (ttl := _snapshot_ttl(snapshot, store.now, now)) >= 1
+            ),
+            batch=Batch.NONE,
+        )
+    return records
+
+
+async def _recover_app_records(cache: "AuthCacheStore", key: str, generation: str | None) -> _AppAuthRecords | None:
+    try:
+        payload: Final = (await cache.read_missing((key,), batch=Batch.NONE)).get(key)
+        if payload is None or await cache.lease(APP_AUTH_POLICY_KEY) != generation:
+            return None
+        return _AppAuthRecords.model_validate(payload)
+    except Exception as error:  # noqa: BLE001  # Redis or invalid cached policy must be treated as a miss
+        verbose_proxy_logger.warning("Unable to read customer app outage cache: %s", type(error).__name__)
+        return None
 
 
 async def resolve_app_hierarchy(
@@ -99,29 +238,18 @@ async def resolve_app_hierarchy(
                 )
             )
         return hierarchy
-    app: Final = await store.by_resource(definition.resource_type, resource_id)
-    if app is None:
-        if assertion is not None and assertion != resource_id:
-            resource: Final = await store.resource(definition.resource_type, resource_id)
-            if isinstance(resource, AppFailure) or assertion != resource.alias:
-                raise_app_failure(AppFailure(403, "The app header does not match the authenticated resource."))
+    records: Final = await _read_app_records(
+        store,
+        definition.resource_type,
+        resource_id,
+        assertion,
+        hierarchy,
+        user_api_key_cache.customer_auth_store,
+        authenticated,
+    )
+    if records is None:
         return hierarchy
-    if assertion is not None and assertion not in (
-        app.app_id,
-        app.resource_id,
-        app.alias,
-    ):
-        raise_app_failure(AppFailure(403, "The app header does not match the authenticated resource."))
-    org: Final = (
-        await store.organization(app, hierarchy.customer_org_id)
-        if hierarchy is not None and hierarchy.customer_org_id
-        else None
-    )
-    member: Final = (
-        await store.member(app, hierarchy.customer_member_id, org)
-        if hierarchy is not None and hierarchy.customer_member_id and org is not None
-        else None
-    )
+    app, org, member = records.app, records.organization, records.member
     app_scopes: Final = (
         app_scope("app", app.app_id, app.spend, app.budget),
         *(
@@ -149,14 +277,22 @@ async def resolve_app_hierarchy(
             else ()
         ),
     )
-    app_hierarchy: Final = await current_customer_spend(CustomerHierarchyAuth(scopes=app_scopes), get_current_spend)
     base: Final = hierarchy or CustomerHierarchyAuth(scopes=())
+    checked_scopes: Final = (*base.scopes, *app_scopes) if authenticated.customer_auth_db_unavailable else app_scopes
+    app_hierarchy: Final = await current_customer_spend(
+        CustomerHierarchyAuth(scopes=checked_scopes),
+        partial(get_current_spend, require_verified_spend=True)
+        if authenticated.customer_auth_db_unavailable
+        else get_current_spend,
+    )
     combined: Final = base.model_copy(
         update={
             "app_id": app.app_id,
             "app_alias": app.alias,
             "app_customer_margin": app.customer_margin,
-            "scopes": (*base.scopes, *app_hierarchy.scopes),
+            "scopes": app_hierarchy.scopes
+            if authenticated.customer_auth_db_unavailable
+            else (*base.scopes, *app_hierarchy.scopes),
         }
     )
     try:

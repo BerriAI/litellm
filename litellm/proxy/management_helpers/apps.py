@@ -88,6 +88,7 @@ class _ResourceRecord(BaseModel):
 
 _DEFINITION_PARAM: Final = "customer_app_definition"
 _DEFINITION_CACHE_KEY: Final = "customer_app_definition:global"
+APP_AUTH_POLICY_KEY: Final = "customer_app_policy:global"
 _PARENT_ORG_ID: Final = TypeAdapter(str)
 AppEntity: Final = TypeVar("AppEntity", App, AppOrganization, AppMember)
 AppAssociation: Final = TypeVar("AppAssociation", AppOrganization, AppMember)
@@ -220,6 +221,7 @@ class AppStore:
         self.now: Final = now or datetime.now(timezone.utc)
         self.cache: Final = cache
         self._definition_cache_dirty = False
+        self._app_auth_policy_dirty = False
         connection: Final = _Connection(db)
         self.apps: Final = AppRepository(connection).table
         self.organizations: Final = AppCustomerOrganizationRepository(connection).table
@@ -268,6 +270,10 @@ class AppStore:
         self._definition_cache_dirty = False
         if self.cache is not None:
             await evict_and_broadcast((_DEFINITION_CACHE_KEY,), self.cache)
+
+    async def invalidate_auth_policy(self) -> None:
+        if self._app_auth_policy_dirty and self.cache is not None:
+            await invalidate_app_auth_policy(self.cache)
 
     async def lock_definition(self) -> _DefinitionState:
         from prisma import Json
@@ -614,6 +620,7 @@ class AppStore:
         row: Final = await self.apps.update(where={"app_id": app_id}, data=await self.fields(data, actor, app))
         if row is None:
             return AppFailure(404, "App not found.")
+        self._app_auth_policy_dirty = True
         updated: Final = await self.response(row)
         await self.customers.delete_released_budget(app.budget_id, updated.budget_id)
         await self.customers.delete_released_budget(
@@ -756,6 +763,7 @@ class AppStore:
             where={"app_id_customer_org_id": identity},
             data={"create": {**identity, **fields}, "update": fields},
         )
+        self._app_auth_policy_dirty = True
         if original is not None:
             await self.customers.delete_released_budget(original.budget_id or original.tier_budget_id, base_id)
             await self.customers.delete_released_budget(original.budget_override_id, override.budget_override_id)
@@ -885,7 +893,13 @@ class AppStore:
                 "update": fields,
             },
         )
+        self._app_auth_policy_dirty = True
         if original is not None:
             await self.customers.delete_released_budget(original.budget_id, base_id)
             await self.customers.delete_released_budget(original.budget_override_id, override.budget_override_id)
         return await self.member(app, customer_member_id, organization)
+
+
+async def invalidate_app_auth_policy(cache: "UserApiKeyCache") -> None:
+    if cache.customer_auth_store is not None:
+        await evict_and_broadcast((APP_AUTH_POLICY_KEY,), cache)

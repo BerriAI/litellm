@@ -28,6 +28,7 @@ from litellm.constants import AUTH_OBJECTS_TARGET as AUTH_OBJECTS_TARGET  # noqa
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
 _CACHED_VALUE: Final = TypeAdapter(object)
 _BUDGET_WINDOWS_ABSENT_PREFIX: Final = "budget_windows_absent:"
+_CUSTOMER_AUTH_PREFIXES: Final = ("customer_member_id:", "customer_org_alias:", "customer_app_")
 
 AuthCacheFactory: TypeAlias = Callable[[RedisCache, AuthCacheSettings], AuthCacheStore]
 
@@ -121,6 +122,7 @@ class UserApiKeyCache(DualCache):
         self._auth_cache: Final = auth_cache
         self._redis_connection: RedisCache | None = None
         self._shared: AuthCacheStore | None = None
+        self._customer_shared: AuthCacheStore | None = None
         self._leases: Final[WeakValueDictionary[str, CacheLease]] = WeakValueDictionary()
         self._decoded_models: Final[dict[str, _DecodedModel]] = {}  # mutable-ok: per-key memo of validated reads
         self.attach_redis_cache(redis_cache, default_redis_ttl=default_redis_ttl)
@@ -176,17 +178,32 @@ class UserApiKeyCache(DualCache):
         self._redis_connection = redis_cache
         self._shared = self._auth_cache(redis_cache, self._settings())
 
+    @property
+    def customer_auth_store(self) -> AuthCacheStore | None:
+        return self._customer_shared
+
+    def attach_customer_auth_store(self, redis_cache: RedisCache) -> None:
+        if self._customer_shared is None:
+            self._customer_shared = self._shared or self._auth_cache(redis_cache, self._settings())
+
+    def _shared_for(self, key: str) -> AuthCacheStore | None:
+        if self._customer_shared is not None and key.startswith(_CUSTOMER_AUTH_PREFIXES):
+            return self._customer_shared
+        return self._shared
+
     def get_local(self, key: str) -> object:
         """This worker's memory copy alone."""
-        if self._shared is not None:
-            return self._shared.get_local(key)
+        shared: Final = self._shared_for(key)
+        if shared is not None:
+            return shared.get_local(key)
         return self._python_memory(key).get_cache(key=key)
 
     def set_local(self, key: str, value: object, ttl: float | None) -> None:
         """A memory write alone, with ``default_in_memory_ttl`` when ``ttl`` is None."""
         self._drop_decoded((key,))
-        if self._shared is not None:
-            self._shared.set_local(key, value, ttl)
+        shared: Final = self._shared_for(key)
+        if shared is not None:
+            shared.set_local(key, value, ttl)
             return
         effective_ttl: Final = self.default_in_memory_ttl if ttl is None else ttl
         if effective_ttl is None:
@@ -202,15 +219,16 @@ class UserApiKeyCache(DualCache):
         held: Final = self._leases.get(key)
         if held is not None:
             return held
-        shared: Final = None if self._shared is None else await self._shared.lease(key)
-        return self._leases.setdefault(key, CacheLease(key, shared))
+        shared: Final = self._shared_for(key)
+        generation: Final = None if shared is None else await shared.lease(key)
+        return self._leases.setdefault(key, CacheLease(key, generation))
 
     async def async_set_leased(self, lease: CacheLease, value: CacheValue, ttl: float | None) -> bool:
         """Caches ``value`` unless the lease's key was evicted since it was taken; False when refused."""
         if self._leases.get(lease.key) is not lease:
             return False
         self._drop_decoded((lease.key,))
-        shared: Final = self._shared
+        shared: Final = self._shared_for(lease.key)
         if shared is None:
             await self.async_set_cache(key=lease.key, value=value, ttl=ttl)
             return True
@@ -243,7 +261,7 @@ class UserApiKeyCache(DualCache):
         if memo is not None and memo.payload is cached and memo.model_type is model_type:
             return memo.model.model_copy()
         decoded: Final = _validated(cached, key, model_type, method)
-        if decoded is None or decoded is cached or self._shared is not None:
+        if decoded is None or decoded is cached or self._shared_for(key) is not None:
             return decoded
         _ = self._decoded_models.pop(key, None)
         self._decoded_models[key] = _DecodedModel(payload=cached, model_type=model_type, model=decoded)
@@ -259,8 +277,9 @@ class UserApiKeyCache(DualCache):
         self._void_leases((key,))
         if key.startswith(_BUDGET_WINDOWS_ABSENT_PREFIX):
             self.budget_windows_absent_cache.delete_cache(key)
-        if self._shared is not None:
-            self._shared.delete_local(key)
+        shared: Final = self._shared_for(key)
+        if shared is not None:
+            shared.delete_local(key)
             return
         self._python_memory(key).delete_cache(key)
 
@@ -298,7 +317,7 @@ class UserApiKeyCache(DualCache):
     ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        shared: Final = self._shared
+        shared: Final = self._shared_for(key)
         cached: Final = _CACHED_VALUE.validate_python(
             self._get_shared_sync(shared, key, local_only)
             if shared is not None
@@ -341,7 +360,7 @@ class UserApiKeyCache(DualCache):
     ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        shared: Final = self._shared
+        shared: Final = self._shared_for(key)
         cached: Final = _CACHED_VALUE.validate_python(
             await self._get_shared(shared, key, local_only)
             if shared is not None
@@ -376,10 +395,8 @@ class UserApiKeyCache(DualCache):
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         if key is not None:
             self._drop_decoded((key,))
-        shared: Final = self._shared
-        if shared is not None:
-            if key is None:
-                return None
+        shared: Final = self._shared_for(key) if key is not None else None
+        if shared is not None and key is not None:
             try:
                 if local_only:
                     shared.set_local(key, payload, _ttl(kwargs))
@@ -408,10 +425,9 @@ class UserApiKeyCache(DualCache):
             and kwargs.keys() <= _PIPELINED_SET_OPTIONS
             and (ttl is None or isinstance(ttl, (int, float)))
         )
-        shared: Final = self._shared
-        if shared is not None:
-            if key is not None:
-                await self._set_shared(shared, key, payload, local_only=local_only, pipelined=pipelined, kwargs=kwargs)
+        shared: Final = self._shared_for(key) if key is not None else None
+        if shared is not None and key is not None:
+            await self._set_shared(shared, key, payload, local_only=local_only, pipelined=pipelined, kwargs=kwargs)
             return None
         if key is not None and is_user_key_cache_key(key):
             return await self.key_object_cache.async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
@@ -438,8 +454,9 @@ class UserApiKeyCache(DualCache):
 
     def delete_cache(self, key: str) -> None:
         self._void_leases((key,))
-        if self._shared is not None:
-            self._shared.delete_sync((key,))
+        shared: Final = self._shared_for(key)
+        if shared is not None:
+            shared.delete_sync((key,))
             return
         if is_user_key_cache_key(key):
             self.key_object_cache.delete_cache(key)
@@ -448,8 +465,9 @@ class UserApiKeyCache(DualCache):
 
     async def async_delete_cache(self, key: str) -> None:
         self._void_leases((key,))
-        if self._shared is not None:
-            await self._shared.delete((key,))
+        shared: Final = self._shared_for(key)
+        if shared is not None:
+            await shared.delete((key,))
             return
         if is_user_key_cache_key(key):
             await self.key_object_cache.async_delete_cache(key)
@@ -459,7 +477,8 @@ class UserApiKeyCache(DualCache):
     def declare_delete(self, key: str) -> Awaitable[None] | None:
         """The DEL on the request's pre-call batch; None without Redis or outside a request, so the caller deletes."""
         self._void_leases((key,))
-        return None if self._shared is None else self._shared.declare_delete(key)
+        shared: Final = self._shared_for(key)
+        return None if shared is None else shared.declare_delete(key)
 
     async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
         """Batch twin of ``async_delete_cache``, partitioned like
@@ -469,6 +488,12 @@ class UserApiKeyCache(DualCache):
         batching these has already committed the rows they cache.
         """
         self._void_leases(keys)
+        customer: Final = self._customer_shared
+        if customer is not None and customer is not self._shared:
+            customer_keys: Final = tuple(key for key in keys if key.startswith(_CUSTOMER_AUTH_PREFIXES))
+            if customer_keys:
+                await customer.delete(customer_keys)
+            keys = tuple(key for key in keys if not key.startswith(_CUSTOMER_AUTH_PREFIXES))  # rebind-ok: routed above
         if self._shared is not None:
             if keys:
                 await self._shared.delete(keys)
@@ -488,6 +513,8 @@ class UserApiKeyCache(DualCache):
         self._leases.clear()
         self._decoded_models.clear()
         self.budget_windows_absent_cache.flush_cache()
+        if self._customer_shared is not None and self._customer_shared is not self._shared:
+            self._customer_shared.flush_local()
         if self._shared is not None:
             self._shared.flush_local()
             return

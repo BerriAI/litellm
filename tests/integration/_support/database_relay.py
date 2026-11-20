@@ -199,7 +199,7 @@ class TriggerScanner:
 
 
 class DroppedConnectionRelay:
-    def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
+    def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes | None) -> None:
         self.port: Final = allocate_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
@@ -225,10 +225,10 @@ class DroppedConnectionRelay:
         server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
 
         async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, inspect: bool) -> None:
-            scanner: Final = TriggerScanner(self._trigger)
+            scanner: Final = TriggerScanner(self._trigger) if inspect and self._trigger is not None else None
             try:
                 while chunk := await reader.read(65536):
-                    matched: Final = scanner.feed(chunk)
+                    matched: Final = scanner is None or scanner.feed(chunk)
                     if inspect and self._armed.is_set() and matched:
                         self.dropped.set()
                         client_writer.close()
@@ -373,7 +373,7 @@ def held_statement_relay(
 
 
 @contextmanager
-def dropped_connection_relay(database_url: str, trigger: bytes) -> Generator[tuple[DroppedConnectionRelay, str]]:
+def dropped_connection_relay(database_url: str, trigger: bytes | None) -> Generator[tuple[DroppedConnectionRelay, str]]:
     parts: Final = urlsplit(database_url)
     assert parts.hostname is not None and parts.port is not None, database_url
     relay: Final = DroppedConnectionRelay(parts.hostname, parts.port, trigger)

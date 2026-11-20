@@ -103,7 +103,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     virtual_key_max_budget_check,
     virtual_key_soft_budget_check,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
 )
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID, UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.auth_object_prefetch import (
     AUTH_OBJECTS_TARGET,
@@ -133,7 +133,11 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     customer_identity_from_request,
     resolve_customer_hierarchy,
 )
-from litellm.proxy.auth.customer_provisioning import registration_refusal, resolve_registered_customer
+from litellm.proxy.auth.customer_provisioning import (
+    registration_refusal,
+    resolve_registered_customer,
+    unknown_customer_header,
+)
 from litellm.proxy.auth.host import identity as auth_identity
 from litellm.proxy.auth.impersonation import (
     IMPERSONATE_USER_HEADER,
@@ -3185,6 +3189,7 @@ async def _authorize_authenticated_request_checks(
     *,
     force_virtual_key_checks: bool = False,
 ) -> UserAPIKeyAuth | None:
+    customer_cache_required = False
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
     # authorization failures (ProxyException, or plain Exception from
@@ -3226,6 +3231,16 @@ async def _authorize_authenticated_request_checks(
         has_customer: Final = customer_identity is not None and not RustAuth.is_public_route(
             route, core.proxy_settings()
         )
+        customer_cache_required = (  # rebind-ok: no customer auth context exists until headers are resolved
+            has_customer and user_api_key_cache.customer_auth_store is not None
+        )
+        if customer_cache_required and user_api_key_auth_obj.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
+            raise ProxyException(
+                message="Database unavailable. The customer request could not be verified.",
+                type=ProxyErrorTypes.no_db_connection,
+                param=None,
+                code=503,
+            )
         if has_customer or RouteChecks.runs_inference_checks(route):
             key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(
                 getattr(user_api_key_auth_obj, "metadata", None) or {}
@@ -3264,6 +3279,17 @@ async def _authorize_authenticated_request_checks(
                         user_api_key_auth_obj,
                     )
                     user_api_key_auth_obj.customer_hierarchy = app_hierarchy  # rebind-ok: request auth state
+                    if (
+                        user_api_key_auth_obj.customer_auth_db_unavailable
+                        and customer_identity is not None
+                        and unknown_customer_header(customer_identity, app_hierarchy) is not None
+                    ):
+                        raise ProxyException(
+                            message="Database unavailable. The customer request could not be verified.",
+                            type=ProxyErrorTypes.no_db_connection,
+                            param=None,
+                            code=503,
+                        )
             except CustomerBudgetExceededError as error:
                 user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
                 raise
@@ -3345,6 +3371,7 @@ async def _authorize_authenticated_request_checks(
             parent_otel_span=user_api_key_auth_obj.parent_otel_span,
             api_key=api_key,
             resolved_identity=user_api_key_auth_obj,
+            allow_db_fallback=not customer_cache_required,
         )
 
     # Defense-in-depth: ``user_api_key_auth_builder`` has multiple early-return

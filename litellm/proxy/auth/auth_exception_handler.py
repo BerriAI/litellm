@@ -176,6 +176,7 @@ class UserAPIKeyAuthExceptionHandler:
         api_key: str,
         resolved_identity: UserAPIKeyAuth | None = None,
         dispatched_call_type: str | None = None,
+        allow_db_fallback: bool = True,
     ) -> UserAPIKeyAuth:
         """
         Handles Connection Errors when reading a Virtual Key from LiteLLM DB
@@ -197,7 +198,8 @@ class UserAPIKeyAuthExceptionHandler:
         )
 
         if (
-            PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+            allow_db_fallback
+            and PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
             and PrismaDBExceptionHandler.is_database_connection_error(e)
         ):
             # log this as a DB failure on prometheus

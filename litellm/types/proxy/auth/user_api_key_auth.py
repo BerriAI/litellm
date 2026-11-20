@@ -268,6 +268,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     customer_hierarchy_started_at: datetime | None = Field(default=None, exclude=True)
+    customer_auth_db_unavailable: bool = Field(default=False, exclude=True)
     budget_reservation: dict[str, object] | None = Field(default=None, exclude=True)
     budget_plan: BudgetPlan | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
@@ -300,6 +301,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_admitted_user_subject", None)
         values.pop("requires_fresh_policy", None)
         values.pop("customer_hierarchy_started_at", None)
+        values.pop("customer_auth_db_unavailable", None)
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_ids", None)
