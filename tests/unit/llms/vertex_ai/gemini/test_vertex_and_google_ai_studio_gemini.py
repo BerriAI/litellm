@@ -2557,6 +2557,7 @@ GEMINI_THOUGHT_IMAGE_PARTS: Final = [
     {"inlineData": {"mimeType": "image/png", "data": "ZHJhZnQ="}, "thought": True},
     {"inlineData": {"mimeType": "image/png", "data": "ZmluYWw="}, "thoughtSignature": "c2ln"},
 ]
+GEMINI_THOUGHT_TEXT_BLOCK: Final = {"type": "thinking", "thinking": "Sketching the layout first"}
 GEMINI_FINAL_IMAGE: Final = {
     "image_url": {"url": "data:image/png;base64,ZmluYWw=", "detail": "auto"},
     "index": 0,
@@ -2566,7 +2567,9 @@ GEMINI_FINAL_IMAGE: Final = {
 
 @pytest.mark.usefixtures("_gemini_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
-async def test_gemini_image_generation_leaves_thought_images_out_of_images(respx_mock: respx.MockRouter) -> None:
+async def test_gemini_image_generation_leaves_thought_images_out_of_images_and_thinking_blocks(
+    respx_mock: respx.MockRouter,
+) -> None:
     respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:generateContent").mock(
         return_value=httpx.Response(
             200,
@@ -2587,6 +2590,7 @@ async def test_gemini_image_generation_leaves_thought_images_out_of_images(respx
 
     assert response.choices[0].message.images == [GEMINI_FINAL_IMAGE]
     assert response.choices[0].message.reasoning_content == "Sketching the layout first"
+    assert response.choices[0].message.thinking_blocks == [GEMINI_THOUGHT_TEXT_BLOCK]
 
 
 @pytest.mark.usefixtures("_gemini_httpx_transport")
