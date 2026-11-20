@@ -105,6 +105,7 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 )
 from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 from litellm.redis.stores.auth_cache import AuthObject
+from tests.unit.redis.stores.auth_cache_invalidation_double import Worker, channel
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.proxy.rust_auth_stores import (
@@ -2638,7 +2639,6 @@ async def test_team_model_add_delete_keep_model_aliases_in_team_cache(endpoint_n
 async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
     endpoint_name: str, blocked: bool, monkeypatch: pytest.MonkeyPatch
 ):
-    import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
     from litellm.proxy._types import BlockTeamRequest
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.team_grants import team_model_aliases
@@ -2661,9 +2661,8 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
     install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows={team_id: columns})))
     prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=update)
     cache: Final = UserApiKeyCache()
-    redis: Final = _BroadcastRecordingRedis()
-    monkeypatch.setattr(pubsub_module, "coordination_redis_cache", lambda: redis)
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    invalidation, fake = channel()
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.auth_cache_invalidation", invalidation)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
@@ -2676,12 +2675,11 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
         http_request=MagicMock(),
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
     )
-    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
 
     seen_by_auth: Final = await get_team_object(team_id=team_id, prisma_client=prisma_client, user_api_key_cache=cache)
     assert seen_by_auth.blocked is blocked
     assert team_model_aliases(seen_by_auth) == {"fast": "gpt-4o"}
-    assert redis.broadcast_keys == [
+    assert [cache_key for cache_key, _, _ in fake.published] == [
         f"team_id:{team_id}",
         "team_alias:kill-switch",
         budget_windows_absent_cache_key("team", team_id),
@@ -10271,42 +10269,6 @@ async def test_delete_team_failing_locked_sweep_rolls_back_the_delete_and_leaves
     assert fresh_cache.get_cache(key=AuthObject.team_alias("doomed-team")) is not None
 
 
-class _BroadcastPipeline:
-    def __init__(self, redis: "_BroadcastRecordingRedis") -> None:
-        self._redis = redis
-        self._messages: list[str] = []
-
-    def publish(self, channel: str, message: str) -> "_BroadcastPipeline":
-        self._messages.append(message)
-        return self
-
-    async def execute(self) -> None:
-        await self._redis.send(tuple(self._messages))
-
-
-class _BroadcastRecordingRedis:
-    namespace = None
-
-    def __init__(self, round_trip_seconds: float = 0.0) -> None:
-        self.broadcast_keys: list[str] = []
-        self._round_trip_seconds = round_trip_seconds
-
-    def init_pubsub_client(self) -> "_BroadcastRecordingRedis":
-        return self
-
-    async def send(self, messages: Sequence[str]) -> None:
-        if self._round_trip_seconds:
-            await asyncio.sleep(self._round_trip_seconds)
-        self.broadcast_keys.extend(json.loads(message)["cache_key"] for message in messages)
-
-    async def publish(self, channel: str, message: str) -> int:
-        await self.send((message,))
-        return 1
-
-    def pipeline(self, transaction: bool = True) -> _BroadcastPipeline:
-        return _BroadcastPipeline(self)
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("rust_auth_stores")
 async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
@@ -10319,7 +10281,6 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     in-memory cache until the TTL, so both stay usable for auth cluster-wide.
     """
     from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     team = LiteLLM_TeamTable(
@@ -10350,9 +10311,6 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
     _wire_team_delete_tx(mock_prisma_client, locked_teams=(team,))
 
-    import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
-
-    redis = _BroadcastRecordingRedis()
     cache: Final = UserApiKeyCache()
     peer_cache: Final = UserApiKeyCache()
     expected_objects: Final = (
@@ -10362,14 +10320,12 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
         AuthObject.team_alias("doomed-team"),
         AuthObject.customer_app("team", "team-doomed"),
     )
-    expected_keys: Final = tuple(obj.key for obj in expected_objects)
     unrelated: Final = AuthObject.customer_app("team", "team-other")
     for worker_cache in (cache, peer_cache):
         for obj in (*expected_objects, unrelated):
             worker_cache.set_cache(key=obj, value="cached")
-    peer_subscriber: Final = AuthCacheInvalidationSubscriber(redis_cache=redis, user_api_key_cache=peer_cache)
-    monkeypatch.setattr(pubsub_module, "coordination_redis_cache", lambda: redis)
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    invalidation, fake = channel(Worker(peer_cache))
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.auth_cache_invalidation", invalidation)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
@@ -10386,13 +10342,7 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
         litellm_changed_by="admin-user",
     )
 
-    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
-
-    assert tuple(redis.broadcast_keys) == expected_keys
-    for key in redis.broadcast_keys:
-        peer_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercise the cross-worker eviction handler
-            {"type": "message", "data": json.dumps({"cache_key": key})}
-        )
+    assert [cache_key for cache_key, _, _ in fake.published] == [obj.key for obj in expected_objects]
     for worker_cache in (cache, peer_cache):
         assert tuple(worker_cache.get_cache(key=obj) for obj in expected_objects) == (None,) * len(expected_objects)
         assert worker_cache.get_cache(key=unrelated) == "cached"
@@ -10404,20 +10354,16 @@ async def test_deleting_a_500_member_team_reaches_every_member_cache_on_other_wo
 ):
     from itertools import chain
 
-    import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.team_endpoints import _evict_deleted_team_member_cache
 
-    redis: Final = _BroadcastRecordingRedis(round_trip_seconds=0.001)
-    monkeypatch.setattr(pubsub_module, "coordination_redis_cache", lambda: redis)
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    invalidation, fake = channel()
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.auth_cache_invalidation", invalidation)
     members: Final = tuple(f"member-{index:03d}" for index in range(500))
 
     await _evict_deleted_team_member_cache(
         team_id="team-large", member_user_ids=members, user_api_key_cache=UserApiKeyCache()
     )
-    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
 
     expected: Final = frozenset(
         chain.from_iterable(
@@ -10429,7 +10375,7 @@ async def test_deleting_a_500_member_team_reaches_every_member_cache_on_other_wo
             for member in members
         )
     )
-    assert expected - frozenset(redis.broadcast_keys) == frozenset()
+    assert expected - frozenset(cache_key for cache_key, _, _ in fake.published) == frozenset()
 
 
 @pytest.mark.asyncio

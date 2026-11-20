@@ -95,6 +95,8 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::auth_cache::{NativeAuthCache, PyAuthObject, PyLocalSizes};
     #[pymodule_export]
+    use crate::redis::store::auth_cache_invalidation::NativeAuthCacheInvalidation;
+    #[pymodule_export]
     use crate::redis::store::deployment_health::NativeDeploymentHealth;
     #[pymodule_export]
     use crate::redis::store::rate_limits::{
@@ -218,6 +220,7 @@ mod tests {
                 "NativeDeploymentHealth",
                 "NativeRouterSessionPins",
                 "AuthObject",
+                "NativeAuthCacheInvalidation",
                 "NativeRateLimits",
                 "WindowCount",
                 "AtomicApplied",

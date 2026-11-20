@@ -1,499 +1,81 @@
-import asyncio
-import hashlib
-import json
-import time
-from collections.abc import Iterable
 from typing import Final
-from unittest.mock import patch
 
 import pytest
-from redis.asyncio import Redis
 
-import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm._internal_context import current_service_target
-from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    AUTH_CACHE_INVALIDATION_CHANNEL,
-    AuthCacheInvalidationSubscriber,
     broadcast_evictions,
     evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
-from litellm.proxy.proxy_server import budget_windows_absent_cache_key
 from litellm.redis.stores.auth_cache import AuthObject
-from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore
-from tests.unit.redis.stores.auth_cache_double import shared_cache
+from litellm.redis.stores.auth_cache_invalidation import AuthCacheInvalidation
+from tests.unit.redis.stores.auth_cache_invalidation_double import FakeChannel, Worker, channel
 
 
-class _RecordingRedisClient(Redis):
-    def __init__(self) -> None:
-        self.published: list[tuple[str, str]] = []
-
-    async def publish(self, channel: str, message: str) -> int:
-        self.published.append((channel, message))
-        return 1
-
-
-class _WedgedPublishRedisClient(Redis):
-    def __init__(self) -> None:
-        self.attempted: list[str] = []
-        self.in_flight = 0
-        self.max_in_flight = 0
-        self.release = asyncio.Event()
-
-    async def publish(self, channel: str, message: str) -> int:
-        self.in_flight += 1
-        self.max_in_flight = max(self.max_in_flight, self.in_flight)
-        self.attempted.append(message)
-        await self.release.wait()
-        self.in_flight -= 1
-        return 1
-
-
-class _SlowPublishRedisClient(Redis):
-    def __init__(self) -> None:
-        self.published: list[str] = []
-
-    async def publish(self, channel: str, message: str) -> int:
-        await asyncio.sleep(0.001)
-        self.published.append(message)
-        return 1
-
-
-class _Pipeline:
-    def __init__(self, client: "_PipelinedRedisClient") -> None:
-        self._client = client
-        self._messages: list[str] = []
-
-    def publish(self, channel: str, message: str) -> "_Pipeline":
-        self._messages.append(message)
-        return self
-
-    async def execute(self) -> None:
-        await self._client.send(tuple(self._messages))
-
-
-class _PipelinedRedisClient:
-    def __init__(self, wedged: bool = False) -> None:
-        self.published: list[str] = []
-        self.round_trips = 0
-        self.release = asyncio.Event()
-        if not wedged:
-            self.release.set()
-
-    async def send(self, messages: tuple[str, ...]) -> None:
-        self.round_trips += 1
-        await self.release.wait()
-        self.published.extend(messages)
-
-    def pipeline(self, transaction: bool = True) -> _Pipeline:
-        return _Pipeline(self)
-
-
-class _FailingPublishRedisClient(Redis):
-    def __init__(self) -> None:
-        pass
-
-    async def publish(self, channel: str, message: str) -> int:
-        raise ConnectionError("redis down")
-
-
-class _TargetRecordingRedisClient(Redis):
-    def __init__(self) -> None:
-        self.targets: list[str | None] = []
-
-    async def publish(self, channel: str, message: str) -> int:
-        self.targets.append(current_service_target())
-        return 1
-
-
-class _QueuePubSub:
-    def __init__(self, initial_messages: Iterable[object] = ()) -> None:
-        self.queue: asyncio.Queue[object] = asyncio.Queue()
-        for message in initial_messages:
-            self.queue.put_nowait(message)
-        self.subscribed_channels: list[str] = []
-        self.closed = False
-        self.drained = asyncio.Event()
-
-    async def subscribe(self, *channels: str) -> None:
-        self.subscribed_channels.extend(channels)
-
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> object | None:
-        if self.queue.empty():
-            self.drained.set()
-        try:
-            return await asyncio.wait_for(self.queue.get(), timeout)
-        except asyncio.TimeoutError:
-            return None
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-
-class _ScriptedPubSubRedisClient(Redis):
-    def __init__(self, pubsubs: Iterable[_QueuePubSub]) -> None:
-        self._scripted_pubsubs = iter(pubsubs)
-
-    def pubsub(self) -> _QueuePubSub:
-        return next(self._scripted_pubsubs)
-
-
-class _FakeRedisCache:
-    def __init__(self, client: object, namespace: str | None = None) -> None:
-        self._client = client
-        self.namespace = namespace
-
-    def init_pubsub_client(self) -> object:
-        return self._client
-
-
-def _invalidation_message(cache_key: str) -> dict:
-    return {"type": "message", "data": json.dumps({"cache_key": cache_key}).encode()}
+def _install(monkeypatch: pytest.MonkeyPatch, *workers: Worker) -> FakeChannel:
+    invalidation, fake = channel(*workers)
+    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", invalidation)
+    return fake
 
 
 @pytest.mark.asyncio
-async def test_publish_sends_cache_key_json_on_channel() -> None:
-    client = _RecordingRedisClient()
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client),
-    ):
-        await publish_auth_cache_invalidation(cache_key="project_id:p-1")
+async def test_publish_sends_an_eviction_or_a_value_on_the_shared_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake: Final = _install(monkeypatch)
 
-    assert client.published == [(AUTH_CACHE_INVALIDATION_CHANNEL, json.dumps({"cache_key": "project_id:p-1"}))]
+    await publish_auth_cache_invalidation(cache_key="project_id:p-1")
+    await publish_auth_cache_invalidation(cache_key="spend:key:k-1", new_value=0.0, ttl=60)
+
+    assert fake.published == [("project_id:p-1", None, None), ("spend:key:k-1", 0.0, 60)]
 
 
 @pytest.mark.asyncio
-async def test_publish_uses_namespaced_channel() -> None:
-    client = _RecordingRedisClient()
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client, namespace="ns1"),
-    ):
-        await publish_auth_cache_invalidation(cache_key="project_id:p-1")
+async def test_evict_and_broadcast_drops_the_key_here_and_on_a_peer_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LIT-3803: a worker that did not handle the mutation must drop its copy too, or it serves the stale object
+    until the TTL expires."""
+    handling: Final = UserApiKeyCache()
+    peer: Final = UserApiKeyCache()
+    for cache in (handling, peer):
+        cache.set_cache(AuthObject.user("user-1"), UserAPIKeyAuth(user_id="user-1"), model_type=UserAPIKeyAuth)
+        cache.set_cache(AuthObject.user("user-2"), UserAPIKeyAuth(user_id="user-2"), model_type=UserAPIKeyAuth)
+    fake: Final = _install(monkeypatch, Worker(peer))
 
-    assert client.published[0][0] == f"ns1:{AUTH_CACHE_INVALIDATION_CHANNEL}"
+    await evict_and_broadcast(cache_keys=(AuthObject.user("user-1").key,), user_api_key_cache=handling)
 
-
-@pytest.mark.asyncio
-async def test_publish_noops_without_coordination_redis() -> None:
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=None,
-    ):
-        await publish_auth_cache_invalidation(cache_key="project_id:p-1")
+    assert fake.published == [(AuthObject.user("user-1").key, None, None)]
+    for cache in (handling, peer):
+        assert cache.get_cache(AuthObject.user("user-1"), model_type=UserAPIKeyAuth) is None
+        assert cache.get_cache(AuthObject.user("user-2"), model_type=UserAPIKeyAuth) is not None
 
 
 @pytest.mark.asyncio
-async def test_publish_swallows_redis_errors() -> None:
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=_FailingPublishRedisClient()),
-    ):
-        await publish_auth_cache_invalidation(cache_key="project_id:p-1")
+async def test_broadcast_evictions_sends_every_key_in_one_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake: Final = _install(monkeypatch)
+    cache_keys: Final = tuple(f"user-{i}" for i in range(3000))
+
+    await broadcast_evictions(cache_keys=cache_keys)
+
+    assert fake.bulk == [cache_keys]
+
+
+class _TargetRecordingChannel(FakeChannel):
+    targets: tuple[str | None, ...] = ()
+
+    def publish(self, cache_key: str, new_value: float | None = None, ttl: float | None = None) -> bool:
+        self.targets = (*self.targets, current_service_target())
+        return super().publish(cache_key, new_value, ttl)
 
 
 @pytest.mark.asyncio
-async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
-    """
-    The cross-worker half of LIT-3803: a worker that did not handle the project
-    mutation must drop its in-memory copy when the invalidation broadcast lands,
-    instead of serving the stale object until the TTL expires.
-    """
-    cache = UserApiKeyCache()
-    cache.set_local(AuthObject.project("p-1"), {"models": []}, None)
-    assert cache.get_local(AuthObject.project("p-1")) is not None
-
-    pubsub = _QueuePubSub(initial_messages=[_invalidation_message("project_id:p-1")])
-    subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
-        user_api_key_cache=cache,
-    )
-    subscriber.start()
-    try:
-        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
-    finally:
-        await subscriber.stop()
-
-    assert cache.get_local(AuthObject.project("p-1")) is None
-    assert pubsub.subscribed_channels == [AUTH_CACHE_INVALIDATION_CHANNEL]
-
-
-@pytest.mark.asyncio
-async def test_subscriber_deletes_key_object_partition_entry_on_message() -> None:
-    """
-    LIT-7563 moved user-key objects into their own in-memory partition; a key
-    invalidation broadcast must still evict the hashed-token entry there, or a
-    deleted key keeps authenticating on other workers until its TTL expires.
-    """
-    hashed_token = hashlib.sha256(b"sk-lit7563-hot-key").hexdigest()
-    cache = UserApiKeyCache()
-    cache.set_cache(AuthObject.virtual_key(hashed_token), UserAPIKeyAuth(token=hashed_token), model_type=UserAPIKeyAuth)
-    assert cache.get_cache(AuthObject.virtual_key(hashed_token), model_type=UserAPIKeyAuth) is not None
-
-    pubsub = _QueuePubSub(initial_messages=[_invalidation_message(hashed_token)])
-    subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
-        user_api_key_cache=cache,
-    )
-    subscriber.start()
-    try:
-        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
-    finally:
-        await subscriber.stop()
-
-    assert cache.get_cache(AuthObject.virtual_key(hashed_token), model_type=UserAPIKeyAuth) is None
-
-
-@pytest.mark.asyncio
-async def test_subscriber_evicts_a_user_whose_id_looks_like_a_no_window_marker_along_with_the_marker() -> None:
-    user_id: Final = budget_windows_absent_cache_key("key", "alice")
-    cache: Final = UserApiKeyCache()
-    cache.set_cache(AuthObject.user(user_id), {"user_id": user_id, "models": ["gpt-4o"]})
-    no_window_markers: Final = InMemoryCache()
-    no_window_markers.set_cache(user_id, True)
-
-    pubsub: Final = _QueuePubSub(initial_messages=[_invalidation_message(user_id)])
-    subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
-        user_api_key_cache=cache,
-        evicted_caches=(no_window_markers,),
-    )
-    subscriber.start()
-    try:
-        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
-    finally:
-        await subscriber.stop()
-
-    assert cache.get_cache(AuthObject.user(user_id)) is None
-    assert no_window_markers.get_cache(user_id) is None
-
-
-@pytest.mark.asyncio
-async def test_a_value_broadcast_leaves_the_evicted_caches_alone_and_writes_the_additional_ones() -> None:
-    hook_state: Final = InMemoryCache()
-    hook_state.set_cache("spend:key:k-1", "hook copy")
-    spend_copy: Final = InMemoryCache()
-    spend_copy.set_cache("spend:key:k-1", 9.0)
-    pubsub: Final = _QueuePubSub(
-        initial_messages=[{"type": "message", "data": json.dumps({"cache_key": "spend:key:k-1", "new_value": 0.0})}]
-    )
-    subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
-        user_api_key_cache=UserApiKeyCache(),
-        additional_in_memory_caches=(spend_copy,),
-        evicted_caches=(hook_state,),
-    )
-    subscriber.start()
-    try:
-        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
-    finally:
-        await subscriber.stop()
-
-    assert hook_state.get_cache("spend:key:k-1") == "hook copy"
-    assert spend_copy.get_cache("spend:key:k-1") == 0.0
-
-
-@pytest.mark.asyncio
-async def test_subscriber_drops_the_shared_auth_cache_copy_so_the_next_read_refills_from_redis() -> None:
-    """With enable_redis_auth_cache the keyspace's memory tier is native; the Python subscriber forwards each
-    eviction broadcast to it, and the next read takes the other worker's write from Redis."""
-    cache, store = shared_cache()
-    await cache.async_set_cache(AuthObject.team("t-1"), {"team_id": "t-1", "models": ["old"]})
-    store.redis["team_id:t-1"] = {"team_id": "t-1", "models": ["new"]}
-
-    pubsub = _QueuePubSub(initial_messages=[_invalidation_message("team_id:t-1")])
-    subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
-        user_api_key_cache=cache,
-    )
-    subscriber.start()
-    try:
-        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
-    finally:
-        await subscriber.stop()
-
-    assert cache.get_local(AuthObject.team("t-1")) is None
-    assert await cache.async_get_cache(AuthObject.team("t-1")) == {"team_id": "t-1", "models": ["new"]}
-
-
-@pytest.mark.asyncio
-async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() -> None:
-    """
-    The spend-counter half of the same cross-worker gap: a remote worker's own
-    spend counter can hold a stale value (its fallback path when that worker's
-    own Redis read for the counter fails), and only clearing user_api_key_cache
-    on message would leave that separate DualCache's in-memory copy untouched.
-    """
-    cache = UserApiKeyCache()
-    spend_counter_in_memory_cache = InMemoryCache()
-    spend_counter_in_memory_cache.set_cache("spend:team_member:u-1:t-1", 999.0)
-    assert spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is not None
-
-    pubsub = _QueuePubSub(initial_messages=[_invalidation_message("spend:team_member:u-1:t-1")])
-    subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
-        user_api_key_cache=cache,
-        additional_in_memory_caches=(spend_counter_in_memory_cache,),
-    )
-    subscriber.start()
-    try:
-        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
-    finally:
-        await subscriber.stop()
-
-    assert spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is None
-
-
-@pytest.mark.asyncio
-async def test_subscriber_writes_and_drops_the_native_spend_counter_copies_a_broadcast_names() -> None:
-    """The spend counters' memory tier lives in the native store, not in a Python InMemoryCache, so a broadcast
-    has to reach it there: a SET carries the reset value into it, a delete drops it, and keys outside the spend
-    counter keyspace leave it alone."""
-    store = SpendCounterStore(connect(None).spend_counters())
-    store.set_local("spend:team_member:u-1:t-1", 999.0)
-    store.set_local("spend:key:k-1", 7.0)
-    pubsub = _QueuePubSub(
-        initial_messages=[
-            _invalidation_message("spend:team_member:u-1:t-1"),
-            {"type": "message", "data": json.dumps({"cache_key": "spend:key:k-1", "new_value": 0.0, "ttl": 60})},
-            {"type": "message", "data": json.dumps({"cache_key": "spend_db_floor:spend:key:k-1", "new_value": 3.0})},
-            {"type": "message", "data": json.dumps({"cache_key": "spend:unknown:x", "new_value": 3.0})},
-        ]
-    )
-    subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
-        user_api_key_cache=UserApiKeyCache(),
-        spend_counters=store,
-    )
-    subscriber.start()
-    try:
-        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
-    finally:
-        await subscriber.stop()
-
-    assert store.snapshot() == {"spend:key:k-1": 0.0}
-
-
-@pytest.mark.asyncio
-async def test_subscriber_ignores_malformed_messages() -> None:
-    cache = UserApiKeyCache()
-    cache.set_local(AuthObject.project("p-1"), {"models": []}, None)
-
-    subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[_QueuePubSub()])),
-        user_api_key_cache=cache,
-    )
-    subscriber._apply_message({"type": "message", "data": b"not json"})
-    subscriber._apply_message({"type": "message", "data": json.dumps({"other": "x"}).encode()})
-    subscriber._apply_message("raw string")
-    subscriber._apply_message(None)
-
-    assert cache.get_local(AuthObject.project("p-1")) is not None
-
-
-@pytest.mark.asyncio
-async def test_evict_and_broadcast_evicts_locally_and_returns_while_redis_publish_never_answers() -> None:
-    cache = UserApiKeyCache()
-    cache.set_cache(AuthObject.user("user-wedged"), UserAPIKeyAuth(user_id="user-wedged"), model_type=UserAPIKeyAuth)
-    client = _WedgedPublishRedisClient()
-
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client),
-    ):
-        started = time.monotonic()
-        await evict_and_broadcast(cache_keys=("user-wedged",), user_api_key_cache=cache)
-        elapsed = time.monotonic() - started
-
-    assert elapsed < 0.1, f"handler waited {elapsed:.3f}s on a publish that never answers"
-    assert cache.get_cache(AuthObject.user("user-wedged"), model_type=UserAPIKeyAuth) is None
-    assert client.attempted == [json.dumps({"cache_key": "user-wedged"})], "publish was not handed to redis"
-    client.release.set()
-    await asyncio.sleep(0)
-
-
-@pytest.mark.asyncio
-async def test_publish_holds_at_most_sixteen_redis_connections_while_redis_is_wedged(
+async def test_evict_and_broadcast_publishes_under_the_auth_objects_service_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    client = _WedgedPublishRedisClient()
+    handle: Final = _TargetRecordingChannel()
+    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", AuthCacheInvalidation(handle))
 
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client),
-    ):
-        for i in range(64):
-            await publish_auth_cache_invalidation(cache_key=f"user-{i}")
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+    await evict_and_broadcast(cache_keys=("user-a", "user-b"), user_api_key_cache=UserApiKeyCache())
 
-        assert client.max_in_flight == 16, f"publish tasks held {client.max_in_flight} redis connections at once"
-        assert len(client.attempted) == 16, "waiters called publish before a semaphore slot freed"
-        client.release.set()
-        await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
-
-    assert len(client.attempted) == 64
-
-
-@pytest.mark.asyncio
-async def test_broadcast_evictions_tells_redis_every_key_past_the_pending_publish_cap_in_one_round_trip(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    client = _PipelinedRedisClient()
-    cache_keys = tuple(f"user-{i}" for i in range(3000))
-
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client),
-    ):
-        await broadcast_evictions(cache_keys=cache_keys)
-
-    assert [json.loads(message)["cache_key"] for message in client.published] == list(cache_keys)
-    assert client.round_trips == 1
-
-
-@pytest.mark.asyncio
-async def test_broadcast_evictions_returns_within_its_bound_while_redis_never_answers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.05)
-    client = _PipelinedRedisClient(wedged=True)
-
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client),
-    ):
-        started = time.monotonic()
-        await broadcast_evictions(cache_keys=("user-1",))
-        waited = time.monotonic() - started
-        assert client.published == []
-        client.release.set()
-        await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
-
-    assert 0.05 <= waited < 1.0
-    assert client.published == [json.dumps({"cache_key": "user-1"})]
-
-
-@pytest.mark.asyncio
-async def test_evict_and_broadcast_publishes_under_the_auth_objects_service_target() -> None:
-    client = _TargetRecordingRedisClient()
-
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client),
-    ):
-        await evict_and_broadcast(cache_keys=("user-a", "user-b"), user_api_key_cache=UserApiKeyCache())
-        await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
-
-    assert client.targets == [AUTH_OBJECTS_TARGET, AUTH_OBJECTS_TARGET]
+    assert handle.targets == (AUTH_OBJECTS_TARGET, AUTH_OBJECTS_TARGET)

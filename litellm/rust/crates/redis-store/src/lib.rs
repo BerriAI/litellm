@@ -1,5 +1,6 @@
 pub mod active_teams;
 pub mod auth_cache;
+pub mod auth_cache_invalidation;
 mod codec;
 pub mod deployment_health;
 mod dual_cache;
