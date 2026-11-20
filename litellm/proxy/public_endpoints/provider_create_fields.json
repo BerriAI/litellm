@@ -3664,6 +3664,34 @@
     "default_model_placeholder": "wally/glm-5.3-flash"
   },
   {
+    "provider": "MODAPI",
+    "provider_display_name": "ModAPI",
+    "litellm_provider": "modapi",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://modapi.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "modapi/gpt-4.1-nano"
+  },
+  {
     "provider": "Sail",
     "provider_display_name": "Sail",
     "litellm_provider": "sail",
