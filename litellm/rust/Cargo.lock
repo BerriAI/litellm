@@ -3495,6 +3495,7 @@ dependencies = [
  "azure_identity",
  "futures-util",
  "litellm-auth-types",
+ "litellm-env",
  "litellm-error",
  "litellm-http",
  "litellm-python-compat",
@@ -3525,18 +3526,33 @@ dependencies = [
  "gcp_auth",
  "google-cloud-auth",
  "http 1.4.2",
+ "litellm-auth-aws",
  "litellm-auth-types",
+ "litellm-env",
  "litellm-error",
+ "litellm-http",
+ "litellm-python-compat",
  "litellm-secret-value",
+ "litellm-tracing",
  "moka",
+ "percent-encoding",
+ "rcgen",
+ "reqwest",
+ "rsa",
  "rstest",
  "rustls 0.23.42",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "shlex",
+ "strum",
  "tempfile",
+ "thiserror 2.0.21",
  "time",
  "tokio",
+ "tokio-rustls 0.26.4",
+ "tracing",
+ "url",
  "veil",
 ]
 
@@ -3852,6 +3868,7 @@ name = "litellm-config"
 version = "0.1.0"
 dependencies = [
  "envy",
+ "litellm-env",
  "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
@@ -3862,6 +3879,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml_ng",
+ "struct-field-names-as-array",
  "strum",
  "thiserror 2.0.21",
  "veil",
@@ -4331,6 +4349,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-auth-gcp",
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
@@ -4538,6 +4557,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "struct-field-names-as-array",
  "strum",
 ]
 
@@ -4596,6 +4616,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "azure_core",
  "bytes",
+ "chrono",
  "criterion",
  "fancy-regex 0.19.2",
  "futures-util",
@@ -4605,6 +4626,7 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-azure",
+ "litellm-auth-gcp",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks",
@@ -4678,6 +4700,7 @@ dependencies = [
 name = "litellm-python-compat"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "criterion",
  "hex",
  "num-bigint 0.4.8",
@@ -4688,6 +4711,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "thiserror 2.0.21",
+ "unicode-general-category",
 ]
 
 [[package]]
@@ -4815,6 +4839,7 @@ name = "litellm-repositories"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "jiff",
  "litellm-db",
  "litellm-error",
  "litellm-python-compat",
@@ -4825,6 +4850,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing",
+ "uuid",
  "veil",
 ]
 
@@ -4875,6 +4901,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "strum",
 ]
 
 [[package]]
@@ -6078,6 +6105,7 @@ version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b"
 dependencies = [
+ "chrono",
  "indexmap 2.14.0",
  "libc",
  "once_cell",
@@ -7576,6 +7604,26 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "struct-field-names-as-array"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22ba4bae771f9cc992c4f403636c54d2ef13acde6367583e99d06bb336674dd9"
+dependencies = [
+ "struct-field-names-as-array-derive",
+]
+
+[[package]]
+name = "struct-field-names-as-array-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2dbf8b57f3ce20e4bb171a11822b283bdfab6c4bb0fe64fa729f045f23a0938"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "structmeta"

@@ -35,6 +35,7 @@ from litellm.constants import (
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -87,6 +88,52 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingVectorStoreRequest,
 )
+
+
+@pytest.mark.parametrize("call_type", ("completion", "anthropic_messages", "pass_through_endpoint"))
+def test_spend_log_keeps_subscription_usage_from_standard_logging(call_type: str) -> None:
+    now: Final = datetime.datetime(2025, 1, 1, tzinfo=timezone.utc)
+    logger: Final = LiteLLMLoggingObj(
+        model="subscription-log-test",
+        messages=[],
+        stream=False,
+        call_type=call_type,
+        start_time=now,
+        litellm_call_id="subscription",
+        function_id="subscription",
+    )
+    logger.update_environment_variables(
+        optional_params={},
+        custom_llm_provider="anthropic",
+        litellm_params={"metadata": {"used_client_oauth_token": True}},
+    )
+    response: Final = litellm.ModelResponse(model="subscription-log-test")
+    response._hidden_params["additional_headers"] = {
+        "llm_provider-anthropic-ratelimit-unified-status": "rejected",
+        "llm_provider-anthropic-ratelimit-unified-overage-status": "allowed",
+    }
+    standard: Final = get_standard_logging_object_payload(
+        kwargs=logger.model_call_details,
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logger,
+        status="success",
+    )
+    assert standard is not None
+    payload: Final = get_logging_payload(
+        kwargs={**logger.model_call_details, "standard_logging_object": standard},
+        response_obj=response,
+        start_time=now,
+        end_time=now,
+    )
+    expected: Final = {
+        "is_overage": True,
+        "status": "rejected",
+        "overage_status": "allowed",
+    }
+    assert standard["metadata"]["claude_subscription_usage"] == expected
+    assert json.loads(payload["metadata"])["claude_subscription_usage"] == expected
 
 
 @pytest.mark.parametrize("bucket", ("metadata", "litellm_metadata"))

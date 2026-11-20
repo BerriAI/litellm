@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
+from litellm.llms.gemini.files.utils import gemini_file_id
 from litellm.proxy._types import ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.managed_file_repository import ManagedFileRepository
@@ -467,9 +468,7 @@ _GEMINI_FILES_URL: Final = "https://generativelanguage.googleapis.com/v1beta/fil
 
 
 def _gemini_files_tail(file_id: str) -> str:
-    """The id Gemini resolves ``file_id`` to, whatever scheme or case wraps it: the text after its ``files/``."""
-    files_index: Final = file_id.find("files/")
-    return file_id[files_index:].strip("/").removeprefix("files/").strip("/") if files_index != -1 else ""
+    return gemini_file_id(file_id) if file_id.startswith(("http://", "https://")) or "files/" in file_id else ""
 
 
 def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
@@ -484,7 +483,11 @@ def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
     canonicalized, reduced the way Gemini reduces it, plus the ``files/`` and Gemini URL forms that upload rows
     stored before ids were canonicalized."""
     original: Final = get_original_file_id(file_id)
-    reductions: Final = (canonical_provider_file_id(original), _gemini_files_tail(unquote(original)))
+    reductions: Final = (
+        canonical_provider_file_id(original),
+        _gemini_files_tail(unquote(original)),
+        _gemini_files_tail(original),
+    )
     bare_ids: Final = tuple(dict.fromkeys(bare for bare in reductions if bare))
     return tuple(dict.fromkeys((file_id, *_iter_stored_forms(bare_ids))))
 

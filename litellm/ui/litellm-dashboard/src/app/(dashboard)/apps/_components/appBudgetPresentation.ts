@@ -1,6 +1,26 @@
 import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { customerBudgetPeriod, type CustomerBudgetUsage } from "../../customers/_components/customerBudgetUsage";
-import type { Budget } from "./appForms";
+import type { AppMember, AppOrganization, Budget } from "./appForms";
+import type { CustomerUsageEntity } from "../../customers/_components/customerUsageApi";
+
+export function appUsageEntity(
+  id: string,
+  label: string,
+  row: Pick<AppOrganization | AppMember, "spend" | "effective_budget" | "budget_usage">,
+): CustomerUsageEntity {
+  const budget = row.effective_budget;
+  return {
+    id,
+    label,
+    spend: row.spend,
+    budgetLimit: budget?.max_budget ?? null,
+    budgetDuration: budget?.budget_duration ?? null,
+    budgetLimits: budget?.budget_limits ?? [],
+    budgetResetAt: null,
+    budgetUsage: appBudgetWindows(budget, row.budget_usage).windows,
+    rateLimits: budget ?? undefined,
+  };
+}
 
 export const appSpend = (spend: number): string => (spend > 0 && spend < 0.01 ? "<$0.01" : formatUsd(spend));
 

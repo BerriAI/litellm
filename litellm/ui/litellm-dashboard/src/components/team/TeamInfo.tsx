@@ -133,9 +133,13 @@ import {
   budgetAlertEmailsFromRows,
   budgetAlertRowsFromMetadata,
   budgetAlertRowsSchema,
+  KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+  legacySoftBudgetRecipientsText,
   TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY,
+  teamBudgetAlertSummary,
   teamMemberBudgetAlertSummary,
 } from "../key_team_helpers/budgetAlertEmails";
+import { Alert, AlertDescription } from "@/components/shared/Alert";
 import { BudgetAlertEmailsEditor } from "../key_team_helpers/BudgetAlertEmailsEditor";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
@@ -149,6 +153,7 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
   "secret_manager_settings",
   "soft_budget_alerting_emails",
+  KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
   TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY,
   "model_tpm_limit",
   "model_rpm_limit",
@@ -376,12 +381,29 @@ const SUPPRESSED_BY_DESCRIPTION = "";
 
 const numericInputSchema = z.union([z.string(), z.number()]).nullish();
 
-const buildTeamUpdateFieldsSchema = (t: TFunction) =>
-  z.object({
+const buildTeamUpdateFieldsSchema = (t: TFunction) => {
+  const fields = z.object({
     team_alias: z.string().min(1, t("teams.teamInfo.validation.teamNameRequired")),
     models: z.array(z.string()).optional(),
     max_budget: numericInputSchema,
     soft_budget: numericInputSchema,
+    max_budget_alert_emails: budgetAlertRowsSchema((issue) =>
+      issue === "thresholdRange"
+        ? t("teams.teamInfo.validation.thresholdRange")
+        : t("teams.teamInfo.validation.duplicateThreshold"),
+    )
+      .superRefine((rows, ctx) => {
+        rows.forEach((row, index) => {
+          if (!row.emails.split(",").some((email) => email.trim().length > 0)) {
+            ctx.addIssue({
+              code: "custom",
+              message: t("teams.teamInfo.validation.teamAlertRecipientsRequired"),
+              path: [index, "emails"],
+            });
+          }
+        });
+      })
+      .optional(),
     soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
     default_team_member_models: z.array(z.string()).optional(),
     team_member_budget: numericInputSchema,
@@ -458,6 +480,17 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) =>
     secret_manager_settings: z.string().optional(),
     metadata: metadataPairsSchema.optional(),
   });
+  return fields.superRefine((values, ctx) => {
+    const maxBudget = Number(values.max_budget);
+    if (values.max_budget_alert_emails?.length && (!Number.isFinite(maxBudget) || maxBudget <= 0)) {
+      ctx.addIssue({
+        code: "custom",
+        message: t("teams.teamInfo.validation.teamAlertBudgetRequired"),
+        path: ["max_budget"],
+      });
+    }
+  });
+};
 
 type TeamUpdateFormValues = z.infer<ReturnType<typeof buildTeamUpdateFieldsSchema>>;
 
@@ -479,6 +512,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   models: [],
   max_budget: undefined,
   soft_budget: undefined,
+  max_budget_alert_emails: [],
   soft_budget_alerting_emails: "",
   default_team_member_models: [],
   team_member_budget: undefined,
@@ -529,9 +563,8 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   models: info.models.length === 0 ? [ALL_PROXY_MODELS] : info.models,
   max_budget: info.max_budget,
   soft_budget: info.soft_budget,
-  soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
-    ? info.metadata.soft_budget_alerting_emails.join(", ")
-    : "",
+  max_budget_alert_emails: [...budgetAlertRowsFromMetadata(info.metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)],
+  soft_budget_alerting_emails: legacySoftBudgetRecipientsText(info.metadata?.soft_budget_alerting_emails),
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
@@ -665,6 +698,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // rate limit dropdown to models this team actually has access to.
   const watchedModels = form.watch("models");
   const killSwitchOn = form.watch("disable_global_guardrails");
+  const watchedBudgetAlertRows = form.watch("max_budget_alert_emails");
+  const watchedSoftBudget = form.watch("soft_budget");
+  const watchedSoftBudgetEmails = form.watch("soft_budget_alerting_emails");
+  const hasBothBudgetAlertKinds =
+    (watchedBudgetAlertRows ?? []).some((row) => row.threshold !== null) &&
+    numberOrNull(watchedSoftBudget) !== null &&
+    legacySoftBudgetRecipientsText(watchedSoftBudgetEmails).length > 0;
   const watchedMcpSelection = form.watch("mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
   const mcpLookupFailure =
@@ -1071,6 +1111,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         memberBudgetAlertEmails !== undefined && Object.keys(memberBudgetAlertEmails).length > 0
           ? { [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberBudgetAlertEmails }
           : {};
+      const maxBudgetAlertEmails = budgetAlertEmailsFromRows(values.max_budget_alert_emails ?? []);
+      const maxBudgetAlertEmailsMetadata =
+        Object.keys(maxBudgetAlertEmails).length > 0 ? { [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: maxBudgetAlertEmails } : {};
       const storedRequireTraceIdMetadata =
         info.metadata && Object.prototype.hasOwnProperty.call(info.metadata, "require_trace_id")
           ? { require_trace_id: info.metadata.require_trace_id }
@@ -1112,6 +1155,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   .filter((email: string) => email.length > 0)
               : values.soft_budget_alerting_emails || [],
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
+          ...maxBudgetAlertEmailsMetadata,
           ...memberBudgetAlertEmailsMetadata,
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
@@ -1714,29 +1758,62 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
-                  <FormField control={form.control} name="soft_budget" label={t("teams.teamInfo.editForm.softBudget")}>
-                    {({ ref, value, ...field }) => (
-                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
-                    )}
-                  </FormField>
-
-                  <FormField
+                  <BudgetAlertEmailsEditor
                     control={form.control}
-                    name="soft_budget_alerting_emails"
+                    name="max_budget_alert_emails"
                     label={labelWithHint(
-                      t("teams.teamInfo.editForm.softBudgetAlertingEmails"),
-                      t("teams.teamInfo.editForm.softBudgetAlertingEmailsHint"),
+                      t("teams.teamInfo.editForm.teamBudgetAlerts.label"),
+                      t("teams.teamInfo.editForm.teamBudgetAlerts.hint"),
                     )}
-                  >
-                    {({ ref, value, ...field }) => (
-                      <UIInput
-                        {...field}
-                        ref={ref}
-                        value={typeof value === "string" ? value : ""}
-                        placeholder={codeSamples.teams.memberEmails}
-                      />
-                    )}
-                  </FormField>
+                    text={{
+                      thresholdPlaceholder: t("teams.teamInfo.editForm.teamBudgetAlerts.thresholdPlaceholder"),
+                      recipientsPlaceholder: t("teams.teamInfo.editForm.teamBudgetAlerts.recipientsPlaceholder"),
+                      removeThreshold: t("teams.teamInfo.editForm.teamBudgetAlerts.removeThreshold"),
+                      addThreshold: t("teams.teamInfo.editForm.teamBudgetAlerts.addThreshold"),
+                    }}
+                  />
+
+                  {hasBothBudgetAlertKinds && (
+                    <Alert variant="warning">
+                      <AlertDescription>
+                        {t("teams.teamInfo.editForm.teamBudgetAlerts.bothConfigured")}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  <fieldset className="space-y-4 rounded-lg border p-4">
+                    <legend className="px-2 text-sm font-medium">
+                      {t("teams.teamInfo.editForm.legacySoftBudgetTitle")}
+                    </legend>
+                    <p className="text-xs text-muted-foreground">{t("teams.teamInfo.editForm.legacySoftBudgetNote")}</p>
+                    <FormField
+                      control={form.control}
+                      name="soft_budget"
+                      label={t("teams.teamInfo.editForm.softBudget")}
+                    >
+                      {({ ref, value, ...field }) => (
+                        <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+                      )}
+                    </FormField>
+
+                    <FormField
+                      control={form.control}
+                      name="soft_budget_alerting_emails"
+                      label={labelWithHint(
+                        t("teams.teamInfo.editForm.softBudgetAlertingEmails"),
+                        t("teams.teamInfo.editForm.softBudgetAlertingEmailsHint"),
+                      )}
+                    >
+                      {({ ref, value, ...field }) => (
+                        <UIInput
+                          {...field}
+                          ref={ref}
+                          value={typeof value === "string" ? value : ""}
+                          placeholder={codeSamples.teams.memberEmails}
+                        />
+                      )}
+                    </FormField>
+                  </fieldset>
 
                   <Collapsible
                     open={teamMemberSettingsOpen}
@@ -2516,14 +2593,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     );
                   },
                 )}
-                {info.metadata?.soft_budget_alerting_emails &&
-                  Array.isArray(info.metadata.soft_budget_alerting_emails) &&
-                  info.metadata.soft_budget_alerting_emails.length > 0 && (
-                    <div>
-                      {t("teams.teamInfo.settingsView.softBudgetAlertingEmails")}
-                      {info.metadata.soft_budget_alerting_emails.join(", ")}
-                    </div>
-                  )}
+                <div>
+                  {t("teams.teamInfo.settingsView.teamBudgetAlerts")}
+                  {teamBudgetAlertSummary(info.metadata).join("; ") ||
+                    t("teams.teamInfo.settingsView.teamMemberSettings.none")}
+                </div>
+                {legacySoftBudgetRecipientsText(info.metadata?.soft_budget_alerting_emails).length > 0 && (
+                  <div>
+                    {t("teams.teamInfo.settingsView.softBudgetAlertingEmails")}
+                    {legacySoftBudgetRecipientsText(info.metadata?.soft_budget_alerting_emails)}
+                  </div>
+                )}
               </div>
               <div>
                 <p className="font-medium">

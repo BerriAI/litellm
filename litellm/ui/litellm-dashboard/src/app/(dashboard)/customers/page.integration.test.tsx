@@ -12,10 +12,11 @@ import {
   within,
 } from "../../../../tests/test-utils";
 import CustomersPage from "./page";
+import type { CustomerOrganization } from "./_components/customerOrganizations";
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 const NOW = new Date("2024-03-15T12:00:00Z");
-const original = Array.from({ length: 30 }, (_, index) => ({
+const original: CustomerOrganization[] = Array.from({ length: 30 }, (_, index) => ({
   customer_org_id: `customer-${String(index).padStart(2, "0")}`,
   alias: `Customer ${String(index).padStart(2, "0")}`,
   spend: index === 0 ? 8 : 0,
@@ -28,15 +29,25 @@ const original = Array.from({ length: 30 }, (_, index) => ({
         ]
       : [],
   member_count: 0,
+  default_budgets: [],
+  budget_groups_revision: "revision",
   created_at: new Date(Date.UTC(2024, 1, index + 1)).toISOString(),
+  updated_at: NOW.toISOString(),
+  created_by: "admin",
+  updated_by: "admin",
 }));
 const mockCustomerApi = ({
   failed = false,
+  groupsFailed = false,
+  organizations = original,
   cachePricing,
 }: Readonly<{
   failed?: boolean;
+  groupsFailed?: boolean;
+  organizations?: readonly CustomerOrganization[];
   cachePricing?: Readonly<Pick<SpendMetrics, "cache_cost" | "priced_cache_tokens">>;
 }> = {}) => {
+  const updateOrganization = vi.fn<(id: string, body: components["schemas"]["OrganizationPatch"]) => void>();
   const createOrganization = vi.fn((body: components["schemas"]["OrganizationCreate"]) => ({
     ...original[1],
     customer_org_id: body.customer_org_id,
@@ -50,14 +61,25 @@ const mockCustomerApi = ({
       return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
     if (url.pathname === "/management/v1/users/me")
       return Response.json({ user_id: "admin", user_role: "proxy_admin", user_email: null });
+    if (url.pathname === "/management/v1/customer_organization_budget_groups") {
+      if (groupsFailed) return Response.json({ detail: "Unavailable" }, { status: 503 });
+      return Response.json({
+        default_budgets: [{ budget_id: "group-growth", name: "Growth" }],
+        default_budget_template_id: null,
+        budget_groups_revision: "revision",
+      });
+    }
     if (url.pathname === "/management/v1/customer_organizations" && request.method === "GET") {
-      const organizations = [
-        ...original,
+      const data = [
+        ...organizations.map((organization) => ({
+          ...organization,
+          ...updateOrganization.mock.calls.findLast(([id]) => id === organization.customer_org_id)?.[1],
+        })),
         ...createOrganization.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
       ];
       return Response.json({
-        data: organizations,
-        meta: { total_count: organizations.length, page: 1, page_size: 100, total_pages: 1 },
+        data,
+        meta: { total_count: data.length, page: 1, page_size: 100, total_pages: 1 },
         links: {},
       });
     }
@@ -109,10 +131,19 @@ const mockCustomerApi = ({
       const created = createOrganization(body);
       return Response.json({ customer_org_id: created.customer_org_id }, { status: 201 });
     }
+    const organization = organizations.find(
+      (entry) => url.pathname === `/management/v1/customer_organizations/${entry.customer_org_id}`,
+    );
+    if (organization && request.method === "GET") return Response.json(organization);
+    if (organization && request.method === "PATCH") {
+      const body: components["schemas"]["OrganizationPatch"] = await request.json();
+      updateOrganization(organization.customer_org_id, body);
+      return Response.json({ ...organization, ...body });
+    }
     throw new Error(`Unexpected request ${request.method} ${url.pathname}`);
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { createOrganization };
+  return { createOrganization, updateOrganization };
 };
 
 beforeEach(() => {
@@ -133,12 +164,71 @@ afterEach(() => {
   document.cookie = "token=; Max-Age=0; Path=/";
 });
 
-const customerLinks = () =>
-  within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link", {
-    name: (name) => name !== "App budgets",
-  });
+const customerLinks = () => within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link");
 
 describe("customer organization overview", () => {
+  it("edits an existing organization budget and refreshes its row without changing filters or pagination", async () => {
+    const { updateOrganization } = mockCustomerApi();
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<CustomersPage />, {
+      searchParams: "?search=customer&sort_by=customer&sort_order=desc&page=2&from=2024-02-01&to=2024-02-29",
+      onUrlUpdate,
+    });
+    const row = await screen.findByRole("row", { name: /Customer 00/ });
+    await user.click(within(row).getByRole("button", { name: "Edit", exact: true }));
+    const limit = await screen.findByRole("spinbutton", { name: "Spend limit (USD)" });
+    expect(limit).toHaveValue(10);
+    fireEvent.change(limit, { target: { value: "25" } });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(updateOrganization).toHaveBeenCalledExactlyOnceWith(
+      "customer-00",
+      expect.objectContaining({ budget: expect.objectContaining({ max_budget: 25, budget_duration: "1mo" }) }),
+    );
+    expect(await within(row).findByText("$25.00", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+  });
+
+  it("shows each organization's assigned tier or custom budget in the budget group column", async () => {
+    mockCustomerApi({
+      organizations: [
+        {
+          ...original[0],
+          budget_id: "group-growth",
+          budget_is_shared: true,
+          default_budgets: [{ budget_id: "group-growth", name: "Member default" }],
+        },
+        { ...original[1], budget_id: "private-budget", budget_is_shared: false, budget: { max_budget: 25 } },
+        original[2],
+      ],
+    });
+    renderWithProviders(<CustomersPage />);
+    await screen.findByRole("cell", { name: "Growth", exact: true });
+    expect(screen.getByRole("columnheader", { name: "Tier" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("row", { name: /Customer 00/ })).getByRole("cell", { name: "Growth", exact: true }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("row", { name: /Customer 01/ })).getByRole("cell", { name: "Custom", exact: true }),
+    ).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /Customer 02/ })).queryByText("Custom")).not.toBeInTheDocument();
+    expect(screen.queryByText("Member default")).not.toBeInTheDocument();
+  });
+
+  it("keeps limits visible without calling a shared tier custom when its name cannot load", async () => {
+    mockCustomerApi({
+      groupsFailed: true,
+      organizations: [{ ...original[0], budget_id: "group-growth", budget_is_shared: true }],
+    });
+    renderWithProviders(<CustomersPage />);
+    const row = await screen.findByRole("row", { name: /Customer 00/ });
+    expect(within(row).getByText("Budget group")).toBeInTheDocument();
+    expect(within(row).getByText("$8.00 / $10.00")).toBeInTheDocument();
+    expect(within(row).queryByText("Custom")).not.toBeInTheDocument();
+  });
+
   it("should keep complete totals and shares while sorting, paginating, and searching", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />);
@@ -151,9 +241,6 @@ describe("customer organization overview", () => {
       "href",
       "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15",
     );
-    expect(
-      within(screen.getByRole("row", { name: /Customer 29/ })).getByRole("link", { name: "App budgets" }),
-    ).toHaveAttribute("href", "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15#app-budgets");
     const overview = screen.getByRole("region", { name: "Overall customer usage" });
     expect(within(overview).getByText("$100.00")).toBeInTheDocument();
     expect(within(overview).getByText("20")).toBeInTheDocument();
@@ -235,7 +322,7 @@ describe("customer organization overview", () => {
       fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "New organization" } });
     });
     act(() => {
-      fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: "new-org" } });
+      fireEvent.change(screen.getByLabelText("Organization ID (optional)"), { target: { value: "new-org" } });
     });
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create customer" }));
     await screen.findByRole("link", { name: "New organization" });

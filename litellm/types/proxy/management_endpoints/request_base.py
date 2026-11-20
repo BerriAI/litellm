@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Any  # noqa: TID251  # metadata and models stay Any so existing callers keep type-checking
 
 from pydantic import ConfigDict, field_validator
@@ -19,6 +20,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     search_tools: list[str] | None = None
     mcp_tool_search_enabled: bool | None = None
     skills: list[str] | None = None
+    apps: Sequence[str] | None = None
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):

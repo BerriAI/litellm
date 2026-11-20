@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -27,7 +28,6 @@ from litellm.constants import AUTH_OBJECTS_TARGET as AUTH_OBJECTS_TARGET  # noqa
 
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
 _CACHED_VALUE: Final = TypeAdapter(object)
-_BUDGET_WINDOWS_ABSENT_PREFIX: Final = "budget_windows_absent:"
 
 AuthCacheFactory: TypeAlias = Callable[[RedisCache, AuthCacheSettings], AuthCacheStore]
 
@@ -100,7 +100,6 @@ class UserApiKeyCache(DualCache):
         default_in_memory_ttl: float | None = None,
         default_redis_ttl: float | None = None,
         key_object_in_memory_cache: InMemoryCache | None = None,
-        budget_windows_absent_in_memory_cache: InMemoryCache | None = None,
         auth_cache: AuthCacheFactory = _connected_auth_cache,
     ) -> None:
         super().__init__(
@@ -112,11 +111,6 @@ class UserApiKeyCache(DualCache):
             in_memory_cache=key_object_in_memory_cache or InMemoryCache(),
             default_in_memory_ttl=default_in_memory_ttl,
             default_redis_ttl=default_redis_ttl,
-        )
-        self.budget_windows_absent_cache: Final = DualCache(
-            in_memory_cache=budget_windows_absent_in_memory_cache
-            or InMemoryCache(default_ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL),
-            default_in_memory_ttl=default_in_memory_ttl,
         )
         self._auth_cache: Final = auth_cache
         self._redis_connection: RedisCache | None = None
@@ -153,16 +147,12 @@ class UserApiKeyCache(DualCache):
         self.key_object_cache.update_cache_ttl(
             default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
         )
-        self.budget_windows_absent_cache.update_cache_ttl(
-            default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=None
-        )
         if self._shared is not None:
             self._shared.reconfigure(self._settings())
 
     def update_in_memory_max_size(self, max_size: int | None) -> None:
         super().update_in_memory_max_size(max_size)
         self.key_object_cache.update_in_memory_max_size(max_size)
-        self.budget_windows_absent_cache.update_in_memory_max_size(max_size)
         if self._shared is not None:
             self._shared.reconfigure(self._settings())
 
@@ -257,8 +247,6 @@ class UserApiKeyCache(DualCache):
     def delete_local(self, key: str) -> None:
         """Drops this worker's memory copy alone, as a cross-worker eviction broadcast does."""
         self._void_leases((key,))
-        if key.startswith(_BUDGET_WINDOWS_ABSENT_PREFIX):
-            self.budget_windows_absent_cache.delete_cache(key)
         if self._shared is not None:
             self._shared.delete_local(key)
             return
@@ -487,7 +475,6 @@ class UserApiKeyCache(DualCache):
     def flush_cache(self) -> None:
         self._leases.clear()
         self._decoded_models.clear()
-        self.budget_windows_absent_cache.flush_cache()
         if self._shared is not None:
             self._shared.flush_local()
             return
@@ -642,6 +629,26 @@ def end_user_cache_key(end_user_id: str) -> str:
     return f"end_user_id:{end_user_id}"
 
 
+def app_cache_key(resource_type: str, resource_id: str) -> str:
+    return f"customer_app:{json.dumps((resource_type, resource_id))}"
+
+
+def app_customer_cache_key(scope: str, app_id: str, customer_id: str) -> str:
+    return f"customer_app_association:{json.dumps((scope, app_id, customer_id))}"
+
+
+def app_budget_cache_key(budget_id: str) -> str:
+    return f"customer_app_budget:{budget_id}"
+
+
+def app_key_resource_cache_key(token_hash: str) -> str:
+    return f"customer_app_key_resource:{token_hash}"
+
+
+def app_shared_profiles_cache_key() -> str:
+    return "customer_app_shared_profiles"
+
+
 def end_user_restricted_registry_cache_key() -> str:
     """Cache key for the set of end-user ids whose row carries a restriction auth enforces."""
     return "end_user_restricted_registry"
@@ -668,11 +675,6 @@ def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
 #: a plain string here means "no row", distinct from a serialized membership. The two budget readers
 #: already treat a non-model value as "no row", so they need no change to stay correct.
 NO_TEAM_MEMBERSHIP_SENTINEL: Final = "__no_team_membership__"
-
-
-def budget_windows_absent_cache_key(entity_type: str, entity_id: str) -> str:
-    """Cache key marking a key or team that holds no budget windows, so the spend fallback skips its row read."""
-    return f"{_BUDGET_WINDOWS_ABSENT_PREFIX}{entity_type}:{entity_id}"
 
 
 def get_management_object_ttl(cache: DualCache) -> float:

@@ -20,7 +20,7 @@ from litellm.proxy._types import PassThroughEndpointLoggingResultValues, PassThr
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import StandardPassThroughResponseObject
+from litellm.types.utils import StandardPassThroughResponseObject, Usage
 
 from .background_response_settlement import BackgroundResponseSettlementStore, PrismaBackgroundResponseSettlementStore
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
@@ -114,6 +114,16 @@ def _websocket_frames(
     return tuple(
         message for message in (response_body if isinstance(response_body, list) else ()) if isinstance(message, dict)
     )
+
+
+def _adopt_handler_usage(logging_obj: LiteLLMLoggingObj, handler_kwargs: Mapping[str, object]) -> None:
+    """Cost finalization reads model_call_details, so without the handler's usage there it logs zero tokens."""
+    usage: Final = handler_kwargs.get("combined_usage_object")
+    if isinstance(usage, Usage):
+        logging_obj.model_call_details["combined_usage_object"] = usage  # rebind-ok: finalization reads it
+    payload: Final = handler_kwargs.get("standard_logging_object")
+    if isinstance(payload, dict):
+        logging_obj.model_call_details["standard_logging_object"] = payload  # rebind-ok: finalization reads it
 
 
 class PassThroughEndpointLogging:
@@ -500,6 +510,7 @@ class PassThroughEndpointLogging:
             kwargs = fal_ai_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         return_dict["standard_logging_response_object"] = standard_logging_response_object
 
+        _adopt_handler_usage(logging_obj, _RESPONSE_BODY.validate_python(kwargs))
         return_dict["kwargs"] = kwargs
         return return_dict
 

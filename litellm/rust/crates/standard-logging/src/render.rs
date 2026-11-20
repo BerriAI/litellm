@@ -61,6 +61,7 @@ fn metadata(
         team_alias: metadata.team_alias,
         team_id: metadata.team_id,
         used_client_oauth_token: metadata.used_client_oauth_token,
+        claude_subscription_usage: metadata.claude_subscription_usage,
     }
 }
 
@@ -149,8 +150,9 @@ mod tests {
     use serde_json::{Map, Value, json};
 
     use crate::{
-        Budget, Caller, Customer, ErrorInformation, GuardrailStatus, HiddenParams, Key, Metadata,
-        ModelInformation, Named, StandardLoggingPayload, Status, Team, User,
+        Budget, Caller, ClaudeSubscriptionUsage, Customer, ErrorInformation, GuardrailStatus,
+        HiddenParams, Key, Metadata, ModelInformation, Named, StandardLoggingPayload, Status, Team,
+        User,
     };
 
     fn object(value: Value) -> Map<String, Value> {
@@ -361,6 +363,43 @@ mod tests {
             }),
             ..served
         }
+    }
+
+    #[rstest]
+    #[case::allowance(
+        ClaudeSubscriptionUsage {
+            is_overage: false,
+            status: text("allowed"),
+            overage_status: None,
+        },
+        json!({"is_overage": false, "status": "allowed", "overage_status": null})
+    )]
+    #[case::overage(
+        ClaudeSubscriptionUsage {
+            is_overage: true,
+            status: text("rejected"),
+            overage_status: text("allowed"),
+        },
+        json!({"is_overage": true, "status": "rejected", "overage_status": "allowed"})
+    )]
+    fn claude_subscription_usage_is_logged_as_python_logs_it(
+        #[case] usage: ClaudeSubscriptionUsage,
+        #[case] logged: Value,
+    ) {
+        let served = success();
+        let payload = StandardLoggingPayload {
+            metadata: Metadata {
+                used_client_oauth_token: Some(true),
+                claude_subscription_usage: Some(usage),
+                ..served.metadata
+            },
+            ..served
+        };
+
+        let document = serde_json::to_value(payload).unwrap();
+
+        assert_eq!(document["metadata"]["claude_subscription_usage"], logged);
+        assert_eq!(document["metadata"]["used_client_oauth_token"], json!(true));
     }
 
     #[rstest]

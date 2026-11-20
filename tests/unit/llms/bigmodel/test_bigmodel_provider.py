@@ -688,17 +688,24 @@ async def test_responses_stream_answered_with_a_failure_envelope_raises_its_stat
 
 
 @pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize(
+    ("answer_status", "terminal_type"),
+    (("completed", "response.completed"), ("incomplete", "response.incomplete")),
+)
 @pytest.mark.asyncio
 @respx.mock
-async def test_responses_stream_answered_with_one_json_response_replays_it_as_events(is_async: bool) -> None:
-    respx.post(f"{BASE}/api/v1/responses").respond(json=response_payload())
+async def test_responses_stream_answered_with_one_json_response_replays_it_as_events(
+    is_async: bool, answer_status: str, terminal_type: str
+) -> None:
+    respx.post(f"{BASE}/api/v1/responses").respond(json={**response_payload(), "status": answer_status})
     request: Final = {"model": f"bigmodel/{MODEL}", "input": "Hello", "stream": True}
     chunks: Final = (
         tuple([chunk async for chunk in await litellm.aresponses(**request)])
         if is_async
         else tuple(litellm.responses(**request))
     )
-    assert chunks[-1].type == "response.completed"
+    assert chunks[-1].type == terminal_type
+    assert chunks[-1].response.status == answer_status
     assert chunks[-1].response.output_text == "Hello"
     assert chunks[-1].response.usage.total_tokens == 30
 
