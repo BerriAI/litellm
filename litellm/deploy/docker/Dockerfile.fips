@@ -72,7 +72,8 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     SQLX_OFFLINE=true \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0 \
-    UV_NO_BINARY_PACKAGE=cryptography \
+    UV_NO_BINARY_PACKAGE="cryptography grpcio" \
+    GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1 \
     PATH="/app/.venv/bin:${PATH}"
 
 COPY pyproject.toml uv.lock ./
@@ -80,7 +81,8 @@ COPY litellm/enterprise/pyproject.toml litellm/enterprise/
 COPY litellm/proxy-extras/pyproject.toml litellm/proxy-extras/
 COPY litellm/packaging/litellm-proxy/pyproject.toml litellm/packaging/litellm-proxy/
 
-RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
+# grpcio's abseil does not compile under the gcc hardening spec, so Wolfi's own grpcio package turns it off too
+RUN sync="uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
     --extra proxy \
     --extra proxy-runtime \
     --group admin-mcp \
@@ -88,7 +90,9 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
     --extra semantic-router \
     --extra saml \
     --extra bedrock-realtime \
-    --python python3.13
+    --python python3.13" && \
+    $sync --no-install-package grpcio && \
+    GCC_SPEC_FILE=no-hardening.spec LDFLAGS=-s $sync
 
 COPY . .
 

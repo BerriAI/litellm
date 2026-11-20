@@ -35,7 +35,11 @@ is_elf() {
 
 crypto_markers() {
   m=""
-  if grep -aq 'BoringSSL' "$1"; then m="BoringSSL"; fi
+  if grep -aq 'BoringSSL' "$1"; then
+    if ! objdump -p "$1" 2>/dev/null | grep -Eq 'NEEDED.*libssl\.so\.[34]'; then
+      m="BoringSSL"
+    fi
+  fi
   if grep -aq 'AWS-LC' "$1"; then m="${m:+$m,}AWS-LC"; fi
   if grep -Eaq 'OpenSSL [0-9]+\.[0-9]+\.[0-9]+' "$1"; then
     if ! objdump -p "$1" 2>/dev/null | grep -Eq 'NEEDED.*libcrypto\.so\.[34]'; then
@@ -68,7 +72,6 @@ is_waived() {
 
 is_waived_package() {
   case "$1" in
-    grpc/_cython/cygrpc.cpython-313-ARCH-linux-gnu.so) ;;
     hf_xet/hf_xet.abi3.so) ;;
     _awscrt.abi3.so) ;;
     pyroscope/_native__lib.cpython-39-ARCH-linux-gnu.so) ;;
