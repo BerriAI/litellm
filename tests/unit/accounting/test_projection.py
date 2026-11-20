@@ -7,6 +7,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.accounting.delivery_projection import project_deliveries
+from litellm.accounting.application import _window
 from litellm.accounting.projection import project
 from litellm.accounting.snapshot import build_accounting_payload
 from litellm.constants import BILLED_RETRY_ATTEMPT_METADATA_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY
@@ -288,6 +289,7 @@ def test_projection_carries_windows_and_does_not_reprice_guardrails() -> None:
                         "entity_id": "key",
                         "window_duration": "1d",
                         "window_start": _NOW.isoformat(),
+                        "reset_at": _NOW.replace(day=3).isoformat(),
                     }
                 ],
                 "guardrail_information": [
@@ -309,6 +311,8 @@ def test_projection_carries_windows_and_does_not_reprice_guardrails() -> None:
     }
     assert dict(window.increments) == {"spend": 0.75}
     assert dict(window.values)["window_start"] == _NOW.isoformat()
+    assert _window(window)["reset_at"] == _NOW.replace(day=3).isoformat()
+    assert _window(window)["window_start"] == _NOW.replace(tzinfo=None).isoformat(timespec="microseconds")
     assert units == {
         "text": {"units": 3, "cost": 0.3, "untracked_units": 0},
         "images": {"units": 2, "cost": 0.0, "untracked_units": 2},

@@ -141,3 +141,4 @@ class AuthorizedToolCall:
     guardrail_auth: UserAPIKeyAuth | None = None
     input_responses: InputResponses | None = None
     request_state: str | None = None
+    flatten_url_elicitation: bool = False

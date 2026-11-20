@@ -1,4 +1,5 @@
-"""In-memory stand-ins for the Rust auth repositories, patched in through ``rust_database.repository``.
+"""In-memory stand-ins for the Rust repositories (the auth objects and the spend log window sums), patched in
+through ``rust_database.repository``.
 
 Each fake keeps separate reader and writer rows (a writer read sees ``writer`` when it is set, else ``rows``),
 logs every lookup, and raises a row that is an exception. Threads porting more auth objects add their fake as
@@ -7,6 +8,7 @@ another field of ``RustAuthStores``.
 
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Final
 
 import pytest
@@ -30,6 +32,7 @@ from litellm.rust_bridge._native import (
     RustObjectPermissionRepository,
     RustOrganizationRepository,
     RustProjectRepository,
+    RustSpendLogRepository,
     RustTagRepository,
     RustTeamMembershipRepository,
     RustTeamRepository,
@@ -413,6 +416,30 @@ class FakeTagStore:
 
 
 @dataclass
+class FakeSpendLogStore:
+    """Window sums by (owner, owner_id); every lookup is logged as (owner, owner_id, since)."""
+
+    totals: dict[tuple[str, str], float] = field(default_factory=dict)
+    error: Exception | None = None
+    lookups: list[tuple[str, str, datetime]] = field(default_factory=list)
+
+    async def _window_spend(self, owner: str, owner_id: str, since: datetime) -> float:
+        self.lookups.append((owner, owner_id, since))
+        if self.error is not None:
+            raise self.error
+        return self.totals.get((owner, owner_id), 0.0)
+
+    async def key_window_spend(self, api_key: str, since: datetime) -> float:
+        return await self._window_spend("Key", api_key, since)
+
+    async def team_window_spend(self, team_id: str, since: datetime) -> float:
+        return await self._window_spend("Team", team_id, since)
+
+    async def user_window_spend(self, user_id: str, since: datetime) -> float:
+        return await self._window_spend("User", user_id, since)
+
+
+@dataclass
 class RustAuthStores:
     key: FakeKeyStore = field(default_factory=FakeKeyStore)
     jwt_key_mapping: FakeJwtKeyMappingStore = field(default_factory=FakeJwtKeyMappingStore)
@@ -427,6 +454,7 @@ class RustAuthStores:
     tag: TagRows = field(default_factory=TagRows)
     access_group: RustStoreRows = field(default_factory=RustStoreRows)
     object_permission: RustStoreRows = field(default_factory=RustStoreRows)
+    spend_log: FakeSpendLogStore = field(default_factory=FakeSpendLogStore)
 
     def by_kind(self) -> Mapping[Callable[..., object], object]:
         return {
@@ -443,6 +471,7 @@ class RustAuthStores:
             RustTagRepository: FakeTagStore(self.tag),
             RustAccessGroupRepository: FakeAccessGroupStore(self.access_group),
             RustObjectPermissionRepository: FakeObjectPermissionStore(self.object_permission),
+            RustSpendLogRepository: self.spend_log,
         }
 
 
