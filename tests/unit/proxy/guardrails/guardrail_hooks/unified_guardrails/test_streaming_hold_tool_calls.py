@@ -7,12 +7,14 @@ tool call the client would run, everything is held, then released on a pass or d
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final, Literal
 
 import pytest
 
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.a2a.chat.guardrail_translation.handler import A2AGuardrailHandler
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
     BedrockPassthroughGuardrailHandler,
@@ -22,6 +24,8 @@ from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
     _decode_invoke_frame,
     _invoke_chunk,
 )
+from litellm.llms.gemini.google_genai.guardrail_translation.handler import GoogleGenAIGenerateContentHandler
+from litellm.llms.openai.image_generation.guardrail_translation.handler import OpenAIImageGenerationHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.responses.streaming_iterator import _CLIENT_RUN_TOOL_CALL_ITEM_TYPES
@@ -88,18 +92,41 @@ def _text_completion_items(with_tool_call: bool) -> tuple[object, ...]:
     return (chunk("Let me "), chunk("clean that up."), chunk("", finish_reason="stop"))
 
 
+def _gemini_chunk(part: dict[str, object], finish_reason: str | None = None) -> dict[str, object]:
+    candidate: Final[dict[str, object]] = {"content": {"role": "model", "parts": [part]}, "index": 0}
+    return {"candidates": [candidate if finish_reason is None else {**candidate, "finishReason": finish_reason}]}
+
+
+GEMINI_FUNCTION_CALL: Final[dict[str, object]] = {
+    "functionCall": {"name": TOOL_NAME, "args": json.loads(TOOL_ARGUMENTS)}
+}
+
+
 def _gemini_items(with_tool_call: bool) -> tuple[object, ...]:
-    """A native Gemini ``:streamGenerateContent`` stream. Its translation does not tell a tool call apart."""
+    """A native Gemini ``:streamGenerateContent`` stream, as the proxy hands it over: one SSE event per item."""
 
-    def chunk(part: dict[str, object], finish_reason: str | None = None) -> dict[str, object]:
-        candidate: Final[dict[str, object]] = {"content": {"role": "model", "parts": [part]}, "index": 0}
-        return {"candidates": [candidate if finish_reason is None else {**candidate, "finishReason": finish_reason}]}
+    def event(chunk: dict[str, object]) -> bytes:
+        return f"data: {json.dumps(chunk)}\n\n".encode()
 
-    text: Final = (chunk({"text": "Let me "}), chunk({"text": "clean that up."}))
+    text: Final = (event(_gemini_chunk({"text": "Let me "})), event(_gemini_chunk({"text": "clean that up."})))
     if not with_tool_call:
-        return (*text, chunk({"text": ""}, finish_reason="STOP"))
-    call: Final = {"functionCall": {"name": TOOL_NAME, "args": json.loads(TOOL_ARGUMENTS)}}
-    return (*text, chunk(call, finish_reason="STOP"))
+        return (*text, event(_gemini_chunk({"text": ""}, finish_reason="STOP")))
+    return (*text, event(_gemini_chunk(GEMINI_FUNCTION_CALL, finish_reason="STOP")))
+
+
+def _a2a_items(with_tool_call: bool) -> tuple[object, ...]:
+    """An A2A ``message/stream`` stream. Its translation scans the stream but does not tell a tool call apart."""
+
+    def update(text: str) -> dict[str, object]:
+        artifact: Final = {"artifactId": "a1", "parts": [{"kind": "text", "text": text}]}
+        return {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {"kind": "artifact-update", "taskId": "t1", "artifact": artifact},
+        }
+
+    status: Final = {"kind": "status-update", "taskId": "t1", "status": {"state": "completed"}, "final": True}
+    return (update("Let me "), update("clean that up."), {"jsonrpc": "2.0", "id": "1", "result": status})
 
 
 def _sse(event: str, data: dict[str, object]) -> bytes:
@@ -252,6 +279,7 @@ MODES_AND_ROUTES: Final = (
 ALL_ROUTES: Final = tuple(ROUTES)
 ROUTES["text"] = ("/v1/completions", _text_completion_items, 2)
 ROUTES["gemini"] = ("/v1beta/models/gemini-2.5-flash:streamGenerateContent", _gemini_items, 2)
+ROUTES["a2a"] = ("/a2a/cleanup-agent/message/stream", _a2a_items, 0)
 
 
 class _RecordingGuardrail(CustomGuardrail):
@@ -287,7 +315,8 @@ class _RecordingGuardrail(CustomGuardrail):
             [{"tool_calls": inputs.get("tool_calls"), "texts": inputs.get("texts")}]
         ) or (
             self._reads_response_for is not None
-            and self._reads_response_for in json.dumps(request_data.get("response"), default=str)
+            and self._reads_response_for
+            in json.dumps(request_data.get("response"), default=str) + _stream_text(request_data)
         )
         if not self.scanned_a_tool_call:
             self.released_at_scan = tuple(self._released)
@@ -297,6 +326,14 @@ class _RecordingGuardrail(CustomGuardrail):
                 message=BLOCK_MESSAGE, model="m", request_data=request_data, guardrail_name=self.guardrail_name
             )
         return inputs
+
+
+def _stream_text(request_data: dict) -> str:
+    """The raw stream a translation hands over as ``responses_so_far``, joined, so a read cut anywhere reads whole."""
+    stream: Final = request_data.get("responses_so_far")
+    if not isinstance(stream, (list, tuple)):
+        return ""
+    return b"".join(item for item in stream if isinstance(item, bytes)).decode(errors="replace")
 
 
 async def _as_stream(items: Sequence[object]) -> AsyncGenerator[object, None]:
@@ -713,25 +750,25 @@ async def test_a_held_item_the_scan_key_does_not_carry_still_gets_an_end_of_stre
     assert BLOCK_MESSAGE in "".join(_readable(chunk) for chunk in received)
 
 
-GEMINI_MODES: Final = pytest.mark.parametrize("mode", ["end_only", "sampled", "background"])
+EARLY_RELEASE_MODES: Final = pytest.mark.parametrize("mode", ["end_only", "sampled", "background"])
 
 
-@GEMINI_MODES
+@EARLY_RELEASE_MODES
 @pytest.mark.asyncio
-async def test_a_route_that_cannot_tell_a_tool_call_apart_holds_its_whole_stream_for_the_verdict(mode: str) -> None:
-    """The native Gemini translation has no tool-call detection, so with the flag on nothing of its stream is
-    released before the end-of-stream verdict, the function call included."""
+async def test_a_gemini_function_call_is_held_until_the_verdict_while_the_text_before_it_streams_live(
+    mode: str,
+) -> None:
     items, at_scan, received = await _relay(
         "gemini", with_tool_call=True, hold_tool_calls=True, blocks=False, mode=mode, blocks_only_tool_calls=False
     )
 
-    assert at_scan == ()
+    assert at_scan == items[:2]
     assert received == items
 
 
-@GEMINI_MODES
+@EARLY_RELEASE_MODES
 @pytest.mark.asyncio
-async def test_a_blocked_stream_on_such_a_route_reaches_the_client_with_nothing_released(mode: str) -> None:
+async def test_a_blocked_gemini_function_call_never_reaches_the_client(mode: str) -> None:
     """This route has no block frames of its own, so a block ends the stream by raising, as it does today."""
     released: Final[list[object]] = []
 
@@ -742,16 +779,207 @@ async def test_a_blocked_stream_on_such_a_route_reaches_the_client_with_nothing_
             hold_tool_calls=True,
             blocks=True,
             mode=mode,
-            blocks_only_tool_calls=False,
+            blocks_only_tool_calls=True,
+            reads_response_for="functionCall",
             released_into=released,
         )
 
-    assert released == []
+    assert released == list(_gemini_items(with_tool_call=True)[:2])
+    assert not _mentions_tool_call(released)
+
+
+@pytest.mark.asyncio
+async def test_without_the_flag_a_blocked_gemini_function_call_reaches_the_client_first() -> None:
+    released: Final[list[object]] = []
+
+    with pytest.raises(ModifyResponseException):
+        await _relay(
+            "gemini",
+            with_tool_call=True,
+            hold_tool_calls=False,
+            blocks=True,
+            blocks_only_tool_calls=True,
+            reads_response_for="functionCall",
+            released_into=released,
+        )
+
+    assert _mentions_tool_call(released)
+
+
+@pytest.mark.asyncio
+async def test_a_gemini_text_stream_is_released_the_same_with_and_without_the_flag() -> None:
+    _, at_scan_held, received_held = await _relay("gemini", with_tool_call=False, hold_tool_calls=True, blocks=False)
+    _, at_scan_live, received_live = await _relay("gemini", with_tool_call=False, hold_tool_calls=False, blocks=False)
+
+    assert at_scan_held == at_scan_live == received_live
+    assert received_held == received_live
+
+
+@pytest.mark.parametrize("read_size", [1, 7, 61, 200])
+@pytest.mark.asyncio
+async def test_a_blocked_gemini_function_call_is_held_however_its_stream_is_cut(read_size: int) -> None:
+    """The proxy hands this route whole events. A read that stops inside one cannot be read for a function
+    call, so it is held too."""
+    whole: Final = b"".join(chunk for chunk in _gemini_items(with_tool_call=True) if isinstance(chunk, bytes))
+    released: Final[list[object]] = []
+
+    with pytest.raises(ModifyResponseException):
+        await _relay(
+            "gemini",
+            with_tool_call=True,
+            hold_tool_calls=True,
+            blocks=True,
+            wire_items=_cut(whole, read_size),
+            blocks_only_tool_calls=True,
+            reads_response_for="functionCall",
+            released_into=released,
+        )
+
+    assert not _mentions_tool_call(released)
+
+
+@pytest.mark.parametrize("read_size", [1, 7, 61, 200])
+@pytest.mark.asyncio
+async def test_a_gemini_function_call_event_cut_after_live_text_never_reaches_the_client(read_size: int) -> None:
+    *text, call = (chunk for chunk in _gemini_items(with_tool_call=True) if isinstance(chunk, bytes))
+    released: Final[list[object]] = []
+
+    with pytest.raises(ModifyResponseException):
+        await _relay(
+            "gemini",
+            with_tool_call=True,
+            hold_tool_calls=True,
+            blocks=True,
+            wire_items=(*text, *_cut(call, read_size)),
+            blocks_only_tool_calls=True,
+            reads_response_for="functionCall",
+            released_into=released,
+        )
+
+    assert released == text
+    assert not _mentions_tool_call(released)
+
+
+@pytest.mark.parametrize("read_size", [1, 7, 61, 200])
+@pytest.mark.asyncio
+async def test_an_allowed_gemini_stream_arrives_byte_for_byte_however_it_is_cut(read_size: int) -> None:
+    whole: Final = b"".join(chunk for chunk in _gemini_items(with_tool_call=True) if isinstance(chunk, bytes))
+
+    _, _, received = await _relay(
+        "gemini", with_tool_call=True, hold_tool_calls=True, blocks=False, wire_items=_cut(whole, read_size)
+    )
+
+    assert b"".join(chunk for chunk in received if isinstance(chunk, bytes)) == whole
+
+
+class _SdkPart:
+    def __init__(self, text: str | None = None, function_call: object | None = None) -> None:
+        self.text: Final = text
+        self.function_call: Final = function_call
+
+
+class _SdkContent:
+    def __init__(self, parts: object) -> None:
+        self.parts: Final = parts
+
+
+class _SdkCandidate:
+    def __init__(self, content: object) -> None:
+        self.content: Final = content
+
+
+class _SdkResponse:
+    def __init__(self, candidates: object) -> None:
+        self.candidates: Final = candidates
+
+
+def _gemini_event(chunk: object) -> bytes:
+    return f"data: {json.dumps(chunk)}\n\n".encode()
+
+
+@pytest.mark.parametrize(
+    ("item", "carries_a_function_call"),
+    [
+        pytest.param(_gemini_event(_gemini_chunk({"text": "hello"})), False, id="sse text"),
+        pytest.param(_gemini_event(_gemini_chunk(GEMINI_FUNCTION_CALL)), True, id="sse function call"),
+        pytest.param(
+            _gemini_event(_gemini_chunk({"text": "hello"})) + _gemini_event(_gemini_chunk(GEMINI_FUNCTION_CALL)),
+            True,
+            id="sse function call after text in one item",
+        ),
+        pytest.param(_gemini_event(_gemini_chunk(GEMINI_FUNCTION_CALL)).decode(), True, id="sse function call as str"),
+        pytest.param(
+            _gemini_event({"candidates": [{"content": {"parts": [{"text": "a"}, GEMINI_FUNCTION_CALL]}}]}),
+            True,
+            id="sse function call after a text part",
+        ),
+        pytest.param(
+            _gemini_event(
+                {
+                    "candidates": [
+                        _gemini_chunk({"text": "a"})["candidates"][0],
+                        {"content": {"parts": [GEMINI_FUNCTION_CALL]}},
+                    ]
+                }
+            ),  # type: ignore[index]
+            True,
+            id="sse function call in a second candidate",
+        ),
+        pytest.param(_gemini_event({"usageMetadata": {"totalTokenCount": 9}}), False, id="sse usage only"),
+        pytest.param(
+            _gemini_event({"candidates": [{"finishReason": "STOP", "index": 0}]}), False, id="sse finish only"
+        ),
+        pytest.param(_gemini_event(_gemini_chunk({"executableCode": {"code": "1"}})), False, id="sse server-run code"),
+        pytest.param(b": keepalive\n\n", False, id="sse comment"),
+        pytest.param(b"event: message\ndata: [DONE]\n\n", False, id="sse done marker"),
+        pytest.param(b"", False, id="empty read"),
+        pytest.param(b'data: {"candidates": [{"content": {"parts": [{"functi', True, id="sse cut inside an event"),
+        pytest.param(b'onCall": {"name": "run_shell"}}]}}]}\n\n', True, id="sse rest of a cut event"),
+        pytest.param(b"data: [1, 2]\n\n", True, id="sse payload that is not an object"),
+        pytest.param(_gemini_event({"candidates": {"content": {}}}), True, id="sse candidates not a list"),
+        pytest.param(
+            _gemini_event({"candidates": [{"content": {"parts": {"text": "a"}}}]}), True, id="sse parts not a list"
+        ),
+        pytest.param(_gemini_chunk({"text": "hello"}), False, id="dict text"),
+        pytest.param(_gemini_chunk(GEMINI_FUNCTION_CALL), True, id="dict function call"),
+        pytest.param({"usageMetadata": {"totalTokenCount": 9}}, False, id="dict usage only"),
+        pytest.param(_SdkResponse([_SdkCandidate(_SdkContent([_SdkPart(text="hello")]))]), False, id="sdk text"),
+        pytest.param(
+            _SdkResponse([_SdkCandidate(_SdkContent([_SdkPart(function_call={"name": TOOL_NAME})]))]),
+            True,
+            id="sdk function call",
+        ),
+        pytest.param(_SdkResponse(None), False, id="sdk usage only"),
+        pytest.param(object(), True, id="an object that is not a response"),
+        pytest.param(MappingProxyType(_gemini_chunk(GEMINI_FUNCTION_CALL)), True, id="a mapping that is not a dict"),
+    ],
+)
+def test_the_gemini_translation_tells_a_function_call_apart(item: object, carries_a_function_call: bool) -> None:
+    assert GoogleGenAIGenerateContentHandler().starts_client_tool_call(item) is carries_a_function_call
+
+
+@EARLY_RELEASE_MODES
+@pytest.mark.asyncio
+async def test_a_route_that_cannot_tell_a_tool_call_apart_holds_its_whole_stream_for_the_verdict(mode: str) -> None:
+    """The A2A translation scans its stream but has no tool-call detection, so with the flag on nothing of the
+    stream is released before the end-of-stream verdict."""
+    items, at_scan, received = await _relay(
+        "a2a", with_tool_call=True, hold_tool_calls=True, blocks=False, mode=mode, blocks_only_tool_calls=False
+    )
+
+    assert at_scan == ()
+    assert received == items
 
 
 @pytest.mark.asyncio
 async def test_without_the_flag_a_route_that_cannot_tell_a_tool_call_apart_streams_as_before() -> None:
-    items, at_scan, received = await _relay("gemini", with_tool_call=True, hold_tool_calls=False, blocks=False)
+    items, at_scan, received = await _relay("a2a", with_tool_call=True, hold_tool_calls=False, blocks=False)
 
-    assert _mentions_tool_call(at_scan)
+    assert at_scan == items
     assert received == items
+
+
+def test_only_a_translation_that_scans_its_stream_holds_it_whole() -> None:
+    """A translation that never scans a stream gives no verdict to hold for, so the hold leaves its stream live."""
+    assert A2AGuardrailHandler().starts_client_tool_call({}) is True
+    assert OpenAIImageGenerationHandler().starts_client_tool_call(b"partial image") is False
