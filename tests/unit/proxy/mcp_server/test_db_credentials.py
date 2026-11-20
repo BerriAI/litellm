@@ -589,9 +589,14 @@ async def test_secret_map_rotation_migrates_rekeys_and_preserves_corrupt(
         {"server_id": "legacy", field: json.dumps(values), other: "{}"},
         {"server_id": "encrypted", field: old, other: None},
     )
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(
-        litellm_mcpservertable=table, litellm_mcpserveroauthclient=SimpleNamespace(find_many=AsyncMock(return_value=[])), litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
-    ))
+    prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=table,
+            litellm_mcpserveroauthclient=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+        ),
+        writer_db=SimpleNamespace(litellm_mcpauthprofiletable=SimpleNamespace(find_many=AsyncMock(return_value=[]))),
+    )
     await rotate_mcp_server_credentials_master_key(prisma, touched_by="test", new_master_key="rotated-map-key")
     assert table.rows["broken"][field] == corrupt
     assert table.rows["legacy"][other] == "{}" and table.rows["encrypted"][other] is None
@@ -1595,7 +1600,7 @@ def test_prepare_mcp_server_data_update_carries_token_exchange_columns():
 
 
 @pytest.mark.asyncio
-async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch):
+async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """The server-scoped DCR client store (LiteLLM_MCPServerOAuthClient) is encrypted at rest, so a
     master-key rotation must re-encrypt it alongside the server rows. Skipping it leaves
     config-declared DCR clients under the retired key, where they decrypt back to ciphertext and
@@ -1621,12 +1626,14 @@ async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch):
 
     prisma = MagicMock()
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_mcpservertable.update = AsyncMock()
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(
         return_value=[SimpleNamespace(server_id="config_faros", credentials=blob_old)]
     )
     store_update = AsyncMock()
     prisma.db.litellm_mcpserveroauthclient.update = store_update
+    prisma.writer_db.litellm_mcpauthprofiletable.find_many = AsyncMock(return_value=[])
 
     await rotate_mcp_server_credentials_master_key(prisma, touched_by="test", new_master_key=key_new)
 

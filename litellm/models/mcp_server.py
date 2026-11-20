@@ -11,11 +11,17 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Literal
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field, SerializerFunctionWrapHandler, ValidationInfo, field_validator, model_serializer
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.mcp import MCPAuthType, MCPCredentials, MCPTransportType
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool, parse_pinned_tools
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPAuthProfile,
+    MCPInfo,
+    PinnedMCPTool,
+    omit_empty_additional_auth,
+    parse_pinned_tools,
+)
 
 
 class MCPEnvVarScope(str, enum.Enum):
@@ -120,6 +126,11 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     submitted_at: datetime | None = None
     reviewed_at: datetime | None = None
     review_notes: str | None = None
+    additional_auth: tuple[MCPAuthProfile, ...] | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_additional_auth(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202  # a return annotation collapses the OpenAPI response schema
+        return omit_empty_additional_auth(handler, self, self.additional_auth)
 
     @field_validator("pinned_tools", mode="before")
     @classmethod

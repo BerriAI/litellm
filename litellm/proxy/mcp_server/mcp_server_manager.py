@@ -246,6 +246,7 @@ from litellm.types.mcp import (
 )
 from litellm.types.mcp_server.mcp_server_manager import (
     MAX_TOOLS_LIST_CACHE_TTL_SECONDS,
+    MCPAuthProfile,
     MCPInfo,
     MCPOAuthMetadata,
     MCPServer,
@@ -3653,6 +3654,7 @@ class MCPServerManager:
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
             rpm=mcp_server.rpm,
+            additional_auth=self._decrypted_auth_profiles(mcp_server.additional_auth, credentials_are_encrypted),
         )
         _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         if register_oauth_discovery:
@@ -5897,6 +5899,28 @@ class MCPServerManager:
             authorization_url=f"{base}/oauth2/v2.0/authorize",
             token_url=f"{base}/oauth2/v2.0/token",
             client_id_metadata_document_supported=False,
+        )
+
+    def _decrypted_auth_profiles(
+        self, profiles: tuple[MCPAuthProfile, ...] | None, credentials_are_encrypted: bool
+    ) -> tuple[MCPAuthProfile, ...] | None:
+        if not profiles:
+            return None
+        return tuple(
+            profile.model_copy(
+                update={
+                    "client_id": self._decrypt_credential_field(
+                        profile.client_id, "client_id", credentials_are_encrypted
+                    ),
+                    "client_secret": self._decrypt_credential_field(
+                        profile.client_secret, "client_secret", credentials_are_encrypted
+                    ),
+                    "authentication_token": self._decrypt_credential_field(
+                        profile.authentication_token, "auth_value", credentials_are_encrypted
+                    ),
+                }
+            )
+            for profile in profiles
         )
 
     @staticmethod
@@ -8181,6 +8205,7 @@ class MCPServerManager:
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
             rpm=server.rpm,
+            additional_auth=tuple(profile.without_secrets() for profile in server.additional_auth or ()) or None,
         )
 
     _build_mcp_server_table = build_mcp_server_table

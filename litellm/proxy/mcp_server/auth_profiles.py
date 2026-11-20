@@ -8,7 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm.types.mcp import MCPAuth, MCPTransport
-from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile
+from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPServer
 
 PROFILE_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
 RESERVED_PROFILE_ID: Final = "default"
@@ -170,6 +170,8 @@ def _first_duplicate(claims: Sequence[_Claim]) -> DuplicateProfileId | None:
 def validate_auth_profiles(
     submitted: Mapping[str, object],
     existing: Iterable[StoredProfileId],
+    *,
+    config_claims: Iterable[StoredProfileId] = (),
 ) -> ValidatedProfiles | AuthProfileRefusal:
     parsed: Final = tuple(_parsed_profiles(submitted))
     refusal: Final = _first_refusal(result for _, result in parsed)
@@ -181,10 +183,13 @@ def validate_auth_profiles(
             for server in submitted
         }
     )
-    kept: Final = tuple(
-        _Claim(stored.profile_id.lower(), stored.profile_id, stored.server)
-        for stored in existing
-        if stored.server not in by_server
+    kept: Final = (
+        *(_Claim(claim.profile_id.lower(), claim.profile_id, claim.server) for claim in config_claims),
+        *(
+            _Claim(stored.profile_id.lower(), stored.profile_id, stored.server)
+            for stored in existing
+            if stored.server not in by_server
+        ),
     )
     submitted_claims: Final = tuple(
         _Claim(result.id.lower(), result.id, owner) for owner, result in parsed if isinstance(result, MCPAuthProfile)
@@ -225,6 +230,12 @@ def profile_host_refusal(
     return None
 
 
+def stored_profile_ids(servers: Iterable[MCPServer]) -> Iterator[StoredProfileId]:
+    for server in servers:
+        for profile in server.additional_auth or ():
+            yield StoredProfileId(profile.id, server.server_name or server.server_id)
+
+
 def describe_refusal(refusal: AuthProfileRefusal) -> str:
     match refusal:
         case InvalidProfileId(server=server, position=position, value=value):
@@ -259,6 +270,12 @@ def describe_refusal(refusal: AuthProfileRefusal) -> str:
             )
         case _:
             assert_never(refusal)
+
+
+def describe_to_submitter(refusal: AuthProfileRefusal) -> str:
+    if isinstance(refusal, DuplicateProfileId):
+        return f"Profile id '{refusal.profile_id}' is already in use. Profile ids are unique, ignoring case."
+    return describe_refusal(refusal)
 
 
 def refusal_http_status(refusal: AuthProfileRefusal) -> Literal[400, 409]:
