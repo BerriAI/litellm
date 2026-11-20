@@ -1392,7 +1392,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm_params,
             as_str_mapping(litellm_params.get("extra_body")) or {},
         )
-        if any(params.get("previous_response_id") for params in sent_params):
+        if any(params.get("previous_response_id") is not None for params in sent_params):
             raise litellm.UnsupportedParamsError(
                 message=_PREVIOUS_RESPONSE_ID_UNSUPPORTED, model=model, llm_provider=_served_provider(litellm_params)
             )

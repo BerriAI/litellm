@@ -6105,6 +6105,7 @@ def _system_input_item(text: str) -> dict[str, object]:
         {"previous_response_id": "resp_prior"},
         {"extra_body": {"previous_response_id": "resp_prior"}},
         {"previous_response_id": "resp_prior", "drop_params": True},
+        {"previous_response_id": ""},
     ],
 )
 async def test_acompletion_rejects_previous_response_id_before_calling_the_provider(

@@ -21,7 +21,6 @@ from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_
 from litellm.llms.anthropic.messages.responses_adapters.handler import (
     count_messages_as_sent,
     preserves_system_instructions,
-    previous_response_id_error,
 )
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -173,13 +172,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             if messages_format == "anthropic"
             else None
         )
-        request_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
-        unsupported_param_error: Final = (
-            previous_response_id_error(request_params) if messages_format == "anthropic" else None
-        )
-        request_error: Final = (
-            unsupported_param_error or malformed_error or unconvertible_blocks_error(messages, messages_format)
-        )
+        request_error: Final = malformed_error or unconvertible_blocks_error(messages, messages_format)
         if request_error is not None:
             return TokenCountResponse(
                 total_tokens=0,
@@ -223,7 +216,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             system=system,
             messages_format=messages_format,
             output_format=output_format,
-            request_params=request_params,
+            request_params=as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {},
         )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting

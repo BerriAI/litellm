@@ -221,7 +221,7 @@ _PREVIOUS_RESPONSE_ID_UNSUPPORTED: Final = (
 
 def previous_response_id_error(request_params: Mapping[str, object]) -> str | None:
     sent: Final = _sent_responses_fields(request_params, ("previous_response_id",))
-    return _PREVIOUS_RESPONSE_ID_UNSUPPORTED if sent["previous_response_id"] else None
+    return _PREVIOUS_RESPONSE_ID_UNSUPPORTED if sent["previous_response_id"] is not None else None
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:

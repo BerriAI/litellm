@@ -257,6 +257,7 @@ async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation
         {"previous_response_id": "resp_prior", "drop_params": True},
         {"extra_body": {"previous_response_id": "resp_prior"}, "additional_drop_params": ["previous_response_id"]},
         {"previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": ""},
     ],
 )
 async def test_messages_rejects_previous_response_id_before_calling_the_provider(
@@ -275,21 +276,9 @@ async def test_messages_rejects_previous_response_id_before_calling_the_provider
                 cache={"no-cache": True},
                 **request_params,
             )
-        counted: Final = await OpenAITokenCounter().count_tokens(
-            model_to_use="gpt-6.2-sol",
-            messages=[{"role": "user", "content": "again"}],
-            contents=None,
-            system="Stable prefix",
-            messages_format="anthropic",
-            deployment={"litellm_params": {"api_key": "sk-test", **request_params}},
-        )
     assert not upstream.called
     assert rejected.value.status_code == 400
-    assert counted is not None
-    assert (counted.error, counted.status_code, counted.rejected_before_provider_call) == (True, 400, True)
-    assert counted.error_message is not None
-    assert "/v1/responses" in counted.error_message
-    assert counted.error_message in rejected.value.message
+    assert "/v1/responses" in rejected.value.message
 
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():

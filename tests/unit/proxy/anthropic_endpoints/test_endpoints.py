@@ -1192,21 +1192,26 @@ def test_messages_count_tokens_uses_the_system_shape_sent_by_inference(
     )
 
 
+@pytest.mark.parametrize("model", ["openai/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol"])
 @pytest.mark.parametrize(
-    "params", [{"previous_response_id": "resp_prior"}, {"extra_body": {"previous_response_id": "resp_prior"}}]
+    "params",
+    [
+        {"previous_response_id": "resp_prior"},
+        {"extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": "resp_prior", "drop_params": True},
+        {"extra_body": {"previous_response_id": "resp_prior"}, "additional_drop_params": ["previous_response_id"]},
+        {"previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": ""},
+    ],
 )
 def test_messages_count_tokens_rejects_previous_response_id_as_inference_does(
-    monkeypatch: pytest.MonkeyPatch, params: dict[str, object]
+    monkeypatch: pytest.MonkeyPatch, params: dict[str, object], model: str
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(
         proxy_server,
         "llm_router",
-        Router(
-            model_list=[
-                {"model_name": "count-sol", "litellm_params": {"model": "openai/gpt-6.2-sol", "api_key": "sk-test"}}
-            ]
-        ),
+        Router(model_list=[{"model_name": "count-sol", "litellm_params": {"model": model, "api_key": "sk-test"}}]),
     )
     app: Final = FastAPI()
     app.include_router(messages_router)
