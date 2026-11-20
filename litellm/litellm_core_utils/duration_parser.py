@@ -140,11 +140,10 @@ def get_next_standardized_reset_time(
         return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
     if reset_at is not None:
-        window_zone: Final = timezone.utc if unit in ("s", "m", "h") else current_time.tzinfo
+        moment: Final = _budget_window_clock(duration, current_time)
         anchor: Final = _setup_timezone(normalize_budget_window_start(reset_at), timezone_str)[0].astimezone(
-            window_zone
+            moment.tzinfo
         )
-        moment: Final = current_time.astimezone(window_zone)
         if anchor > moment:
             return anchor
         if value > 0 and unit in ("s", "m", "h", "d", "w") and (value, unit) != (30, "d"):
@@ -210,8 +209,15 @@ def get_budget_window_end(
     return _shift_budget_window(duration, boundary, 1).astimezone(timezone.utc)
 
 
+def _budget_window_clock(duration: str, moment: datetime) -> datetime:
+    value, unit = _parse_duration(normalize_duration(duration))
+    if value is None or unit not in ("s", "m", "h") or moment.tzinfo is None:
+        return moment
+    return moment.astimezone(timezone.utc) if duration_in_seconds(duration) < 86400 else moment
+
+
 def _shift_budget_window(duration: str, moment: datetime, direction: int) -> datetime:
-    boundary: Final = normalize_budget_window_start(moment)
+    boundary: Final = _budget_window_clock(duration, normalize_budget_window_start(moment))
     value, unit = _parse_duration(normalize_duration(duration))
     if value is None:
         return boundary + timedelta(days=direction)

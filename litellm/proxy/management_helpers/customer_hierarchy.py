@@ -771,7 +771,9 @@ class CustomerHierarchyStore:
         )
         return responses[0]
 
-    async def create_budget(self, budget: Budget, actor: str, name: str | None = None) -> str:
+    async def create_budget(
+        self, budget: Budget, actor: str, name: str | None = None, *, previous: tuple[BudgetLimit, ...] = ()
+    ) -> str:
         budget_id: Final = str(uuid4())
         await create_budget_row(
             self.budgets,
@@ -780,7 +782,11 @@ class CustomerHierarchyStore:
                     **budget_values(budget),
                     **budget_window_values(budget, budget.model_fields_set),
                     **(
-                        {"budget_limits": initialize_budget_limits(budget.budget_limits, self.settings, self.now)}
+                        {
+                            "budget_limits": initialize_budget_limits(
+                                budget.budget_limits, self.settings, self.now, previous=previous
+                            )
+                        }
                         if budget.budget_limits is not None
                         else {}
                     ),
@@ -1347,7 +1353,9 @@ class CustomerHierarchyStore:
         custom: Final = Budget.model_validate(
             {**(budget_values(source) if source is not None else {}), **patch.model_dump(exclude_unset=True)}
         )
-        budget_id: Final = await self.create_budget(custom, actor)
+        budget_id: Final = await self.create_budget(
+            custom, actor, previous=(source.budget_limits or ()) if source is not None else ()
+        )
         if original is not None and source is not None and custom.budget_duration == source.budget_duration:
             reset_at: Final = window_reset_at(original.model_dump())
             if reset_at is not None:

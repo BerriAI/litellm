@@ -24,7 +24,6 @@ from litellm.litellm_core_utils.duration_parser import (
     get_annual_budget_window_start,
     is_annual_budget_duration,
     normalize_budget_window_start,
-    normalize_duration,
 )
 from litellm.litellm_core_utils.duration_parser import (
     get_budget_window_start as calendar_budget_window_start,
@@ -141,12 +140,7 @@ def _customer_window_counter(
         else limit.reset_at
     )
     reset_at: Final = compute_budget_reset_at(limit.budget_duration, settings, now, reset_at=configured_reset)
-    window_zone: Final = (
-        timezone.utc if normalize_duration(limit.budget_duration).endswith(("s", "m", "h")) else reset_at.tzinfo
-    )
-    start: Final = calendar_budget_window_start(limit.budget_duration, reset_at.astimezone(window_zone)).astimezone(
-        timezone.utc
-    )
+    start: Final = calendar_budget_window_start(limit.budget_duration, reset_at).astimezone(timezone.utc)
     return _BudgetCounter(
         counter_key=customer_window_counter(scope_key, entity_id, limit.budget_duration, start),
         max_budget=limit.max_budget,

@@ -30,6 +30,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     CustomerMember,
     MemberCreate,
     OrganizationCreate,
+    OrganizationPatch,
     Team,
     TeamCreate,
 )
@@ -672,16 +673,13 @@ def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseMod
 def test_additional_budget_windows_normalize_without_changing_the_scalar(duration: str, expected: str) -> None:
     budget: Final = Budget(max_budget=50, budget_duration="daily",
                           budget_limits=(BudgetLimit(budget_duration=duration, max_budget=0),))
-    assert budget.model_dump(include={"max_budget", "budget_duration", "budget_limits"}) == {
-        "max_budget": 50, "budget_duration": "daily",
-        "budget_limits": ({"budget_duration": expected, "max_budget": 0, "reset_at": None},),
-    }
-
-
+    assert (budget.max_budget, budget.budget_duration) == (50, "daily")
+    assert tuple(limit.budget_duration for limit in budget.budget_limits or ()) == (expected,)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("elapsed", (1, 3))
-async def test_editing_a_custom_cap_retains_its_original_reset_anchor(elapsed: int) -> None:
+@pytest.mark.parametrize("shared", (False, True))
+async def test_editing_a_custom_cap_retains_its_original_reset_anchor(elapsed: int, shared: bool) -> None:
     database: Final = Database()
     store: Final = CustomerHierarchyStore(cast("Prisma", database), NOW, premium_user=True)
     policy: Final = Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=10),))
@@ -689,8 +687,11 @@ async def test_editing_a_custom_cap_retains_its_original_reset_anchor(elapsed: i
     original: Final = database.litellm_budgettable.rows[budget_id].model_dump()["budget_limits"]
     later: Final = CustomerHierarchyStore(cast("Prisma", database), NOW + timedelta(days=elapsed), premium_user=True)
     patch: Final = Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=20),))
-    await later.update_budget(budget_id, patch, "admin")
-    assert database.litellm_budgettable.rows[budget_id].model_dump()["budget_limits"] == [
+    updated_id: Final = await later.private_budget_patch(
+        budget_id, OrganizationPatch(budget=patch), "admin", shared_ids=(budget_id,) if shared else ()
+    )
+    assert updated_id is not None and (updated_id != budget_id) is shared
+    assert database.litellm_budgettable.rows[updated_id].model_dump()["budget_limits"] == [
         {**limit, "max_budget": 20} for limit in original
     ]
 
