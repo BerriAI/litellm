@@ -81,6 +81,16 @@ def can_block_current_thread() -> bool:
     return threading.current_thread() is threading.main_thread() and not is_event_loop_running()
 
 
+async def _run_then_release(awaitable: Awaitable[T_Retval]) -> T_Retval:
+    """Release this loop's cached clients while it can still await their close."""
+    from litellm import in_memory_llm_clients_cache  # lazy: litellm imports this module
+
+    try:
+        return await awaitable
+    finally:
+        await in_memory_llm_clients_cache.aclose_clients_for_running_loop()
+
+
 def run_async_function(async_function, *args, **kwargs):
     """
     Helper utility to run an async function in a sync context.
@@ -109,7 +119,7 @@ def run_async_function(async_function, *args, **kwargs):
         new_loop: Final = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(new_loop)
-            return new_loop.run_until_complete(async_function(*args, **kwargs))
+            return new_loop.run_until_complete(_run_then_release(async_function(*args, **kwargs)))
         finally:
             new_loop.close()
             asyncio.set_event_loop(None)

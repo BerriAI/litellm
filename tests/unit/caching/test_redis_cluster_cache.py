@@ -383,7 +383,7 @@ def test_init_async_client_returns_one_cluster_client_per_event_loop() -> None:
 
 
 @pytest.mark.parametrize("cluster", [True, False])
-def test_evicted_async_client_is_closed_only_for_cluster(cluster: bool) -> None:
+def test_evicted_async_client_is_closed(cluster: bool) -> None:
     clients = LLMClientCache(evicted_client_closer=EvictedClientCloser(grace_seconds=0))
     with (
         patch("litellm.in_memory_llm_clients_cache", clients),
@@ -406,14 +406,8 @@ def test_evicted_async_client_is_closed_only_for_cluster(cluster: bool) -> None:
             replacement = cache.init_async_client()
 
             assert replacement is not client
-            if cluster:
-                await asyncio.wait_for(closed.wait(), timeout=1)
-                client.aclose.assert_awaited_once()
-            else:
-                await asyncio.sleep(0)
-                await asyncio.sleep(0)
-                await asyncio.sleep(0)
-                client.aclose.assert_not_awaited()
+            await asyncio.wait_for(closed.wait(), timeout=1)
+            client.aclose.assert_awaited_once()
 
         asyncio.run(exercise())
 
