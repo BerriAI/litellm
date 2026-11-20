@@ -26,24 +26,18 @@ from litellm.constants import (
     OTLP_RETRY_AFTER_SECONDS,
     TRACE_READ_RETRY_AFTER_SECONDS,
 )
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
-from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
-from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
-from litellm.tracing import TraceReceiver
-from litellm.tracing.errors import TraceChanged
-from litellm.tracing.generated.models import TraceQueryHelp
-from litellm.tracing.generated.requests import (
+from litellm.integrations.lens import TraceReceiver
+from litellm.integrations.lens.errors import TraceChanged
+from litellm.integrations.lens.generated.models import TraceQueryHelp
+from litellm.integrations.lens.generated.requests import (
     TraceDetailRequest,
     TraceErrorPageRequest,
     TraceListRequest,
     TraceQueryRequest,
     TraceSpanRequest,
 )
-from litellm.tracing.generated.responses import TraceSQLResponse
-from litellm.tracing.generated.types import (
+from litellm.integrations.lens.generated.responses import TraceSQLResponse
+from litellm.integrations.lens.generated.types import (
     AllQueryScope,
     OwnedQueryScope,
     QueryScope,
@@ -53,9 +47,15 @@ from litellm.tracing.generated.types import (
     TracePage,
     TraceScope,
 )
-from litellm.tracing.otlp_http import encode_otlp_response
-from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing.types import TraceAgentList
+from litellm.integrations.lens.otlp_http import encode_otlp_response
+from litellm.integrations.lens.proxy.tracing_runtime import provide_receiver, require_receiver
+from litellm.integrations.lens.storage import LensTraceStorage
+from litellm.integrations.lens.types import TraceAgentList
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
+from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router = APIRouter(tags=["agent tracing"])

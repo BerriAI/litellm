@@ -3,11 +3,18 @@ from typing import Final, TypeVar
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
-from litellm.tracing.generated.models import TraceAgentRow, TraceAgentsParams, TraceQueryHelp
-from litellm.tracing.generated.responses import TraceSQLResponse
-from litellm.tracing.generated.types import QueryScope, SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
-from litellm.tracing.queries import TRACE_AGENTS, ClickHouseSQLEnvelope, ParamsT, ReadQuery, RowT
-from litellm.tracing.remote import RemoteTraceStore
+from litellm.integrations.lens.generated.models import TraceAgentRow, TraceAgentsParams, TraceQueryHelp
+from litellm.integrations.lens.generated.responses import TraceSQLResponse
+from litellm.integrations.lens.generated.types import (
+    QueryScope,
+    SpanDetail,
+    SpanErrorPage,
+    Trace,
+    TracePage,
+    TraceScope,
+)
+from litellm.integrations.lens.queries import TRACE_AGENTS, ClickHouseSQLEnvelope, ParamsT, ReadQuery, RowT
+from litellm.integrations.lens.remote import RemoteTraceStore
 
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | float | list[str]])
 _SQL_ENVELOPE: Final = TypeAdapter(ClickHouseSQLEnvelope)

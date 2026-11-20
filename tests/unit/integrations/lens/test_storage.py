@@ -5,8 +5,8 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from litellm.tracing.remote import RemoteTraceStore
-from litellm.tracing.storage import LensTraceStorage
+from litellm.integrations.lens.remote import RemoteTraceStore
+from litellm.integrations.lens.storage import LensTraceStorage
 
 
 @pytest.mark.parametrize(

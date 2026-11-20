@@ -7,9 +7,9 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from litellm.tracing.errors import TraceChanged
-from litellm.tracing.generated.types import AllQueryScope, TraceScope
-from litellm.tracing.remote import LensConnection, RemoteTraceStore, bounded_response
+from litellm.integrations.lens.errors import TraceChanged
+from litellm.integrations.lens.generated.types import AllQueryScope, TraceScope
+from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore, bounded_response
 
 
 @pytest.mark.parametrize(
