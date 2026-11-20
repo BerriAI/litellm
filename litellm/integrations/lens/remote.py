@@ -10,9 +10,9 @@ import httpx
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
+from litellm.integrations.lens.errors import TraceChanged
+from litellm.integrations.lens.generated.types import QueryScope, ReadQueryName, TraceScope
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.tracing.errors import TraceChanged
-from litellm.tracing.generated.types import QueryScope, ReadQueryName, TraceScope
 
 MAX_RESPONSE_BYTES: Final = 64 * 1024 * 1024
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)

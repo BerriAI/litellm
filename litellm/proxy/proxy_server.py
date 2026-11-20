@@ -974,6 +974,7 @@ from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
+from litellm.integrations.lens.config import is_lens_tracing_enabled
 from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream
 from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
@@ -1139,7 +1140,6 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
-from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (

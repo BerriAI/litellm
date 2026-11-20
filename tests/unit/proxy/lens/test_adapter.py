@@ -18,7 +18,7 @@ from litellm.proxy.lens.adapter import (
     service_connection,
     service_status,
 )
-from litellm.tracing.remote import LensConnection
+from litellm.integrations.lens.remote import LensConnection
 
 SECRET: Final = "gateway-delegated-identity-fixture-32"
 

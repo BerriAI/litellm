@@ -9,7 +9,7 @@ from fastapi import HTTPException, Request, Response
 from fastapi.routing import APIRoute
 from starlette.types import Message, Receive, Scope, Send
 
-from litellm.tracing.remote import MAX_RESPONSE_BYTES
+from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES
 
 
 class BufferBudget:

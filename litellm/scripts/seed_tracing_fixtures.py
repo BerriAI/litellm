@@ -26,10 +26,10 @@ import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.rust_bridge.clickhouse import spend_storage_config
-from litellm.tracing.generated.types import AllQueryScope, Trace
-from litellm.tracing.remote import LensConnection, RemoteTraceStore
-from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing.types import SpendLogRecord
+from litellm.integrations.lens.generated.types import AllQueryScope, Trace
+from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
+from litellm.integrations.lens.storage import LensTraceStorage
+from litellm.integrations.lens.types import SpendLogRecord
 
 if TYPE_CHECKING:
     from prisma import Prisma

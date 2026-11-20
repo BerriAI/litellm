@@ -8,11 +8,11 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.lens import TraceReceiver
+from litellm.integrations.lens.exporter import LensExporter
 from litellm.integrations.lens.lens_trace_adapter import export_traces
-from litellm.tracing import TraceReceiver
-from litellm.tracing.exporter import LensExporter
-from litellm.tracing.remote import LensConnection, RemoteTraceStore
-from litellm.tracing.storage import LensTraceStorage
+from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
+from litellm.integrations.lens.storage import LensTraceStorage
 
 _RECEIVER_ADAPTER: Final[TypeAdapter[TraceReceiver | None]] = TypeAdapter(
     TraceReceiver | None, config=ConfigDict(arbitrary_types_allowed=True)

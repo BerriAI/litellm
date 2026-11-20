@@ -2,10 +2,10 @@ from datetime import datetime, timezone
 from typing import Final
 
 from litellm.constants import AGENT_TRACING_AGENT_LIST_LIMIT, AGENT_TRACING_LIST_PAGE_SIZE
-from litellm.tracing.generated.models import TraceAgentsParams
-from litellm.tracing.generated.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
-from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing.types import TraceAgent, TraceAgentList
+from litellm.integrations.lens.generated.models import TraceAgentsParams
+from litellm.integrations.lens.generated.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
+from litellm.integrations.lens.storage import LensTraceStorage
+from litellm.integrations.lens.types import TraceAgent, TraceAgentList
 
 
 class TraceReceiver:

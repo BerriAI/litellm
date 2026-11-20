@@ -24,11 +24,11 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from typing_extensions import override
 
 import litellm
+from litellm.integrations.lens.remote import LensConnection
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import LLMCallEvent
 from litellm.integrations.otel.model.utils import to_ns
-from litellm.tracing.remote import LensConnection
 from litellm.types.utils import CaptureMessageContent
 
 _KNOWN_AGENTS: Final[tuple[tuple[str, str], ...]] = (

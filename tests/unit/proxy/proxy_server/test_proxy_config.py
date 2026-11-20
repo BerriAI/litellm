@@ -37,14 +37,12 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_SSL_CIPHERS
+from litellm.integrations.lens.config import is_lens_tracing_enabled
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
-from litellm.router_api import ApplyResult, RouterSettings
-from litellm.types.router import Deployment, LiteLLM_Params
-from litellm.types.utils import CredentialItem
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -59,7 +57,9 @@ from litellm.proxy.proxy_server import (
     validate_deployment_max_agentic_loops,
 )
 from litellm.proxy.utils import evict_config_param
-from litellm.tracing.config import is_lens_tracing_enabled
+from litellm.router_api import ApplyResult, RouterSettings
+from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.utils import CredentialItem
 
 from .conftest import normalize
 
@@ -182,9 +182,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 ) -> None:
     import httpx
 
+    from litellm.integrations.lens.exporter import LensExporter
+    from litellm.integrations.lens.remote import LensConnection
     from litellm.proxy.tracing_runtime import manage_tracing
-    from litellm.tracing.exporter import LensExporter
-    from litellm.tracing.remote import LensConnection
 
     monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
     monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")

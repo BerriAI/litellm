@@ -14,6 +14,6 @@ import pytest
 def test_lens_enablement_requires_its_service_or_an_explicit_lens_store(
     settings: object, environ: dict[str, str], enabled: bool
 ) -> None:
-    from litellm.tracing.config import is_lens_tracing_enabled
+    from litellm.integrations.lens.config import is_lens_tracing_enabled
 
     assert is_lens_tracing_enabled(settings, environ) is enabled

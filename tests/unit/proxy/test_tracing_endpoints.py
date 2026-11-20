@@ -35,14 +35,14 @@ from litellm.proxy.auth.authorization import OwnedRows, ReadScope
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing
-from litellm.tracing import TraceReceiver
-from litellm.tracing.errors import TraceChanged
-from litellm.tracing.generated.models import TraceQueryHelp
-from litellm.tracing.generated.responses import TraceSQLResponse
-from litellm.tracing.generated.types import TraceScope
-from litellm.tracing.remote import LensConnection, RemoteTraceStore
-from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing.types import TraceAgent, TraceAgentList
+from litellm.integrations.lens import TraceReceiver
+from litellm.integrations.lens.errors import TraceChanged
+from litellm.integrations.lens.generated.models import TraceQueryHelp
+from litellm.integrations.lens.generated.responses import TraceSQLResponse
+from litellm.integrations.lens.generated.types import TraceScope
+from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
+from litellm.integrations.lens.storage import LensTraceStorage
+from litellm.integrations.lens.types import TraceAgent, TraceAgentList
 
 SQL_ROWS: Final[tuple[Mapping[str, JsonValue], ...]] = (
     {

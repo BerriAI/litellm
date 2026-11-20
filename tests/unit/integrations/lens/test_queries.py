@@ -3,7 +3,7 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
-from litellm.tracing.queries import TRACE_AGENTS
+from litellm.integrations.lens.queries import TRACE_AGENTS
 
 
 @pytest.mark.parametrize("count", (0, "9007199254740993", 2**64 - 1))
@@ -29,7 +29,7 @@ def test_agent_rows_reject_invalid_counts(count: int | str) -> None:
 def test_dictionary_validation_keeps_required_nullable_and_optional_fields_distinct() -> None:
     from pydantic import TypeAdapter
 
-    from litellm.tracing.generated.types import SpanDetail, SpanErrorPage
+    from litellm.integrations.lens.generated.types import SpanDetail, SpanErrorPage
 
     result: Final = TypeAdapter(SpanDetail).validate_python(
         {
