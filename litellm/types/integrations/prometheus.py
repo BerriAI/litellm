@@ -243,6 +243,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_request_total_latency_metric",
     "litellm_overhead_latency_metric",
     "litellm_overhead_with_guardrails_latency_metric",
+    "litellm_proxy_chat_processing_seconds",
     "litellm_remaining_requests_metric",
     "litellm_remaining_tokens_metric",
     "litellm_proxy_total_requests_metric",
@@ -722,6 +723,8 @@ class PrometheusMetricLabels:
     ]
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
+
+    litellm_proxy_chat_processing_seconds: ClassVar[tuple[str, ...]] = ()
 
     litellm_dynamic_limiter_share_tokens: ClassVar[tuple[str, ...]] = (
         UserAPIKeyLabelNames.MODEL_GROUP.value,
