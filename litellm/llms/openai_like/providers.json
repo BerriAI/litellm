@@ -335,5 +335,11 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "redrouter": {
+    "base_url": "https://redrouter.org/v1",
+    "api_key_env": "REDROUTER_API_KEY",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
+    "provider_info": {"supports_function_calling": true}
   }
 }
