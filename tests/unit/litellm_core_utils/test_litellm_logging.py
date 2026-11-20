@@ -455,6 +455,67 @@ def logging_obj():
     )
 
 
+@pytest.mark.parametrize("call_type", ("completion", "anthropic_messages"))
+@pytest.mark.parametrize("header_source", ("raw", "hidden"))
+@pytest.mark.parametrize("additional_cost", (None, 0.0, 0.25, -1.0, "invalid"))
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize(
+    "signals, oauth, covered",
+    (
+        ({"status": "allowed"}, True, True),
+        ({"status": "allowed", "overage-in-use": "true"}, True, False),
+        ({"status": "rejected", "overage-status": "allowed_warning"}, True, False),
+        ({}, True, False),
+        ({"status": "allowed"}, False, False),
+    ),
+)
+def test_claude_subscription_cost_uses_allowance_only_with_oauth_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: str,
+    header_source: str,
+    signals: dict[str, str],
+    oauth: bool,
+    covered: bool,
+    additional_cost: object,
+    stream: bool,
+) -> None:
+    model: Final = "claude-subscription-pricing-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "anthropic", "mode": "chat"},
+    )
+    logger: Final = LitellmLogging(
+        model=model,
+        messages=[],
+        stream=stream,
+        call_type=call_type,
+        start_time=datetime.datetime(2025, 1, 1),
+        litellm_call_id="subscription",
+        function_id="subscription",
+    )
+    logger.update_environment_variables(
+        model=model,
+        optional_params={},
+        custom_llm_provider="anthropic",
+        litellm_params={"metadata": {"used_client_oauth_token": oauth}},
+    )
+    headers: Final = {f"anthropic-ratelimit-unified-{key}": value for key, value in signals.items()}
+    logger.model_call_details["additional_response_cost"] = additional_cost
+    response: Final = litellm.ModelResponse(
+        model=model, usage=litellm.Usage(prompt_tokens=100, completion_tokens=10, total_tokens=110)
+    )
+    if header_source == "raw":
+        logger.model_call_details["response_headers"] = headers
+    else:
+        response._hidden_params["additional_headers"] = {f"llm_provider-{key}": value for key, value in headers.items()}
+
+    cost: Final = logger.response_cost_calculator(response)
+
+    expected_additional: Final = additional_cost if isinstance(additional_cost, (int, float)) and additional_cost > 0 else 0.0
+    assert cost == pytest.approx((0.0 if covered else 100 * 0.01 + 10 * 0.02) + expected_additional)
+
+
 @pytest.mark.asyncio
 async def test_async_post_mcp_tool_call_hook_preserves_and_returns_content(logging_obj):
     from litellm.types.mcp import MCPPostCallResponseObject
@@ -5816,6 +5877,112 @@ def test_logged_messages_gain_no_extra_system_entry(
         kwargs={"system": system}, messages=messages
     )
     assert result == messages
+
+
+class _SubscriptionUsageRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payload: StandardLoggingPayload | None = None
+        self.logged: asyncio.Event = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, StandardLoggingPayload], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.payload = kwargs["standard_logging_object"]
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize(
+    "signals, covered",
+    (
+        ({"status": "allowed"}, True),
+        ({"status": "allowed", "overage-in-use": "true"}, False),
+        ({}, False),
+    ),
+)
+async def test_native_messages_logs_subscription_cost_from_upstream_headers(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, signals: dict[str, str], covered: bool
+) -> None:
+    model: Final = "claude-subscription-native-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "anthropic", "mode": "chat"},
+    )
+    recorder: Final = _SubscriptionUsageRecorder()
+    reply: Final = {
+        "id": "msg_subscription_native",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 10},
+    }
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                **reply,
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 100, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 10},
+        },
+        {"type": "message_stop"},
+    )
+    body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+    headers: Final = {f"anthropic-ratelimit-unified-{key}": value for key, value in signals.items()}
+    upstream: Final = AsyncHTTPHandler(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream" if stream else "application/json", **headers},
+                request=request,
+                content=body if stream else json.dumps(reply).encode(),
+            )
+        )
+    )
+    try:
+        result: Final = await litellm.anthropic.messages.acreate(
+            model=f"anthropic/{model}",
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-ant-oat-subscription-test",
+            client=upstream,
+            stream=stream,
+            metadata={"used_client_oauth_token": True},
+            callbacks=[recorder],
+        )
+        if stream:
+            async for _ in result:
+                pass
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+    finally:
+        await upstream.close()
+    payload: Final = recorder.payload
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0 if covered else 100 * 0.01 + 10 * 0.02)
+    assert payload["metadata"].get("claude_subscription_usage") == (
+        {
+            "is_overage": not covered,
+            "status": signals["status"],
+            "overage_status": None,
+        }
+        if signals
+        else None
+    )
 
 
 class _LoggedMessagesRecorder(CustomLogger):

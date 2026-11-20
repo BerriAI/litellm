@@ -152,29 +152,28 @@ def test_empty_constraints_match_nothing() -> None:
 @pytest.mark.parametrize(
     ("context", "expected"),
     (
-        (RouteContext(Route.MESSAGES, provider="bedrock", target=Target.BEDROCK_INVOKE), Decision.RUST_REQUIRED),
-        (RouteContext(Route.MESSAGES, provider="bedrock", target=Target.MESSAGES), Decision.PYTHON),
+        (RouteContext(Route.MESSAGES, provider="bedrock", target=Target.MESSAGES), Decision.RUST_REQUIRED),
         (RouteContext(Route.MESSAGES, provider="bedrock", target=Target.CHAT_COMPLETIONS), Decision.PYTHON),
-        (RouteContext(Route.MESSAGES, provider="anthropic", target=Target.BEDROCK_INVOKE), Decision.PYTHON),
+        (RouteContext(Route.MESSAGES, provider="anthropic", target=Target.MESSAGES), Decision.PYTHON),
         (
             RouteContext(
                 Route.MESSAGES,
                 provider="bedrock",
-                target=Target.BEDROCK_INVOKE,
+                target=Target.MESSAGES,
                 features=frozenset({Feature.STREAMING}),
             ),
             Decision.PYTHON,
         ),
     ),
 )
-def test_a_provider_and_target_rule_admits_only_bedrock_invoke(context: RouteContext, expected: Decision) -> None:
+def test_a_provider_and_target_rule_admits_only_that_pair(context: RouteContext, expected: Decision) -> None:
     rules: Final[Rules] = (
         RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.STREAMING})),
         RouteRule(
             Route.MESSAGES,
             Rollout.RUST_REQUIRED,
             providers=frozenset({"bedrock"}),
-            targets=frozenset({Target.BEDROCK_INVOKE}),
+            targets=frozenset({Target.MESSAGES}),
         ),
         RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     )
@@ -213,6 +212,14 @@ def test_only_claude_on_vertex_ai_messages_is_served_by_rust(model: str, target:
         ("vertex_ai", None, Decision.PYTHON),
         ("azure_ai", Target.CHAT_COMPLETIONS, Decision.PYTHON),
         ("azure_ai", Target.RESPONSES, Decision.PYTHON),
+        ("bedrock", Target.MESSAGES, Decision.RUST_REQUIRED),
+        ("bedrock_mantle", Target.MESSAGES, Decision.RUST_REQUIRED),
+        ("bedrock", None, Decision.PYTHON),
+        ("bedrock_mantle", None, Decision.PYTHON),
+        ("bedrock", Target.CHAT_COMPLETIONS, Decision.PYTHON),
+        ("bedrock_mantle", Target.RESPONSES, Decision.PYTHON),
+        ("bedrock", Target.MESSAGES_PASSTHROUGH, Decision.PYTHON),
+        ("openai", Target.MESSAGES, Decision.PYTHON),
     ),
 )
 def test_native_messages_providers_require_rust_only_for_a_native_messages_target(
@@ -236,22 +243,3 @@ def test_vertex_ai_claude_messages_has_no_python_fallback(monkeypatch: pytest.Mo
 
     assert catalog.rollout(context) is Rollout.RUST_REQUIRED
     assert catalog.decision(context) is Decision.RUST_REQUIRED
-
-
-@pytest.mark.parametrize(
-    ("provider", "target", "expected"),
-    (
-        ("bedrock_mantle", Target.BEDROCK_MANTLE, Decision.RUST_REQUIRED),
-        ("bedrock", Target.BEDROCK_MANTLE, Decision.RUST_REQUIRED),
-        ("bedrock_mantle", Target.CHAT_COMPLETIONS, Decision.PYTHON),
-        ("bedrock_mantle", Target.RESPONSES, Decision.PYTHON),
-        ("bedrock", Target.MESSAGES, Decision.PYTHON),
-        ("vertex_ai", Target.BEDROCK_MANTLE, Decision.PYTHON),
-    ),
-)
-def test_shipped_rules_require_rust_only_for_bedrock_mantle_messages(
-    provider: str, target: Target, expected: Decision
-) -> None:
-    context: Final = RouteContext(Route.MESSAGES, provider=provider, model="m", target=target)
-
-    assert catalog.decision(context, catalog.RULES) is expected

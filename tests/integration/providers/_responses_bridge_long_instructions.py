@@ -20,7 +20,6 @@ ANSWER: Final = "Policy summarized."
 
 DeploymentShape: TypeAlias = Literal["responses_prefix", "mode_responses"]
 DEPLOYMENT_SHAPES: Final[tuple[DeploymentShape, ...]] = ("responses_prefix", "mode_responses")
-StoredChains: TypeAlias = Mapping[str, tuple[dict[str, JsonValue], ...]]
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _ITEMS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
@@ -40,15 +39,6 @@ def bridged_model(scenario: Scenario, shape: DeploymentShape, wire_url: str) -> 
             )
 
 
-def stored_message(role: str, text: str) -> dict[str, JsonValue]:
-    return {
-        "type": "message",
-        "id": f"msg_{uuid.uuid4().hex}",
-        "role": role,
-        "content": [{"type": "input_text", "text": text}],
-    }
-
-
 def _too_long(length: int) -> bytes:
     return json.dumps(
         {
@@ -61,18 +51,6 @@ def _too_long(length: int) -> bytes:
                 "param": "instructions",
                 "code": "string_above_max_length",
             }
-        }
-    ).encode()
-
-
-def _input_item_list(items: tuple[dict[str, JsonValue], ...]) -> bytes:
-    return json.dumps(
-        {
-            "object": "list",
-            "data": list(items),
-            "first_id": items[0]["id"] if items else None,
-            "last_id": items[-1]["id"] if items else None,
-            "has_more": False,
         }
     ).encode()
 
@@ -100,16 +78,9 @@ def _completed() -> bytes:
     ).encode()
 
 
-def openai_responses_peer(stored: StoredChains) -> Callable[[Request], Reply]:
+def openai_responses_peer() -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         path: Final = urlsplit(request.target).path
-        if request.method == "GET" and path.endswith("/input_items"):
-            response_id: Final = path.removesuffix("/input_items").rsplit("/", 1)[-1]
-            if response_id not in stored:
-                return Reply(
-                    status=404, body=b'{"error":{"message":"No response found","type":"invalid_request_error"}}'
-                )
-            return Reply(body=_input_item_list(stored[response_id]))
         if request.method != "POST" or path != "/v1/responses":
             return Reply(status=404, body=b'{"error":{"message":"not scripted","type":"invalid_request_error"}}')
         instructions: Final = _JSON_OBJECT.validate_json(request.body).get("instructions")

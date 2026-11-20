@@ -67,7 +67,6 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_ManagedVectorStoresTable,
     LiteLLM_ObjectPermissionTable,
-    LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
@@ -108,10 +107,12 @@ from litellm.proxy.auth.model_access_denied import (
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     broadcast_evictions,
+    evict_and_broadcast,
     evict_local,
     evict_shared,
     publish_auth_cache_invalidation,
 )
+from litellm.proxy.common_utils.budget_alerts import parse_budget_alert_recipients as _parse_email_list
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -130,7 +131,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
-    budget_windows_absent_cache_key,
+    app_cache_key,
+    app_key_resource_cache_key,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
     get_management_object_ttl,
@@ -186,7 +188,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.tag_repository import TagRepository
 from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.user_repository import NewUserDefaults, UserRepository, unstored_default_keys
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
@@ -222,24 +224,10 @@ else:
     Span = Any
 
 
-class _PrismaModelDumpRow(Protocol):
-    def model_dump(self) -> Mapping[str, object]: ...
-
-
 class _PrismaVectorStoreRow(Protocol):
     def dict(self) -> Mapping[str, object]: ...
 
     def model_dump(self) -> Mapping[str, object]: ...
-
-    def __iter__(self) -> Iterator[tuple[str, object]]: ...
-
-
-class _PrismaUserRow(Protocol):
-    @property
-    def organization_memberships(self) -> Sequence[_PrismaModelDumpRow | None] | None: ...
-
-    @organization_memberships.setter
-    def organization_memberships(self, value: Sequence[_PrismaModelDumpRow] | None) -> None: ...
 
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
@@ -320,10 +308,6 @@ class _DeadlineBoundedTable(Generic[RowT_co]):
 
 def _vector_store_table(repo: _PrismaTableHolder[_PrismaVectorStoreRow]) -> _PrismaAuthTable[_PrismaVectorStoreRow]:
     return _DeadlineBoundedTable(repo.table, "vector_store")
-
-
-def _user_table(repo: _PrismaTableHolder[_PrismaUserRow]) -> _PrismaAuthTable[_PrismaUserRow]:
-    return _DeadlineBoundedTable(repo.table, "user")
 
 
 GrantLayer = Literal["key", "team", "user"]
@@ -1679,6 +1663,7 @@ async def common_checks(
                     team_object=team_object,
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
+                    send_percentage_alerts=RouteChecks.runs_inference_checks(route=route),
                 ),
                 _team_multi_budget_check(team_object=team_object),
                 virtual_key_max_budget_check(
@@ -3027,12 +3012,6 @@ def _email_fallback_links_any_user() -> bool:
     return str_to_bool(os.environ.get("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER")) is True
 
 
-async def _email_free_to_store(prisma_client: PrismaClient, user_email: str | None, user_id: str) -> str | None:
-    if user_email is None or await email_belongs_to_another_user(prisma_client, user_email, user_id):
-        return None
-    return user_email
-
-
 async def email_belongs_to_another_user(prisma_client: PrismaClient, user_email: str, user_id: str) -> bool:
     if _email_fallback_links_any_user():
         return False
@@ -3141,51 +3120,43 @@ async def get_user_object(
             from litellm.proxy.management_helpers.utils import initial_budget_windows_json
 
             default_params: Final = _default_internal_user_params()
-            scalar_default_params: Final = {
-                key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
-            }
-            new_user_email: Final = await _email_free_to_store(prisma_client, user_email, user_id)
-            new_user_params: Final[dict[str, Any]] = {
-                "user_id": user_id,
-                **({"user_email": new_user_email} if new_user_email is not None else {}),
-                **(
-                    {"sso_user_id": sso_user_id}
-                    if sso_user_id is not None and not _email_fallback_links_any_user()
-                    else {}
-                ),
-                **scalar_default_params,
-                **(
-                    {"budget_limits": initial_budget_windows_json(scalar_default_params["budget_limits"])}
-                    if "budget_limits" in scalar_default_params
-                    else {}
-                ),
-            }
-            if new_user_params.get("budget_duration") is not None and new_user_params.get("budget_reset_at") is None:
-                new_user_params["budget_reset_at"] = get_budget_reset_time(
-                    budget_duration=new_user_params["budget_duration"]
+            defaults: Final = NewUserDefaults.model_validate(default_params)
+            unstored: Final = unstored_default_keys(default_params)
+            if unstored:
+                verbose_proxy_logger.warning(
+                    "default_internal_user_params keys not stored on a user created at sign-in: %s",
+                    ", ".join(unstored),
                 )
-
-            response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).create(
-                data=new_user_params,
-                include={"organization_memberships": True},
+            inserted: Final = await UserRepository(prisma_client).insert_for_auth(
+                user_id,
+                sso_user_id=sso_user_id,
+                user_email=user_email,
+                links_any_user=_email_fallback_links_any_user(),
+                defaults=defaults,
+                budget_reset_at=(
+                    None
+                    if defaults.budget_duration is None
+                    else get_budget_reset_time(budget_duration=defaults.budget_duration)
+                ),
+                budget_limits_json=(
+                    initial_budget_windows_json(default_params["budget_limits"])
+                    if "budget_limits" in default_params
+                    else None
+                ),
             )
+            if inserted.user is None:
+                raise UserNotFoundError(user_id=user_id)
 
-            default_teams: Final = check_if_default_team_set()
+            default_teams: Final = check_if_default_team_set() if inserted.created else None
             if default_teams:
                 await add_new_user_to_default_team(
                     user_id=user_id,
-                    user_email=new_user_email,
+                    user_email=inserted.user.user_email,
                     user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
                     teams=default_teams,
                     prisma_client=prisma_client,
                 )
-            if response.organization_memberships is not None and len(response.organization_memberships) > 0:
-                response.organization_memberships = [
-                    LiteLLM_OrganizationMembershipTable.model_validate(membership.model_dump())
-                    for membership in response.organization_memberships
-                    if membership is not None
-                ]
-            _response = LiteLLM_UserTable.model_validate(dict(response))
+            _response = inserted.user
         elif _response is None:
             if should_check_db:
                 _update_last_db_access_time(
@@ -3487,7 +3458,11 @@ async def delete_cache_team_object(
     rows are already gone, so letting an unreachable cache backend raise here would fail a request
     whose delete has committed.
     """
-    keys: Final = (f"team_id:{team_id}", *((f"team_alias:{team_alias}",) if team_alias else ()))
+    keys: Final = (
+        f"team_id:{team_id}",
+        *((f"team_alias:{team_alias}",) if team_alias else ()),
+        app_cache_key("team", team_id),
+    )
 
     for key in keys:
         try:
@@ -3566,19 +3541,18 @@ async def delete_cache_key_object(
         )
 
     await publish_auth_cache_invalidation(cache_key=key)
-    await evict_budget_windows_absent_marker(
-        entity_type=Litellm_EntityType.KEY, entity_id=hashed_token, user_api_key_cache=user_api_key_cache
-    )
+    await evict_and_broadcast((app_key_resource_cache_key(hashed_token),), user_api_key_cache)
+    await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.KEY, entity_id=hashed_token)
 
 
 _delete_cache_key_object: Final = delete_cache_key_object
 
 
-async def evict_budget_windows_absent_marker(
-    entity_type: Litellm_EntityType, entity_id: str, user_api_key_cache: UserApiKeyCache
-) -> None:
+async def evict_budget_windows_absent_marker(entity_type: Litellm_EntityType, entity_id: str) -> None:
+    from litellm.proxy.proxy_server import budget_windows_absent_cache, budget_windows_absent_cache_key
+
     marker: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
-    evict_local(cache_keys=(marker,), user_api_key_cache=user_api_key_cache)
+    budget_windows_absent_cache.delete_cache(marker)
     await publish_auth_cache_invalidation(cache_key=marker)
 
 
@@ -3603,14 +3577,15 @@ async def delete_cache_key_objects(
     an auth refill source, so its batch delete runs beside that chain and a hung Redis costs one
     bounded wait there instead of another in line.
     """
-    evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
+    keys: Final = (*hashed_tokens, *(app_key_resource_cache_key(token) for token in hashed_tokens))
+    evict_local(cache_keys=keys, user_api_key_cache=user_api_key_cache)
     usage_eviction: Final = (
         ()
         if proxy_logging_obj is None
         else (evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache),)
     )
     _ = await asyncio.gather(
-        _evict_auth_cache_then_broadcast(hashed_tokens=hashed_tokens, user_api_key_cache=user_api_key_cache),
+        _evict_auth_cache_then_broadcast(hashed_tokens=keys, user_api_key_cache=user_api_key_cache),
         *usage_eviction,
     )
 
@@ -7116,15 +7091,6 @@ async def virtual_key_soft_budget_check(
 _virtual_key_soft_budget_check: Final = virtual_key_soft_budget_check
 
 
-def _parse_email_list(raw: str | Sequence[object] | None) -> list[str]:
-    """Parse emails from a list or comma-separated string."""
-    if isinstance(raw, list):
-        return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
-    elif isinstance(raw, str):
-        return [e.strip() for e in raw.split(",") if e.strip()]
-    return []
-
-
 def _normalize_alert_emails(
     cfg: Mapping[str, str | Sequence[object] | None] | None,
 ) -> dict[str, list[str]]:
@@ -7247,13 +7213,12 @@ _TEAM_MEMBER_ALERT_CONFIG_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = Ty
 
 
 def _is_valid_alert_threshold_pct(pct: str) -> bool:
-    return pct.isdigit() and len(pct) <= 3 and 1 <= int(pct) <= 100
+    return pct.isascii() and pct.isdigit() and len(pct) <= 3 and 1 <= int(pct) <= 100
 
 
 def _alert_recipients(raw: object) -> Sequence[str] | None:
-    if isinstance(raw, (str, Sequence)):
-        return _parse_email_list(raw)
-    return None
+    emails: Final = _parse_email_list(raw)
+    return emails if isinstance(raw, (str, Sequence)) else None
 
 
 def _valid_alert_threshold_config(raw_config: object) -> Mapping[str, str | Sequence[object] | None] | None:
@@ -7295,6 +7260,74 @@ def team_member_max_budget_alert_check(
         organization_id=organization_id,
         user_email=user_email,
         event_group=Litellm_EntityType.TEAM_MEMBER,
+        max_budget_alert_emails=alert_email_config,
+    )
+    asyncio.create_task(proxy_logging_obj.budget_alerts(type="max_budget_alert", user_info=call_info))
+
+
+TEAM_MAX_BUDGET_ALERT_EMAILS_KEY: Final = "max_budget_alert_emails"
+_TEAM_ALERT_CONFIG_WRITE_ADAPTER: Final[TypeAdapter[Mapping[str, str | Sequence[str]]]] = TypeAdapter(
+    Mapping[str, str | Sequence[str]]
+)
+
+
+def _team_alert_threshold_error(pct: str, recipients: str | Sequence[str]) -> str | None:
+    if not (_is_valid_alert_threshold_pct(pct) and str(int(pct)) == pct):
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} threshold {pct!r} must be a whole number from 1 to 100"
+    emails: Final = _parse_email_list(recipients)
+    if not emails:
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} threshold {pct} needs at least one recipient email"
+    return None
+
+
+def team_max_budget_alert_emails_error(raw_config: object, max_budget: float | None) -> str | None:
+    if raw_config is None:
+        return None
+    try:
+        config: Final = _TEAM_ALERT_CONFIG_WRITE_ADAPTER.validate_python(raw_config)
+    except ValidationError:
+        return (
+            f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} must map a whole-number percentage (1 to 100) "
+            "to a list of recipient emails"
+        )
+    if not config:
+        return None
+    if max_budget is None or not math.isfinite(max_budget) or max_budget <= 0:
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} requires the team max_budget to be a positive number"
+    return next(
+        (error for pct, recipients in config.items() if (error := _team_alert_threshold_error(pct, recipients))),
+        None,
+    )
+
+
+def team_max_budget_alert_check(
+    team_id: str | None,
+    team_alias: str | None,
+    team_metadata: Mapping[str, object] | None,
+    max_budget: float | None,
+    proxy_logging_obj: ProxyLogging,
+    spend: float,
+) -> None:
+    if max_budget is None or not math.isfinite(max_budget) or max_budget <= 0:
+        return
+    if spend <= 0:
+        return
+    alert_email_config: Final = _merge_budget_alert_email_configs(
+        global_cfg=None,
+        per_key_cfg=_valid_alert_threshold_config(
+            team_metadata.get(TEAM_MAX_BUDGET_ALERT_EMAILS_KEY) if team_metadata else None
+        ),
+    )
+    if not alert_email_config:
+        return
+    if spend < max_budget * (min(int(pct) for pct in alert_email_config) / 100.0):
+        return
+    call_info: Final = CallInfo(
+        spend=spend,
+        max_budget=max_budget,
+        team_id=team_id,
+        team_alias=team_alias,
+        event_group=Litellm_EntityType.TEAM,
         max_budget_alert_emails=alert_email_config,
     )
     asyncio.create_task(proxy_logging_obj.budget_alerts(type="max_budget_alert", user_info=call_info))
@@ -7484,6 +7517,8 @@ async def team_max_budget_check(
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
     proxy_logging_obj: ProxyLogging,
+    *,
+    send_percentage_alerts: bool = False,
 ) -> None:
     """
     Check if the team is over it's max budget.
@@ -7501,6 +7536,16 @@ async def team_max_budget_check(
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
         )
+
+        if send_percentage_alerts:
+            team_max_budget_alert_check(
+                team_id=team_object.team_id,
+                team_alias=team_object.team_alias,
+                team_metadata=team_object.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_TeamTable.metadata is a bare dict
+                max_budget=team_object.max_budget,
+                proxy_logging_obj=proxy_logging_obj,
+                spend=spend,
+            )
 
         native: Final = _native_budget_decision(
             {
@@ -7840,7 +7885,7 @@ async def delete_cached_project_object(
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
     await evict_and_broadcast(
-        cache_keys=(project_cache_key(project_id),),
+        cache_keys=(project_cache_key(project_id), app_cache_key("project", project_id)),
         user_api_key_cache=user_api_key_cache,
     )
 

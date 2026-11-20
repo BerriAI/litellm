@@ -50,7 +50,7 @@ def _assert_answered(response: httpx.Response) -> None:
 def test_regression_long_system_with_auto_truncation_reaches_openai_as_input(
     gateway: Gateway, shape: DeploymentShape
 ) -> None:
-    with wire_server(openai_responses_peer({})) as wire, gateway.scenario() as scenario:
+    with wire_server(openai_responses_peer()) as wire, gateway.scenario() as scenario:
         model: Final = bridged_model(scenario, shape, wire.url)
         response: Final = _messages(gateway, model, _LONG_SYSTEM)
         bodies: Final = posted_bodies(wire.drain())
@@ -63,7 +63,7 @@ def test_regression_long_system_with_auto_truncation_reaches_openai_as_input(
 
 @pytest.mark.parametrize("shape", DEPLOYMENT_SHAPES)
 def test_guard_short_system_with_auto_truncation_stays_instructions(gateway: Gateway, shape: DeploymentShape) -> None:
-    with wire_server(openai_responses_peer({})) as wire, gateway.scenario() as scenario:
+    with wire_server(openai_responses_peer()) as wire, gateway.scenario() as scenario:
         model: Final = bridged_model(scenario, shape, wire.url)
         response: Final = _messages(gateway, model, _SHORT_SYSTEM)
         (body,) = posted_bodies(wire.drain())

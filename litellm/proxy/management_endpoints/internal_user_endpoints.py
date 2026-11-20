@@ -108,6 +108,7 @@ from litellm.redis.stores.spend_counters import (
     user_counter,
     user_window_counter,
 )
+from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, rebase_budget_limits_update
 from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -130,9 +131,7 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     UserUpdateResult,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
-    SCIM_ENTERPRISE_METADATA_KEY,
-    SCIM_ENTITLEMENTS_METADATA_KEY,
-    SCIM_ROLES_METADATA_KEY,
+    SCIM_DIRECTORY_METADATA_KEYS,
 )
 from litellm.types.utils import BudgetConfig
 
@@ -956,9 +955,7 @@ async def _get_user_info_teams(
     return team_list, teams_1
 
 
-_SCIM_DIRECTORY_METADATA_KEYS: Final = frozenset(
-    {SCIM_ENTERPRISE_METADATA_KEY, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_ROLES_METADATA_KEY}
-)
+_SCIM_DIRECTORY_METADATA_KEYS: Final = SCIM_DIRECTORY_METADATA_KEYS
 
 
 def _redact_scim_enterprise_metadata(
@@ -1634,6 +1631,31 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
     await evict_and_broadcast(cache_keys=keys, user_api_key_cache=user_api_key_cache)
 
 
+async def _write_user_update(
+    prisma_client: "PrismaClient",
+    user_id: str,
+    data: Mapping[str, object],
+    original: LiteLLM_UserTable | None,
+) -> Mapping[str, object] | None:
+    if "budget_limits" not in data:
+        return cast(  # cast-ok: the user branch returns a user_id/data dictionary
+            "Mapping[str, object] | None",
+            await prisma_client.update_data(user_id=user_id, data=data, table_name="user"),
+        )
+    async with prisma_client.tx() as transaction:
+        rebased: Final = await rebase_budget_limits_update(
+            cast("BudgetLimitsTransaction", transaction),  # cast-ok: Prisma implements raw transaction queries
+            "LiteLLM_UserTable",
+            user_id,
+            original.budget_limits if original is not None else None,
+            prisma_client.jsonify_object(data),
+        )
+        row: Final = await user_tx_db(transaction).upsert(
+            where={"user_id": user_id}, data={"create": rebased, "update": rebased}
+        )
+    return {"user_id": user_id, "data": row}
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1762,14 +1784,15 @@ async def _update_single_user_helper(
         non_default_values["object_permission_id"] = None
 
     # Perform the update
-    response: dict[str, Any] | None = None
+    response: Mapping[str, object] | None = None
 
     if user_request.user_id and len(user_request.user_id) > 0:
         non_default_values["user_id"] = user_request.user_id
-        response = await prisma_client.update_data(
-            user_id=user_request.user_id,
-            data=non_default_values,
-            table_name="user",
+        response = await _write_user_update(
+            prisma_client,
+            user_request.user_id,
+            _ADMIN_USER_ROW_ADAPTER.validate_python(non_default_values),
+            existing_user_row,
         )
     elif user_request.user_email:
         # Handle email-based updates
@@ -1782,10 +1805,11 @@ async def _update_single_user_helper(
         if existing_user_rows and isinstance(existing_user_rows, list) and len(existing_user_rows) > 0:
             for existing_user in existing_user_rows:
                 non_default_values["user_id"] = existing_user.user_id
-                response = await prisma_client.update_data(
-                    user_id=existing_user.user_id,
-                    data=non_default_values,
-                    table_name="user",
+                response = await _write_user_update(
+                    prisma_client,
+                    TypeAdapter(str).validate_python(existing_user.user_id),
+                    _ADMIN_USER_ROW_ADAPTER.validate_python(non_default_values),
+                    existing_user_row,
                 )
                 break  # Update first matching user
         else:
@@ -1827,7 +1851,6 @@ async def _update_single_user_helper(
             await evict_budget_windows_absent_marker(
                 entity_type=Litellm_EntityType.USER,
                 entity_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
-                user_api_key_cache=user_api_key_cache,
             )
 
         await evict_and_broadcast(
@@ -1854,7 +1877,7 @@ async def _update_single_user_helper(
             detail={"error": "Failed to update user"},
         )
     _strip_password_from_response(response)
-    return response
+    return dict(response)
 
 
 def can_user_call_user_update(
@@ -2204,7 +2227,6 @@ async def bulk_user_update(
                         evict_budget_windows_absent_marker(
                             entity_type=Litellm_EntityType.USER,
                             entity_id=user.user_id,
-                            user_api_key_cache=user_api_key_cache,
                         )
                         for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
                         if user.user_id in windows_by_user

@@ -79,12 +79,20 @@ class CustomerScopeAuth(BaseModel):
     budget_reset_at: datetime | None = None
     max_budget: float | None = None
     budget_limits: tuple[BudgetLimit | AppDurationLimit, ...] = ()
+    soft_budget_duration: str | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_models: tuple[str, ...] | None = None
     model_tpm_limit: Mapping[str, int] | None = None
     model_rpm_limit: Mapping[str, int] | None = None
     cap_policy: CapPolicy | None = None
+
+    def accounting_limits(self) -> tuple[BudgetLimit | AppDurationLimit, ...]:
+        if self.soft_budget_duration is None or any(
+            limit.budget_duration == self.soft_budget_duration for limit in self.budget_limits
+        ):
+            return self.budget_limits
+        return (*self.budget_limits, AppDurationLimit(budget_duration=self.soft_budget_duration, max_budget=0))
 
 
 _APP_FIELDS: Final = ("app_id", "app_alias", "app_customer_margin")
@@ -164,7 +172,7 @@ def customer_budget_scopes_metadata(hierarchy: CustomerHierarchyAuth | None) -> 
         return None
     return _BUDGET_SCOPES.dump_json(
         hierarchy.scopes,
-        include={"__all__": {"key": True, "entity_id": True, "budget_limits": True}},
+        include={"__all__": {"key": True, "entity_id": True, "budget_limits": True, "soft_budget_duration": True}},
     ).decode()
 
 

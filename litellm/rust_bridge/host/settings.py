@@ -31,9 +31,12 @@ class ProviderDefaults:
     vertex_location: object
     enable_azure_ad_token_refresh: object
     api_key: object
+    api_base: object
     azure_key: object
     drop_params: object
     bedrock_request_metadata_fields: object
+    bedrock_session_tag_fields: object
+    bedrock_session_name_fields: object
     vertex_request_label_fields: object
 
 
@@ -148,9 +151,12 @@ def provider_defaults() -> ProviderDefaults:
         vertex_location=litellm.vertex_location,
         enable_azure_ad_token_refresh=litellm.enable_azure_ad_token_refresh,
         api_key=litellm.api_key,
+        api_base=litellm.api_base,
         azure_key=litellm.azure_key,
         drop_params=litellm.drop_params,
         bedrock_request_metadata_fields=litellm.bedrock_request_metadata_fields,
+        bedrock_session_tag_fields=litellm.bedrock_session_tag_fields,
+        bedrock_session_name_fields=litellm.bedrock_session_name_fields,
         vertex_request_label_fields=litellm.vertex_request_label_fields,
     )
 

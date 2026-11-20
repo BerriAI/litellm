@@ -225,12 +225,14 @@ _RELAY_HEADERS: Final = TypeAdapter(dict[str, str])
 _RELAY_METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
+ANTHROPIC_CLIENT_OAUTH_STATE_KEY: Final = "litellm_anthropic_client_oauth"
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
     return (
         not key.startswith("user_api_key_")
         and key not in ROUTER_RESERVED_METADATA_FIELDS
+        and key not in ("used_client_oauth_token", "claude_subscription_usage")
         and (key != "model_info" or isinstance(value, Mapping))
     )
 
@@ -863,6 +865,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
         _request_state: Final = getattr(request, "state", None)
+        client_oauth: Final = getattr(_request_state, ANTHROPIC_CLIENT_OAUTH_STATE_KEY, None)
+        if isinstance(client_oauth, bool):
+            _metadata["used_client_oauth_token"] = client_oauth
         deployment_model_info: Final = getattr(
             _request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, None
         )

@@ -37,9 +37,11 @@ const MESSAGES_TIMEOUT: &str = "messages_timeout";
 const MESSAGES_BODY_CUT: &str = "messages_body_cut";
 /// No credential reached the provider, which Python raises as `AuthenticationError`.
 const MESSAGES_MISSING_CREDENTIAL: &str = "messages_missing_credential";
+/// What the provider config needed and did not get, when that was a named param rather than the key.
+const MESSAGES_MISSING_PARAM: &str = "messages_missing_param";
 /// Python refuses the request only once its logger knows the resolved model and provider (the
 /// provider config's request transform), so the failure logs them.
-const MESSAGES_LATE_REJECTION: &str = "messages_late_rejection";
+pub(crate) const MESSAGES_LATE_REJECTION: &str = "messages_late_rejection";
 /// Python's request transform raises a builtin exception (`TypeError`) that its handler does not
 /// map, so the caller gets the native exception as it is.
 const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
@@ -101,6 +103,13 @@ fn innermost_aws_error<'a>(
                 .or_else(|| cause.downcast_ref::<Source>()?.downcast_ref())
         })
         .last()
+}
+
+fn missing_param(error: &Error) -> Option<&litellm_auth::Error> {
+    let (Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth))) = error else {
+        return None;
+    };
+    matches!(auth, litellm_auth::Error::MissingParam { .. }).then_some(auth)
 }
 
 fn missing_profile(error: &Error) -> Option<&str> {
@@ -273,6 +282,7 @@ pub(crate) fn route_failure(
                 rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
                 Some(
                     litellm_llms::ErrorDetail::MissingAzureApiBase
+                        | litellm_llms::ErrorDetail::InvalidAwsRegion { .. }
                         | litellm_llms::ErrorDetail::InvalidMantleRegion {
                             check: litellm_llms::MantleRegionCheck::Request,
                             ..
@@ -347,6 +357,9 @@ pub(crate) fn route_failure(
             }
             if error.is_missing_credential() {
                 value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
+            }
+            if let Some(missing) = missing_param(&error) {
+                value.setattr(MESSAGES_MISSING_PARAM, missing.to_string())?;
             }
             if matches!(
                 error.refused_response(),
