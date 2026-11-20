@@ -49,6 +49,12 @@ from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, warm_committed_counter_keys
+from litellm.proxy.spend_tracking.customer_cost_margin import (
+    apply_callback_customer_cost_margin,
+    failed_request_customer_attribution,
+    request_customer_cost_margin,
+    snapshotless_cost_with_customer_margin,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
@@ -65,6 +71,7 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
     spend_log_error,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
+    SNAPSHOTLESS_COST_BREAKDOWN_KEY,
     _sanitize_error_information_for_spend_logs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     deployment_params_provider,
     get_request_model_access_groups,
@@ -72,6 +79,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     should_store_prompts_for_call,
 )
 from litellm.proxy.utils import (
+    FAILURE_ROW_ALREADY_WRITTEN,
+    FAILURE_ROW_ALREADY_WRITTEN_KEY,
+    GUARDRAIL_ENDPOINT_FAILURE,
+    GUARDRAIL_ENDPOINT_FAILURE_KEY,
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
     BilledFailedAttempt,
@@ -313,6 +324,25 @@ def _billed_failed_attempts(request_data: Mapping[str, object]) -> tuple[BilledF
     return tuple(attempt for attempt in lifted if isinstance(attempt, BilledFailedAttempt))
 
 
+def _failure_row_with_customer_surcharge(
+    row_cost: float, row_kwargs: Mapping[str, object]
+) -> tuple[float, Mapping[str, object]]:
+    """A failure row the provider billed is charged to the customer like a completed request, surcharge included."""
+    margin: Final = request_customer_cost_margin(failed_request_customer_attribution(row_kwargs))
+    if margin is None or row_cost <= 0:
+        return row_cost, row_kwargs
+    snapshot: Final = row_kwargs.get("standard_logging_object")
+    if not isinstance(snapshot, dict):
+        cost: Final = snapshotless_cost_with_customer_margin(row_cost, margin)
+        return cost.amount, {**row_kwargs, SNAPSHOTLESS_COST_BREAKDOWN_KEY: cost.logging_breakdown()}
+    payload: Final = cast("StandardLoggingPayload", {**snapshot})  # cast-ok: a copy of the failure snapshot dict
+    surcharged_cost: Final = apply_callback_customer_cost_margin(payload, row_cost, margin)
+    return (
+        surcharged_cost if surcharged_cost is not None else row_cost,
+        {**row_kwargs, "standard_logging_object": payload},
+    )
+
+
 def _failure_spend_rows(
     request_data: Mapping[str, object],
     final_cost: float,
@@ -320,7 +350,8 @@ def _failure_spend_rows(
     deployment_lookup: DeploymentLookup,
 ) -> tuple[tuple[float, Mapping[str, object]], ...]:
     """One ``(response_cost, kwargs)`` per spend row a failure writes: the final attempt under the
-    request id, then every earlier attempt the provider also billed under its own row."""
+    request id, then every earlier attempt the provider also billed under its own row.
+    """
     final_row: Final[Mapping[str, object]] = (
         request_data
         if late_guardrails_snapshot is None
@@ -493,6 +524,7 @@ class _ProxyDBLogger(CustomLogger):
             return
 
         request_route: Final = user_api_key_dict.request_route
+        request_fields: Final = _str_keyed_fields(request_data)
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
 
         route_is_trackable: Final = (
@@ -500,9 +532,11 @@ class _ProxyDBLogger(CustomLogger):
             or RouteChecks.runs_inference_checks(request_route)
             or RouteChecks.is_info_route(route=request_route)
             or InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(route=request_route)
+            or request_fields.get(GUARDRAIL_ENDPOINT_FAILURE_KEY) is GUARDRAIL_ENDPOINT_FAILURE
         )
         if (
-            ProxyDBLogger._should_track_errors_in_db() is False
+            request_fields.get(FAILURE_ROW_ALREADY_WRITTEN_KEY) is FAILURE_ROW_ALREADY_WRITTEN
+            or ProxyDBLogger._should_track_errors_in_db() is False
             and not completed_cost
             or ProxyDBLogger._skips_pre_routing_rejections()
             and is_pre_routing_rejection(original_exception, _REQUEST_DATA.validate_python(request_data))
@@ -537,7 +571,6 @@ class _ProxyDBLogger(CustomLogger):
             )
         )
 
-        request_fields: Final = _str_keyed_fields(request_data)
         _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_fields, request_route)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
@@ -631,11 +664,14 @@ class _ProxyDBLogger(CustomLogger):
             user_api_key_dict=user_api_key_dict,
             original_exception=original_exception,
             start_time=actual_start_time,
-            spend_rows=_failure_spend_rows(
-                cast("Mapping[str, object]", request_data),  # cast-ok: request dict, copied per row below
-                recovered_response_cost,
-                failure_snapshot_with_late_guardrails,
-                self._deployment_lookup,
+            spend_rows=tuple(
+                _failure_row_with_customer_surcharge(row_cost, row_kwargs)
+                for row_cost, row_kwargs in _failure_spend_rows(
+                    cast("Mapping[str, object]", request_data),  # cast-ok: request dict, copied per row below
+                    recovered_response_cost,
+                    failure_snapshot_with_late_guardrails,
+                    self._deployment_lookup,
+                )
             ),
         )
 
@@ -694,6 +730,7 @@ class _ProxyDBLogger(CustomLogger):
             await customer_accounting_counters(
                 customer_hierarchy_ids_from_request(spend_rows[0][1]),
                 customer_budget_scopes_from_request(spend_rows[0][1]),
+                started_at=start_time,
             )
             if any(cost > 0 for cost, _ in spend_rows)
             else ()
@@ -735,7 +772,8 @@ class _ProxyDBLogger(CustomLogger):
     ) -> None:
         """The counters the success path raises for the same spend, sent before the client sees the error. A
         counter store slower than ``failure_counter_wait_seconds`` finishes them in the background instead of
-        holding the error back. The reservation was already released, so every counter takes the full row cost."""
+        holding the error back. The reservation was already released, so every counter takes the full row cost.
+        """
         increment: Final = asyncio.create_task(
             self._raise_failure_spend_counters(
                 user_api_key_dict, token, end_user_id, counted_rows, start_time, customer_counters
@@ -811,7 +849,7 @@ class _ProxyDBLogger(CustomLogger):
     async def _PROXY_track_cost_callback(
         self,
         kwargs,  # kwargs to completion
-        completion_response: litellm.ModelResponse | object | None,  # response from completion
+        completion_response: (litellm.ModelResponse | object | None),  # response from completion
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
@@ -867,7 +905,7 @@ class _ProxyDBLogger(CustomLogger):
                 sl_object if sl_object is not None else kwargs  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
             ).get("response_cost")
             priced_cost: Final = finite_cost(raw_cost)
-            response_cost: Final = (
+            allowance_adjusted_cost: Final = (
                 await apply_search_free_tier(
                     kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
                     sl_object=sl_object,  # pyright: ignore[reportUnknownArgumentType]  # payload carries untyped lists
@@ -881,6 +919,12 @@ class _ProxyDBLogger(CustomLogger):
                 and priced_cost is not None
                 and not sl_object.get("cost_finalized", False)
                 else priced_cost
+            )
+            margin_payload: Final = cast(StandardLoggingPayload | None, sl_object)  # cast-ok: callback payload contract
+            response_cost: Final = apply_callback_customer_cost_margin(
+                margin_payload,
+                allowance_adjusted_cost,
+                request_customer_cost_margin(_BATCH_CALLBACK_FIELDS.validate_python(metadata)),
             )
             tags: Final = _get_request_tags_for_cost_tracking(
                 sl_object=sl_object,
@@ -909,6 +953,9 @@ class _ProxyDBLogger(CustomLogger):
                     end_user_id=end_user_id,
                     call_type=call_type,
                     agent_id=metadata.get("billing_agent_id") or metadata.get("agent_id"),
+                    app_id=_tracked_app_id(
+                        metadata,  # pyright: ignore[reportUnknownArgumentType]  # validated legacy callback metadata
+                    ),
                 ):
                     ## UPDATE DATABASE
                     charged_cost: Final = await _charge_request_cost(
@@ -1145,7 +1192,8 @@ def is_pre_routing_rejection(exception: Exception, request_data: Mapping[str, ob
     """The pipeline sets up the logging object only after auth, body parsing and model resolution succeed, and
     before guardrails or routing run. ``ProxyLogging._handle_logging_proxy_only_error`` marks a failure that
     arrives without one with the ``REJECTED_BEFORE_REQUEST_SETUP`` sentinel, so that request never had a provider
-    considered. An unknown model is the one later rejection that still never reached a provider."""
+    considered. An unknown model is the one later rejection that still never reached a provider.
+    """
     return request_data.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP or isinstance(
         exception, ProxyModelNotFoundError
     )
@@ -1187,6 +1235,11 @@ def _is_unbilled_in_progress_interaction(completion_response: object) -> bool:
     return completion_response.usage is None and is_pollable_background_interaction(completion_response)
 
 
+def _tracked_app_id(metadata: object) -> str | None:
+    value: Final = _str_keyed_fields(metadata).get("user_api_key_app_id")
+    return value if isinstance(value, str) and value else None
+
+
 def _should_track_cost_callback(
     user_api_key: str | None,
     user_id: str | None,
@@ -1194,6 +1247,7 @@ def _should_track_cost_callback(
     end_user_id: str | None,
     call_type: str | None = None,
     agent_id: str | None = None,
+    app_id: str | None = None,
 ) -> bool:
     """
     Determine if the cost callback should be tracked based on the kwargs
@@ -1212,6 +1266,7 @@ def _should_track_cost_callback(
 
     if (
         agent_id is not None
+        or app_id is not None
         or user_api_key is not None
         or user_id is not None
         or team_id is not None
@@ -1377,7 +1432,9 @@ async def _update_database_and_spend_counters(
     request_fields: Final = _OBJECT_MAPPING.validate_python(kwargs)
     customer_counters: Final = (
         await customer_accounting_counters(
-            customer_hierarchy_ids_from_request(request_fields), customer_budget_scopes_from_request(request_fields)
+            customer_hierarchy_ids_from_request(request_fields),
+            customer_budget_scopes_from_request(request_fields),
+            started_at=start_time,
         )
         if response_cost
         else ()

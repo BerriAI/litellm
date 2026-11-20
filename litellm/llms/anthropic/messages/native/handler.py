@@ -302,8 +302,8 @@ def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
     return isinstance(model_info, dict) and model_info.get("cache_control_ttl") is True
 
 
-def _native_messages_config(
-    model: str, custom_llm_provider: str | None, model_info: object, api_base: str | None
+def _provider_messages_config(
+    model: str, custom_llm_provider: str | None, api_base: str | None
 ) -> BaseAnthropicMessagesConfig | None:
     provider_config: Final = (
         ProviderConfigManager.get_provider_anthropic_messages_config(
@@ -313,9 +313,13 @@ def _native_messages_config(
         if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]
         else None
     )
-    native_config: Final = (
-        provider_config if provider_config is not None and provider_config.serves_api_base(model, api_base) else None
-    )
+    return provider_config if provider_config is not None and provider_config.serves_api_base(model, api_base) else None
+
+
+def _native_messages_config(
+    model: str, custom_llm_provider: str | None, model_info: object, api_base: str | None
+) -> BaseAnthropicMessagesConfig | None:
+    native_config: Final = _provider_messages_config(model, custom_llm_provider, api_base)
     if native_config is not None or not _deployment_passes_through_anthropic_messages(model_info):
         return native_config
     from litellm.llms.openai_like.messages.transformation import (

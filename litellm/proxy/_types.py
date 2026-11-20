@@ -15,8 +15,10 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    ModelWrapValidatorHandler,
     NonNegativeInt,
     PositiveInt,
+    PrivateAttr,
     TypeAdapter,
     ValidationError,
     ValidatorFunctionWrapHandler,
@@ -28,11 +30,12 @@ from typing_extensions import (
     NotRequired,
     ReadOnly,
     Required,
+    Self,
     TypedDict,
 )
 
 from litellm._uuid import uuid
-from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
+from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, KEY_EXPIRY_ALERT_MAX_DAYS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     OTEL_DESTINATION_VALIDATORS,
     validate_arize_otlp_protocol_value,
@@ -102,6 +105,7 @@ from litellm.types.utils import (
     OTEL_DESTINATION_VARS,
     AzureSpillover,
     CallTypes,
+    ClaudeSubscriptionUsage,
     CostBreakdown,
     EmbeddingResponse,
     GenericBudgetConfigType,
@@ -415,6 +419,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vertex_ai",
         "/cohere",
         "/cursor",
+        "/cursor-cli",
         "/gemini",
         "/anthropic",
         "/langfuse",
@@ -607,6 +612,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/info",
         "/key/health",
         "/team/info",
+        "/management/v1/teams/{team_id}/members",
         "/team/list",
         "/v2/team/list",
         "/organization/list",
@@ -628,6 +634,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso/get/ui_settings",
         "/get/user_banner",
         "/get/latest_release_info",
+        "/get/reference_exchange_rates",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -696,6 +703,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/list",
             "/v2/team/list",
             "/team/info",
+            "/management/v1/teams/{team_id}/members",
             "/team/block",
             "/team/unblock",
             "/team/available",
@@ -729,6 +737,10 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
             "/management/v1/customer_organizations",
+            "/management/v1/apps",
+            "/management/v1/apps/{app_id}",
+            "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}",
+            "/management/v1/apps/{app_id}/customer_members/{customer_member_id}",
             "/management/v1/customer_organizations/daily/activity/aggregated",
             "/management/v1/customer_organizations/{customer_org_id}",
             "/management/v1/customer_organizations/daily/activity",
@@ -894,8 +906,20 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    own_spend_log_routes = ("/spend/logs", "/spend/logs/v2")
+
     self_managed_routes = [
         "/management/v1/customer_budget_increase_requests",
+        "/management/v1/apps",
+        "/management/v1/apps/definition",
+        "/management/v1/apps/{app_id}",
+        "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}",
+        "/management/v1/apps/{app_id}/customer_members/{customer_member_id}",
+        "/management/v1/customer_organizations/daily/activity/aggregated",
+        "/management/v1/customer_organizations/daily/activity",
+        "/management/v1/customer_teams/daily/activity",
+        "/management/v1/customer_members/daily/activity",
+        *own_spend_log_routes,
         "/lens",
         "/lens/{path:path}",
         "/telemetry/ui_events",
@@ -905,6 +929,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/update",
         "/team/member_add",
         "/team/member_delete",
+        "/management/v1/teams/{team_id}/members",
         "/management/v1/teams/{team_id}/members/bulk_delete",
         "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",
@@ -2948,6 +2973,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
     )
     user_header_mappings: list[UserHeaderMapping] | None = None
+    customer_org_alias_header: str | None = Field(
+        default=None,
+        pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        description=(
+            "Request header for the customer organization alias. Replaces x-litellm-customer-org-alias when set. "
+            "Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence."
+        ),
+    )
+    customer_member_id_header: str | None = Field(
+        default=None,
+        pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        description=(
+            "Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. "
+            "Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence."
+        ),
+    )
     supported_db_objects: list[SupportedDBObjectType] | None = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
@@ -3022,6 +3063,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). "
             "Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window "
             "falls under the threshold (default 0.9). Off unless set."
+        ),
+    )
+    key_expiry_alert_days: int | None = Field(
+        None,
+        ge=1,
+        le=KEY_EXPIRY_ALERT_MAX_DAYS,
+        description=(
+            "Email a key's owner once when the key has this many days or fewer left before it expires. "
+            "Applies to every key with an expiry date and an owner email, including existing keys. "
+            "A key's metadata.key_expiry_alert_days overrides it. Off unless set."
         ),
     )
     maximum_spend_logs_retention_period: str | None = Field(
@@ -3369,6 +3420,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     object_permission: LiteLLM_ObjectPermissionTable | None = None
     model_max_budget: Mapping[str, object] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3518,6 +3570,7 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     blocked: bool | None = None
     budget_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+    _sent_metadata: bool = PrivateAttr(default=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -3532,6 +3585,18 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
                 values["metadata"][field] = values.get(field)
                 values.pop(field)
         return values
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def remember_whether_metadata_was_sent(cls, values: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        sent_metadata: Final = not isinstance(values, Mapping) or "metadata" in values
+        request: Final = handler(values)
+        request._sent_metadata = sent_metadata
+        return request
+
+    @property
+    def sent_metadata(self) -> bool:
+        return self._sent_metadata
 
 
 class DeleteProjectRequest(LiteLLMPydanticObjectBase):
@@ -3608,10 +3673,21 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
         masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
 
+        def decoded(value: object) -> object:
+            if not isinstance(value, str):
+                return value
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+
+        def masked_json(value: object) -> str:
+            return json.dumps(mask_credentials_in_payload(decoded(value), masker), default=str)
+
         if self.before_value is not None:
-            self.before_value = json.dumps(mask_credentials_in_payload(self.before_value, masker), default=str)
+            self.before_value = masked_json(self.before_value)
         if self.updated_values is not None:
-            self.updated_values = json.dumps(mask_credentials_in_payload(self.updated_values, masker), default=str)
+            self.updated_values = masked_json(self.updated_values)
 
         return self
 
@@ -3889,6 +3965,8 @@ class SpendLogsRouterMetadata(TypedDict):
 
 class SpendLogsMetadata(TypedDict):
     user_api_key_customer_org_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_team_id: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_team_alias: ReadOnly[NotRequired[str | None]]
@@ -3926,6 +4004,7 @@ class SpendLogsMetadata(TypedDict):
     kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
     billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
+    route_call_type: ReadOnly[NotRequired[str | None]]
     upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     is_silent_experiment: ReadOnly[NotRequired[bool | None]]
@@ -3953,6 +4032,7 @@ class SpendLogsMetadata(TypedDict):
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
     used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
+    claude_subscription_usage: NotRequired[ReadOnly[ClaudeSubscriptionUsage | None]]
 
 
 class SpendLogsPayload(TypedDict):
@@ -4584,6 +4664,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
     caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 
@@ -4684,7 +4765,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     # `x-litellm-timeout`/`x-litellm-stream-timeout` headers, or a `timeout`/`request_timeout`/
     # `stream_timeout` field in the request body) rather than deployment config, so a
     # deliberately tiny value isn't treated as a deployment health signal (see
-    # cooldown_handlers._trigger_cooldown_for_failed_deployment).
+    # router_rust.surface.health.RustHealthCallbacks.blocked_failure_exempt).
     client_side_timeout: bool
     keepalive_seconds: float | None
 
@@ -5000,6 +5081,9 @@ class JWTIssuerConfig(LiteLLMBaseModel):
         default=None,
         description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
     )
+    customer_org_alias_jwt_field: str | None = None
+    customer_member_id_jwt_field: str | None = None
+    customer_team_id_jwt_field: str | None = None
     virtual_key_claim_field: str | None = Field(
         default=None,
         description="Issuer-specific claim path used for the virtual key mapping lookup. Falls back to the global field.",
@@ -5117,6 +5201,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_allowed_roles: list[str] | None = None
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
+    customer_org_alias_jwt_field: str | None = None
+    customer_member_id_jwt_field: str | None = None
+    customer_team_id_jwt_field: str | None = None
     agent_id_jwt_field: str | None = Field(
         default=None,
         description=(
@@ -5405,6 +5492,9 @@ class BaseDailySpendTransaction(TypedDict):
     # is explicitly tested against.
     autorouter_savings_spend: NotRequired[float]
     guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    customer_margin_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    cache_cost: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    priced_cache_tokens: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float
@@ -5441,6 +5531,7 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
 
 
 class DailyCustomerMemberSpendTransaction(BaseDailySpendTransaction):
+    app_id: ReadOnly[NotRequired[str]]
     customer_member_id: ReadOnly[str]
     customer_team_id: ReadOnly[str]
     customer_org_id: ReadOnly[str]
@@ -5465,6 +5556,9 @@ class DBSpendUpdateTransactions(TypedDict):
     customer_org_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_team_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_member_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    app_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
+    app_customer_org_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
+    app_customer_member_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
-use litellm_auth_types::{AwsParams, ParamSpec, VertexParams};
+use litellm_auth_types::{AwsParams, ClaudePlatformParams, ParamSpec, VertexParams};
 use litellm_secret_value::SecretValue;
 
 use serde::Deserialize;
@@ -51,6 +51,10 @@ pub struct LitellmParams {
     pub use_chat_completions_api: Option<bool>,
     pub litellm_credential_name: Option<String>,
     pub provider_affinity_header: Option<String>,
+    /// The Bedrock Mantle workspace a call is billed to, sent as `anthropic-workspace-id`.
+    pub aws_bedrock_project_id: Option<String>,
+    #[serde(flatten)]
+    pub claude_platform: ClaudePlatformParams,
     #[serde(flatten)]
     pub extra: ExtraParams,
 }
@@ -66,10 +70,17 @@ impl LitellmParams {
     /// and each credential family. The routing and limit fields are a deployment's
     /// settings, which only a config spells.
     pub fn fields() -> impl Iterator<Item = &'static str> {
-        ["model", "api_key", "api_base", "api_version"]
-            .into_iter()
-            .chain(AwsParams::fields())
-            .chain(VertexParams::fields())
+        [
+            "model",
+            "api_key",
+            "api_base",
+            "api_version",
+            "aws_bedrock_project_id",
+        ]
+        .into_iter()
+        .chain(ClaudePlatformParams::fields())
+        .chain(AwsParams::fields())
+        .chain(VertexParams::fields())
     }
 }
 
@@ -87,8 +98,39 @@ impl Deref for ExtraParams {
     }
 }
 
+impl FromIterator<(String, Value)> for ExtraParams {
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(entries: I) -> Self {
+        Self(entries.into_iter().collect())
+    }
+}
+
 impl fmt::Debug for ExtraParams {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_list().entries(self.0.keys()).finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::{Map, Value, json};
+
+    use super::*;
+
+    #[rstest]
+    fn every_claude_platform_field_lands_in_its_group_not_the_extra_params() {
+        let claude_platform: Map<String, Value> = ClaudePlatformParams::fields()
+            .map(|name| (name.to_string(), json!("x")))
+            .collect();
+        let params: LitellmParams = serde_json::from_value(Value::Object(
+            [("model".to_string(), json!("m"))]
+                .into_iter()
+                .chain(claude_platform)
+                .collect(),
+        ))
+        .unwrap();
+        assert!(params.extra.is_empty(), "{:?}", params.extra);
+        assert_eq!(params.claude_platform.workspace().as_deref(), Some("x"));
+        assert_eq!(params.claude_platform.ignored_override_type(), Some("str"));
     }
 }

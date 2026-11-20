@@ -1,3 +1,6 @@
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
@@ -137,6 +140,40 @@ async def test_an_unknown_alias_becomes_an_organization_once_and_a_known_one_is_
         _prisma(database), premium_user=False, clock=lambda: NOW
     ).list_organizations(page=1, page_size=10)
     assert not isinstance(listed, Failure) and len(listed.data) == 1
+
+
+class _TransactionCountingDatabase(Database):
+    def __init__(self) -> None:
+        super().__init__()
+        self.open_transactions = 0
+        self.most_open_transactions = 0
+
+    @asynccontextmanager
+    async def tx(self) -> AsyncIterator["Database"]:
+        self.open_transactions += 1
+        self.most_open_transactions = max(self.most_open_transactions, self.open_transactions)
+        try:
+            await asyncio.sleep(0)
+            async with super().tx() as transaction:
+                yield transaction
+        finally:
+            self.open_transactions -= 1
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_new_aliases_registers_every_one_through_one_open_transaction_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    database: Final = _TransactionCountingDatabase()
+    aliases: Final = tuple(f"burst-{index}" for index in range(20))
+
+    registered: Final = await asyncio.gather(*(ensure_customer_organization(a, _prisma(database)) for a in aliases))
+
+    assert tuple(getattr(row, "customer_org_id", row) for row in registered) == aliases
+    assert database.most_open_transactions == 1
 
 
 @pytest.mark.asyncio

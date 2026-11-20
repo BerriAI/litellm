@@ -281,8 +281,7 @@ async fn rotation_applies_timeout_to_each_request(token_values: Vec<(&str, &str)
 #[tokio::test]
 #[ignore]
 async fn live_vault_round_trip() {
-    let environment: Arc<dyn Lookup + Send + Sync> =
-        Arc::new(litellm_core_utils::settings::ProcessEnvironment);
+    let environment: Arc<dyn Lookup + Send + Sync> = Arc::new(litellm_env::ProcessEnvironment);
     let manager: HashicorpVault = HashicorpVault::new(environment, true).unwrap();
     let name: String = std::env::var("LITELLM_VAULT_LIVE_SECRET_NAME").unwrap();
     let value: SecretValue = SecretValue::new("native-live-value");

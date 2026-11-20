@@ -12,6 +12,7 @@ use axum::{
 };
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
+use litellm_llms_types::formats::messages::MessagesOptionalParams;
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
@@ -25,6 +26,7 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
 ];
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
+const TOOLS: &str = "tools";
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
@@ -72,12 +74,14 @@ fn project(
     body: Map<String, Value>,
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
-    let body = body
-        .into_iter()
-        .map(|(name, value)| match name.as_str() {
-            "model" => (name, Value::from(deployment.model.as_str())),
-            _ => (name, value),
-        })
+    let tools = merged_tools(deployment, body.get(TOOLS)).map(|tools| (TOOLS.to_owned(), tools));
+    let client_params = body.into_iter().map(|(name, value)| match name.as_str() {
+        "model" => (name, Value::from(deployment.model.as_str())),
+        _ => (name, value),
+    });
+    let body = deployment_default_params(deployment)
+        .chain(client_params)
+        .chain(tools)
         .collect();
     Ok(MessagesCall {
         body: messages_body(body)?,
@@ -90,6 +94,33 @@ fn project(
         timeout: deployment.timeout,
         shaping: deployment.shaping.clone(),
     })
+}
+
+fn deployment_default_params(
+    deployment: &Deployment,
+) -> impl Iterator<Item = (String, Value)> + '_ {
+    MessagesOptionalParams::fields()
+        .filter(|name| *name != TOOLS)
+        .filter_map(|name| {
+            let value = deployment.litellm_params.extra.get(name)?;
+            Some((name.to_owned(), value.clone()))
+        })
+}
+
+fn merged_tools(deployment: &Deployment, client_tools: Option<&Value>) -> Option<Value> {
+    let deployment_tools = deployment.litellm_params.extra.get(TOOLS)?.as_array()?;
+    let client_tools: &[Value] = match client_tools.unwrap_or(&Value::Null) {
+        Value::Null => &[],
+        Value::Array(tools) => tools,
+        _ => return None,
+    };
+    Some(
+        deployment_tools
+            .iter()
+            .chain(client_tools)
+            .cloned()
+            .collect(),
+    )
 }
 
 fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders> {

@@ -5,7 +5,7 @@ use litellm_auth_aws::{
     AwsAuthConfig, AwsAuthService,
     constants::{AWS_DEFAULT_REGION, AWS_REGION, AWS_REGION_NAME},
 };
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secrets_types::{AwsOperationContext, KeyManagementSettings};
 
 use crate::Error;
@@ -49,6 +49,9 @@ impl Credentials {
                 profile_name: settings.aws_profile_name.clone(),
                 web_identity_token: settings.aws_web_identity_token.as_ref().cloned(),
                 sts_endpoint: settings.aws_sts_endpoint.clone(),
+                session_tags: None,
+                session_policy: None,
+                require_session_attribution: false,
             },
             environment,
         }

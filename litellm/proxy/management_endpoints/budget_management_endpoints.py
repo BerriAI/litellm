@@ -23,21 +23,36 @@ from pydantic import TypeAdapter
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
 from litellm.models.budget import initialize_budget_limits
 from litellm.proxy._types import *
-from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies, forget_customer_organization_aliases
+from litellm.proxy.auth.customer_hierarchy_auth import (
+    forget_customer_hierarchies,
+    forget_customer_organization_aliases,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_settings, get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_settings,
+    get_budget_reset_time,
+)
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
     validate_budget_duration,
 )
-from litellm.proxy.management_helpers.customer_hierarchy import budget_limit_json
+from litellm.proxy.management_helpers.customer_hierarchy import (
+    BudgetGroupScope,
+    Failure,
+    PrismaRecord,
+    budget_group_ids,
+    budget_limit_json,
+    delete_unattached_customer_budget,
+)
 from litellm.proxy.management_helpers.utils import validate_budget_windows_update
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     CustomerMemberRepository,
     CustomerOrganizationRepository,
@@ -278,7 +293,12 @@ async def update_budget(
     return response
 
 
-@router.post("/budget/new", tags=["budget management"], description=new_budget.__doc__)
+@router.post(
+    "/budget/new",
+    tags=["budget management"],
+    description=new_budget.__doc__,
+    operation_id="new_budget_budget_new_post",
+)
 async def new_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -286,7 +306,12 @@ async def new_budget_endpoint(
     return await new_budget(budget_obj, user_api_key_dict)
 
 
-@router.post("/budget/update", tags=["budget management"], description=update_budget.__doc__)
+@router.post(
+    "/budget/update",
+    tags=["budget management"],
+    description=update_budget.__doc__,
+    operation_id="update_budget_budget_update_post",
+)
 async def update_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -452,6 +477,14 @@ async def delete_budget(
             detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
+    config: Final = require_attributes(
+        attribute_or_none(prisma_client.writer_db, "litellm_config"), TableActions[PrismaRecord], "find_unique"
+    )
+    for scope in BudgetGroupScope:
+        if data.id in await budget_group_ids(config, scope):
+            raise HTTPException(
+                status_code=409, detail={"error": f"Remove this group through {scope.value.removesuffix('_ids')}s."}
+            )
     customer_org_count: Final = await CustomerOrganizationRepository(prisma_client).table.count(
         where={"budget_template_ids": {"has": data.id}}
     )
@@ -464,6 +497,11 @@ async def delete_budget(
             },
         )
 
-    response: Final = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
+    response: Final = await delete_unattached_customer_budget(BudgetRepository(prisma_client).table, data.id)
+    if isinstance(response, Failure):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "Budget is attached to a customer or app. Remove it through the owning entity."},
+        )
 
     return response

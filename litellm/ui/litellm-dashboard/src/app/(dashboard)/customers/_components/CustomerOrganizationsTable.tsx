@@ -6,15 +6,22 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
+import { $api } from "@/lib/http/api";
 import CustomerBudgetSpend, { CustomerBudgetWindow } from "./CustomerBudgetSpend";
-import type { CustomerOrganizationRow } from "./customerOrganizations";
+import { customerOrganizationBudgetSource, type CustomerOrganizationRow } from "./customerOrganizations";
+import { CustomerBudgetLimitCell } from "./CustomerBudgetColumn";
+import CustomerTokenTotal from "./CustomerTokenTotal";
+import { EMPTY_CUSTOMER_USAGE, type CustomerUsageTotals } from "./customerUsageTotals";
 
 const usageHref = createSerializer({ org: parseAsString, from: parseAsString, to: parseAsString });
 const SORT_DIRECTIONS = ["ascending", "descending"] as const;
 const COLUMNS = [
   { id: "customer", label: "customerPortal.list.columns.customer" },
-  { id: "spend", label: "customerPortal.analytics.monthlySpend" },
+  { id: "group", label: "customerPortal.list.columns.tier" },
+  { id: "spend", label: "customerPortal.list.columns.monthlySpend" },
+  { id: "budget", label: "customerPortal.hierarchy.maxBudget" },
   { id: "share", label: "customerPortal.list.columns.overallSpendShare" },
+  { id: "tokens", label: "customerPortal.list.columns.tokens", numeric: true },
   { id: "status", label: "customerPortal.list.columns.status" },
 ] as const;
 
@@ -26,6 +33,7 @@ export default function CustomerOrganizationsTable({
   searching,
   startDate,
   endDate,
+  usageTotals,
 }: {
   rows: readonly CustomerOrganizationRow[];
   sorting: SortingState;
@@ -34,13 +42,23 @@ export default function CustomerOrganizationsTable({
   searching: boolean;
   startDate: string;
   endDate: string;
+  usageTotals: CustomerUsageTotals | null;
 }) {
   const { t } = useTranslation();
+  const groups = $api.useQuery("get", "/management/v1/customer_organization_budget_groups", {});
   return (
     <Table aria-label={t("customerPortal.list.title")}>
       <TableHeader>
         <TableRow>
-          {COLUMNS.map(({ id, label }) => {
+          {COLUMNS.map((column) => {
+            const { id, label } = column;
+            if (id === "group" || "numeric" in column) {
+              return (
+                <TableHead key={id} className={cn("px-4", "numeric" in column && "text-right whitespace-normal")}>
+                  {t(label)}
+                </TableHead>
+              );
+            }
             const active = sorting[0]?.id === id;
             const descending = sorting[0]?.desc ?? false;
             const SortIcon = descending ? ArrowDown : ArrowUp;
@@ -50,13 +68,13 @@ export default function CustomerOrganizationsTable({
               <TableHead
                 key={id}
                 aria-sort={active ? direction : "none"}
-                className={cn("px-4", id === "spend" && "min-w-80", id === "status" && "text-right")}
+                className={cn("px-4", id === "spend" && "w-[30%] min-w-80", id === "status" && "text-right")}
               >
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="-mx-2 gap-2"
-                  onClick={() => onSort([{ id, desc: active ? !descending : id !== "customer" }])}
+                  className={cn("-mx-2 gap-2", id === "share" && "h-auto min-h-8 py-1 text-left whitespace-normal")}
+                  onClick={() => onSort([{ id, desc: active ? !descending : id !== "customer" && id !== "budget" }])}
                 >
                   {t(label)}
                   <Icon aria-hidden="true" className="size-3.5" />
@@ -69,23 +87,31 @@ export default function CustomerOrganizationsTable({
       <TableBody>
         {loading && (
           <TableRow>
-            <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+            <TableCell colSpan={COLUMNS.length} className="py-8 text-center text-muted-foreground">
               {t("customerPortal.list.loading")}
             </TableCell>
           </TableRow>
         )}
         {!loading && rows.length === 0 && (
           <TableRow>
-            <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+            <TableCell colSpan={COLUMNS.length} className="py-8 text-center text-muted-foreground">
               {t(searching ? "customerPortal.list.noMatches" : "customerPortal.list.empty")}
             </TableCell>
           </TableRow>
         )}
         {!loading &&
-          rows.map(({ organization, monthlySpend, monthlyBudgets, share, status }) => {
+          rows.map(({ organization, monthlySpend, monthlyBudgets, budgetLimit, share, status }) => {
             const label = organization.alias || organization.customer_org_id;
             const percentage = Math.max(0, Math.min(100, share * 100));
             const shareLabel = t("format.number", { val: share, style: "percent", maximumFractionDigits: 1 });
+            const budgetSource = customerOrganizationBudgetSource(organization, groups.data?.default_budgets);
+            const customLabel =
+              budgetSource?.kind === "custom" ? t("customerPortal.organizationGroups.customBadge") : null;
+            const budgetGroup =
+              budgetSource?.kind === "group"
+                ? budgetSource.name ?? t("customerPortal.organizationGroups.groupBadge")
+                : customLabel;
+            const usage = usageTotals ? usageTotals.get(organization.customer_org_id) ?? EMPTY_CUSTOMER_USAGE : null;
             return (
               <TableRow key={organization.customer_org_id}>
                 <TableCell className="px-4 py-5">
@@ -103,7 +129,8 @@ export default function CustomerOrganizationsTable({
                     </span>
                     <div className="min-w-0">
                       <a
-                        className="font-medium hover:text-primary hover:underline"
+                        className="block max-w-40 truncate font-medium hover:text-primary hover:underline"
+                        title={label}
                         href={usageHref(uiHref("customers/usage"), {
                           org: organization.customer_org_id,
                           from: startDate,
@@ -112,9 +139,27 @@ export default function CustomerOrganizationsTable({
                       >
                         {label}
                       </a>
-                      <p className="font-mono text-[11px] text-muted-foreground">{organization.customer_org_id}</p>
+                      {label !== organization.customer_org_id && (
+                        <p
+                          className="max-w-40 truncate font-mono text-[11px] text-muted-foreground"
+                          title={organization.customer_org_id}
+                        >
+                          {organization.customer_org_id}
+                        </p>
+                      )}
+                      <a
+                        className="mt-1 inline-block text-xs text-muted-foreground hover:text-foreground hover:underline"
+                        href={`${usageHref(uiHref("customers/usage"), { org: organization.customer_org_id, from: startDate, to: endDate })}#app-budgets`}
+                      >
+                        {t("apps.organizationTitle")}
+                      </a>
                     </div>
                   </div>
+                </TableCell>
+                <TableCell className="px-4 text-muted-foreground">
+                  <span className="block max-w-48 truncate" title={budgetGroup ?? undefined}>
+                    {budgetGroup ?? "-"}
+                  </span>
                 </TableCell>
                 <TableCell className="px-4">
                   <div className="max-w-lg space-y-3">
@@ -130,11 +175,11 @@ export default function CustomerOrganizationsTable({
                         spend={monthlySpend}
                         limit={null}
                         label={t("customerPortal.analytics.monthlySpend")}
-                        noLimitLabel={t("customerPortal.analytics.noMonthlyLimit")}
                       />
                     )}
                   </div>
                 </TableCell>
+                <CustomerBudgetLimitCell limit={budgetLimit} rateLimits={organization.budget} />
                 <TableCell className="px-4">
                   <div className="flex items-center gap-3">
                     <div
@@ -144,12 +189,15 @@ export default function CustomerOrganizationsTable({
                       aria-valuemax={100}
                       aria-valuenow={percentage}
                       aria-valuetext={shareLabel}
-                      className="h-2 w-24 overflow-hidden rounded-full bg-muted"
+                      className="h-2 w-14 overflow-hidden rounded-full bg-muted"
                     >
                       <div className="h-full rounded-full bg-primary/60" style={{ width: `${percentage}%` }} />
                     </div>
                     <span className="text-xs tabular-nums text-muted-foreground">{shareLabel}</span>
                   </div>
+                </TableCell>
+                <TableCell className="px-4 text-right tabular-nums">
+                  <CustomerTokenTotal usage={usage} />
                 </TableCell>
                 <TableCell className="px-4 text-right">
                   <span

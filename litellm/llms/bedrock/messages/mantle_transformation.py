@@ -1,39 +1,21 @@
 """
 Transformation for Bedrock Mantle (Claude Mythos Preview) - /messages endpoint
 
-Inherits all Messages API request/response transformations from
-AmazonAnthropicClaudeMessagesConfig. Overrides the URL, the model-prefix
-stripping, and the anthropic-version / anthropic-beta placement (headers,
-never the body) that are specific to the bedrock-mantle endpoint.
+Rust sends /v1/messages calls on this route. Python keeps the config for provider lookups, the URL
+and the request transform that count_tokens reads its thinking, tool_choice and output_config from.
 """
 
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import Final
 
-import httpx
 from pydantic import TypeAdapter
 
-from litellm.llms.anthropic.messages.native.transformation import (
-    DEFAULT_ANTHROPIC_API_VERSION,
-    AnthropicMessagesConfig,
-)
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
-from litellm.types.llms.anthropic_messages.anthropic_response import (
-    AnthropicMessagesResponse,
-    AnthropicUsage,
-)
 from litellm.types.router import GenericLiteLLMParams
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = Any
 
 _BODY_FIELDS_MANTLE_READS_FROM_HEADERS: Final = frozenset({"anthropic_version", "anthropic_beta"})
 _ANTHROPIC_BETAS: Final = TypeAdapter(tuple[str, ...])
@@ -48,6 +30,8 @@ def _move_betas_into_header(request: Mapping[str, object], headers: dict[str, st
     headers.pop("anthropic-beta", None)
 
 
+# TODO: `bedrock/mantle/` is slated for deprecation in favour of `bedrock_mantle/`. Folding it in must keep its defaults
+# (us-west-2, no BEDROCK_MANTLE_API_KEY, build_mantle_messages_url, no claude gate) or ship with a deprecation notice.
 class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     """
     Config for the bedrock-mantle /messages endpoint (Claude Mythos Preview).
@@ -86,42 +70,6 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
             region=region,
         )
 
-    def validate_anthropic_messages_environment(
-        self,
-        headers: dict,
-        model: str,
-        messages: Sequence[object],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
-        merged_headers, resolved_api_base = super().validate_anthropic_messages_environment(
-            headers=headers,
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            api_key=api_key,
-            api_base=api_base,
-        )
-        project_id: Final = litellm_params.get("aws_bedrock_project_id")
-        has_version: Final = any(name.lower() == "anthropic-version" for name in merged_headers)
-        mantle_headers: Final = MappingProxyType(
-            {
-                name: value
-                for name, value in (
-                    ("anthropic-workspace-id", project_id),
-                    ("anthropic-version", None if has_version else DEFAULT_ANTHROPIC_API_VERSION),
-                )
-                if value
-            }
-        )
-        return {
-            **merged_headers,
-            **mantle_headers,
-        }, resolved_api_base
-
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -152,37 +100,3 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
             **body,
             **mantle_fields,
         }
-
-    def transform_anthropic_messages_response(
-        self,
-        model: str,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> AnthropicMessagesResponse:
-        response: Final = super().transform_anthropic_messages_response(
-            model=model,
-            raw_response=raw_response,
-            logging_obj=logging_obj,
-        )
-        existing_usage: Final[AnthropicUsage] = response.get("usage") or AnthropicUsage()
-        normalized_usage: Final[AnthropicUsage] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            **existing_usage,
-        }
-        return {**response, "usage": normalized_usage}
-
-    def get_async_streaming_response_iterator(
-        self,
-        model: str,
-        httpx_response: httpx.Response,
-        request_body: dict[str, object],  # mutable-ok: mirrors the base signature
-        litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator[bytes]:
-        return AnthropicMessagesConfig.get_async_streaming_response_iterator(
-            self,
-            model=model,
-            httpx_response=httpx_response,
-            request_body=request_body,
-            litellm_logging_obj=litellm_logging_obj,
-        )
