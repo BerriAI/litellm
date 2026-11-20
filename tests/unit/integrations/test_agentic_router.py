@@ -130,6 +130,25 @@ def test_hook_shadow_mode_keeps_model(tmp_path):
     assert hook.stats()["linSamples"] == 0  # shadow outcomes do not train the flywheel
 
 
+def test_hook_skips_sensitive_data_pinned_sessions(tmp_path):
+    hook = AgenticRouterHook(mode="active", home=str(tmp_path),
+                             tier_models={"fast": "flash-model",
+                                          "mid": "base-model",
+                                          "strong": "pro-model"})
+    data = {"model": "private-model", "litellm_call_id": "call-sdr",
+            "metadata": {"sensitive_data_routing_applied": True,
+                         "sensitive_data_routing_original_model": "base-model"},
+            "messages": [{"role": "user", "content": "请帮我重构这个模块并做性能优化"}]}
+    out = asyncio.run(hook.async_pre_call_hook(None, None, data, "acompletion"))
+    assert out["model"] == "private-model"  # pinned destination stays authoritative
+    assert hook.stats()["pending"] == 0  # no decision tracked at all
+    # even if the caller settles the id anyway, nothing trains
+    asyncio.run(hook.async_post_call_success_hook(
+        None, {"litellm_call_id": "call-sdr", "response_cost": 0.002}, None,
+        start_time=None, end_time=None))
+    assert hook.stats()["linSamples"] == 0  # sensitive sessions never train
+
+
 class _Key:
     def __init__(self, models):
         self.models = models

@@ -720,6 +720,14 @@ class AgenticRouterHook(CustomLogger):
                                   data=None, call_type=None, **kwargs):
         if not isinstance(data, dict):
             return data
+        # Sensitive-data routing (PROXY_SensitiveDataRoutingHandler) may have
+        # already pinned this session to a private model. That pin is a
+        # compliance boundary and must stay authoritative: skip agentic routing
+        # entirely (no decision, no training), otherwise the tier rewrite below
+        # would send follow-up messages carrying sensitive history to a
+        # public-tier model.
+        if (data.get("metadata") or {}).get("sensitive_data_routing_applied"):
+            return data
         text = _last_user_text(data.get("messages") or [])
         if not text:
             return data
