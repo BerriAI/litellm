@@ -125,15 +125,21 @@ def models() -> None:
     default="table",
     help="Output format (table or json)",
 )
+@click.option(
+    "--sort/--no-sort", default=True, help="Sort alphabetically by ID (case-insensitive). Enabled by default."
+)
 @click.pass_context
-def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> None:
-    """List all available models"""
+def list_models(ctx: click.Context, output_format: Literal["table", "json"], sort: bool) -> None:
+    """List all available models alphabetically, or use --no-sort for proxy order."""
     client: Final = create_client(ctx)
     models_list: Final = client.models.list()
     assert isinstance(models_list, list)
+    ordered_models: Final = (
+        sorted(models_list, key=lambda model: _str_field(model, "id", "").casefold()) if sort else models_list
+    )
 
     if output_format == "json":
-        rich.print_json(data=models_list)
+        rich.print_json(data=ordered_models)
     else:  # table format
         table: Final = rich.table.Table(title="Available Models")
 
@@ -144,7 +150,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
         table.add_column("Owned By", style="yellow")
 
         # Add rows
-        for model in models_list:
+        for model in ordered_models:
             created = model.get("created")
             # Convert string timestamp to integer if needed
             if isinstance(created, str) and created.isdigit():
