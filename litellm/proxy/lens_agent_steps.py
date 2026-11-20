@@ -8,6 +8,7 @@ earlier reply made.
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final, TypeVar
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -74,7 +75,7 @@ class _Item(BaseModel):
     content: object = None
 
 
-_Model = TypeVar("_Model", bound=BaseModel)
+_Model: Final = TypeVar("_Model", bound=BaseModel)
 _ITEMS: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _BLOCKS: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
@@ -162,16 +163,17 @@ def tool_exchanges(messages: object) -> tuple[ToolExchange, ...]:
         raw: Final = _ITEMS.validate_python(messages)
     except ValidationError:
         return ()
-    turns: Final = tuple(_turn(item) for item in (_parsed(_Item, value) for value in raw) if item is not None)
+    items: Final = tuple(_parsed(_Item, value) for value in raw)
+    turns: Final = tuple(_turn(item) for item in items if item is not None)
     last_model_turn: Final = max((index for index, turn in enumerate(turns) if turn.from_model), default=-1)
     calls: Final[Mapping[str, tuple[str, str]]] = {
-        call_id: (name, arguments) for turn in turns for call_id, name, arguments in turn.calls
+        call_id: (name, arguments) for call_id, name, arguments in chain.from_iterable(turn.calls for turn in turns)
     }
+    results: Final = chain.from_iterable(turn.results for turn in turns[last_model_turn + 1 :])
+    answered: Final = tuple(answer for answer in results if answer[0] in calls)
     return tuple(
         ToolExchange(call_id=call_id, name=calls[call_id][0] or "tool", arguments=calls[call_id][1], result=result)
-        for turn in turns[last_model_turn + 1 :]
-        for call_id, result in turn.results
-        if call_id in calls
+        for call_id, result in answered
     )
 
 

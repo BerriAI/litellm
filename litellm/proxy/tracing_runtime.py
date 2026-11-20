@@ -19,7 +19,6 @@ from typing_extensions import override
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.otel.logger import OpenTelemetryV2
-from litellm.integrations.otel.model.baggage import DEFAULT_BAGGAGE_METADATA_KEYS
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import LLMCallEvent
 from litellm.integrations.otel.model.utils import to_ns
@@ -104,9 +103,6 @@ LENS_TRACE_PATH: Final = "/internal/traces"
 
 
 LENS_TRACE_CALLBACK: Final = "lens"
-
-
-_CALLER_IP_KEY: Final = "requester_ip_address"
 
 
 class _LensTraceConfig(OpenTelemetryV2Config):
@@ -195,7 +191,6 @@ async def _export_traces(connection: LensConnection) -> AsyncGenerator[None, Non
                 )
             ],
             capture_message_content=CaptureMessageContent.SPAN_ONLY,
-            baggage_metadata_keys=[key for key in DEFAULT_BAGGAGE_METADATA_KEYS if key != _CALLER_IP_KEY],
         ),
         callback_name=LENS_TRACE_CALLBACK,
     )

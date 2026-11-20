@@ -1084,7 +1084,7 @@ class _FakeLens(BaseHTTPRequestHandler):
 
 
 @pytest.mark.asyncio
-async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_without_the_caller_ip(
+async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_with_the_caller_ip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import litellm
@@ -1133,7 +1133,7 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
     assert attributes["litellm.metadata.user_api_key_user_id"] == "user-1"
     assert "what is the capital of France" in attributes["gen_ai.input.messages"]
     assert "Paris" in attributes["gen_ai.output.messages"]
-    assert "litellm.metadata.requester_ip_address" not in attributes
+    assert attributes["litellm.metadata.requester_ip_address"] == "203.0.113.7"
     assert not any(isinstance(callback, OpenTelemetryV2) for callback in litellm.callbacks)
 
 
