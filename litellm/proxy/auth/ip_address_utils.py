@@ -25,7 +25,7 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
 # behaviour see an actionable message in their logs the first time it triggers.
 _warned_xff_without_trusted_ranges = False
 
-# Error for the inverse footgun: requests arrive with an X-Forwarded-For header
+# One-shot warning for the inverse footgun: requests arrive with an X-Forwarded-For header
 # but use_x_forwarded_for is off, so the real client IP is silently dropped and
 # "internal network only" access control trusts the load balancer's IP instead.
 # Logged once per misconfiguration window (not per-request) so a flood of crafted
