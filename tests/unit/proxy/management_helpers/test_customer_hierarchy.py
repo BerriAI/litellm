@@ -25,6 +25,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     effective_member_budget,
     related_budget,
 )
+from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     CustomerMember,
@@ -693,6 +694,23 @@ async def test_editing_a_custom_cap_retains_its_original_reset_anchor(elapsed: i
     assert database.litellm_budgettable.rows[updated_id].model_dump()["budget_limits"] == [
         {**limit, "max_budget": 20} for limit in original
     ]
+    current: Final = NOW + timedelta(days=elapsed)
+    before: Final = customer_window_counters(
+        "customer_member", "member", tuple(BudgetLimit.model_validate(limit) for limit in original), now=current
+    )[0]
+    after: Final = customer_window_counters(
+        "customer_member",
+        "member",
+        tuple(
+            BudgetLimit.model_validate(limit)
+            for limit in database.litellm_budgettable.rows[updated_id].model_dump()["budget_limits"]
+        ),
+        now=current,
+    )[0]
+    assert after.counter_key == before.counter_key
+    assert after.window_start == before.window_start
+    assert after.reset_at == before.reset_at
+
 
 def test_window_override_preserves_other_period_and_scalar_fields() -> None:
     template: Final = Budget(
