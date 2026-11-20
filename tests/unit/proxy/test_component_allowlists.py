@@ -308,11 +308,14 @@ def test_backend_serves_metrics_after_startup_when_enabled(enabled: bool) -> Non
             assert "litellm_postgres_failed_requests_total 2.0\n" in response.text
 
 
-def test_gateway_drops_ui_and_scalar_mounts():
-    """UI static and scalar Mounts must still be trimmed from the gateway."""
-    for path in ("/ui", "/_next", "/litellm-asset-prefix/_next", "/scalar"):
+def test_gateway_drops_admin_ui_mounts():
+    for path in ("/ui", "/_next", "/litellm-asset-prefix/_next"):
         assert not _is_gateway_route(Mount(path, app=make_asgi_app())), \
             f"Mount {path} must not be served by the gateway"
+
+
+def test_gateway_keeps_scalar_assets_for_its_api_reference():
+    assert _is_gateway_route(Mount("/scalar", app=make_asgi_app()))
 
 
 def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():

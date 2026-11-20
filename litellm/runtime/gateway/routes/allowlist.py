@@ -147,5 +147,6 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
 GATEWAY_MOUNT_PATHS: frozenset[str] = frozenset(
     {
         "/metrics",
+        "/scalar",
     }
 )

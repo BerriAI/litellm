@@ -998,9 +998,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
     ),
     (
         "litellm.proxy.proxy_server",
-    ),
-    (
-        "litellm.proxy.proxy_server",
         "_is_azure_model_router_request",
         "is_azure_model_router_request",
     ),
@@ -4042,11 +4039,6 @@ PROXY_ALIAS_CASES: Final = (
         "",
         "_get_projected_spend_over_limit",
         "get_projected_spend_over_limit",
-        False,
-    ),
-    (
-        "litellm.proxy.utils",
-        "",
         False,
     ),
     (
