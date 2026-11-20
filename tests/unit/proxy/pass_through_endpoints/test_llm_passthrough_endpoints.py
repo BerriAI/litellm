@@ -352,6 +352,32 @@ async def test_gemini_pass_through_refuses_an_encoded_path_the_provider_would_re
 
 
 @pytest.mark.asyncio
+async def test_gemini_pass_through_rejects_a_file_path_encoded_too_many_times(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _DenyingFileAccessGuard()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    deeply_encoded_dots: Final = f"%{'25' * 1200}2e%{'25' * 1200}2e"
+
+    with pytest.raises(HTTPException) as rejected:
+        await _call_gemini_pass_through("GET", f"v1beta/files/other/{deeply_encoded_dots}/abc123")
+
+    assert rejected.value.status_code == 400
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("override_header", ["x-http-method-override", "x-pass-x-http-method-override"])
 async def test_gemini_pass_through_refuses_a_method_override_on_a_file_the_caller_does_not_own(
     override_header: str,

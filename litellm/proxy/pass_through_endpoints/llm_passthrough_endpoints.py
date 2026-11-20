@@ -17,7 +17,7 @@ import re
 import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
 from urllib.parse import quote, unquote
@@ -494,9 +494,14 @@ class _ProviderFileAccessGuard(Protocol):
 _METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-method-override")
 
 
+_MAX_PATH_DECODE_ROUNDS: Final = 8
+
+
 def _fully_decoded_path(path: str) -> str:
-    decoded: Final = unquote(path)
-    return path if decoded == path else _fully_decoded_path(decoded)
+    decoded: Final = reduce(lambda current, _: unquote(current), range(_MAX_PATH_DECODE_ROUNDS), path)
+    if unquote(decoded) != decoded:
+        raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
+    return decoded
 
 
 def _gemini_passthrough_file_id(method: str, headers: Mapping[str, str], path: str) -> str | None:
