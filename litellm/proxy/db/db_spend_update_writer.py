@@ -84,11 +84,13 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, db_writ
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction, utc_date_from_start_time
 from litellm.proxy.db.request_error_tracking import request_error_accumulator
 from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
-from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.route_llm_request import spend_endpoint
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
 from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
+from litellm.proxy.spend_tracking.customer_cache_cost import recorded_customer_cache_cost
+from litellm.proxy.spend_tracking.customer_cost_margin import customer_margin_share_of_spend
 from litellm.proxy.spend_tracking.savings import (
     compute_savings_spend,
     extract_cache_creation_tokens,
@@ -147,18 +149,28 @@ def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Rout
 
     Native Responses providers hold the conversation themselves, so their rows can wait for the batch write.
     A row with no router deployment behind it is treated as bridged, which keeps today's immediate flush.
+    A native Foundry model router row is written at once too, as when every router turn was bridged,
+    because its follow-up can land on a router entry in the same group that still bridges.
     """
     if payload.get("call_type") not in RESPONSES_SESSION_CALL_TYPES:
         return False
+    from litellm.llms.azure_ai.common_utils import is_foundry_v1_model_router
+    from litellm.responses.main import answered_by_the_chat_bridge, provider_stores_the_conversation
+
+    if answered_by_the_chat_bridge(payload.get("request_id")):
+        return True
     model_id: Final = payload.get("model_id")
     deployment: Final = (
         llm_router.registry().deployment(model_id) if llm_router is not None and isinstance(model_id, str) else None
     )
     if deployment is None:
         return True
-    from litellm.responses.main import provider_stores_the_conversation
-
     litellm_params: Final = deployment.litellm_params
+    if is_foundry_v1_model_router(litellm_params.model, litellm_params.api_base) and (
+        litellm.get_llm_provider(model=litellm_params.model, custom_llm_provider=litellm_params.custom_llm_provider)[1]
+        == "azure_ai"
+    ):
+        return True
     return not provider_stores_the_conversation(
         litellm_params.model,
         litellm_params.custom_llm_provider,
@@ -361,6 +373,9 @@ class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
 
 
 _SpendTableName = Literal[
+    "app_list_transactions",
+    "app_customer_org_list_transactions",
+    "app_customer_member_list_transactions",
     "user_list_transactions",
     "end_user_list_transactions",
     "key_list_transactions",
@@ -388,6 +403,9 @@ _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
     "tag_list_transactions",
     "model_access_group_list_transactions",
     "agent_list_transactions",
+    "app_list_transactions",
+    "app_customer_org_list_transactions",
+    "app_customer_member_list_transactions",
     "customer_org_list_transactions",
     "customer_team_list_transactions",
     "customer_member_list_transactions",
@@ -400,9 +418,25 @@ class _CustomerHierarchyLevel:
     table: str
     prisma_table: str
     id_column: str
+    customer_column: str | None = None
 
 
 _CUSTOMER_HIERARCHY_LEVELS: Final = (
+    _CustomerHierarchyLevel("app_list_transactions", "LiteLLM_AppTable", "litellm_apptable", "app_id"),
+    _CustomerHierarchyLevel(
+        "app_customer_org_list_transactions",
+        "LiteLLM_AppCustomerOrgTable",
+        "litellm_appcustomerorgtable",
+        "app_id",
+        "customer_org_id",
+    ),
+    _CustomerHierarchyLevel(
+        "app_customer_member_list_transactions",
+        "LiteLLM_AppCustomerMemberTable",
+        "litellm_appcustomermembertable",
+        "app_id",
+        "customer_member_id",
+    ),
     _CustomerHierarchyLevel(
         "customer_org_list_transactions",
         "LiteLLM_CustomerOrganizationTable",
@@ -410,7 +444,10 @@ _CUSTOMER_HIERARCHY_LEVELS: Final = (
         "customer_org_id",
     ),
     _CustomerHierarchyLevel(
-        "customer_team_list_transactions", "LiteLLM_CustomerTeamTable", "litellm_customerteamtable", "customer_team_id"
+        "customer_team_list_transactions",
+        "LiteLLM_CustomerTeamTable",
+        "litellm_customerteamtable",
+        "customer_team_id",
     ),
     _CustomerHierarchyLevel(
         "customer_member_list_transactions",
@@ -419,6 +456,13 @@ _CUSTOMER_HIERARCHY_LEVELS: Final = (
         "customer_member_id",
     ),
 )
+
+
+def _customer_spend_where(level: _CustomerHierarchyLevel, entity_id: str) -> Mapping[str, str]:
+    if level.customer_column is None:
+        return {level.id_column: entity_id}
+    app_id, _, customer_id = entity_id.partition(":")
+    return {level.id_column: app_id, level.customer_column: customer_id}
 
 
 def _spend_tables_left_to_send(
@@ -2112,6 +2156,7 @@ class DBSpendUpdateWriter:
                         await DBSpendUpdateWriter._commit_window_spend_updates(
                             prisma_client=prisma_client,
                             window_spend_transactions=window_spend_update_transactions,
+                            proxy_logging_obj=proxy_logging_obj,
                         )
                     except Exception as e:
                         if not db_write_failure_is_requeue_safe(e):
@@ -2285,6 +2330,7 @@ class DBSpendUpdateWriter:
             await DBSpendUpdateWriter._commit_window_spend_updates(
                 prisma_client=prisma_client,
                 window_spend_transactions=window_spend_update_transactions,
+                proxy_logging_obj=proxy_logging_obj,
             )
         except Exception as e:  # noqa: BLE001  # the increments go back on the queue; the rest of the flush must run
             if db_write_failure_is_requeue_safe(e):
@@ -2370,6 +2416,7 @@ class DBSpendUpdateWriter:
     async def _commit_window_spend_updates(
         prisma_client: PrismaClient,
         window_spend_transactions: Sequence[WindowSpendTransaction],
+        proxy_logging_obj: ProxyLogging | None = None,
     ) -> None:
         """
         Commit per-budget-window spend increments to LiteLLM_BudgetWindowSpend.
@@ -2383,10 +2430,15 @@ class DBSpendUpdateWriter:
             commit_window_spend_updates,
         )
 
-        await commit_window_spend_updates(
+        committed: Final = await commit_window_spend_updates(
             prisma_client=prisma_client,
             transactions=window_spend_transactions,
+            capture_spend=proxy_logging_obj is not None and bool(CustomerBudgetAlerting.callbacks()),
         )
+        if proxy_logging_obj is not None:
+            await CustomerBudgetAlerting.detect_committed_windows(
+                committed, prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
+            )
 
     async def _drain_and_commit_daily_tag_spend_from_redis(
         self,
@@ -2837,6 +2889,8 @@ class DBSpendUpdateWriter:
         """Increment the customer org, team and member rows a request ran under, one table per commit so a
         partial failure re-sends only the tables still owed."""
         for level in _CUSTOMER_HIERARCHY_LEVELS:
+            if level.transactions.startswith("app_") and level.transactions not in db_spend_update_transactions:
+                continue
             await DBSpendUpdateWriter._commit_customer_hierarchy_level(
                 level,
                 db_spend_update_transactions.get(level.transactions),
@@ -2898,7 +2952,7 @@ class DBSpendUpdateWriter:
             ):
                 for entity_id, response_cost in sorted(transactions.items()):
                     getattr(batcher, level.prisma_table).update_many(
-                        where={level.id_column: entity_id},
+                        where=_customer_spend_where(level, entity_id),
                         data={"spend": {"increment": response_cost}},
                     )
         except Exception as e:
@@ -3417,16 +3471,14 @@ class DBSpendUpdateWriter:
             )
             return None
         try:
-            # Map call_type to endpoint using ROUTE_ENDPOINT_MAPPING
             call_type: Final = payload.get("call_type", None)
-            endpoint = None
-            if call_type:
-                endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
+            endpoint: Final = spend_endpoint(call_type, _metadata) if call_type else None
 
             is_internal_call: Final = bool(_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
             caller_request: Final = not is_internal_call and not _is_billed_retry_attempt(_metadata)
             cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
+            cost_breakdown: Final = _metadata.get("cost_breakdown")
             savings_spend: Final = compute_savings_spend(
                 model=payload.get("model", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
@@ -3436,7 +3488,7 @@ class DBSpendUpdateWriter:
                 model_id=payload.get("model_id"),
                 llm_router=get_llm_router,
                 usage_object=usage_obj,
-                cost_breakdown=_metadata.get("cost_breakdown"),
+                cost_breakdown=cost_breakdown,
                 recorded_autorouter_savings=_metadata.get("autorouter_savings"),
                 recorded_autorouter_savings_estimate=_metadata.get("autorouter_savings_estimate"),
                 billed_at=payload.get("endTime"),
@@ -3473,10 +3525,21 @@ class DBSpendUpdateWriter:
                     _metadata,
                     payload["spend"],  # pyright: ignore[reportUnknownArgumentType]  # legacy dict | SpendLogsPayload union
                 ),
+                customer_margin_spend=customer_margin_share_of_spend(
+                    _metadata,
+                    payload["spend"],  # pyright: ignore[reportUnknownArgumentType]  # legacy dict | SpendLogsPayload union
+                ),
                 total_response_time_ms=timed_duration_ms or 0,
                 timed_requests=0 if timed_duration_ms is None else 1,
             )
-            return daily_transaction
+            if type != "customer_member":
+                return daily_transaction
+            cache_cost, priced_cache_tokens = recorded_customer_cache_cost(
+                cost_breakdown,
+                daily_transaction["cache_read_input_tokens"],
+                daily_transaction["cache_creation_input_tokens"],
+            )
+            return {**daily_transaction, "cache_cost": cache_cost, "priced_cache_tokens": priced_cache_tokens}
         except Exception as e:
             raise e
 
@@ -3602,7 +3665,7 @@ class DBSpendUpdateWriter:
         customer_hierarchy: CustomerHierarchyIds | None,
         prisma_client: PrismaClient | None = None,
     ) -> None:
-        if prisma_client is None or customer_hierarchy is None:
+        if prisma_client is None or customer_hierarchy is None or customer_hierarchy.customer_org_id is None:
             return
         member_id: Final = customer_hierarchy.customer_member_id or ""
         team_id: Final = customer_hierarchy.customer_team_id or ""
@@ -3624,9 +3687,12 @@ class DBSpendUpdateWriter:
             "customer_team_id": team_id,
             "customer_org_id": org_id,
         }
+        attributed: Final[DailyCustomerMemberSpendTransaction] = (
+            {**transaction, "app_id": customer_hierarchy.app_id} if customer_hierarchy.app_id else transaction
+        )
         table: Final = DAILY_SPEND_TABLES["customer_member"]
-        key: Final = json.dumps(conflict_key(table, transaction))
-        await self.daily_customer_member_spend_update_queue.add_update({key: transaction})
+        key: Final = json.dumps(conflict_key(table, attributed))
+        await self.daily_customer_member_spend_update_queue.add_update({key: attributed})
 
     async def add_spend_log_transaction_to_daily_agent_transaction(
         self,

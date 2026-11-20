@@ -334,6 +334,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "otel_service_name_override",
     "otel_service_name",
     "soft_budget_alerting_emails",
+    "max_budget_alert_emails",
     "team_member_max_budget_alert_emails",
     "batch_enqueued_token_limit",
     "max_batch_file_records",

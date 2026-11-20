@@ -3,7 +3,7 @@ Enforce the caller's budget against router fallback targets.
 
 Budget is checked once, during auth, against the *requested* model group. A zero-cost group takes
 `_is_model_cost_zero`'s bypass and waives every budget check; the router then picks a fallback
-target after auth, inside `run_async_fallback`, and nothing re-checks budget on the group that
+target after auth, through `router_rust.core._Driver.allow_fallback`, which must re-check budget on the group that
 actually bills. So a free model with a paid fallback spends without a gate.
 
 This predicate is injected into the router to re-check budget for each fallback target before it is

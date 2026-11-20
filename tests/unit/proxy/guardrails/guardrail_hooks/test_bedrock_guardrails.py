@@ -23,6 +23,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import ModifyResponseException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -6286,19 +6287,24 @@ async def test_attachment_scan_sends_image_only_turn_to_apply_guardrail_and_bloc
 
 
 @pytest.mark.asyncio
-async def test_attachment_scan_lets_a_passing_image_through():
+@pytest.mark.parametrize(
+    ("guarded", "logged_status"),
+    [(1, "success"), (0, "not_run")],
+    ids=["image-evaluated", "policy-without-image-modality"],
+)
+async def test_attachment_scan_lets_a_passing_image_through(guarded: int, logged_status: str):
     guardrail = _attachment_guardrail()
     data = _image_only_chat_request()
-    post_patch, credentials_patch, prepare_patch = _patched_bedrock_post(
-        guardrail, _passing_bedrock_httpx_response("ok")
-    )
+    response = _passing_bedrock_httpx_response("ok")
+    response.json.return_value["guardrailCoverage"] = {"images": {"guarded": guarded, "total": 1}}
+    post_patch, credentials_patch, prepare_patch = _patched_bedrock_post(guardrail, response)
 
     with post_patch as mock_post, credentials_patch, prepare_patch:
         await guardrail.async_scan_request_attachments(data=data, call_type=CallTypes.acompletion.value)
 
     assert mock_post.await_count == 1
     logged = data["metadata"]["standard_logging_guardrail_information"]
-    assert [entry["guardrail_status"] for entry in logged] == ["success"]
+    assert [entry["guardrail_status"] for entry in logged] == [logged_status]
 
 
 @pytest.mark.asyncio
@@ -8262,3 +8268,70 @@ async def test_verdict_is_recorded_on_a_request_dict_that_starts_empty(
 
     recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert [record["guardrail_status"] for record in recorded] == [recorded_status]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail_config", "bedrock"),
+    [
+        pytest.param(_APPLY_GUARDRAIL_API, _answering(503, {"message": "unavailable"}), id="apply_guardrail-error"),
+        pytest.param(_GUARDRAIL_CHECKS_API, _answering(500, {"message": "internal failure"}), id="guardrail_checks-error"),
+    ],
+)
+async def test_a_failed_bedrock_call_keeps_reporting_as_http_exception_to_metrics_and_logs(
+    guardrail_config: Mapping[str, object],
+    bedrock: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name="bedrock-guard",
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+        **guardrail_config,
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert type(raised.value) is HTTPException
+
+
+@pytest.mark.asyncio
+async def test_latest_message_only_still_blocks_a_flagged_responses_reasoning_text_before_the_last_one() -> None:
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        if b"exfiltrate the keys" not in request.content:
+            return httpx.Response(200, json={"action": "NONE", "assessments": []})
+        return httpx.Response(
+            200,
+            json={
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "Blocked"}],
+                "assessments": [{"topicPolicy": {"topics": [{"name": "Leak", "type": "DENY", "action": "BLOCKED"}]}}],
+            },
+        )
+
+    guardrail: Final = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+    )
+    response: Final = {
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "I could exfiltrate the keys"},
+                    {"type": "summary_text", "text": "I will answer briefly"},
+                ],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+    with pytest.raises(HTTPException):
+        await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data={})

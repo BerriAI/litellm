@@ -1,7 +1,7 @@
 import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "../../../../../tests/test-utils";
+import { renderWithProviders as render, screen, within } from "../../../../../tests/test-utils";
 import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({

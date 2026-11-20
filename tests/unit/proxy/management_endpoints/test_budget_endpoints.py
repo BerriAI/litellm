@@ -18,6 +18,36 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import app
 
 
+@pytest.mark.asyncio
+async def test_budget_update_replaces_cached_app_budget(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.management_helpers.apps import AppStore
+    from litellm.types.proxy.management_endpoints.apps import App, AppCreate, AppDefinition, AppResourceType
+    from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
+    from tests.unit.proxy.management_helpers.test_apps import AppDatabase, UnavailableAppDatabase, seed_resources
+    from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW
+
+    client, _, _ = client_and_mocks
+    database: Final = AppDatabase()
+    writer: Final = AppStore(database, NOW)
+    await seed_resources(database)
+    await writer.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    configured: Final = await writer.create(AppCreate(resource_id="chat", budget=Budget(max_budget=10)), "admin")
+    assert isinstance(configured, App)
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setattr(ps, "prisma_client", types.SimpleNamespace(db=database, writer_db=database))
+    reader: Final = AppStore(database, NOW, cache)
+    assert await reader.by_resource(AppResourceType.TEAM, "chat") == configured
+    response: Final = client.post("/budget/update", json={"budget_id": configured.budget_id, "max_budget": 0})
+    assert response.status_code == 200, response.text
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        await AppStore(UnavailableAppDatabase(), NOW, cache).by_resource(AppResourceType.TEAM, "chat")
+    refreshed: Final = await reader.by_resource(AppResourceType.TEAM, "chat")
+    assert isinstance(refreshed, App) and refreshed.budget == Budget(max_budget=0, allowed_models=())
+
+
 @pytest.fixture
 def client_and_mocks(monkeypatch):
     # Setup MagicMock Prisma
@@ -32,15 +62,19 @@ def client_and_mocks(monkeypatch):
 
     mock_table.create = AsyncMock(side_effect=created)
     mock_table.update = AsyncMock(side_effect=updated)
+    mock_table.find_unique = AsyncMock(return_value=None)
 
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_table,
+        litellm_config=types.SimpleNamespace(find_unique=AsyncMock(return_value=None)),
         litellm_customermembertable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerteamtable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerorganizationtable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_dailyspend=mock_table,
         query_raw=AsyncMock(return_value=[{"referenced": False}]),
     )
+
+    mock_prisma.writer_db = mock_prisma.db
 
     # Monkeypatch Mocked Prisma client into the server module
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -95,17 +129,16 @@ def test_budget_update_can_clear_windows(
 
 @pytest.mark.parametrize("path", ("/budget/new", "/budget/update"))
 @pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1h"))
-def test_concurrent_windows_reject_noncanonical_durations_but_scalar_budgets_preserve_them(
+def test_concurrent_and_scalar_budgets_accept_custom_durations(
     client_and_mocks: tuple[TestClient, MagicMock, MagicMock], path: str, duration: str,
 ) -> None:
-    client, _, table = client_and_mocks
-    rejected: Final = client.post(path, json={
+    client, _, _ = client_and_mocks
+    window: Final = client.post(path, json={
         "budget_id": "duration-test",
         "budget_limits": [{"budget_duration": duration, "max_budget": 10}],
     })
-    assert rejected.status_code == 422, rejected.text
-    table.create.assert_not_awaited()
-    table.update.assert_not_awaited()
+    assert window.status_code == 200, window.text
+    assert window.json()["budget_limits"][0]["max_budget"] == 10
 
     accepted: Final = client.post(path, json={
         "budget_id": "duration-test", "max_budget": 10, "budget_duration": duration,
@@ -636,11 +669,42 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
 def admin_client(client_and_mocks):
     client, mock_prisma, mock_table = client_and_mocks
     mock_table.delete = AsyncMock(return_value={"budget_id": "tpl-1"})
-    mock_prisma.db.litellm_customerorganizationtable = MagicMock()
+    mock_table.find_unique = AsyncMock(return_value={"budget_id": "tpl-1"})
+    mock_table.delete_many = AsyncMock(return_value=1)
+    mock_prisma.db.litellm_customerorganizationtable = MagicMock(
+        find_many=AsyncMock(return_value=[]), count=AsyncMock(return_value=0)
+    )
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
     )
     return client, mock_prisma, mock_table
+
+
+@pytest.mark.parametrize("encoded", (False, True))
+@pytest.mark.parametrize(
+    ("catalog", "endpoint"),
+    (
+        ("customer_organization_budget_group_ids", "customer_organization_budget_groups"),
+        ("app_customer_organization_budget_group_ids", "app_customer_organization_budget_groups"),
+    ),
+)
+def test_delete_budget_preserves_catalog(
+    admin_client: tuple[TestClient, MagicMock, MagicMock], encoded: bool, catalog: str, endpoint: str
+) -> None:
+    from tests.unit.proxy.management_helpers.test_customer_hierarchy import Record
+
+    client, database, table = admin_client
+
+    def find_catalog(*, where: Mapping[str, object]) -> Record | None:
+        if where["param_name"] != catalog:
+            return None
+        return Record.model_validate({"param_value": json.dumps(["tpl-1"]) if encoded else ["tpl-1"]})
+
+    database.db.litellm_config.find_unique.side_effect = find_catalog
+    response: Final = client.post("/budget/delete", json={"id": "tpl-1"})
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["error"] == f"Remove this group through {endpoint}."
+    table.delete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -656,11 +720,31 @@ async def test_delete_budget_refuses_customer_organization_default_budget(admin_
 
 
 @pytest.mark.asyncio
-async def test_delete_budget_deletes_budget_no_customer_organization_uses(admin_client):
+@pytest.mark.parametrize("attached", (False, True))
+async def test_delete_budget_deletes_budget_no_customer_organization_uses(admin_client, attached: bool):
     client, mock_prisma, mock_table = admin_client
     mock_prisma.db.litellm_customerorganizationtable.count = AsyncMock(return_value=0)
 
+    mock_table.delete_many.return_value = 0 if attached else 1
     resp: Final = client.post("/budget/delete", json={"id": "tpl-1"})
 
-    assert resp.status_code == 200, resp.text
-    mock_table.delete.assert_awaited_once_with(where={"budget_id": "tpl-1"})
+    assert resp.status_code == (409 if attached else 200), resp.text
+    assert resp.json() == (
+        {"detail": {"error": "Budget is attached to a customer or app. Remove it through the owning entity."}}
+        if attached
+        else {"budget_id": "tpl-1"}
+    )
+    mock_table.delete_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_missing_budget_preserves_prisma_missing_record_error() -> None:
+    from prisma.errors import RecordNotFoundError
+
+    from litellm.proxy.management_helpers.customer_hierarchy import delete_unattached_customer_budget
+
+    table: Final = MagicMock(
+        find_unique=AsyncMock(return_value=None), delete=AsyncMock(side_effect=RecordNotFoundError({}))
+    )
+    with pytest.raises(RecordNotFoundError):
+        await delete_unattached_customer_budget(table, "missing")
