@@ -13,7 +13,7 @@ import litellm
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
-from litellm.responses.additional_tools import additional_tools_in_input, hoist_additional_tools
+from litellm.responses.additional_tools import hoist_additional_tools, tools_added_earlier
 from litellm.responses.configuration_update import with_configuration_updates_applied
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
@@ -67,10 +67,9 @@ def _bridged_request(
     earlier_items: Sequence[object] = (),
     loaded_earlier: Sequence[Mapping[str, object]] = (),
 ) -> _BridgedRequest:
-    earlier_tools: Final = additional_tools_in_input(list(earlier_items))
-    hoisted: Final = hoist_additional_tools(
-        input, (*(responses_api_request.get("tools") or ()), *earlier_tools), drop_params=drop_params
-    )
+    request_tools: Final = tuple(responses_api_request.get("tools") or ())
+    earlier_tools: Final = tools_added_earlier(earlier_items, input, request_tools)
+    hoisted: Final = hoist_additional_tools(input, (*request_tools, *earlier_tools), drop_params=drop_params)
     searched: Final = bridge_client_tool_search(
         hoisted.input, hoisted.tools, loaded_earlier if has_client_tool_search(hoisted.tools) else ()
     )

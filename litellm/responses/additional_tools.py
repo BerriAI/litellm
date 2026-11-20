@@ -93,6 +93,19 @@ def additional_tools_in_input(input: object) -> tuple[ALL_RESPONSES_API_TOOL_PAR
     return tuple(chain.from_iterable(_tools_of_item(item) for item in items if _is_additional_tools_item(item)))
 
 
+def tools_added_earlier(
+    earlier_items: Sequence[object],
+    input: str | ResponseInputParam,
+    tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
+    sent_now: Final = frozenset(_tool_identity(tool) for tool in (*(tools or ()), *additional_tools_in_input(input)))
+    return tuple(
+        cast("ALL_RESPONSES_API_TOOL_PARAMS", tool)  # cast-ok: a merged namespace is rebuilt from the same tool dicts
+        for tool in _unique_tools(additional_tools_in_input(list(earlier_items)))
+        if _tool_identity(tool) not in sent_now
+    )
+
+
 def hoist_additional_tools(
     input: str | ResponseInputParam,
     tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,

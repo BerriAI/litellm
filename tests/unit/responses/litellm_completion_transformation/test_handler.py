@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -523,8 +524,20 @@ _CITY_FORMAT: Final = {
     },
     "strict": True,
 }
-_GET_WEATHER: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}
-_GET_TIME: Final = {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}}
+_GET_WEATHER: Final[Mapping[str, object]] = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {}},
+}
+_GET_TIME: Final[Mapping[str, object]] = {
+    "type": "function",
+    "name": "get_time",
+    "parameters": {"type": "object", "properties": {}},
+}
+_SENT_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_TURN_ONE_RESPONSE_ID: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+    custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+)
 
 
 @pytest.mark.asyncio
@@ -552,6 +565,10 @@ async def test_bridged_turn_applies_configuration_updates_and_echoes_the_request
     assert [message["role"] for message in provider.request_body["messages"]] == ["user"]
     assert isinstance(response, ResponsesAPIResponse)
     assert response.reasoning == {"effort": "low"}
+
+
+def _sent_tool_names(request_body: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(tool.get("name") for tool in _SENT_TOOLS.validate_python(request_body["tools"]))
 
 
 def _stored_configured_turn(request_id: str) -> Mapping[str, object]:
@@ -586,16 +603,13 @@ def _stored_configured_turn(request_id: str) -> Mapping[str, object]:
 
 @pytest.mark.asyncio
 async def test_bridged_follow_up_keeps_the_configuration_and_tools_an_earlier_turn_added():
-    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
-        custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
-    )
     provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
     client: Final = AsyncHTTPHandler()
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
 
     with patch(  # test-quality-ok: no DI seam; the file stubs this same boundary
         "litellm.proxy.proxy_server.prisma_client",
-        SimpleNamespace(db=_StoredTurns((_stored_configured_turn(previous_response_id),))),
+        SimpleNamespace(db=_StoredTurns((_stored_configured_turn(_TURN_ONE_RESPONSE_ID),))),
     ):
         response = await litellm.aresponses(
             model="azure_ai/claude-sonnet-4-6",
@@ -607,15 +621,52 @@ async def test_bridged_follow_up_keeps_the_configuration_and_tools_an_earlier_tu
             ],
             reasoning={"effort": "low"},
             tools=[_GET_WEATHER],
-            previous_response_id=previous_response_id,
+            previous_response_id=_TURN_ONE_RESPONSE_ID,
             client=client,
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert provider.request_body["output_config"] == {"effort": "high"}
     assert provider.request_body["output_format"] == {"type": "json_schema", "schema": _CITY_FORMAT["schema"]}
-    assert [tool["name"] for tool in provider.request_body["tools"]] == ["get_weather", "get_time"]
+    assert _sent_tool_names(provider.request_body) == ("get_weather", "get_time")
     assert [message["role"] for message in provider.request_body["messages"]] == ["user", "assistant", "user"]
     assert isinstance(response, ResponsesAPIResponse)
     assert response.reasoning == {"effort": "low"}
     assert [tool.name for tool in response.tools] == ["get_weather", "get_time"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tools", "resent_items"),
+    [
+        pytest.param((_GET_WEATHER, _GET_TIME), (), id="moved_to_top_level_tools"),
+        pytest.param(
+            (_GET_WEATHER,),
+            ({"type": "additional_tools", "role": "developer", "tools": [_GET_TIME]},),
+            id="additional_tools_item_sent_again",
+        ),
+    ],
+)
+async def test_bridged_follow_up_sends_a_tool_an_earlier_turn_added_once_when_the_client_resends_it(
+    tools: Sequence[Mapping[str, object]], resent_items: Sequence[Mapping[str, object]]
+):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch(  # test-quality-ok: no DI seam; the file stubs this same boundary
+        "litellm.proxy.proxy_server.prisma_client",
+        SimpleNamespace(db=_StoredTurns((_stored_configured_turn(_TURN_ONE_RESPONSE_ID),))),
+    ):
+        await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input=[{"type": "message", "role": "user", "content": "What time is it?"}, *resent_items],
+            tools=tools,
+            previous_response_id=_TURN_ONE_RESPONSE_ID,
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert _sent_tool_names(provider.request_body) == ("get_weather", "get_time")
