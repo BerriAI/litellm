@@ -1,9 +1,12 @@
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 
+from litellm import Router
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     VertexAIPassThroughHandler,
@@ -13,6 +16,9 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+)
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
 )
 from litellm.types.router import DeploymentTypedDict
 
@@ -93,7 +99,7 @@ async def test_vertex_passthrough_load_balancing():
 
         # Verify
         # 1. Check that select(kind="pass_through") was called with the correct model ID
-        mock_router.select.assert_awaited_once_with("gemini-pro", kind="pass_through")
+        mock_router.select.assert_awaited_once_with("gemini-pro", {"litellm_call_id": ANY}, kind="pass_through")
 
         # 2. Check that get_model_list was NOT called (this ensures we aren't doing the old logic)
         mock_router.get_model_list.assert_not_called()
@@ -741,7 +747,7 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         )
 
         # Verify the router was called with the custom model name (extracted from URL)
-        mock_router.select.assert_awaited_once_with("gcp/google/gemini-3-pro", kind="pass_through")
+        mock_router.select.assert_awaited_once_with("gcp/google/gemini-3-pro", {"litellm_call_id": ANY}, kind="pass_through")
 
         # Verify the target URL passed to create_pass_through_route contains
         # the REAL Vertex AI model name, not the custom one
@@ -828,6 +834,123 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
     assert logging_kwargs["litellm_params"]["metadata"]["model_info"]["id"] == "vertex-gemini-38-flash-dep"
 
 
+_VERTEX_MODEL: Final = "gemini-3.8-flash"
+_VERTEX_ENDPOINT: Final = f"v1/projects/p/locations/global/publishers/google/models/{_VERTEX_MODEL}:generateContent"
+
+
+def _least_busy_vertex_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": _VERTEX_MODEL,
+                "litellm_params": {
+                    "model": f"vertex_ai/{_VERTEX_MODEL}",
+                    "vertex_project": deployment_id,
+                    "vertex_location": "global",
+                    "use_in_pass_through": True,
+                },
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("vertex-a", "vertex-b")
+        ],
+        routing_strategy="least-busy",
+    )
+
+
+def _vertex_request() -> Request:
+    return Request({
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("0.0.0.0", 4000),
+        "path": f"/vertex_ai/{_VERTEX_ENDPOINT}",
+        "headers": [],
+        "query_string": b"",
+    })
+
+
+def _picked_deployment(request: Request) -> str:
+    return getattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY)["id"]
+
+
+async def _relay_vertex(request: Request) -> object:
+    handler: Final = MagicMock()
+    handler.get_default_base_target_url.return_value = "https://aiplatform.googleapis.com"
+    return await _base_vertex_proxy_route(
+        endpoint=_VERTEX_ENDPOINT,
+        request=request,
+        fastapi_response=MagicMock(),
+        get_vertex_pass_through_handler=handler,
+        general_settings={},
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+    )
+
+
+def _relay_holding_until(burst: asyncio.Barrier) -> Callable[[Request, object, UserAPIKeyAuth], Awaitable[None]]:
+    async def relay(request: Request, fastapi_response: object, user_api_key_dict: UserAPIKeyAuth) -> None:
+        await burst.wait()
+
+    return relay
+
+
+@pytest.mark.asyncio
+async def test_a_concurrent_vertex_passthrough_burst_spreads_across_least_busy_deployments():
+    """Each pass-through pick holds its deployment until the call starts, so four calls in flight at once on a
+    two-deployment least-busy group split two and two instead of all landing on the first deployment"""
+    requests: Final = tuple(_vertex_request() for _ in range(4))
+    with (
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.proxy_server.llm_router", _least_busy_vertex_router()
+        ),
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+        ),
+        patch(  # test-quality-ok: the route offers no injection point for its header preparation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers",
+            new_callable=AsyncMock,
+            return_value=({}, False, "p", "global"),
+        ),
+        patch(  # test-quality-ok: the relay holds the calls in flight together, the route offers no seam
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=_relay_holding_until(asyncio.Barrier(len(requests))),
+        ),
+    ):
+        await asyncio.gather(*(_relay_vertex(request) for request in requests))
+
+    picked: Final = sorted(_picked_deployment(request) for request in requests)
+    assert picked == ["vertex-a", "vertex-a", "vertex-b", "vertex-b"]
+
+
+@pytest.mark.asyncio
+async def test_a_vertex_passthrough_that_fails_before_the_upstream_call_frees_its_pick():
+    """A pass-through that fails before reaching Vertex never starts its pick, so the next call sees that
+    deployment as idle again instead of steering away from it for the reservation's lifetime"""
+    failed: Final = _vertex_request()
+    relayed: Final = _vertex_request()
+    with (
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.proxy_server.llm_router", _least_busy_vertex_router()
+        ),
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+        ),
+        patch(  # test-quality-ok: the route offers no injection point for its header preparation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers",
+            new_callable=AsyncMock,
+            side_effect=[HTTPException(status_code=401), ({}, False, "p", "global")],
+        ),
+        patch(  # test-quality-ok: the relay is replaced so no upstream call is made, the route offers no seam
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=AsyncMock(),
+        ),
+    ):
+        with pytest.raises(HTTPException):
+            await _relay_vertex(failed)
+        await _relay_vertex(relayed)
+
+    assert _picked_deployment(relayed) == _picked_deployment(failed)
+
+
 def _router_without_deployment() -> MagicMock:
     router = MagicMock()
     router.select = AsyncMock(return_value=None)
@@ -854,6 +977,7 @@ async def test_vertex_passthrough_without_a_resolved_deployment_keeps_the_url_an
     resolved = await _resolve_vertex_model_from_router(
         model_id="gemini-3.8-flash",
         llm_router=llm_router,
+        call_id="vertex-call",
         encoded_endpoint="/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
         endpoint="v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
         vertex_project="url-project",
