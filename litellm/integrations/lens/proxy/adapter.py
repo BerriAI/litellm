@@ -25,6 +25,7 @@ from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection,
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_builder
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
@@ -168,6 +169,7 @@ async def browser_session(request: Request) -> UserAPIKeyAuth | None:
             azure_apim_header=None,
             request_data={},
         )
+        RouteChecks.should_call_route(route=request.url.path, valid_token=auth, request=request)
     except Exception:  # noqa: BLE001  # any rejected dashboard session means the browser signs in again
         return None
     return auth if auth.user_id == user_id else None
