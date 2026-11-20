@@ -22,6 +22,7 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, RESPONSE_FORMAT_TOOL_NAME
+from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -1522,6 +1523,15 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             allow_parameters_json_schema=False,
             allowed_openai_params=allowed_openai_param_names(openai_request_body.get("allowed_openai_params")),
         )
+        if "service_tier" in vertex_params and not drop_params:
+            raise UnsupportedParamsError(
+                message=(
+                    "Vertex AI batch requests do not support `service_tier`, since batch jobs run on the batch tier. "
+                    "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+                    "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+                ),
+                status_code=400,
+            )
         return vertex_params
 
     def transform_create_file_request(
