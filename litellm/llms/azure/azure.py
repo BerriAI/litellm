@@ -998,7 +998,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model_response: ImageResponse | None,
         azure_client_params: dict,
         api_key: str,
-        input: list,
+        input: str,
         logging_obj: LiteLLMLoggingObj,
         headers: dict[str, str],
         client=None,
@@ -1138,7 +1138,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if aimg_generation is True:
                 return self.aimage_generation(
                     data=data,
-                    input=input,
+                    input=prompt,
                     logging_obj=logging_obj,
                     model_response=model_response,
                     api_key=api_key,
