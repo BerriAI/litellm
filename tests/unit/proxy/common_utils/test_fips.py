@@ -292,18 +292,25 @@ def test_standard_mode_starts_whatever_the_salt_key_looks_like(
 
 
 _PASSWORD_DATABASE_URL: Final = "postgresql://litellm:hunter2-pw@db:5432/litellm?sslmode=verify-full"
+_CERT_DATABASE_URL: Final = "postgresql://litellm@db:5432/litellm?sslidentity=/certs/client.p12&sslpassword=p12-pass"
 
 
 @pytest.mark.parametrize(
     "environ",
     [
-        {"DATABASE_URL": "postgresql://litellm@db:5432/litellm?sslidentity=/certs/client.p12&sslpassword=p12-pass"},
+        {"DATABASE_URL": _CERT_DATABASE_URL},
         {},
         {"DATABASE_URL": _PASSWORD_DATABASE_URL, "IAM_TOKEN_DB_AUTH": "True"},
         {"DATABASE_URL": _PASSWORD_DATABASE_URL, "IAM_TOKEN_DB_AUTH": "1"},
         {"DATABASE_URL": _PASSWORD_DATABASE_URL, "AZURE_POSTGRESQL_AUTH": "true"},
         {"DATABASE_URL": _PASSWORD_DATABASE_URL, "AZURE_POSTGRESQL_AUTH": "yes"},
         {"DATABASE_URL": "postgresql://litellm:pw@[::1/litellm"},
+        {"DATABASE_URL": _CERT_DATABASE_URL, "DATABASE_URL_READ_REPLICA": _CERT_DATABASE_URL},
+        {
+            "DATABASE_URL": _CERT_DATABASE_URL,
+            "DATABASE_URL_READ_REPLICA": _PASSWORD_DATABASE_URL,
+            "IAM_TOKEN_DB_AUTH": "true",
+        },
     ],
     ids=[
         "client-certificate",
@@ -313,6 +320,8 @@ _PASSWORD_DATABASE_URL: Final = "postgresql://litellm:hunter2-pw@db:5432/litellm
         "azure-entra-token",
         "azure-entra-token-set-to-yes",
         "unparseable-url",
+        "client-certificate-replica",
+        "rds-iam-token-replica",
     ],
 )
 def test_no_password_login_warning_without_a_database_password(environ: Mapping[str, str]) -> None:
@@ -340,10 +349,22 @@ def test_an_unreadable_token_flag_still_gets_the_password_login_warning() -> Non
     assert database_password_login_warning({"DATABASE_URL": _PASSWORD_DATABASE_URL, "IAM_TOKEN_DB_AUTH": "maybe"})
 
 
-def test_the_password_login_warning_names_database_url_but_not_the_password() -> None:
-    warning: Final = database_password_login_warning({"DATABASE_URL": _PASSWORD_DATABASE_URL})
+@pytest.mark.parametrize(
+    "environ, named",
+    [
+        ({"DATABASE_URL": _PASSWORD_DATABASE_URL}, "DATABASE_URL logs in"),
+        (
+            {"DATABASE_URL": _CERT_DATABASE_URL, "DATABASE_URL_READ_REPLICA": _PASSWORD_DATABASE_URL},
+            "DATABASE_URL_READ_REPLICA logs in",
+        ),
+        ({"DATABASE_URL_READ_REPLICA": _PASSWORD_DATABASE_URL}, "DATABASE_URL_READ_REPLICA logs in"),
+    ],
+    ids=["writer", "replica-with-certificate-writer", "replica-only"],
+)
+def test_the_password_login_warning_names_the_url_but_not_the_password(environ: Mapping[str, str], named: str) -> None:
+    warning: Final = database_password_login_warning(environ)
     assert warning is not None
-    assert "DATABASE_URL" in warning
+    assert named in warning
     assert "hunter2-pw" not in warning
 
 
