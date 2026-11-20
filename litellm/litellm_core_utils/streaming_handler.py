@@ -2278,10 +2278,13 @@ class CustomStreamWrapper:
             }
         )
 
-    def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
-        if finish_reason == "stop" and self.tool_call:
+    def _normalize_tool_call_finish_reason(self, finish_reason: str | None) -> str:
+        if finish_reason is not None and self.custom_llm_provider == "cached_response":
+            return finish_reason
+        resolved: Final = finish_reason if finish_reason is not None else "stop"
+        if resolved == "stop" and self.tool_call:
             return "tool_calls"
-        return finish_reason
+        return resolved
 
     def _apply_finish_choice_fields(
         self, choice: StreamingChoices, fields: Sequence[str] = STREAM_FINISH_CHOICE_FIELDS
@@ -2364,9 +2367,7 @@ class CustomStreamWrapper:
             or self.received_finish_reasons.get(model_response.choices[0].index)
             or self.intermittent_finish_reason
         )
-        model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
-            _finish_reason if _finish_reason is not None else "stop"
-        )
+        model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(_finish_reason)
         self._apply_finish_choice_fields(model_response.choices[0])
         close_tag: Final = self._close_open_think_block()
         if close_tag is not None:

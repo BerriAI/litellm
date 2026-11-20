@@ -460,11 +460,14 @@ def test_sync_annotations_arrive_once_with_the_last_content_slice():
 
 
 async def _client_stream(
-    message: dict[str, JsonValue], replay: Literal["async", "sync"]
+    message: dict[str, JsonValue],
+    replay: Literal["async", "sync"],
+    stored_finish_reason: dict[str, JsonValue] | None = None,
 ) -> list[dict[str, JsonValue]]:
+    finish: Final = {"finish_reason": "stop"} if stored_finish_reason is None else stored_finish_reason
     payload: Final = {
         **_async_payload(),
-        "choices": [{"index": 0, "message": {"role": "assistant", **message}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": {"role": "assistant", **message}, **finish}],
     }
     logging_obj: Final = litellm.Logging(
         model="gpt-4o-mini",
@@ -563,7 +566,7 @@ async def test_a_cached_answer_streams_its_tool_call_after_the_reasoning_and_the
     assert reasoning and max(reasoning) < min(text)
     assert called == [max(text) + 1]
     assert deltas[called[0]]["tool_calls"] == [tool_call]
-    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["tool_calls"]
+    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["stop"]
 
 
 @pytest.mark.asyncio
@@ -586,7 +589,7 @@ async def test_a_cached_tool_turn_without_text_streams_the_reasoning_before_the_
     assert "".join(str(deltas[i]["reasoning_content"]) for i in reasoning) == "I need the basket totals"
     assert reasoning and called and max(reasoning) < min(called)
     assert [deltas[i]["tool_calls"] for i in called] == [[tool_call]]
-    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["tool_calls"]
+    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["stop"]
 
 
 @pytest.mark.asyncio
@@ -610,4 +613,31 @@ async def test_a_cached_tool_turn_keeps_its_whitespace_only_text_between_the_rea
     assert "".join(str(deltas[i]["content"]) for i in text) == whitespace
     assert reasoning and text and called and max(reasoning) < min(text) and max(text) < min(called)
     assert [deltas[i]["tool_calls"] for i in called] == [[tool_call]]
-    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["tool_calls"]
+    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["stop"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.parametrize(
+    "stored_finish_reason, replayed_finish_reason",
+    [
+        ({"finish_reason": "tool_calls"}, "tool_calls"),
+        ({"finish_reason": "length"}, "length"),
+        ({"finish_reason": None}, "tool_calls"),
+        ({}, "tool_calls"),
+    ],
+    ids=["stored-tool-calls", "stored-length", "stored-null", "missing"],
+)
+async def test_a_cached_tool_turn_replays_its_stored_finish_reason_and_derives_a_missing_one(
+    replay: Literal["async", "sync"],
+    stored_finish_reason: dict[str, JsonValue],
+    replayed_finish_reason: str,
+) -> None:
+    tool_call: Final[JsonValue] = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "count_apples", "arguments": '{"basket": "all"}'},
+        "index": 0,
+    }
+    deltas: Final = await _client_stream({"content": None, "tool_calls": [tool_call]}, replay, stored_finish_reason)
+    assert [delta["finish"] for delta in deltas if delta["finish"]] == [replayed_finish_reason]
