@@ -909,6 +909,9 @@ if MCP_AVAILABLE:
             verbose_logger.info("Shutting down MCP session managers...")
 
             try:
+                from litellm.proxy.mcp_server.catalog import shutdown_tool_page_producers
+
+                await shutdown_tool_page_producers()
                 if _stateful_auth_context_cleanup_task:
                     _stateful_auth_context_cleanup_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):

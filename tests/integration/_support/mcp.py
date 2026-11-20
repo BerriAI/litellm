@@ -3,6 +3,7 @@ import json
 import os
 import queue
 import sys
+import threading
 import time
 from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
@@ -165,8 +166,14 @@ def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Qu
             return
         body: Final = await StarletteRequest(scope, receive).body()
         assert len(body) <= 65536
-        if body:
-            observed.put({"body": json.loads(body), "headers": dict(scope["headers"]), "path": scope["path"]})
+        observed.put(
+            {
+                "body": json.loads(body) if body else None,
+                "headers": dict(scope["headers"]),
+                "method": scope["method"],
+                "path": scope["path"],
+            }
+        )
         message: Final = {"type": "http.request", "body": body, "more_body": False}
         pending: Final = iter((message,))
 
@@ -835,6 +842,9 @@ def paginated_mcp_peer(
     fail_continuation: bool = False,
     session_bound: bool = False,
     metadata: dict[str, JsonValue] | None = None,
+    block_tool_continuation: threading.Event | None = None,
+    tool_continuation_blocked: threading.Event | None = None,
+    release_tool_continuation: threading.Event | None = None,
 ) -> Iterator[McpPeer]:
     from contextlib import asynccontextmanager
 
@@ -885,8 +895,20 @@ def paginated_mcp_peer(
     session_by_request: dict[int | str, str | None] = {}  # mutable-ok: bind ASGI headers to low-level request IDs
     session_header_by_request: dict[int | str, bytes | None] = {}
     payload_adapter: Final = TypeAdapter(dict[str, JsonValue])
+    tool_list_lock: Final = asyncio.Lock()
 
     async def tools(context, params):
+        if (
+            params is not None
+            and params.cursor is not None
+            and block_tool_continuation is not None
+            and block_tool_continuation.is_set()
+            and tool_continuation_blocked is not None
+            and not tool_continuation_blocked.is_set()
+            and release_tool_continuation is not None
+        ):
+            tool_continuation_blocked.set()
+            await asyncio.to_thread(release_tool_continuation.wait)
         request_id: Final = context.request_id
         session_id: Final = (
             session_by_request.pop(request_id, None)
@@ -998,9 +1020,6 @@ def paginated_mcp_peer(
             None,
         )
         request_id: Final = payload.get("id")
-        if payload.get("method") == "tools/list" and isinstance(request_id, (int, str)):
-            session_by_request[request_id] = raw_session_id.decode() if raw_session_id is not None else None
-            session_header_by_request[request_id] = raw_session_id
         pending: Final = iter(({"type": "http.request", "body": body, "more_body": False},))
 
         async def replay() -> Message:
@@ -1008,6 +1027,17 @@ def paginated_mcp_peer(
             if buffered is not None:
                 return buffered
             return await receive()
+
+        if payload.get("method") == "tools/list" and isinstance(request_id, (int, str)):
+            async with tool_list_lock:
+                session_by_request[request_id] = raw_session_id.decode() if raw_session_id is not None else None
+                session_header_by_request[request_id] = raw_session_id
+                try:
+                    await app(scope, replay, send)
+                finally:
+                    session_by_request.pop(request_id, None)
+                    session_header_by_request.pop(request_id, None)
+            return
 
         await app(scope, replay, send)
 

@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Final, Literal
@@ -19,7 +20,7 @@ from litellm.types.mcp import MCPTransport
 
 
 @asynccontextmanager
-async def catalog_session(gateway, protocol: str = "2025-11-25"):
+async def catalog_session(gateway, protocol: str = "2025-11-25", *, discovery_peer: McpPeer | None = None):
     async with httpx.AsyncClient(headers={"Authorization": "Bearer " + gateway.key}) as client:
         async with streamable_http_client(
             str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client
@@ -27,6 +28,8 @@ async def catalog_session(gateway, protocol: str = "2025-11-25"):
             async with ClientSession(streams[0], streams[1]) as session:
                 if protocol == "2026-07-28":
                     session.adopt(DiscoverResult.model_validate(await session.send_discover(protocol)))
+                    if discovery_peer is not None:
+                        await asyncio.to_thread(collect_tool_list_requests, discovery_peer, 7)
                 else:
                     await session.initialize()
                 yield session
@@ -49,6 +52,11 @@ def config_file(
             "master_key": "sk-pagination-test",
             "store_model_in_db": False,
             **(
+                {"coordination_redis": {"host": redis.host, "port": redis.port}}
+                if redis is not None
+                else {}
+            ),
+            **(
                 {"mcp_advertised_versions": ["2025-11-25", "2026-07-28"]}
                 if protocol == "2026-07-28"
                 else {}
@@ -59,7 +67,7 @@ def config_file(
         values["litellm_settings"] = {
             "cache": True,
             "cache_params": {"type": "redis", "host": redis.host, "port": redis.port},
-            "enable_redis_auth_cache": True,
+            "enable_redis_auth_cache": False,
         }
     config.write_text(
         yaml.safe_dump(values)
@@ -70,19 +78,62 @@ def config_file(
 REMOVE_DATABASE = ("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH")
 
 
-def discard_startup_tool_requests(peer: McpPeer, expected: int) -> None:
-    observed: tuple[dict[str, object], ...] = ()
+def discard_startup_tool_requests(peer: McpPeer, expected: int, *, session_bound: bool = False) -> None:
+    observed: list[dict[str, object]] = []
 
     def collect() -> int:
-        nonlocal observed
-        observed += peer.drain()
-        return sum(
+        observed.extend(peer.drain())
+        tool_list_count = sum(
             1
             for call in observed
             if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
         )
+        if not session_bound:
+            return tool_list_count
+        tool_sessions = {
+            headers.get(b"mcp-session-id")
+            for call in observed
+            if isinstance(call.get("body"), dict)
+            and call["body"].get("method") == "tools/list"
+            and isinstance((headers := call.get("headers")), dict)
+        }
+        closed_sessions = {
+            headers.get(b"mcp-session-id")
+            for call in observed
+            if call.get("method") == "DELETE" and isinstance((headers := call.get("headers")), dict)
+        }
+        return tool_list_count if tool_sessions <= closed_sessions else 0
 
     eventually(collect, lambda count: count >= expected, seconds=20)
+
+
+def collect_tool_list_requests(peer: McpPeer, expected: int) -> tuple[dict[str, object], ...]:
+    observed: list[dict[str, object]] = []
+
+    def collect() -> int:
+        observed.extend(
+            call
+            for call in peer.drain()
+            if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
+        )
+        return len(observed)
+
+    eventually(collect, lambda count: count >= expected, seconds=20)
+    return tuple(observed)
+
+
+def drain_tool_list_requests(peer: McpPeer) -> tuple[dict[str, object], ...]:
+    return tuple(
+        call
+        for call in peer.drain()
+        if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
+    )
+
+
+def is_catalog_list_request(call: dict[str, object]) -> bool:
+    body: Final = call.get("body")
+    method: Final = body.get("method") if isinstance(body, dict) else None
+    return isinstance(method, str) and method.endswith("/list")
 
 
 @pytest.mark.parametrize("protocol", ["2025-11-25", "2026-07-28"])
@@ -96,16 +147,12 @@ def test_catalog_pages_are_portable_repeatable_and_complete(tmp_path: Path, prot
             ("list_resources", "resources"),
             ("list_resource_templates", "resource_templates"),
         ):
-            async with catalog_session(first_replica, protocol) as first_session:
+            async with catalog_session(first_replica, protocol, discovery_peer=peer) as first_session:
                 first = await getattr(first_session, method)()
             if method == "list_tools":
-                assert len(first.tools) == 100
+                assert len(first.tools) == 30
                 assert first.next_cursor
-                upstream_calls = tuple(
-                    call
-                    for call in peer.drain()
-                    if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
-                )
+                upstream_calls = collect_tool_list_requests(peer, (205 + 29) // 30)
                 assert len(upstream_calls) == (205 + 29) // 30
                 upstream_sessions = {
                     call["headers"].get(b"mcp-session-id") for call in upstream_calls if "headers" in call
@@ -117,25 +164,32 @@ def test_catalog_pages_are_portable_repeatable_and_complete(tmp_path: Path, prot
                     assert upstream_sessions == {None}
                 if protocol == "2026-07-28":
                     assert 0 < first.ttl_ms <= 9000
-                async with catalog_session(second_replica, protocol) as second_session:
-                    peer.drain()
+                async with catalog_session(second_replica, protocol, discovery_peer=peer) as second_session:
                     second = await second_session.list_tools(params=PaginatedRequestParams(cursor=first.next_cursor))
                     replay = await second_session.list_tools(params=PaginatedRequestParams(cursor=first.next_cursor))
-                    assert [item.name for item in second.tools] == [item.name for item in replay.tools]
-                    assert second.next_cursor
-                    assert replay.next_cursor
-                    third = await second_session.list_tools(params=PaginatedRequestParams(cursor=second.next_cursor))
-                names = [item.name for page in (first, second, third) for item in page.tools]
+                    assert second.tools == replay.tools
+                    pages = [first, second]
+                    while pages[-1].next_cursor is not None:
+                        pages.append(
+                            await second_session.list_tools(
+                                params=PaginatedRequestParams(cursor=pages[-1].next_cursor)
+                            )
+                        )
+                names = [item.name for page in pages for item in page.tools]
                 assert names == [f"pages-add{index}" for index in range(205)]
-                assert [len(page.tools) for page in (first, second, third)] == [100, 100, 5]
-                assert third.next_cursor is None
-                assert not any(
-                    isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
-                    for call in peer.drain()
+                assert [len(page.tools) for page in pages] == [30, 30, 30, 30, 30, 30, 25]
+                assert pages[-1].next_cursor is None
+                extra_requests = drain_tool_list_requests(peer)
+                assert not extra_requests, tuple(
+                    (
+                        call.get("headers", {}).get(b"mcp-session-id"),
+                        call["body"].get("params"),
+                    )
+                    for call in extra_requests
                 )
                 continue
             assert first.next_cursor
-            async with catalog_session(second_replica, protocol) as second_session:
+            async with catalog_session(second_replica, protocol, discovery_peer=peer) as second_session:
                 second = await getattr(second_session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
                 replay = await getattr(second_session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
                 assert getattr(second, field) == getattr(replay, field)
@@ -167,12 +221,13 @@ def test_catalog_pages_are_portable_repeatable_and_complete(tmp_path: Path, prot
             "STORE_MODEL_IN_DB": "False",
             "DISABLE_SCHEMA_UPDATE": "true",
             "LITELLM_SALT_KEY": "shared-pagination-test",
+            "LITELLM_MCP_DISCOVERY_CACHE_TTL": "0",
         }
         with (
             owned_proxy(seed, tmp_path / "a", environment, **options) as a,
             owned_proxy(seed, tmp_path / "b", environment, **options) as b,
         ):
-            discard_startup_tool_requests(peer, 14)
+            discard_startup_tool_requests(peer, 14, session_bound=session_bound)
             asyncio.run(exercise(a, b, peer))
 
 
@@ -232,67 +287,80 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
     from integration._support.mcp import register_mcp
 
     assert os.environ.get("DATABASE_URL"), "This integration case requires disposable-database access"
+    session_bound: Final = protocol == "2025-11-25"
 
     async def exercise(a, b, peer, identity, owner, stranger, policy, spare):
         owner_a = Gateway(a.client, owner, peer.url)
         owner_b = Gateway(b.client, owner, peer.url)
         stranger_b = Gateway(b.client, stranger, peer.url)
+
         first_pages = {}
         for method in ("list_tools", "list_prompts", "list_resources", "list_resource_templates"):
-            async with catalog_session(owner_a, protocol) as session:
+            async with catalog_session(owner_a, protocol, discovery_peer=peer) as session:
                 first_pages[method] = await getattr(session, method)()
                 if method == "list_tools":
                     assert [tool.name for tool in first_pages[method].tools] == [
-                        f"pages-add{index}" for index in range(100)
+                        f"pages-add{index}" for index in range(30)
                     ]
                     assert first_pages[method].next_cursor
                 else:
                     assert first_pages[method].next_cursor
             if method == "list_tools":
-                tool_requests = tuple(
-                    call
-                    for call in peer.drain()
-                    if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
-                )
+                tool_requests = collect_tool_list_requests(peer, (205 + 29) // 30)
                 assert len(tool_requests) == (205 + 29) // 30
-                sessions = {
-                    call["headers"].get(b"mcp-session-id") for call in tool_requests if "headers" in call
-                }
-                assert len(sessions) == 1
-                assert None not in sessions
-                async with catalog_session(owner_b, protocol) as session:
+                sessions = {call["headers"].get(b"mcp-session-id") for call in tool_requests if "headers" in call}
+                if session_bound:
+                    assert len(sessions) == 1
+                    assert None not in sessions
+                else:
+                    assert sessions == {None}
+                async with catalog_session(owner_b, protocol, discovery_peer=peer) as session:
                     second = await session.list_tools(
                         params=PaginatedRequestParams(cursor=first_pages[method].next_cursor)
                     )
                     replay = await session.list_tools(
                         params=PaginatedRequestParams(cursor=first_pages[method].next_cursor)
                     )
-                    third = await session.list_tools(params=PaginatedRequestParams(cursor=second.next_cursor))
-                assert [tool.name for tool in second.tools] == [f"pages-add{index}" for index in range(100, 200)]
-                assert [tool.name for tool in replay.tools] == [tool.name for tool in second.tools]
-                assert second.next_cursor and replay.next_cursor
-                assert [tool.name for tool in third.tools] == [f"pages-add{index}" for index in range(200, 205)]
-                assert third.next_cursor is None
-                assert peer.drain() == ()
-                async with catalog_session(stranger_b, protocol) as session:
+                    pages = [first_pages[method], second]
+                    while pages[-1].next_cursor is not None:
+                        pages.append(
+                            await session.list_tools(
+                                params=PaginatedRequestParams(cursor=pages[-1].next_cursor)
+                            )
+                        )
+                assert [tool.name for tool in second.tools] == [f"pages-add{index}" for index in range(30, 60)]
+                assert replay.tools == second.tools
+                assert tuple(tool.name for page in pages for tool in page.tools) == tuple(
+                    f"pages-add{index}" for index in range(205)
+                )
+                assert pages[-1].next_cursor is None
+                extra_requests = drain_tool_list_requests(peer)
+                assert not extra_requests, tuple(
+                    (
+                        call.get("headers", {}).get(b"mcp-session-id"),
+                        call["body"].get("params"),
+                    )
+                    for call in extra_requests
+                )
+                async with catalog_session(stranger_b, protocol, discovery_peer=peer) as session:
                     with pytest.raises(MCPError, match="scope"):
                         await session.list_tools(
                             params=PaginatedRequestParams(cursor=first_pages[method].next_cursor)
                         )
-                assert peer.drain() == ()
+                assert drain_tool_list_requests(peer) == ()
                 continue
-            async with catalog_session(owner_b, protocol) as session:
+            async with catalog_session(owner_b, protocol, discovery_peer=peer) as session:
                 continued = await getattr(session, method)(
                     params=PaginatedRequestParams(cursor=first_pages[method].next_cursor)
                 )
                 assert continued.next_cursor
-            async with catalog_session(stranger_b, protocol) as session:
+            async with catalog_session(stranger_b, protocol, discovery_peer=peer) as session:
                 peer.drain()
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(
                         params=PaginatedRequestParams(cursor=first_pages[method].next_cursor)
                     )
-                assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
+                assert not any(is_catalog_list_request(call) for call in peer.drain())
 
         a.post(
             "/key/update",
@@ -311,40 +379,53 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                     peer.drain()
                     with pytest.raises(MCPError, match="scope"):
                         await session.list_tools(params=PaginatedRequestParams(cursor=first.next_cursor))
-                    assert peer.drain() == ()
+                    assert drain_tool_list_requests(peer) == ()
                     revoked = await session.list_tools()
-                assert [tool.name for tool in revoked.tools] == [
+                    revoked_pages = [revoked]
+                    while revoked_pages[-1].next_cursor is not None:
+                        revoked_pages.append(await session.list_tools(
+                            params=PaginatedRequestParams(cursor=revoked_pages[-1].next_cursor)
+                        ))
+                assert [tool.name for page in revoked_pages for tool in page.tools] == [
                     "spare-add0",
                     "spare-add1",
                     "spare-add2",
                 ]
-                assert revoked.next_cursor is None
+                assert revoked_pages[-1].next_cursor is None
                 continue
             async with catalog_session(owner_b, protocol) as session:
                 peer.drain()
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
-                assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
+                assert not any(is_catalog_list_request(call) for call in peer.drain())
         a.post("/key/update", {"key": owner, "object_permission": {"mcp_servers": []}, **policy})
         changed = a.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "new catalog generation"})
         assert changed.status_code == 202, changed.text
         for method, first in first_pages.items():
-            async with catalog_session(owner_b, protocol) as session:
+            async with catalog_session(owner_b, protocol, discovery_peer=peer) as session:
                 if method == "list_tools":
                     peer.drain()
                     with pytest.raises(MCPError, match="snapshot"):
                         await session.list_tools(params=PaginatedRequestParams(cursor=first.next_cursor))
-                    assert peer.drain() == ()
+                    assert drain_tool_list_requests(peer) == ()
                     fresh = await session.list_tools()
                     assert [tool.name for tool in fresh.tools] == [
-                        f"pages-add{index}" for index in range(100)
+                        f"pages-add{index}" for index in range(30)
                     ]
                     assert fresh.next_cursor
+                    while fresh.next_cursor is not None:
+                        fresh = await session.list_tools(params=PaginatedRequestParams(cursor=fresh.next_cursor))
                     continue
                 peer.drain()
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
-                assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
+                rejected_calls = tuple(call for call in peer.drain() if is_catalog_list_request(call))
+                for call in rejected_calls:
+                    assert (
+                        protocol == "2026-07-28"
+                        and call["body"]["method"] == "tools/list"
+                        and (call["body"].get("params") or {}).get("cursor") is not None
+                    ), (method, call["body"])
                 fresh = await getattr(session, method)()
                 assert fresh.next_cursor
 
@@ -368,7 +449,10 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
         )
         with (
             paginated_mcp_peer(
-                page_size=1, tool_page_size=30, tool_count=205, session_bound=True
+                page_size=1,
+                tool_page_size=30,
+                tool_count=205,
+                session_bound=protocol == "2025-11-25",
             ) as peer,
             paginated_mcp_peer() as spare_peer,
             owned_redis(tmp_path / "redis") as redis,
@@ -384,11 +468,12 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                             "master_key": seed.key,
                             "store_model_in_db": True,
                             "mcp_advertised_versions": ["2025-11-25", "2026-07-28"],
+                            "coordination_redis": {"host": redis.host, "port": redis.port},
                         },
                         "litellm_settings": {
                             "cache": True,
                             "cache_params": {"type": "redis", "host": redis.host, "port": redis.port},
-                            "enable_redis_auth_cache": True,
+                            "enable_redis_auth_cache": False,
                         },
                     }
                 )
@@ -397,6 +482,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                 "DATABASE_URL": database_url,
                 "DISABLE_SCHEMA_UPDATE": "true",
                 "LITELLM_SALT_KEY": "shared-pagination-test",
+                "LITELLM_MCP_DISCOVERY_CACHE_TTL": "0",
             }
             options = dict(
                 config=config,
@@ -451,7 +537,7 @@ def test_cursor_rejects_changed_replica_configuration_before_dispatch(tmp_path: 
                 peer.drain()
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
-                assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
+                assert not any(is_catalog_list_request(call) for call in peer.drain())
                 fresh = await getattr(session, method)()
                 assert fresh.next_cursor
 
@@ -512,7 +598,12 @@ def test_pages_preserve_supported_protocol_versions(tmp_path: Path):
     with paginated_mcp_peer() as peer, httpx.Client() as client:
         seed = Gateway(client, "sk-pagination-test", peer.url)
         config = config_file(tmp_path, peer.url)
-        environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-key"}
+        environment = {
+            "STORE_MODEL_IN_DB": "False",
+            "DISABLE_SCHEMA_UPDATE": "true",
+            "LITELLM_SALT_KEY": "shared-key",
+            "LITELLM_MCP_DISCOVERY_CACHE_TTL": "0",
+        }
         with owned_proxy(
             seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
         ) as gateway:
@@ -538,7 +629,7 @@ def test_incomplete_discovery_never_establishes_a_bare_tool_route(tmp_path: Path
                 CallToolRequest(params=CallToolRequestParams(name="pages-add0", arguments={"a": 3, "b": 4})),
                 CallToolResult,
             )
-            assert not prefixed.is_error
+            assert not prefixed.is_error, prefixed
             assert prefixed.content[0].text == "7"
             assert len(tool_calls(peer.drain())) == 1
 
@@ -597,7 +688,11 @@ def test_session_bound_tools_listing_uses_gateway_pages_and_isolates_peer_failur
     async def exercise(gateway, healthy: McpPeer, broken: McpPeer):
         async with catalog_session(gateway, "2025-11-25") as session:
             first = await session.list_tools()
-            assert len(first.tools) == 100
+            assert len(first.tools) == 31
+            assert set(tool.name for tool in first.tools) == {
+                *(f"pages-add{index}" for index in range(30)),
+                "broken-add0",
+            }
             assert first.next_cursor
 
             def tool_requests(peer: McpPeer) -> tuple[dict[str, object], ...]:
@@ -607,9 +702,8 @@ def test_session_bound_tools_listing_uses_gateway_pages_and_isolates_peer_failur
                     if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
                 )
 
-            healthy_requests: Final = tool_requests(healthy)
-            broken_requests: Final = tool_requests(broken)
-            assert len(healthy_requests) == (205 + 29) // 30
+            healthy_requests: Final = collect_tool_list_requests(healthy, (205 + 29) // 30)
+            broken_requests: Final = collect_tool_list_requests(broken, 2)
             assert len(broken_requests) == 2
             for requests in (healthy_requests, broken_requests):
                 headers = tuple(request.get("headers") for request in requests)
@@ -622,40 +716,158 @@ def test_session_bound_tools_listing_uses_gateway_pages_and_isolates_peer_failur
 
             second = await session.list_tools(params=PaginatedRequestParams(cursor=first.next_cursor))
             replay = await session.list_tools(params=PaginatedRequestParams(cursor=first.next_cursor))
-            assert [tool.name for tool in second.tools] == [tool.name for tool in replay.tools]
-            assert second.next_cursor and replay.next_cursor
-            third = await session.list_tools(params=PaginatedRequestParams(cursor=second.next_cursor))
-            pages = (first, second, third)
+            assert second.tools == replay.tools
+            pages = [first, second]
+            while pages[-1].next_cursor is not None:
+                pages.append(await session.list_tools(params=PaginatedRequestParams(cursor=pages[-1].next_cursor)))
             names = tuple(tool.name for page in pages for tool in page.tools)
-            assert names == tuple(f"pages-add{index}" for index in range(205))
-            assert tuple(len(page.tools) for page in pages) == (100, 100, 5)
-            assert third.next_cursor is None
+            assert len(names) == 206
+            assert set(names) == {*[f"pages-add{index}" for index in range(205)], "broken-add0"}
+            assert tuple(len(page.tools) for page in pages) == (31, 30, 30, 30, 30, 30, 25)
+            assert pages[-1].next_cursor is None
             assert all(page.ttl_ms == 0 for page in pages)
-            for page in pages:
+            for page in pages[1:]:
                 failure = page.meta["litellm.ai/server_outcomes"]["broken"]
                 assert failure["status"] != "ok"
                 assert "tag" not in failure
                 assert "untrusted upstream message" not in page.model_dump_json()
-            assert healthy.drain() == ()
-            assert broken.drain() == ()
+            assert not any(
+                isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
+                for call in healthy.drain()
+            )
+            assert not any(
+                isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
+                for call in broken.drain()
+            )
 
     with (
         paginated_mcp_peer(session_bound=True, tool_count=205, tool_page_size=30) as healthy,
         paginated_mcp_peer(session_bound=True, fail_continuation=True) as broken,
+        owned_redis(tmp_path / "redis") as redis,
         httpx.Client() as client,
     ):
         seed = Gateway(client, "sk-pagination-test", healthy.url)
-        config = config_file(tmp_path, healthy.url)
+        config = config_file(tmp_path, healthy.url, redis=redis)
         values = yaml.safe_load(config.read_text())
         values["mcp_servers"]["broken"] = {"url": broken.url, "transport": "http"}
         config.write_text(yaml.safe_dump(values))
-        environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-key"}
+        environment = {
+            "STORE_MODEL_IN_DB": "False",
+            "DISABLE_SCHEMA_UPDATE": "true",
+            "LITELLM_SALT_KEY": "shared-key",
+            "LITELLM_MCP_DISCOVERY_CACHE_TTL": "0",
+        }
         with owned_proxy(
             seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
         ) as gateway:
-            discard_startup_tool_requests(healthy, 7)
-            discard_startup_tool_requests(broken, 2)
+            discard_startup_tool_requests(healthy, 7, session_bound=True)
+            discard_startup_tool_requests(broken, 2, session_bound=True)
             asyncio.run(exercise(gateway, healthy, broken))
+
+
+def test_session_bound_first_page_returns_while_next_page_is_blocked(tmp_path: Path):
+    blocked = threading.Event()
+    block_continuation = threading.Event()
+    release = threading.Event()
+
+    async def exercise(gateway, peer: McpPeer):
+        async with catalog_session(gateway, "2025-11-25") as session:
+            try:
+                block_continuation.set()
+                first = await session.list_tools()
+                assert [tool.name for tool in first.tools] == [f"pages-add{index}" for index in range(30)]
+                assert first.next_cursor
+                assert await asyncio.to_thread(blocked.wait, 20)
+                observed = list(peer.drain())
+                tool_requests = [
+                    call
+                    for call in observed
+                    if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
+                ]
+                assert len(tool_requests) == 2
+
+                release.set()
+
+                def collect() -> int:
+                    observed.extend(peer.drain())
+                    return sum(
+                        1
+                        for call in observed
+                        if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
+                    )
+
+                eventually(collect, lambda count: count == 7, seconds=20)
+
+                def collect_session_close() -> bool:
+                    observed.extend(peer.drain())
+                    tool_sessions = {
+                        call["headers"].get(b"mcp-session-id")
+                        for call in observed
+                        if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
+                    }
+                    closed_sessions = {
+                        headers.get(b"mcp-session-id")
+                        for call in observed
+                        if call.get("method") == "DELETE"
+                        and isinstance((headers := call.get("headers")), dict)
+                    }
+                    return bool(tool_sessions) and tool_sessions <= closed_sessions
+
+                eventually(collect_session_close, lambda closed: closed, seconds=20)
+                upstream_sessions = {
+                    call["headers"].get(b"mcp-session-id")
+                    for call in observed
+                    if isinstance(call.get("body"), dict) and call["body"].get("method") == "tools/list"
+                }
+                assert len(upstream_sessions) == 1
+                assert None not in upstream_sessions
+                closed_sessions = {
+                    value
+                    for call in observed
+                    if call.get("method") == "DELETE"
+                    and isinstance(call.get("headers"), dict)
+                    and (value := call["headers"].get(b"mcp-session-id")) is not None
+                }
+                assert upstream_sessions <= closed_sessions
+
+                pages = [first]
+                while pages[-1].next_cursor is not None:
+                    pages.append(
+                        await session.list_tools(params=PaginatedRequestParams(cursor=pages[-1].next_cursor))
+                    )
+                assert tuple(tool.name for page in pages for tool in page.tools) == tuple(
+                    f"pages-add{index}" for index in range(205)
+                )
+                assert tuple(len(page.tools) for page in pages) == (30, 30, 30, 30, 30, 30, 25)
+                assert pages[-1].next_cursor is None
+            finally:
+                release.set()
+
+    with (
+        paginated_mcp_peer(
+            session_bound=True,
+            tool_count=205,
+            tool_page_size=30,
+            block_tool_continuation=block_continuation,
+            tool_continuation_blocked=blocked,
+            release_tool_continuation=release,
+        ) as peer,
+        owned_redis(tmp_path / "redis") as redis,
+        httpx.Client() as client,
+    ):
+        seed = Gateway(client, "sk-pagination-test", peer.url)
+        config = config_file(tmp_path, peer.url, redis=redis)
+        environment = {
+            "STORE_MODEL_IN_DB": "False",
+            "DISABLE_SCHEMA_UPDATE": "true",
+            "LITELLM_SALT_KEY": "shared-key",
+            "LITELLM_MCP_DISCOVERY_CACHE_TTL": "0",
+        }
+        with owned_proxy(
+            seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
+        ) as gateway:
+            discard_startup_tool_requests(peer, 7, session_bound=True)
+            asyncio.run(exercise(gateway, peer))
 
 
 def test_failed_single_server_tools_walk_returns_classified_error(tmp_path: Path):

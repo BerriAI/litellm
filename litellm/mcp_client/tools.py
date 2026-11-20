@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Final, Literal
 
 import anyio
@@ -117,7 +117,11 @@ async def list_tools_with_pagination(
 
 
 async def list_tools_result_with_pagination(
-    session: ClientSession, listing_deadline: float | None = None, *, require_complete: bool = False
+    session: ClientSession,
+    listing_deadline: float | None = None,
+    *,
+    require_complete: bool = False,
+    on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
 ) -> ListToolsResult:
     """Collect tools from every tools/list page by following nextCursor.
 
@@ -147,8 +151,10 @@ async def list_tools_result_with_pagination(
                 if cursor is None
                 else await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
             )
-            tools.extend(result.tools)
             pages.append((result, time.monotonic()))
+            if on_page is not None:
+                await on_page(result)
+            tools.extend(result.tools)
 
             next_cursor = result.next_cursor
             if not isinstance(next_cursor, str) or not next_cursor:

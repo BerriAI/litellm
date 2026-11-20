@@ -1,7 +1,7 @@
 import asyncio
 import json
 import queue
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from itertools import count
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -193,6 +193,21 @@ def page(name: str, cursor: str | None = None, revision: str = "stable") -> List
         next_cursor=cursor,
         meta={"revision": revision},
     )
+
+
+class MemoryToolPageStore:
+    available = True
+
+    def __init__(self) -> None:
+        self.values: dict[str, JsonValue] = {}
+
+    async def get(self, key: str) -> JsonValue | None:
+        return self.values.get(key)
+
+    async def set(self, key: str, value: JsonValue, _ttl: float) -> None:
+        if key in self.values and ":list-status:" not in key:
+            raise AssertionError(f"Tool page key was overwritten: {key}")
+        self.values[key] = value
 
 
 def rate_limit_catalog_setup(
@@ -598,13 +613,20 @@ async def test_gateway_tools_walks_session_bound_pages(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_gateway_tools_cache_complete_session_walk_in_replayable_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "salt_key",
+    (pytest.param("session-bound-tools-pages-test", id="salt-present"), pytest.param(None, id="salt-missing")),
+)
+async def test_gateway_tools_without_redis_returns_complete_session_walk_without_cursor(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str | None
+) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.mcp_server.outbound_credentials.result import Error
-    from litellm.proxy.mcp_server.state_tokens import open_state
 
-    monkeypatch.setenv("LITELLM_SALT_KEY", "session-bound-tools-pages-test")
+    if salt_key is None:
+        monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     monkeypatch.setattr(catalog.time, "time", lambda: 1000.0)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
@@ -631,8 +653,8 @@ async def test_gateway_tools_cache_complete_session_walk_in_replayable_pages(mon
         use_tool_list_cache=False,
     )
 
-    assert tuple(tool.name for tool in first.tools) == tuple(f"bound-bound-tool-{index}" for index in range(100))
-    assert first.next_cursor
+    assert tuple(tool.name for tool in first.tools) == tuple(f"bound-bound-tool-{index}" for index in range(205))
+    assert first.next_cursor is None
     assert first.ttl_ms == 0
     assert first.outcomes["bound"] == ServerListOk(tool_count=205)
     initial_requests: Final = tuple(calls.get_nowait() for _ in range(calls.qsize()))
@@ -644,73 +666,55 @@ async def test_gateway_tools_cache_complete_session_walk_in_replayable_pages(mon
         *(f"{upstream_pages[0][2]}:{offset}" for offset in range(30, 205, 30)),
     )
 
-    second = await catalog.aggregate_gateway_tools(
-        context,
-        PaginatedRequestParams(cursor=first.next_cursor),
-        [server],
-        prefetched,
-        enforce_rate_limits=False,
-        use_tool_list_cache=False,
-    )
-    replay = await catalog.aggregate_gateway_tools(
-        context,
-        PaginatedRequestParams(cursor=first.next_cursor),
-        [server],
-        prefetched,
-        enforce_rate_limits=False,
-        use_tool_list_cache=False,
-    )
-    assert second.tools == replay.tools
-    assert second.next_cursor
-    assert replay.next_cursor
-    second_state: Final = open_state(
-        second.next_cursor,
-        purpose="mcp.catalog.list.v1:tools/list",
-        now=1000,
-    )
-    replay_state: Final = open_state(
-        replay.next_cursor,
-        purpose="mcp.catalog.list.v1:tools/list",
-        now=1000,
-    )
-    assert not isinstance(second_state, Error)
-    assert not isinstance(replay_state, Error)
-    assert catalog._ListingState.model_validate_json(
-        json.dumps(second_state.ok)
-    ) == catalog._ListingState.model_validate_json(
-        json.dumps(replay_state.ok)
-    )
-    third = await catalog.aggregate_gateway_tools(
-        context,
-        PaginatedRequestParams(cursor=second.next_cursor),
-        [server],
-        prefetched,
-        enforce_rate_limits=False,
-        use_tool_list_cache=False,
-    )
-    assert tuple(tool.name for tool in second.tools) == tuple(f"bound-bound-tool-{index}" for index in range(100, 200))
-    assert tuple(tool.name for tool in third.tools) == tuple(f"bound-bound-tool-{index}" for index in range(200, 205))
-    assert third.next_cursor is None
     assert calls.empty()
 
-    with pytest.raises(MCPError, match="Pagination scope or snapshot changed"):
-        await catalog.aggregate_gateway_tools(
-            mcp_operations.prepare_context(UserAPIKeyAuth(api_key="different-caller")),
-            PaginatedRequestParams(cursor=first.next_cursor),
+
+@pytest.mark.asyncio
+async def test_redis_tool_pages_replay_and_reject_changed_caller_or_oauth_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "session-bound-tools-pages-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", MemoryToolPageStore())
+    transport, calls = _session_bound_tools_transport(tool_count=3, page_size=1)
+    server = MCPServer(server_id="bound", name="bound", url="https://bound.example/mcp", transport=MCPTransport.http)
+    manager = MCPServerManager(upstream_transport=transport)
+    monkeypatch.setattr(manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    context = mcp_operations.prepare_context(UserAPIKeyAuth(api_key="tools-page-caller"))
+    prefetched = {"bound": {"access_token": "token-a"}}
+
+    async def listing(caller, credentials, cursor=None):
+        return await catalog.aggregate_gateway_tools(
+            caller,
+            PaginatedRequestParams(cursor=cursor),
             [server],
-            prefetched,
+            credentials,
             enforce_rate_limits=False,
             use_tool_list_cache=False,
         )
+
+    first = await listing(context, prefetched)
+    assert first.next_cursor
+    await asyncio.gather(*tuple(catalog._TOOL_PRODUCERS.values()))
+    initial = tuple(calls.get_nowait() for _ in range(calls.qsize()))
+    assert len([call for call in initial if call[1] == "tools/list"]) == 3
+    second = await listing(context, prefetched, first.next_cursor)
+    replay = await listing(context, prefetched, first.next_cursor)
+    assert tuple(tool.name for tool in second.tools) == ("bound-bound-tool-1",)
+    assert replay.tools == second.tools
+    assert second.next_cursor
+    last = await listing(context, prefetched, second.next_cursor)
+    assert tuple(tool.name for tool in last.tools) == ("bound-bound-tool-2",)
+    assert last.next_cursor is None
     with pytest.raises(MCPError, match="Pagination scope or snapshot changed"):
-        await catalog.aggregate_gateway_tools(
-            context,
-            PaginatedRequestParams(cursor=first.next_cursor),
-            [server],
-            {"bound": {"access_token": "token-b"}},
-            enforce_rate_limits=False,
-            use_tool_list_cache=False,
+        await listing(
+            mcp_operations.prepare_context(UserAPIKeyAuth(api_key="different-caller")), prefetched, first.next_cursor
         )
+    with pytest.raises(MCPError, match="Pagination scope or snapshot changed"):
+        await listing(context, {"bound": {"access_token": "token-b"}}, first.next_cursor)
     assert calls.empty()
 
 
@@ -767,7 +771,7 @@ async def test_gateway_tools_rejects_stale_cursor_before_upstream_dispatch(monke
 
 
 @pytest.mark.asyncio
-async def test_gateway_tools_isolates_failed_page_two_without_publishing_bare_routes(
+async def test_gateway_tools_without_redis_keeps_healthy_full_walk_when_peer_page_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy import proxy_server
@@ -807,10 +811,8 @@ async def test_gateway_tools_isolates_failed_page_two_without_publishing_bare_ro
         use_tool_list_cache=False,
     )
 
-    assert tuple(tool.name for tool in result.tools) == tuple(
-        f"healthy-healthy-tool-{index}" for index in range(100)
-    )
-    assert result.next_cursor
+    assert tuple(tool.name for tool in result.tools) == tuple(f"healthy-healthy-tool-{index}" for index in range(205))
+    assert result.next_cursor is None
     assert result.ttl_ms == 0
     assert result.outcomes["broken"].tag != "ok"
     assert "untrusted upstream message" not in str(result.outcomes["broken"].model_dump())
@@ -830,123 +832,71 @@ async def test_gateway_tools_isolates_failed_page_two_without_publishing_bare_ro
     assert broken_requests[0][3] is None
     assert broken_requests[1][3] == f"{broken_requests[0][2]}:30"
 
-    second = await catalog.aggregate_gateway_tools(
-        mcp_operations.prepare_context(),
-        PaginatedRequestParams(cursor=result.next_cursor),
-        servers,
-        {},
-        record_listing=True,
-        enforce_rate_limits=False,
-        use_tool_list_cache=False,
-    )
-    assert second.next_cursor
-    third = await catalog.aggregate_gateway_tools(
-        mcp_operations.prepare_context(),
-        PaginatedRequestParams(cursor=second.next_cursor),
-        servers,
-        {},
-        record_listing=True,
-        enforce_rate_limits=False,
-        use_tool_list_cache=False,
-    )
-    assert tuple(tool.name for tool in second.tools) == tuple(
-        f"healthy-healthy-tool-{index}" for index in range(100, 200)
-    )
-    assert tuple(tool.name for tool in third.tools) == tuple(
-        f"healthy-healthy-tool-{index}" for index in range(200, 205)
-    )
-    assert third.next_cursor is None
-    assert all(page.ttl_ms == 0 and page.outcomes["broken"].tag != "ok" for page in (second, third))
     assert calls.empty()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cache_state", ("missing", "expired"))
-async def test_gateway_tool_page_cache_miss_or_expiry_requires_restart(
+async def test_gateway_tool_page_missing_or_expired_requires_restart(
     monkeypatch: pytest.MonkeyPatch, cache_state: str
 ) -> None:
-    from litellm.proxy import proxy_server
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.mcp_server.outbound_credentials.result import Error
-    from litellm.proxy.mcp_server.state_tokens import open_state
-
-    monkeypatch.setenv("LITELLM_SALT_KEY", "tool-page-cache-miss-test")
     monkeypatch.setattr(catalog.time, "time", lambda: 1000.0)
-    monkeypatch.setattr(proxy_server, "prisma_client", None)
-    cache = UserApiKeyCache()
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
-    transport, calls = _session_bound_tools_transport(tool_count=205, page_size=30, ttl_ms=0)
-    server = MCPServer(
-        server_id="bound",
-        name="bound",
-        url="https://bound.example/mcp",
-        transport=MCPTransport.http,
+    snapshot_id = "a" * 32
+    server_id = "bound"
+    caller_scope = "b" * 64
+    store = MemoryToolPageStore()
+    page_index = 1
+    page_key = catalog._tool_page_cache_key(caller_scope, server_id, snapshot_id, page_index)
+    await store.set(
+        catalog._tool_page_status_key(caller_scope, server_id, snapshot_id),
+        catalog._ToolProducerStatus(
+            state="complete", deadline_at=1000, expires_at=1600, next_page_index=2
+        ).model_dump(mode="json"),
+        600,
     )
-    manager = MCPServerManager(upstream_transport=transport)
-    monkeypatch.setattr(manager, "registry", {server.server_id: server})
-    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
-    context = mcp_operations.prepare_context()
-    first = await catalog.aggregate_gateway_tools(
-        context,
-        PaginatedRequestParams(),
-        [server],
-        {},
-        enforce_rate_limits=False,
-        use_tool_list_cache=False,
-    )
-    assert first.next_cursor
-
-    opened = open_state(
-        first.next_cursor,
-        purpose="mcp.catalog.list.v1:tools/list",
-        now=int(catalog.time.time()),
-    )
-    assert not isinstance(opened, Error)
-    state = catalog._ListingState.model_validate_json(json.dumps(opened.ok))
-    upstream_cursor = state.positions[0].cursor
-    assert upstream_cursor
-    parsed_cursor = catalog._parse_tool_page_cursor(upstream_cursor)
-    assert parsed_cursor is not None
-    snapshot_id, page_index = parsed_cursor
-    caller_scope, _ = await catalog._tool_listing_scope(context, [server], {})
-    cache_key = catalog._tool_page_cache_key(caller_scope, server.server_id, snapshot_id, page_index)
     if cache_state == "missing":
-        cache.delete_cache(cache_key)
+        assert await store.get(page_key) is None
     else:
-        value = cache.get_local(cache_key)
-        assert value is not None
-        page = catalog._CACHED_TOOL_PAGE.validate_python(value)
-        cache.set_local(cache_key, page.model_copy(update={"expires_at": 0}).model_dump(mode="json"), 600)
-    while not calls.empty():
-        calls.get_nowait()
+        await store.set(
+            page_key,
+            catalog._CachedToolPage(
+                server_id=server_id,
+                snapshot_id=snapshot_id,
+                page_index=page_index,
+                captured_at=900,
+                expires_at=999,
+                result=ListToolsResult(tools=[]),
+            ).model_dump(mode="json"),
+            600,
+        )
 
     with pytest.raises(MCPError, match="start a fresh listing") as rejected:
-        await catalog.aggregate_gateway_tools(
-            context,
-            PaginatedRequestParams(cursor=first.next_cursor),
-            [server],
-            {},
-            enforce_rate_limits=False,
-            use_tool_list_cache=False,
+        await catalog._read_tool_page(
+            catalog._tool_page_cursor(snapshot_id, page_index),
+            server_id=server_id,
+            caller_scope=caller_scope,
+            store=store,
         )
     assert rejected.value.code == -32602
-    assert calls.empty()
 
 
 @pytest.mark.asyncio
 async def test_gateway_tool_page_publish_failure_exposes_no_cursor_or_routes(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
 
-    class FailedSharedCache:
-        async def set(self, _key: str, _value: JsonValue, _ttl: float) -> None:
-            raise OSError("cache unavailable")
+    class FailedToolPageStore:
+        available = True
 
-    class Cache:
-        shared: Final = FailedSharedCache()
+        async def get(self, _key: str) -> object | None:
+            return None
+
+        async def set(self, _key: str, _value: object, _ttl: float) -> None:
+            raise OSError("cache unavailable")
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "tool-page-publish-failure-test")
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", Cache())
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", object())
+    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", FailedToolPageStore())
     transport, calls = _session_bound_tools_transport(tool_count=205, page_size=30, ttl_ms=0)
     server = MCPServer(
         server_id="bound",
@@ -958,7 +908,7 @@ async def test_gateway_tool_page_publish_failure_exposes_no_cursor_or_routes(mon
     monkeypatch.setattr(manager, "registry", {server.server_id: server})
     monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
 
-    with pytest.raises(MCPError, match="Unable to publish tool listing continuation") as rejected:
+    with pytest.raises(MCPError, match="producer stopped before its first page") as rejected:
         await catalog.aggregate_gateway_tools(
             mcp_operations.prepare_context(),
             PaginatedRequestParams(),
@@ -970,7 +920,104 @@ async def test_gateway_tool_page_publish_failure_exposes_no_cursor_or_routes(mon
         )
     assert rejected.value.code == -32603
     assert manager.get_listed_tool(server, "bound-tool-0") is None
-    assert not calls.empty()
+    assert calls.empty()
+
+
+@pytest.mark.asyncio
+async def test_gateway_tool_page_producer_timeout_bounds_initial_redis_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm import constants
+    from litellm.proxy import proxy_server
+
+    started = asyncio.Event()
+
+    class HangingToolPageStore:
+        available = True
+
+        async def get(self, _key: str) -> object | None:
+            return None
+
+        async def set(self, _key: str, _value: object, _ttl: float) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "tool-page-timeout-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", object())
+    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", HangingToolPageStore())
+    monkeypatch.setattr(constants, "MCP_TOOL_LISTING_TIMEOUT", 0.01)
+    transport, calls = _session_bound_tools_transport()
+    server = MCPServer(
+        server_id="bound",
+        name="bound",
+        url="https://bound.example/mcp",
+        transport=MCPTransport.http,
+    )
+    manager = MCPServerManager(upstream_transport=transport)
+    monkeypatch.setattr(manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+
+    with pytest.raises(MCPError, match="producer stopped before its first page") as rejected:
+        await catalog.aggregate_gateway_tools(
+            mcp_operations.prepare_context(),
+            PaginatedRequestParams(),
+            [server],
+            {},
+            record_listing=True,
+            enforce_rate_limits=False,
+            use_tool_list_cache=False,
+        )
+
+    assert rejected.value.code == -32603
+    assert started.is_set()
+    assert manager.get_listed_tool(server, "bound-tool-0") is None
+    assert calls.empty()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_pending_tool_walk_and_closes_its_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "shutdown-tool-producer-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", MemoryToolPageStore())
+    transport, calls = _session_bound_tools_transport()
+    blocked = asyncio.Event()
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            payload = json.loads(request.content)
+            if payload.get("method") == "tools/list" and (payload.get("params") or {}).get("cursor"):
+                blocked.set()
+                await asyncio.Event().wait()
+        return await transport.handle_async_request(request)
+
+    server = MCPServer(server_id="bound", name="bound", url="https://bound.example/mcp", transport=MCPTransport.http)
+    manager = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    monkeypatch.setattr(manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    first = await catalog.aggregate_gateway_tools(
+        mcp_operations.prepare_context(),
+        PaginatedRequestParams(),
+        [server],
+        {},
+        record_listing=True,
+        enforce_rate_limits=False,
+        use_tool_list_cache=False,
+    )
+    assert first.next_cursor
+    await blocked.wait()
+    await catalog.shutdown_tool_page_producers()
+    requests = tuple(calls.get_nowait() for _ in range(calls.qsize()))
+    initialized = {session for _, method, session, _ in requests if method == "tools/list"}
+    closed = {session for _, method, session, _ in requests if method == "DELETE"}
+    assert len(initialized) == 1
+    assert None not in initialized
+    assert initialized <= closed
+    assert not catalog._TOOL_PRODUCERS
+    assert manager.get_listed_tool(server, "bound-tool-0") is None
+    assert manager.get_mcp_server_from_tool_name("bound-tool-0") is None
 
 
 @pytest.mark.asyncio
@@ -1036,56 +1083,152 @@ async def test_manager_reuses_and_expires_complete_tool_discovery_cache(monkeypa
     assert calls.qsize() == first_calls * 2
 
 
-def test_tool_listing_pages_obey_count_and_serialized_size_limits() -> None:
+@pytest.mark.asyncio
+async def test_streaming_tool_pages_respect_count_limit_and_preserve_empty_upstream_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from mcp.types import Tool
 
+    monkeypatch.setattr(catalog.time, "time", lambda: 1000.0)
+    store = MemoryToolPageStore()
+    first_page: Final = asyncio.get_running_loop().create_future()
+    publisher: Final = catalog._StreamingToolPagePublisher(
+        store, "c" * 64, "bounded", "a" * 32, "bounded", 1600, first_page
+    )
+    await publisher.start(deadline_at=1300)
     tools: Final = tuple(
-        Tool(name=f"large-{index}", inputSchema={"type": "object", "description": "x" * 18_000})
-        for index in range(40)
+        Tool(name=f"tool-{index}", inputSchema={"type": "object"}) for index in range(catalog._TOOL_PAGE_MAX_TOOLS + 1)
     )
-    result: Final = ListToolsResult(tools=list(tools), _meta={"source": "x" * 10_000})
-    first, entries = catalog._chunk_tool_listing(
-        result,
-        server_id="bounded",
-        caller_scope="c" * 64,
-        snapshot_id="a" * 32,
-        captured_at=1000,
-        expires_at=1600,
+    await publisher.publish(ListToolsResult(tools=list(tools), next_cursor="upstream-next"))
+    first: Final = first_page.result()
+    assert tuple(tool.name for tool in first.tools) == tuple(f"tool-{index}" for index in range(100))
+    assert first.next_cursor == catalog._tool_page_cursor("a" * 32, 1)
+
+    await publisher.publish(ListToolsResult(tools=[]))
+    await publisher.finish(ServerListOk(tool_count=len(tools)), failed=False)
+    pages: Final = tuple(
+        catalog._CACHED_TOOL_PAGE.validate_python(store.values[key])
+        for key in (
+            catalog._tool_page_cache_key("c" * 64, "bounded", "a" * 32, 0),
+            catalog._tool_page_cache_key("c" * 64, "bounded", "a" * 32, 1),
+            catalog._tool_page_cache_key("c" * 64, "bounded", "a" * 32, 2),
+        )
     )
-    pages: Final = (
-        first,
-        *(catalog._CACHED_TOOL_PAGE.validate_python(value).result for _key, value in entries),
+    assert tuple(len(page.result.tools) for page in pages) == (100, 1, 0)
+    assert pages[-1].result.next_cursor is None
+    assert all(len(page.model_dump_json().encode()) <= catalog._TOOL_PAGE_MAX_BYTES for page in pages)
+    status: Final = catalog._ToolProducerStatus.model_validate(
+        store.values[catalog._tool_page_status_key("c" * 64, "bounded", "a" * 32)]
     )
-    envelopes: Final = (
-        catalog._CachedToolPage(
-            server_id="bounded",
-            snapshot_id="a" * 32,
-            page_index=0,
-            captured_at=1000,
-            expires_at=1600,
-            result=first,
-        ),
-        *(catalog._CACHED_TOOL_PAGE.validate_python(value) for _key, value in entries),
+    assert (
+        sum(len(page.model_dump_json().encode()) for page in pages) + len(status.model_dump_json().encode())
+        <= catalog._TOOL_SNAPSHOT_MAX_BYTES
     )
-    assert len(pages) > 1
-    assert all(len(page.tools) <= catalog._TOOL_PAGE_MAX_TOOLS for page in pages)
-    assert all(len(page.model_dump_json().encode()) <= catalog._TOOL_PAGE_MAX_BYTES for page in envelopes)
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_pages_split_individually_fitting_schemas_by_envelope_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp.types import Tool
+
+    monkeypatch.setattr(catalog.time, "time", lambda: 1000.0)
+    store = MemoryToolPageStore()
+    first_page: Final = asyncio.get_running_loop().create_future()
+    publisher: Final = catalog._StreamingToolPagePublisher(
+        store, "c" * 64, "bounded", "b" * 32, "bounded", 1600, first_page
+    )
+    await publisher.start(deadline_at=1300)
+    tools: Final = (
+        Tool(name="large-a", inputSchema={"type": "object", "description": "a" * 270_000}),
+        Tool(name="large-b", inputSchema={"type": "object", "description": "b" * 270_000}),
+    )
+    await publisher.publish(ListToolsResult(tools=list(tools)))
+    assert first_page.result().tools == [tools[0]]
+    assert first_page.result().next_cursor == catalog._tool_page_cursor("b" * 32, 1)
+    await publisher.finish(ServerListOk(tool_count=2), failed=False)
+    pages: Final = tuple(
+        catalog._CACHED_TOOL_PAGE.validate_python(store.values[key])
+        for key in (
+            catalog._tool_page_cache_key("c" * 64, "bounded", "b" * 32, 0),
+            catalog._tool_page_cache_key("c" * 64, "bounded", "b" * 32, 1),
+        )
+    )
+    assert tuple(page.result.tools[0].name for page in pages) == ("large-a", "large-b")
+    assert all(len(page.model_dump_json().encode()) <= catalog._TOOL_PAGE_MAX_BYTES for page in pages)
+    status: Final = catalog._ToolProducerStatus.model_validate(
+        store.values[catalog._tool_page_status_key("c" * 64, "bounded", "b" * 32)]
+    )
+    assert (
+        sum(len(page.model_dump_json().encode()) for page in pages) + len(status.model_dump_json().encode())
+        <= catalog._TOOL_SNAPSHOT_MAX_BYTES
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_page_publisher_rejects_oversized_tool_and_outcome_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp.types import Tool
+
+    monkeypatch.setattr(catalog.time, "time", lambda: 1000.0)
+    oversized_store = MemoryToolPageStore()
+    oversized_publisher: Final = catalog._StreamingToolPagePublisher(
+        oversized_store,
+        "c" * 64,
+        "bounded",
+        "d" * 32,
+        "bounded",
+        1600,
+        asyncio.get_running_loop().create_future(),
+    )
+    await oversized_publisher.start(deadline_at=1300)
     with pytest.raises(catalog._ToolListingTooLarge):
-        catalog._chunk_tool_listing(
+        await oversized_publisher.publish(
             ListToolsResult(
                 tools=[
                     Tool(
                         name="oversized",
-                        inputSchema={"type": "object", "description": "x" * (catalog._TOOL_SNAPSHOT_MAX_BYTES + 1)},
+                        inputSchema={
+                            "type": "object",
+                            "description": "x" * catalog._TOOL_PAGE_MAX_BYTES,
+                        },
                     )
                 ]
-            ),
-            server_id="bounded",
-            caller_scope="c" * 64,
-            snapshot_id="b" * 32,
-            captured_at=1000,
-            expires_at=1600,
+            )
         )
+
+    snapshot_id: Final = "e" * 32
+    empty_page: Final = catalog._CachedToolPage(
+        server_id="bounded",
+        snapshot_id=snapshot_id,
+        page_index=0,
+        captured_at=1000,
+        expires_at=1600,
+        result=ListToolsResult(tools=[]),
+    )
+    pending_status: Final = catalog._ToolProducerStatus(
+        state="pending", deadline_at=1300, expires_at=1600, next_page_index=0
+    )
+    monkeypatch.setattr(
+        catalog,
+        "_TOOL_SNAPSHOT_MAX_BYTES",
+        len(empty_page.model_dump_json().encode()) + len(pending_status.model_dump_json().encode()),
+    )
+    outcome_store = MemoryToolPageStore()
+    outcome_publisher: Final = catalog._StreamingToolPagePublisher(
+        outcome_store,
+        "c" * 64,
+        "bounded",
+        snapshot_id,
+        "bounded",
+        1600,
+        asyncio.get_running_loop().create_future(),
+    )
+    await outcome_publisher.start(deadline_at=1300)
+    await outcome_publisher.publish(ListToolsResult(tools=[]))
+    with pytest.raises(catalog._ToolListingTooLarge):
+        await outcome_publisher.finish(ServerListOk(tool_count=0), failed=False)
 
 
 def _session_bound_tools_transport(
@@ -1195,6 +1338,72 @@ def _session_bound_tools_transport(
         )
 
     return httpx2.MockTransport(respond), calls
+
+
+@pytest.mark.asyncio
+async def test_streamed_listing_records_guarded_authorized_underlying_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from mcp.types import Tool
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "guarded-streamed-tools-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", object())
+    monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", MemoryToolPageStore())
+    transport, _calls = _session_bound_tools_transport(tool_count=3, page_size=3)
+    server = MCPServer(
+        server_id="bound",
+        name="bound",
+        url="https://bound.example/mcp",
+        transport=MCPTransport.http,
+        tool_name_to_display_name={"bound-tool-0": "renamed"},
+    )
+    manager = MCPServerManager(upstream_transport=transport)
+    monkeypatch.setattr(manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    guarded_pages: list[tuple[str, ...]] = []
+
+    async def guard_catalog(
+        *,
+        server: MCPServer,
+        tools: Sequence[Tool],
+        **_kwargs: object,
+    ) -> tuple[Tool, ...]:
+        assert server.server_id == "bound"
+        guarded_pages.append(tuple(tool.name for tool in tools))
+        return tuple(
+            tool.model_copy(update={"description": "guarded description"})
+            for tool in tools
+            if tool.name != "bound-tool-1"
+        )
+
+    async def granted_tools(server_id: str, user_api_key_auth: object | None) -> set[str]:
+        assert server_id == "bound"
+        return {"bound-tool-0"}
+
+    monkeypatch.setattr(manager, "_guard_tool_catalog", guard_catalog)
+    monkeypatch.setattr(MCPRequestHandler, "get_allowed_tools_for_server", granted_tools)
+    result: Final = await catalog.aggregate_gateway_tools(
+        mcp_operations.prepare_context(),
+        PaginatedRequestParams(),
+        [server],
+        {},
+        record_listing=True,
+        enforce_rate_limits=False,
+        use_tool_list_cache=False,
+    )
+    await asyncio.gather(*tuple(catalog._TOOL_PRODUCERS.values()))
+
+    assert tuple(tool.name for tool in result.tools) == ("renamed",)
+    assert result.tools[0].description == "guarded description"
+    assert guarded_pages == [("bound-tool-0", "bound-tool-1", "bound-tool-2")]
+    listed: Final = manager.get_listed_tool(server, "bound-tool-0")
+    assert listed is not None
+    assert listed.description == "guarded description"
+    assert manager.get_listed_tool(server, "bound-tool-1") is None
+    assert manager.get_listed_tool(server, "bound-tool-2") is None
+    assert manager.get_mcp_server_from_tool_name("bound-tool-1") is None
+    assert manager.get_mcp_server_from_tool_name("bound-tool-2") is None
 
 
 @pytest.mark.asyncio
@@ -1310,21 +1519,27 @@ async def test_first_catalog_page_raises_when_every_server_is_rate_limited(
 async def test_continuation_rate_limit_raises_without_refetching_completed_servers(
     monkeypatch: pytest.MonkeyPatch, kind: CatalogKind
 ) -> None:
+    from litellm.proxy import proxy_server
     from mcp import types
 
     servers, context, limiter = rate_limit_catalog_setup(monkeypatch, frozenset())
 
-    async def fetch_tools(server: MCPServer, **_kwargs: object) -> tuple[ListToolsResult, ServerListOk]:
+    async def fetch_tools(
+        server: MCPServer,
+        *,
+        on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
+        **_kwargs: object,
+    ) -> tuple[ListToolsResult, ServerListOk]:
         tool_count: Final = 205 if server.server_id == "catalog-a" else 1
-        return (
-            ListToolsResult(
-                tools=[
-                    types.Tool(name=f"{server.server_id}-item-{index}", inputSchema={"type": "object"})
-                    for index in range(tool_count)
-                ],
-            ),
-            ServerListOk(tool_count=tool_count),
+        result: Final = ListToolsResult(
+            tools=[
+                types.Tool(name=f"{server.server_id}-item-{index}", inputSchema={"type": "object"})
+                for index in range(tool_count)
+            ],
         )
+        if on_page is not None:
+            await on_page(result)
+        return result, ServerListOk(tool_count=tool_count)
 
     async def fetch_optional(
         _context: OperationContext,
@@ -1340,6 +1555,8 @@ async def test_continuation_rate_limit_raises_without_refetching_completed_serve
         )
 
     if kind == "tools":
+        monkeypatch.setattr(proxy_server, "redis_usage_cache", object())
+        monkeypatch.setattr(catalog, "_TOOL_PAGE_STORE", MemoryToolPageStore())
         monkeypatch.setattr(catalog, "get_filtered_server_tools", fetch_tools)
     else:
         monkeypatch.setattr(catalog, "fetch_optional_catalog_page", fetch_optional)
@@ -1348,6 +1565,7 @@ async def test_continuation_rate_limit_raises_without_refetching_completed_serve
     if kind == "tools":
         assert isinstance(first_page, AggregateToolListing)
         assert first_page.next_cursor
+        await asyncio.gather(*tuple(catalog._TOOL_PRODUCERS.values()))
         limiter.side_effect = ProxyRateLimitError(detail="catalog-a RPM exceeded")
         with pytest.raises(ProxyRateLimitError, match="catalog-a RPM exceeded"):
             await run_catalog_listing(kind, context, servers, first_page.next_cursor)

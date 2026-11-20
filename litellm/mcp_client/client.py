@@ -1074,7 +1074,12 @@ class MCPClient:
     async def list_tools(self, raise_on_error: bool = False) -> list[MCPTool]:
         return (await self.list_tools_result(raise_on_error=raise_on_error)).tools
 
-    async def list_tools_result(self, raise_on_error: bool = False) -> ListToolsResult:
+    async def list_tools_result(
+        self,
+        raise_on_error: bool = False,
+        *,
+        on_page: Callable[[ListToolsResult], Awaitable[None]] | None = None,
+    ) -> ListToolsResult:
         """List available tools from the server.
 
         Args:
@@ -1083,6 +1088,7 @@ class MCPClient:
                 can surface upstream HTTP 401 responses as a proper 401 to the
                 MCP client (triggering the upstream OAuth flow) rather than
                 masking them as "connected, no tools".
+            on_page: Callback invoked for each upstream page during the complete walk.
         """
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
@@ -1094,6 +1100,7 @@ class MCPClient:
                     list_tools_result_with_pagination,
                     listing_deadline=listing_deadline,
                     require_complete=raise_on_error,
+                    on_page=on_page,
                 ),
                 quiet_on_error=raise_on_error,
             )
