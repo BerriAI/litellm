@@ -103,7 +103,10 @@ for (const { role, storage } of roles) {
 
         await expectUiRoute(page, "models-and-endpoints");
         await expect(
-          page.getByRole("main").getByRole("heading", { name: "Model Management", exact: true }),
+          page
+            .getByRole("main")
+            .locator('[data-slot="page-header"]')
+            .getByRole("heading", { name: "Model Management", exact: true }),
         ).toBeVisible();
       });
     }
@@ -113,7 +116,10 @@ for (const { role, storage } of roles) {
       expect(response?.ok()).toBe(true);
       await expectUiRoute(page, "models-and-endpoints");
       await expect(
-        page.getByRole("main").getByRole("heading", { name: "Model Management", exact: true }),
+        page
+          .getByRole("main")
+          .locator('[data-slot="page-header"]')
+          .getByRole("heading", { name: "Model Management", exact: true }),
       ).toBeVisible();
       expect(new URL(page.url()).search).toBe("?source=navigation-smoke");
       expect(new URL(page.url()).hash).toBe("#overview");
