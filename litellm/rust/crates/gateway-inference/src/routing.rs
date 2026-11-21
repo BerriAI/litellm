@@ -1,6 +1,6 @@
 //! How a route is served through router-core. [`call`] checks the name the request asks for is
-//! one the router knows, then runs it through [`litellm_router_core::Router::call`], where the
-//! core picks a deployment, retries and falls back, and each attempt runs the request's own
+//! one the router knows, has the auth core decide whether the caller's model lists reach it, then
+//! runs it through [`litellm_router_core::Router::call`], where the core picks a deployment, retries and falls back, and each attempt runs the request's own
 //! [`RouteAttempt`]. Every other hostcall the core makes is answered by the [`Host`] the gateway
 //! was built with. The route's typed outcome comes back with the routing facts, and the route
 //! renders it once. A served stream is held until it sends content, so one the provider fails
@@ -11,7 +11,10 @@ use std::{future::Future, time::Duration};
 use futures_util::{StreamExt, stream};
 use litellm_config::LitellmRole;
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::Rows;
+use litellm_gateway_auth_core::{
+    Rows,
+    authz::{self, Denied, Layer, ModelAsk},
+};
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallError, Deployment, FailureKind, Op, Router,
@@ -44,6 +47,13 @@ pub trait Host: Send + Sync + Sized + 'static {
 
     /// The rows of the callers this host authenticates.
     type Rows: Rows;
+
+    /// The model lists this host read for `identity`, which the auth core decides access on. A
+    /// list the host did not read belongs to a key it declined when it authenticated it.
+    fn layers<'a>(
+        &self,
+        identity: &'a Authenticated<Self::Rows>,
+    ) -> impl Iterator<Item = Layer<'a>>;
 
     /// The callback hooks of one call `identity` makes on the `call_type` route.
     fn hooks(&self, identity: &Authenticated<Self::Rows>, call_type: CallType) -> Self::Hooks;
@@ -115,6 +125,26 @@ fn known<H: Host>(gateway: &Gateway<H>, request: &RouterRequest) -> bool {
     !routable.is_empty()
 }
 
+/// Whether the model lists the host read for `identity` reach `name`, which the auth core
+/// decides. The route only says what the router resolves the name to: its model group and the
+/// access groups of that group's deployments, as `can_key_call_model` reads them.
+fn authorize<H: Host>(
+    gateway: &Gateway<H>,
+    identity: &Authenticated<H::Rows>,
+    name: &str,
+) -> Result<(), Denied> {
+    let registry = gateway.router.registry();
+    let access_groups: Vec<String> = resolve::model_access_groups(&registry, name, None)
+        .into_iter()
+        .collect();
+    let ask = ModelAsk {
+        name,
+        group: registry.alias_of(name).unwrap_or(name),
+        access_groups: &access_groups,
+    };
+    authz::authorize(gateway.host.layers(identity), &ask)
+}
+
 fn retry_after(headers: &[(String, String)]) -> Option<Duration> {
     let (_, seconds) = headers
         .iter()
@@ -175,12 +205,33 @@ pub fn attempt_failure(attempt: &Attempt, error: Error) -> AttemptFailure<Error>
     }
 }
 
-/// A request for `model` by `identity`, an admin by the role the auth core gives it and never
-/// by the kind of credential it presented.
-fn caller_request<R: Rows>(identity: &Authenticated<R>, model: &str) -> RouterRequest {
+/// Whether `identity` may be served `target`, which a fallback is only taken to when it may. A
+/// target the router does not know is not refused here.
+pub fn allows<H: Host>(
+    gateway: &Gateway<H>,
+    identity: &Authenticated<H::Rows>,
+    target: &str,
+) -> bool {
+    let request = caller_request(identity, gateway.host.layers(identity), target);
+    !known(gateway, &request) || authorize(gateway, identity, target).is_ok()
+}
+
+/// A request for `model` by `identity`: an admin by the role the auth core gives it, never by
+/// the kind of credential it presented, with the names its `layers` hold, which the router
+/// narrows access groups by as Python's reads the key's `models`.
+fn caller_request<'a, R: Rows>(
+    identity: &Authenticated<R>,
+    layers: impl Iterator<Item = Layer<'a>>,
+    model: &str,
+) -> RouterRequest {
     RouterRequest {
         model: model.to_owned(),
         proxy_admin: identity.role() == LitellmRole::ProxyAdmin,
+        allowed_models: layers
+            .flat_map(|layer| match layer {
+                Layer::Key(models) => models.iter().cloned(),
+            })
+            .collect(),
         ..RouterRequest::default()
     }
 }
@@ -195,7 +246,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
     model: &str,
     route: &A,
 ) -> Result<RouterResponse<A::Outcome>, Ended> {
-    let request = caller_request(identity, model);
+    let request = caller_request(identity, gateway.host.layers(identity), model);
     if !known(gateway, &request) {
         return Err(Error::UnknownModel {
             route: path,
@@ -203,6 +254,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
         }
         .into());
     }
+    authorize(gateway, identity, model).map_err(Error::from)?;
     let host = gateway.host.router_host(gateway, identity, route);
     let ended = gateway
         .router
@@ -440,9 +492,19 @@ mod tests {
         #[case] caller: Caller<Held>,
         #[case] proxy_admin: bool,
     ) {
-        let request = caller_request(&Authenticated::from(caller), "public/model");
+        let request = caller_request(&Authenticated::from(caller), [].into_iter(), "public/model");
 
         assert_eq!(request.proxy_admin, proxy_admin);
+    }
+
+    #[rstest]
+    fn the_router_narrows_access_groups_by_the_names_the_key_layer_holds() {
+        let models = ["claude".to_owned(), "fast".to_owned()];
+        let caller = Authenticated::from(key("stored", false));
+
+        let request = caller_request(&caller, [Layer::Key(&models)].into_iter(), "claude");
+
+        assert_eq!(request.allowed_models, models);
     }
 
     fn attempt(params: Value, router_timeout: Option<u64>) -> Attempt {
