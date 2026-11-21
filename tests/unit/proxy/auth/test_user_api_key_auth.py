@@ -72,18 +72,18 @@ def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "denial,code",
+    "denial,code,header",
     (
-        ("scope", "403"),
-        ("mismatch", "403"),
-        ("unknown", "403"),
-        ("model", "403"),
-        ("model_budget", "403"),
-        ("budget", "422"),
+        ("scope", "403", "X-User-ID"),
+        ("mismatch", "403", "X-Tenant-ID"),
+        ("unknown", "403", "X-User-ID"),
+        ("model", "403", None),
+        ("model_budget", "403", None),
+        ("budget", "422", None),
     ),
 )
 async def test_customer_identity_is_retained_only_after_ownership_authorization(
-    monkeypatch: pytest.MonkeyPatch, denial: str, code: str
+    monkeypatch: pytest.MonkeyPatch, denial: str, code: str, header: str | None
 ) -> None:
     server: Final = litellm.proxy.proxy_server
     cache: Final = UserApiKeyCache()
@@ -112,7 +112,11 @@ async def test_customer_identity_is_retained_only_after_ownership_authorization(
     monkeypatch.setattr(server, "prisma_client", database)
     monkeypatch.setattr(server, "user_api_key_cache", cache)
     monkeypatch.setattr(server, "llm_router", None)
-    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(
+        server,
+        "general_settings",
+        {"customer_member_id_header": "X-User-ID", "customer_org_alias_header": "X-Tenant-ID"},
+    )
     identity: Final = UserAPIKeyAuth(
         token="verified-customer-key",
         metadata={
@@ -120,8 +124,8 @@ async def test_customer_identity_is_retained_only_after_ownership_authorization(
         },
         customer_hierarchy=hierarchy,
     )
-    headers: Final = ((b"x-litellm-customer-member-id", b"customer-member-b"),) + (
-        ((b"x-litellm-customer-org-alias", b"customer-a" if denial == "mismatch" else b"unknown-customer"),)
+    headers: Final = ((b"x-user-id", b"customer-member-b"),) + (
+        ((b"x-tenant-id", b"customer-a" if denial == "mismatch" else b"unknown-customer"),)
         if denial in ("mismatch", "unknown")
         else ()
     )
@@ -135,7 +139,55 @@ async def test_customer_identity_is_retained_only_after_ownership_authorization(
             api_key="verified-customer-key",
         )
     assert denied.value.code == code
+    assert header is None or denied.value.param == header
     assert identity.customer_hierarchy == (hierarchy if denial == "budget" else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("setting", "configured_header", "expected_header"),
+    (
+        ("customer_member_id_header", "X-User-ID", "X-User-ID"),
+        ("customer_org_alias_header", "X-Tenant-ID", "X-Tenant-ID"),
+        ("customer_member_id_header", None, "x-litellm-customer-member-id"),
+        ("customer_org_alias_header", None, "x-litellm-customer-org-alias"),
+    ),
+)
+async def test_registration_denial_names_the_header_that_identifies_the_unknown_customer(
+    monkeypatch: pytest.MonkeyPatch, setting: str, configured_header: str | None, expected_header: str
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    database: Final = MagicMock()
+    database.db.litellm_config.find_unique = AsyncMock(
+        return_value=MagicMock(model_dump=lambda: {"param_value": {"auto_create_customers_without_app": False}})
+    )
+    database.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
+    database.db.litellm_customermembertable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(server, "prisma_client", database)
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "general_settings", {setting: configured_header} if configured_header else {})
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": ((expected_header.lower().encode(), b"unknown-customer"),),
+        }
+    )
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(
+            UserAPIKeyAuth(token="verified-customer-key"),
+            request,
+            {"model": "qa-model", "input": "Hello"},
+            "/v1/responses",
+            "verified-customer-key",
+        )
+    assert (denied.value.code, denied.value.param, denied.value.message) == (
+        "403",
+        expected_header,
+        f"Unknown customer in {expected_header}. Requests that belong to no app may not create customers.",
+    )
 
 
 @pytest.mark.asyncio
