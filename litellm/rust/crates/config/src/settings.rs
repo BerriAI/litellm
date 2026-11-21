@@ -122,6 +122,7 @@ pub struct GeneralSettings {
     pub allowed_routes: Option<Box<[String]>>,
     pub custom_auth: Option<String>,
     pub litellm_key_header_name: Option<String>,
+    pub required_customer_headers: Box<[String]>,
     pub litellm_jwtauth: Option<JwtAuthSettings>,
     pub role_permissions: Option<Box<[RolePermissions]>>,
     /// `bool(general_settings.get("enforce_rbac"))`
@@ -185,6 +186,7 @@ impl Default for GeneralSettings {
             allowed_routes: None,
             custom_auth: None,
             litellm_key_header_name: None,
+            required_customer_headers: Box::default(),
             litellm_jwtauth: None,
             role_permissions: None,
             enforce_rbac: false,

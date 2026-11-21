@@ -1,3 +1,4 @@
+from collections import UserDict
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, SimpleNamespace
@@ -22,6 +23,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
     check_customer_hierarchy_windows,
+    check_required_customer_headers,
     customer_hierarchy_from_member_row,
     customer_identity_from_headers,
     customer_identity_from_request,
@@ -45,6 +47,25 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import Customer
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+class _ReadCountingHeaders(UserDict[str, object]):
+    reads = 0
+
+    def __getitem__(self, key: str) -> object:
+        self.reads += 1
+        return super().__getitem__(key)
+
+
+def test_duplicate_requirements_do_not_multiply_header_reads_or_admit_a_blank_header() -> None:
+    headers: Final = _ReadCountingHeaders(
+        {**{f"x-extra-{index}": "value" for index in range(100)}, "hOsT": "gateway", "X-Tenant-ID": " \t "}
+    )
+    with pytest.raises(ProxyException, match="Missing required customer header X-Tenant-ID") as rejected:
+        check_required_customer_headers(headers, (*("Host" for _ in range(1000)), "X-Tenant-ID"))
+    assert rejected.value.code == "403"
+    assert rejected.value.param == "X-Tenant-ID"
+    assert headers.reads <= len(headers)
 
 
 @pytest.fixture(autouse=True)

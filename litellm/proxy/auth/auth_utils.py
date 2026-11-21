@@ -1930,8 +1930,6 @@ def enforce_output_token_estimates_are_admin_only(
 
 
 class BatchLimitRequest(Protocol):
-    """The shape of any management request that can carry an admin-only batch limit in its metadata."""
-
     @property
     def metadata(self) -> Mapping[str, object] | None: ...
 
@@ -1943,6 +1941,7 @@ _ADMIN_ONLY_METADATA_KEYS: Final = (
     *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
     TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
     MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
 )
 _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -1951,6 +1950,9 @@ _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         ),
         MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
             "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+        REQUIRED_CUSTOMER_HEADERS_SETTING: (
+            "It requires customer identity headers, so the holder cannot remove the policy."
         ),
     }
 )
@@ -1962,20 +1964,16 @@ def enforce_batch_limits_are_admin_only(
     user_api_key_dict: UserAPIKeyAuth,
     entity: Literal["key", "team", "project"],
 ) -> None:
-    """Only a proxy admin may change a key, team, or project's batch limits.
+    """Protect administrator-owned policies when metadata is replaced, including by clearing it."""
+    from litellm.proxy.auth.customer_hierarchy_auth import validate_required_customer_headers_metadata
 
-    Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
-    may do with batches, so a holder-writable copy would let a caller lift their
-    own quota, and the S3 bucket list grants access to buckets with the proxy's
-    own credentials. A project only enforces ``model_batch_enqueued_token_limit``,
-    so that is the one key gated there. Gated on the resulting value rather than
-    on presence, so a form resending the stored value stays a no-op.
-    """
+    if entity in ("key", "team"):
+        validate_required_customer_headers_metadata(data.metadata)
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    stored: Final[Mapping[str, object]] = existing_metadata or EMPTY_MAPPING
+    stored: Final[Mapping[str, object]] = existing_metadata or MappingProxyType[str, object]({})
     requested: Final[Mapping[str, object]] = (
-        (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
+        (data.metadata or MappingProxyType[str, object]({})) if "metadata" in data.model_fields_set else stored
     )
     admin_only_keys: Final[tuple[str, ...]] = (
         (MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,) if entity == "project" else _ADMIN_ONLY_METADATA_KEYS

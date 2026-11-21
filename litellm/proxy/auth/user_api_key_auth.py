@@ -12,6 +12,7 @@ import base64
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial, reduce
 from typing import TYPE_CHECKING, Final, Protocol, cast
@@ -130,6 +131,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
     CustomerIdentityHeaderNames,
+    check_required_customer_headers,
     customer_identity_from_request,
     resolve_customer_hierarchy,
 )
@@ -2505,62 +2507,35 @@ async def _load_team_member_default_model_budget(
     )
 
 
-@tracer.wrap()
-async def run_centralized_common_checks(
+@dataclass(frozen=True, slots=True)
+class _CommonCheckContext:
+    run_checks: bool = True
+    team_object: LiteLLM_TeamTableCachedObj | None = None
+    user_object: LiteLLM_UserTable | None = None
+    project_object: LiteLLM_ProjectTableCachedObj | None = None
+    end_user_object: LiteLLM_EndUserTable | None = None
+    global_proxy_spend: float | None = None
+    end_user_id: str | None = None
+    key_end_user_budget_id: str | None = None
+
+
+async def _resolve_common_check_context(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
-    request_data: dict[str, object],
+    request_data: Mapping[str, object],
     route: str,
     *,
     force_virtual_key_checks: bool = False,
-    sub_call: bool = False,
-) -> None:
-    """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
-    boundary, regardless of which ``user_api_key_auth_builder`` path
-    returned. This is the single invariant enforcement point for key
-    model-access, budgets, guardrails, org, and vector-store checks.
-
-    Invariants:
-    - ``user_custom_auth`` with ``custom_auth_run_common_checks`` unset
-      skips the gate — matches the existing custom-auth RPS guarantee.
-      Custom-auth deployments don't use OAuth2 / DB-fallback paths, so
-      the skip does not re-open any bypass.
-    - ``PROXY_ADMIN`` tokens still run through ``common_checks`` so
-      team-blocked / team-budget / end-user-budget / tag-budget /
-      vector-store / tool-allowlist enforcement applies to admin keys
-      too. Admin status is honored where the underlying check exempts it
-      (``_is_api_route_allowed``, ``organization_role_based_access_check``).
-    - ``sub_call`` marks a proxy-made call inside an already admitted
-      request. Its model's budgets are checked, the key's own
-      ``max_budget`` included, because the builder checked that only for
-      the parent's model, which may be free. Nothing is reserved, because
-      the sub-call is charged once it runs.
-    """
+) -> _CommonCheckContext:
     from litellm.proxy.proxy_server import (
         general_settings,
         litellm_proxy_admin_name,
-        llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
-        llm_router,
         master_key,
-        model_max_budget_limiter,
         prisma_client,
         proxy_logging_obj,
-        spend_counter_store,
         user_api_key_cache,
         user_custom_auth,
     )
-
-    if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
-        body_model: Final = request_data.get("model")
-        is_request_body_safe(
-            request_body=request_data,
-            general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
-            llm_router=llm_router,
-            model=body_model if isinstance(body_model, str) else "",
-            route=route,
-            team_id=user_api_key_auth_obj.team_id,
-            defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
-        )
 
     # Public routes (e.g. /health/liveness) are exempt from
     # auth in the builder — the wrapper must not retroactively apply
@@ -2569,7 +2544,7 @@ async def run_centralized_common_checks(
     if not force_virtual_key_checks and (
         route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route)
     ):
-        return
+        return _CommonCheckContext(run_checks=False)
 
     # User-configured pass-through endpoints with ``auth: false`` are
     # explicitly unauthenticated — the builder returns an empty
@@ -2581,7 +2556,7 @@ async def run_centralized_common_checks(
     if not force_virtual_key_checks and pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True:
-                return
+                return _CommonCheckContext(run_checks=False)
 
     # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
     # configured. The builder returns an INTERNAL_USER token for any
@@ -2590,14 +2565,14 @@ async def run_centralized_common_checks(
     # deployments where that was previously not the contract. If any
     # authn is enabled (JWT, OAuth2, OAuth2-proxy), authz must run.
     if not force_virtual_key_checks and is_no_auth_dev_mode(master_key, general_settings):
-        return
+        return _CommonCheckContext(run_checks=False)
 
     if (
         not force_virtual_key_checks
         and user_custom_auth is not None
         and not general_settings.get("custom_auth_run_common_checks", False)
     ):
-        return
+        return _CommonCheckContext(run_checks=False)
 
     parent_otel_span: Final = user_api_key_auth_obj.parent_otel_span
     # In the integrated auth flow ``user_api_key_auth_builder`` has already
@@ -2607,7 +2582,9 @@ async def run_centralized_common_checks(
     key_end_user_budget_id: Final = get_key_end_user_budget_id(user_api_key_auth_obj.metadata)
     end_user_id = user_api_key_auth_obj.end_user_id
     if end_user_id is None:
-        raw_end_user_id: Final = get_end_user_id_from_request_body(request_data, safe_get_request_headers(request))
+        raw_end_user_id: Final = get_end_user_id_from_request_body(
+            dict(request_data), safe_get_request_headers(request)
+        )
         end_user_id = await resolve_and_validate_end_user_id(
             raw_end_user_id=raw_end_user_id,
             prisma_client=prisma_client,
@@ -2750,16 +2727,134 @@ async def run_centralized_common_checks(
             _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id == UI_TEAM_ID else team_result
         )
 
-    user_object: LiteLLM_UserTable | None = user_result if isinstance(user_result, LiteLLM_UserTable) else None
+    user_object: Final[LiteLLM_UserTable | None] = user_result if isinstance(user_result, LiteLLM_UserTable) else None
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
     end_user_object: Final = end_user_result if isinstance(end_user_result, LiteLLM_EndUserTable) else None
-    global_proxy_spend: float | None = None if isinstance(global_spend_result, BaseException) else global_spend_result
+    global_proxy_spend: Final[float | None] = (
+        None if isinstance(global_spend_result, BaseException) else global_spend_result
+    )
+    return _CommonCheckContext(
+        team_object=team_object,
+        user_object=user_object,
+        project_object=project_object,
+        end_user_object=end_user_object,
+        global_proxy_spend=global_proxy_spend,
+        end_user_id=end_user_id,
+        key_end_user_budget_id=key_end_user_budget_id,
+    )
+
+
+async def _prepare_common_check_context(
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    request: Request,
+    request_data: Mapping[str, object],
+    route: str,
+    *,
+    force_virtual_key_checks: bool = False,
+) -> _CommonCheckContext:
+    from litellm.proxy import proxy_server
+
+    context: Final = await _resolve_common_check_context(
+        user_api_key_auth_obj,
+        request,
+        request_data,
+        route,
+        force_virtual_key_checks=force_virtual_key_checks,
+    )
+    _check_required_inference_customer_headers(
+        _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request)),
+        route,
+        _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings),
+        user_api_key_auth_obj,
+        team=context.team_object,
+    )
+    return context
+
+
+@tracer.wrap()
+async def run_centralized_common_checks(
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    request: Request,
+    request_data: dict[str, object],
+    route: str,
+    *,
+    force_virtual_key_checks: bool = False,
+    sub_call: bool = False,
+    context: _CommonCheckContext | None = None,
+) -> None:
+    """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
+    boundary, regardless of which ``user_api_key_auth_builder`` path
+    returned. This is the single invariant enforcement point for key
+    model-access, budgets, guardrails, org, and vector-store checks.
+
+    Invariants:
+    - ``user_custom_auth`` with ``custom_auth_run_common_checks`` unset
+      skips the gate — matches the existing custom-auth RPS guarantee.
+      Custom-auth deployments don't use OAuth2 / DB-fallback paths, so
+      the skip does not re-open any bypass.
+    - ``PROXY_ADMIN`` tokens still run through ``common_checks`` so
+      team-blocked / team-budget / end-user-budget / tag-budget /
+      vector-store / tool-allowlist enforcement applies to admin keys
+      too. Admin status is honored where the underlying check exempts it
+      (``_is_api_route_allowed``, ``organization_role_based_access_check``).
+    - ``sub_call`` marks a proxy-made call inside an already admitted
+      request. Its model's budgets are checked, the key's own
+      ``max_budget`` included, because the builder checked that only for
+      the parent's model, which may be free. Nothing is reserved, because
+      the sub-call is charged once it runs.
+    """
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
+        llm_router,
+        model_max_budget_limiter,
+        prisma_client,
+        proxy_logging_obj,
+        spend_counter_store,
+        user_api_key_cache,
+        user_custom_auth,
+    )
+
+    general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings)
+    if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
+        body_model: Final = request_data.get("model")
+        is_request_body_safe(
+            request_body=request_data,
+            general_settings=general_settings,
+            llm_router=llm_router,
+            model=body_model if isinstance(body_model, str) else "",
+            route=route,
+            team_id=user_api_key_auth_obj.team_id,
+            defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
+        )
+    resolved: Final = (
+        context
+        if context is not None
+        else await _prepare_common_check_context(
+            user_api_key_auth_obj,
+            request,
+            request_data,
+            route,
+            force_virtual_key_checks=force_virtual_key_checks,
+        )
+    )
+    if not resolved.run_checks:
+        return
+    team_object: Final = resolved.team_object
+    resolved_user: Final = resolved.user_object
+    project_object: Final = resolved.project_object
+    end_user_object: Final = resolved.end_user_object
+    global_proxy_spend: Final = resolved.global_proxy_spend
+    end_user_id: Final = resolved.end_user_id
+    key_end_user_budget_id: Final = resolved.key_end_user_budget_id
+    parent_otel_span: Final = user_api_key_auth_obj.parent_otel_span
     carry_team_and_user_budget_state(
         valid_token=user_api_key_auth_obj,
         team_object=team_object,
-        user_object=user_object,
+        user_object=resolved_user,
     )
 
     await _inherit_org_identity(
@@ -2783,23 +2878,20 @@ async def run_centralized_common_checks(
     # username/password login) keeps the row's personal budget (max_budget,
     # and user_email for budget alerts) so common_checks enforces it; every
     # other field keeps its default.
-    if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
-        budget_row: Final = (
-            user_object
-            if isinstance(user_object, LiteLLM_UserTable) and user_api_key_auth_obj.user_id != litellm_proxy_admin_name
-            else None
-        )
-        user_object = LiteLLM_UserTable(
+    budget_row: Final = resolved_user if user_api_key_auth_obj.user_id != litellm_proxy_admin_name else None
+    user_object: Final = (
+        LiteLLM_UserTable(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            spend=user_object.spend if user_object is not None else 0.0,
+            spend=resolved_user.spend if resolved_user is not None else 0.0,
             max_budget=budget_row.max_budget if budget_row is not None else None,
             budget_limits=budget_row.budget_limits if budget_row is not None else None,
             user_email=budget_row.user_email if budget_row is not None else None,
-            object_permission_id=(
-                user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
-            ),
+            object_permission_id=resolved_user.object_permission_id if resolved_user is not None else None,
         )
+        if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN
+        else resolved_user
+    )
 
     if project_object is not None:
         user_api_key_auth_obj.project_metadata = project_object.metadata
@@ -2968,10 +3060,7 @@ async def run_centralized_common_checks(
             request_data=request_data,
             route=route,
             llm_router=llm_router,
-            team_object=cast(  # cast-ok: preserve plain team-table objects through reservation
-                LiteLLM_TeamTableCachedObj | None,
-                team_object,
-            ),
+            team_object=team_object,
             user_object=user_object,
             end_user_id=end_user_id,
             end_user_object=end_user_object,
@@ -3176,6 +3265,35 @@ async def _authorize_authenticated_request(
     return (recovered or billing_auth) if billing_auth is not user_api_key_auth_obj else recovered
 
 
+def _is_customer_inference_route(route: str) -> bool:
+    return (
+        RouteChecks.runs_inference_checks(route)
+        and not RouteChecks.is_info_route(route)
+        and not RustAuth.is_public_route(route, core.proxy_settings())
+    )
+
+
+def _check_required_inference_customer_headers(
+    headers: Mapping[str, object],
+    route: str,
+    settings: Mapping[str, object],
+    auth: UserAPIKeyAuth,
+    *,
+    team: LiteLLM_TeamTableCachedObj | None = None,
+) -> None:
+    if not _is_customer_inference_route(route):
+        return
+    key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(getattr(auth, "metadata", None) or {})
+    team_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(
+        (getattr(team, "metadata", None) if team is not None else auth.team_metadata) or {}
+    )
+    for required_headers in (
+        scope.get(REQUIRED_CUSTOMER_HEADERS_SETTING) for scope in (settings, team_metadata, key_metadata)
+    ):
+        if required_headers is not None:
+            check_required_customer_headers(headers, required_headers)
+
+
 async def _authorize_authenticated_request_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
@@ -3210,24 +3328,29 @@ async def _authorize_authenticated_request_checks(
         )
 
         request_headers: Final = _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request))
-        customer_header_names: Final = CustomerIdentityHeaderNames.from_settings(
-            cast("Mapping[str, object]", general_settings),  # cast-ok: proxy settings are a string-keyed dict
+        settings: Final = cast(  # cast-ok: proxy settings are a string-keyed dict without type parameters
+            "Mapping[str, object]", general_settings
         )
-        customer_identity: Final = customer_identity_from_request(
-            request_headers,
-            user_api_key_auth_obj.jwt_claims,
-            litellm_jwtauth,
-            names=customer_header_names,
+        common_check_context: Final = await _prepare_common_check_context(
+            user_api_key_auth_obj,
+            request,
+            request_data,
+            route,
+            force_virtual_key_checks=force_virtual_key_checks,
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         received_at: Final = getattr(getattr(request, "state", None), "litellm_received_at", None)
         user_api_key_auth_obj.customer_hierarchy_started_at = (  # rebind-ok: server request clock, never a cached key or caller field
             received_at if isinstance(received_at, datetime) else datetime.now(timezone.utc)
         )
-        has_customer: Final = customer_identity is not None and not RustAuth.is_public_route(
-            route, core.proxy_settings()
-        )
-        if has_customer or RouteChecks.runs_inference_checks(route):
+        if _is_customer_inference_route(route):
+            customer_header_names: Final = CustomerIdentityHeaderNames.from_settings(settings)
+            customer_identity: Final = customer_identity_from_request(
+                request_headers,
+                user_api_key_auth_obj.jwt_claims,
+                litellm_jwtauth,
+                names=customer_header_names,
+            )
             key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(
                 getattr(user_api_key_auth_obj, "metadata", None) or {}
             )
@@ -3235,7 +3358,7 @@ async def _authorize_authenticated_request_checks(
                 request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
             )
             try:
-                if customer_identity is not None and has_customer:
+                if customer_identity is not None:
                     with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                         hierarchy: Final = await resolve_registered_customer(
                             customer_identity,
@@ -3255,18 +3378,17 @@ async def _authorize_authenticated_request_checks(
                             header_names=customer_header_names,
                         )
                     user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
-                if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):
-                    app_hierarchy: Final = await resolve_app_hierarchy(
-                        user_api_key_auth_obj.customer_hierarchy,
-                        request_headers,
-                        key_metadata,
-                        prisma_client,
-                        llm_router,
-                        request_model,
-                        route,
-                        user_api_key_auth_obj,
-                    )
-                    user_api_key_auth_obj.customer_hierarchy = app_hierarchy  # rebind-ok: request auth state
+                app_hierarchy: Final = await resolve_app_hierarchy(
+                    user_api_key_auth_obj.customer_hierarchy,
+                    request_headers,
+                    key_metadata,
+                    prisma_client,
+                    llm_router,
+                    request_model,
+                    route,
+                    user_api_key_auth_obj,
+                )
+                user_api_key_auth_obj.customer_hierarchy = app_hierarchy  # rebind-ok: request auth state
             except CustomerBudgetExceededError as error:
                 user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
                 raise
@@ -3302,7 +3424,7 @@ async def _authorize_authenticated_request_checks(
             managed_inference_request(
                 route,
                 request_data,
-                general_settings,
+                settings,
                 user_model,
                 request.path_params.get("model") or request.path_params.get("model_name"),
                 request.query_params.get("model"),
@@ -3338,6 +3460,7 @@ async def _authorize_authenticated_request_checks(
             request_data=authorized_data,
             route=route,
             force_virtual_key_checks=force_virtual_key_checks,
+            context=common_check_context,
         )
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
