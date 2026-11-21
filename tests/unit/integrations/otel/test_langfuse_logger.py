@@ -32,6 +32,7 @@ from litellm.proxy._types import UserAPIKeyAuth  # noqa: E402
 from litellm.proxy.utils import ProxyLogging  # noqa: E402
 from litellm.types.llms.openai import (  # noqa: E402
     ResponseCompletedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -224,12 +225,17 @@ def test_chat_stream_relays_chunks_untouched_and_stamps_assembled_output():
     assert [(turn["role"], turn["content"]) for turn in output] == [("assistant", "pong")]
 
 
-def test_responses_stream_stamps_output_from_the_completed_event():
+@pytest.mark.parametrize(
+    ("terminal_event_class", "terminal_event_type"),
+    [
+        (ResponseCompletedEvent, ResponsesAPIStreamEvents.RESPONSE_COMPLETED),
+        (ResponseIncompleteEvent, ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE),
+    ],
+)
+def test_responses_stream_stamps_output_from_the_terminal_event(terminal_event_class, terminal_event_type):
     logger, exporter = _logger()
-    completed = ResponseCompletedEvent(
-        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=_responses_api_response()
-    )
-    chunks = ({"type": "response.created"}, {"type": "response.output_text.delta", "delta": "pong"}, completed)
+    terminal_event = terminal_event_class(type=terminal_event_type, response=_responses_api_response())
+    chunks = ({"type": "response.created"}, {"type": "response.output_text.delta", "delta": "pong"}, terminal_event)
 
     relayed = _run_stream(logger, {"model": "gpt-5.4-mini", "input": "ping"}, chunks)
 

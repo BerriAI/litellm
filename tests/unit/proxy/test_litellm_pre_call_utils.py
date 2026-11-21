@@ -8072,13 +8072,25 @@ async def test_add_litellm_data_to_request_stamps_used_client_oauth_token(path, 
     async def metadata_for(client_headers: dict) -> dict:
         request_mock = _make_request_mock(path, {"Content-Type": "application/json", **client_headers})
         updated = await add_litellm_data_to_request(
-            data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+            data={
+                "model": "anthropic-claude",
+                "messages": [{"role": "user", "content": "hello"}],
+                "metadata": {"used_client_oauth_token": True, "claude_subscription_usage": {"is_overage": False}},
+                "litellm_metadata": {
+                    "used_client_oauth_token": True,
+                    "claude_subscription_usage": {"is_overage": False},
+                },
+            },
             request=request_mock,
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
             proxy_config=MagicMock(),
             general_settings={"forward_client_headers_to_llm_api": True},
             version="test-version",
         )
+        other_metadata = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
+        assert "used_client_oauth_token" not in updated.get(other_metadata, {})
+        assert "claude_subscription_usage" not in updated.get(other_metadata, {})
+        assert "claude_subscription_usage" not in updated[metadata_variable_name]
         return updated[metadata_variable_name]
 
     def spend_log_row_metadata(request_metadata: dict) -> dict:
@@ -9201,6 +9213,15 @@ def test_client_typesafe_danger_zone_headers_stay_off_other_providers(custom_llm
     assert _headers_forwarded_to(TYPESAFE_DANGER_ZONE_HEADERS, custom_llm_provider) == {}
 
 
+def _unsigned_jwt_segment(payload: Mapping[str, str | Mapping[str, str]]) -> str:
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+
+
+_UNSIGNED_CHATGPT_JWT: Final = ".".join(
+    (_unsigned_jwt_segment({"alg": "none"}), _unsigned_jwt_segment({"https://api.openai.com/auth": {}}), "")
+)
+
+
 @pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
 def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(authorization_header_name):
     assert add_provider_specific_headers_to_request(data={}, headers=_client_headers(authorization_header_name)) is True
@@ -9212,6 +9233,8 @@ def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(auth
         _client_headers(None),
         {"content-type": "application/json", "authorization": "Bearer sk-a-normal-key"},
         {"anthropic-beta": "claude-code-20250219", "authorization": "Bearer sk-ant-api03-a-configured-key"},
+        {"x-litellm-api-key": "Bearer sk-1234", "authorization": "sk-ant-oat01-never-forwarded"},
+        {"x-litellm-api-key": "Bearer sk-1234", "authorization": f"Bearer {_UNSIGNED_CHATGPT_JWT}"},
     ],
 )
 def test_add_provider_specific_headers_reports_no_oauth_credential_without_a_forwarded_token(headers):

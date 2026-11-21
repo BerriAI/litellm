@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
+    provider_origin_status,
 )
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -1365,6 +1366,7 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
     [
         (400, "Invalid 'temperature'", litellm.BadRequestError),
         (401, "Invalid API key", litellm.AuthenticationError),
+        (403, "Project does not have access to this endpoint", litellm.PermissionDeniedError),
         (404, "The model does not exist", litellm.NotFoundError),
     ],
 )
@@ -1403,8 +1405,8 @@ def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(
 
 
 @pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
-@pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
-def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
+@pytest.mark.parametrize("status_code", [409, 422, 429, 500, 503])
+def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_403_and_404(
     provider: str, status_code: int
 ) -> None:
     message: Final = "Cannot cancel a batch that is already completed."
@@ -1437,10 +1439,11 @@ def _openai_sdk_error(
     "sdk_error, status_code, expected_exception, param, code",
     [
         (openai.AuthenticationError, 401, litellm.AuthenticationError, "organization", "mismatched_organization"),
+        (openai.PermissionDeniedError, 403, litellm.PermissionDeniedError, "model", "model_access_denied"),
         (openai.NotFoundError, 404, litellm.NotFoundError, "id", None),
     ],
 )
-def test_openai_invalid_request_error_401_and_404_keep_the_provider_error_fields(
+def test_openai_invalid_request_error_401_403_and_404_keep_the_provider_error_fields(
     sdk_error: type[openai.APIStatusError],
     status_code: int,
     expected_exception: type[openai.APIStatusError],
@@ -1471,6 +1474,31 @@ def test_openai_invalid_request_error_401_and_404_keep_the_provider_error_fields
     assert excinfo.value.body == provider_error
     assert openai_error_type(excinfo.value, status_code) == "invalid_request_error"
     assert excinfo.value.message.count(expected_exception.__name__) == 1
+
+
+@pytest.mark.parametrize(
+    "error_detail, expected_exception",
+    [
+        ("model_not_found", litellm.NotFoundError),
+        ("content_policy_violation", litellm.ContentPolicyViolationError),
+    ],
+)
+def test_openai_invalid_request_error_403_keeps_specialized_mappings(
+    error_detail: str, expected_exception: type[openai.APIStatusError]
+) -> None:
+    error_message: Final = json.dumps(
+        {"error": {"message": "Rejected.", "type": "invalid_request_error", "code": error_detail}}
+    )
+    original_exception: Final = OpenAIError(status_code=403, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert type(excinfo.value) is expected_exception
 
 
 def test_openai_incorrect_api_key_keeps_the_proxy_authentication_error_type() -> None:
@@ -3781,3 +3809,50 @@ def test_openai_error_never_mentions_the_copilot_app_permission(monkeypatch):
             extra_kwargs={},
         )
     assert "Copilot Requests" not in caught.value.message, caught.value.message
+
+
+@pytest.mark.parametrize(
+    ("provider", "provider_status", "mapped_error", "public_status"),
+    [
+        ("anthropic", 529, litellm.InternalServerError, 500),
+        ("anthropic", 429, litellm.RateLimitError, 429),
+        ("openai", 529, litellm.APIError, 529),
+        ("openai", 429, litellm.RateLimitError, 429),
+    ],
+)
+def test_a_mapped_provider_error_keeps_the_providers_own_status_beside_its_public_one(
+    provider: str,
+    provider_status: int,
+    mapped_error: type[litellm.InternalServerError | litellm.RateLimitError | litellm.APIError],
+    public_status: int,
+    quiet_exception_mapping: None,
+) -> None:
+    with pytest.raises(mapped_error, match="upstream failure") as raised:
+        exception_type(
+            model="model-under-test",
+            original_exception=_UpstreamHTTPError(status_code=provider_status, message="upstream failure"),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is mapped_error
+    assert (raised.value.status_code, provider_origin_status(raised.value)) == (public_status, provider_status)
+
+
+def test_an_error_litellm_raised_itself_carries_no_provider_status(quiet_exception_mapping: None) -> None:
+    synthetic: Final = litellm.RateLimitError(message="deployment at capacity", llm_provider="", model="m")
+
+    returned: Final = exception_type(model="m", original_exception=synthetic, custom_llm_provider="openai")
+
+    assert returned is synthetic
+    assert provider_origin_status(returned) is None
+
+
+def test_a_status_litellm_made_up_for_a_provider_error_is_not_kept_as_the_providers(
+    quiet_exception_mapping: None,
+) -> None:
+    made_up: Final = BaseLLMException(status_code=429, message="no status upstream", status_code_is_synthesized=True)
+
+    with pytest.raises(litellm.RateLimitError, match="no status upstream") as raised:
+        exception_type(model="m", original_exception=made_up, custom_llm_provider="openai")
+
+    assert provider_origin_status(raised.value) is None

@@ -25,14 +25,19 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_TeamTable,
     ProxyException,
-    TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key
-from litellm.proxy.management_endpoints import team_endpoints
 from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_through
-from tests.unit.proxy.auth._user_table import UserTable
+from tests.unit.proxy.auth._user_table import UserTable, user_store_over
+from tests.unit.proxy.rust_auth_stores import (
+    FakeJwtKeyMappingStore,
+    FakeTeamStore,
+    JwtMapping,
+    RustAuthStores,
+    install_rust_auth_stores,
+)
 
 JWKS_URL: Final = "https://idp.invalid/keys"
 SIGNING_KEY: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -147,13 +152,24 @@ class _UnreachableUsers(UserTable):
         raise httpx.ConnectError("connection refused")
 
 
-async def _key_mapping(where: Mapping[str, object], **_: object) -> SimpleNamespace | None:
-    mapped: Final = where.get("jwt_claim_value") == MAPPED_CLIENT and not where.get("jwt_issuer")
-    return SimpleNamespace(token=_hash(MAPPED_KEY)) if mapped else None
+class _UnreachableTeams(dict[str, Exception]):
+    """Every team read by id fails as the database is down."""
+
+    def get(self, team_id: str, default: object = None) -> Exception:
+        return httpx.ConnectError("connection refused")
 
 
-async def _teams_by_alias(where: Mapping[str, object], **_: object) -> list[LiteLLM_TeamTable]:
-    return [team for team in TEAMS if team.team_alias is not None and team.team_alias == where.get("team_alias")]
+def _stores(users: UserTable, database_up: bool) -> RustAuthStores:
+    """Users, teams and the mapped client's key mapping, whose reads fail once the database is down."""
+    user_store: Final = user_store_over(users)
+    mappings: Final = FakeJwtKeyMappingStore([JwtMapping("azp", MAPPED_CLIENT, _hash(MAPPED_KEY))])
+    if not database_up:
+        user_store.error = mappings.error = httpx.ConnectError("connection refused")
+    return RustAuthStores(
+        user=user_store,
+        team=FakeTeamStore(rows={team.team_id: team for team in TEAMS} if database_up else _UnreachableTeams()),
+        jwt_key_mapping=mappings,
+    )
 
 
 class _Tables(SimpleNamespace):
@@ -168,14 +184,12 @@ class _Tables(SimpleNamespace):
 
 
 def _prisma(users: UserTable, database_up: bool) -> MagicMock:
-    """A database holding only users and key mappings, whose key, team and user reads fail once it is down."""
+    """A database holding only users, whose key and user reads fail once it is down."""
     read: Final = (
         AsyncMock(return_value=None) if database_up else AsyncMock(side_effect=httpx.ConnectError("connection refused"))
     )
     tables: Final = _Tables(
-        litellm_teamtable=SimpleNamespace(find_unique=read, find_first=read, find_many=_teams_by_alias),
         litellm_usertable=users,
-        litellm_jwtkeymapping=SimpleNamespace(find_first=AsyncMock(side_effect=_key_mapping)),
     )
     prisma: Final = MagicMock()
     prisma.get_data = read
@@ -220,17 +234,11 @@ async def _reply(call: Call, failure_hook: AsyncMock) -> Served | Refused:
 
 async def _outcome(monkeypatch: pytest.MonkeyPatch, call: Call) -> Outcome:
     users: Final = UserTable() if call.database_up else _UnreachableUsers()
-    added: Final[list[tuple[str, str]]] = []  # mutable-ok: records the team members auth adds
     failure_hook: Final = AsyncMock(return_value=None)
-
-    async def add_member(data: TeamMemberAddRequest, **_: object) -> None:
-        assert not isinstance(data.member, list)
-        added.append((data.team_id, str(data.member.user_id)))
-
+    stores: Final = install_rust_auth_stores(monkeypatch, _stores(users, call.database_up))
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", JWKS_URL)
     monkeypatch.delenv("JWT_ISSUER", raising=False)
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
-    monkeypatch.setattr(team_endpoints, "team_member_add", add_member)
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_failure_hook", failure_hook)
     for name, value in {
         "prisma_client": _prisma(users, call.database_up),
@@ -252,7 +260,8 @@ async def _outcome(monkeypatch: pytest.MonkeyPatch, call: Call) -> Outcome:
         reply: Final = await _reply(call, failure_hook)
     finally:
         await pass_through.initialize_pass_through_endpoints([])
-    return Outcome(reply, created=tuple(row.user_id for row in users.rows), added=tuple(added))
+    added: Final = tuple((team_id, user_id) for user_id, team_id, _ in stores.team_membership.adds)
+    return Outcome(reply, created=tuple(row.user_id for row in users.rows), added=added)
 
 
 def _joined(team_id: str) -> Outcome:

@@ -38,6 +38,7 @@ from litellm.types.extraction import ExtractionRequestBody
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 if sys.version_info >= (3, 14):
     from compression import zstd
@@ -1079,7 +1080,7 @@ def test_prompt_cache_controls_reach_an_openai_deployment_unchanged(
     upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
         json={
             "model": "gpt-6-luna",
-            "answers": _OPENAI_FORMAT_ANSWERS[:1],
+            "answers": [{**_OPENAI_FORMAT_ANSWERS[0], "name": _PREDICATE["name"]}],
             "usage": {
                 "input_tokens": _INPUT_TOKENS,
                 "output_tokens": _OUTPUT_TOKENS,
@@ -1323,7 +1324,7 @@ _UNACCEPTED_PROMPT_CACHE_IDS: Final = (
 )
 _OPENAI_DECISION_RESPONSE: Final[Mapping[str, object]] = {
     "model": "gpt-6-luna",
-    "answers": _OPENAI_FORMAT_ANSWERS[:1],
+    "answers": [{**_OPENAI_FORMAT_ANSWERS[0], "name": _PREDICATE["name"]}],
     "usage": {
         "input_tokens": _INPUT_TOKENS,
         "output_tokens": _OUTPUT_TOKENS,
@@ -2062,7 +2063,7 @@ def test_a_compressed_body_naming_a_model_outside_the_key_is_refused_by_auth(
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", "no-db-needed-for-a-cached-key")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
     upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
 
     response: Final = client.post(

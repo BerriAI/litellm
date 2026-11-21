@@ -7,10 +7,10 @@ import sys
 import types
 from binascii import crc32
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -27,12 +27,91 @@ from litellm.llms.bedrock.passthrough.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, PassthroughStreamingResponse
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 _STANDARD_LOGGING_OBJECT: Final = TypeAdapter(Mapping[str, object])
 CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
 CONVERSE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/converse-stream"
 INVOKE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/invoke-with-response-stream"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_proxy_identity_reaches_sts_and_isolates_cached_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_team_alias"])
+    monkeypatch.setattr(litellm, "bedrock_session_name_fields", ["user_api_key_user_id"])
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_SESSION_NAME", raising=False)
+    sts = MagicMock()
+    sts.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "ASIAIDENTITY",
+            "SecretAccessKey": "assumed-secret",
+            "SessionToken": "assumed-token",
+            "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+        }
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "identity-model",
+                "litellm_params": {
+                    "model": f"bedrock/{CONVERSE_MODEL}",
+                    "aws_access_key_id": "caller",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-east-1",
+                    "aws_role_name": "arn:aws:iam::123456789012:role/invocation",
+                    "aws_session_tags": [{"Key": "deployment", "Value": "static"}],
+                },
+            }
+        ]
+    )
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"generation": "ok"}, request=request))
+    first_identity = get_passthrough_router_request_metadata(UserAPIKeyAuth(user_id="agent-one", team_alias="team-one"))
+    second_identity = get_passthrough_router_request_metadata(
+        UserAPIKeyAuth(user_id="agent-two", team_alias="team-two")
+    )
+    with patch("boto3.client", return_value=sts):
+        first = await router.allm_passthrough_route(
+            model="identity-model",
+            method="POST",
+            endpoint=f"/model/{CONVERSE_MODEL}/invoke",
+            data={"prompt": "hi"},
+            litellm_metadata=first_identity,
+            client=AsyncHTTPHandler(transport=transport),
+        )
+        first_sts = sts.assume_role.call_args.kwargs
+        second = await router.allm_passthrough_route(
+            model="identity-model",
+            method="POST",
+            endpoint=f"/model/{CONVERSE_MODEL}/invoke",
+            data={"prompt": "hi"},
+            litellm_metadata=second_identity,
+            client=AsyncHTTPHandler(transport=transport),
+        )
+        repeated = await router.allm_passthrough_route(
+            model="identity-model",
+            method="POST",
+            endpoint=f"/model/{CONVERSE_MODEL}/invoke",
+            data={"prompt": "hi"},
+            litellm_metadata=first_identity,
+            client=AsyncHTTPHandler(transport=transport),
+        )
+    assert (first.status_code, second.status_code, repeated.status_code) == (200, 200, 200)
+    assert first_sts == {
+        "RoleArn": "arn:aws:iam::123456789012:role/invocation",
+        "RoleSessionName": "agent-one",
+        "Tags": ({"Key": "deployment", "Value": "static"}, {"Key": "user_api_key_team_alias", "Value": "team-one"}),
+    }
+    assert sts.assume_role.call_args.kwargs == {
+        "RoleArn": "arn:aws:iam::123456789012:role/invocation",
+        "RoleSessionName": "agent-two",
+        "Tags": ({"Key": "deployment", "Value": "static"}, {"Key": "user_api_key_team_alias", "Value": "team-two"}),
+    }
+    assert sts.assume_role.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -928,6 +1007,38 @@ def _tier_priced_cost(price_suffix: str) -> float:
         TIERED_PROMPT_TOKENS * prices[f"input_cost_per_token{price_suffix}"]
         + TIERED_COMPLETION_TOKENS * prices[f"output_cost_per_token{price_suffix}"]
     )
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_passthrough_logs_the_tier_in_metadata() -> None:
+    endpoint: Final = f"/model/{TIERED_MODEL}/converse-stream"
+    callback: Final = _CaptureAsyncSuccessCallback()
+    logging_obj: Final = _stream_logging_obj(endpoint, [callback], model=TIERED_MODEL)
+    collector: Final = BedrockPassthroughConfig().create_stream_collector(
+        model=TIERED_MODEL, custom_llm_provider="bedrock", endpoint=endpoint
+    )
+    _feed(
+        collector,
+        _event_frame("messageStart", {"role": "assistant"})
+        + _text_block(0, ["Converse response"])
+        + _event_frame("messageStop", {"stopReason": "end_turn"})
+        + _event_frame(
+            "metadata",
+            {
+                "usage": {
+                    "inputTokens": TIERED_PROMPT_TOKENS,
+                    "outputTokens": TIERED_COMPLETION_TOKENS,
+                    "totalTokens": TIERED_PROMPT_TOKENS + TIERED_COMPLETION_TOKENS,
+                },
+                "metrics": {"latencyMs": 1},
+                "serviceTier": {"type": "priority"},
+            },
+        ),
+    )
+
+    assert await logging_obj.async_flush_passthrough_collected_chunks(collector=collector) is True
+    assert callback.kwargs is not None
+    assert callback.kwargs["response_cost"] == pytest.approx(_tier_priced_cost("_priority"))
 
 
 def _nova_invoke_text_stream(texts: list[str]) -> bytes:

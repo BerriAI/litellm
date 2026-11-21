@@ -1,5 +1,3 @@
-import base64
-import binascii
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -29,6 +27,7 @@ from litellm.proxy._types import (
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
     SecretMapDecodeError,
     _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    decode_legacy_mcp_user_credential,
     decode_secret_map,
     decrypt_value_helper,
     encrypt_secret_map,
@@ -1631,10 +1630,7 @@ def _decode_user_credential(stored: str) -> str | None:
     )
     if decrypted is not None:
         return decrypted
-    try:
-        return base64.urlsafe_b64decode(stored).decode()
-    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError):
-        return None
+    return decode_legacy_mcp_user_credential(stored)
 
 
 def _warn_undecryptable_credential(user_id: str, server_id: str) -> None:

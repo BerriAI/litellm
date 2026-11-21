@@ -21,12 +21,12 @@ from prometheus_client import REGISTRY, Gauge
 from prometheus_client.registry import Collector
 
 import litellm
+from litellm.integrations.lens.exporter import lens_export_counters
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import SpendLogCleanupMetrics
 from litellm.proxy.middleware.admission_control_middleware import create_prometheus_admission_metrics
 from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
-from litellm.tracing.exporter import lens_export_counters
 
 _GRAFANA_DIR: Final = Path(__file__).parents[3] / "litellm" / "integrations" / "prometheus_helpers" / "grafana_dashboards"
 _ALL_METRICS_DASHBOARD: Final = _GRAFANA_DIR / "dashboard_all_metrics" / "grafana_dashboard.json"
@@ -60,6 +60,7 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
     assert SpendLogCleanupMetrics.rows_remaining is not None
     assert SpendLogCleanupMetrics.batch_failures is not None
     assert SpendLogCleanupMetrics.runs is not None
+    assert SpendLogCleanupMetrics.storage_bytes is not None
     in_flight: Final = InFlightRequestsMiddleware._get_gauge()
     assert in_flight is not None
     services: Final = PrometheusServicesLogger()
@@ -72,6 +73,7 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
         SpendLogCleanupMetrics.rows_remaining,
         SpendLogCleanupMetrics.batch_failures,
         SpendLogCleanupMetrics.runs,
+        SpendLogCleanupMetrics.storage_bytes,
         in_flight,
         services.redis_breaker_state,
         services.redis_breaker_transitions,

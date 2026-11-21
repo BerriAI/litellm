@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::{
     AgentIdentityFailure, Error, KeyHash, Token,
     authn::{
-        jwt::{KeyMappingRow, KeyMappingWrite, MappedKey},
+        jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
         key::{CachedTeam, Keyed},
     },
     identity::{
@@ -129,19 +129,39 @@ pub trait AuthHost: Send + Sync {
         token: &Token,
     ) -> impl Future<Output = Result<Option<Value>, Error>> + Send;
 
-    /// `user_api_key_cache.async_get_cache`
-    fn cached_json(&self, key: &str) -> impl Future<Output = Result<Option<Value>, Error>> + Send;
+    /// A JWKS, OIDC discovery or UserInfo document cached under `key`, or the marker beside one
+    /// that says when it went stale or that its URL was unreachable. These never share a cache
+    /// with the auth objects, which management endpoints evict.
+    fn cached_document(
+        &self,
+        key: &str,
+    ) -> impl Future<Output = Result<Option<Value>, Error>> + Send;
 
-    /// `user_api_key_cache.async_set_cache`
-    fn cache_json(
+    fn cache_document(
         &self,
         key: &str,
         value: &Value,
         ttl: Duration,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    /// `user_api_key_cache.async_delete_cache`
-    fn forget_json(&self, key: &str) -> impl Future<Output = Result<(), Error>> + Send;
+    /// What the auth cache holds for `claim`: the hash of the key it maps to, or a sentinel.
+    /// Management endpoints evict it under `claim.cache_key()`.
+    fn cached_key_mapping(
+        &self,
+        claim: MappedClaim<'_>,
+    ) -> impl Future<Output = Result<Option<Value>, Error>> + Send;
+
+    fn cache_key_mapping(
+        &self,
+        claim: MappedClaim<'_>,
+        value: &Value,
+        ttl: Duration,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
+
+    fn forget_key_mapping(
+        &self,
+        claim: MappedClaim<'_>,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// The operator's own code, or `None` on a host that cannot run it. Such a host hands a request
     /// planned as [`Plan::JwtWithOperatorCode`](crate::plan::Plan::JwtWithOperatorCode) to one

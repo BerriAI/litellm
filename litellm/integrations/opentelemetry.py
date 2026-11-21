@@ -459,6 +459,7 @@ class OpenTelemetryConfig:
 
 class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     logs_every_failed_attempt: ClassVar[bool] = True
+    reads_original_response: ClassVar[bool] = True
     wants_failed_prompt_token_estimate: ClassVar[bool] = True
 
     def __init__(
