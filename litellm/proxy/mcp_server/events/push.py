@@ -182,20 +182,25 @@ class PushRelay:
         return _IDLE
 
     async def consume(self, frames: Frames) -> None:
-        while not self._ended:
-            item = await self._receive(frames)
-            if item is None:
-                return
-            if isinstance(item, Overflow):
-                await self._announce(item.cursor, True)
-            elif isinstance(item, StreamFrame):
-                await self._relay(item)
-            elif self._active:
-                await self._heartbeat(None)
-            if not self._ended and self._runtime.clock() >= self._next_check:
-                self._next_check = self._runtime.clock() + RECHECK_SECONDS
-                if await self._authorized() is None:
-                    await self._terminate(forbidden("Access revoked"))
+        while not self._ended and await self._step(frames):
+            pass
+
+    async def _step(self, frames: Frames) -> bool:
+        """Handle one frame or idle tick; False once the upstream stream has ended."""
+        item: Final = await self._receive(frames)
+        if item is None:
+            return False
+        if isinstance(item, Overflow):
+            await self._announce(item.cursor, True)
+        elif isinstance(item, StreamFrame):
+            await self._relay(item)
+        elif self._active:
+            await self._heartbeat(None)
+        if not self._ended and self._runtime.clock() >= self._next_check:
+            self._next_check = self._runtime.clock() + RECHECK_SECONDS
+            if await self._authorized() is None:
+                await self._terminate(forbidden("Access revoked"))
+        return True
 
 
 async def push(

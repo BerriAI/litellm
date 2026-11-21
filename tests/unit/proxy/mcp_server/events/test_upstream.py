@@ -177,3 +177,16 @@ async def test_draining_a_full_buffer_releases_the_overflow_without_new_upstream
     reader: Final = route.reader()
     received: Final = [await reader.receive() for _ in range(257)]
     assert received[-1] == Overflow(cursor="256")
+
+
+@pytest.mark.asyncio
+async def test_a_reader_that_falls_too_far_behind_is_terminated_with_bounded_memory() -> None:
+    route: Final = StreamRoute()
+    for index in range(256):
+        route.deliver(StreamFrame("notifications/events/event", {"cursor": str(index)}))
+    for index in range(500):
+        route.deliver(StreamFrame("notifications/events/error", {"error": {"code": -32603, "message": str(index)}}))
+    route.finish(None)
+    methods: Final = [frame.method if isinstance(frame, StreamFrame) else "overflow" async for frame in route.reader()]
+    assert len(methods) == 256 + 32 + 1
+    assert methods[-1] == "notifications/events/terminated"

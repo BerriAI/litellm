@@ -68,6 +68,8 @@ def test_only_server_held_credentials_outlive_the_request(
     (
         ({}, None, 60 * 60 * 1000),
         ({"ttl_ms": 1}, None, MIN_TTL_MS),
+        ({"ttl_ms": 0}, None, MIN_TTL_MS),
+        ({"ttl_ms": 0}, MCPAuth.oauth_delegate, MIN_TTL_MS),
         ({"ttl_ms": 10 * MAX_TTL_MS}, None, MAX_TTL_MS),
         ({"ttl_ms": None}, None, None),
         ({"ttl_ms": None}, MCPAuth.oauth_delegate, REQUEST_SCOPED_TTL_MS),

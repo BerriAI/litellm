@@ -115,11 +115,13 @@ async def prepare_object_permission_upsert(
         else {}
     )
     reject_app_grant_change(new_object_permission.get("apps"), existing_fields.get("apps"), can_grant_apps)
-    await reject_ambiguous_mcp_tool_permission_keys(
-        new_mcp_tool_permissions=new_object_permission.get("mcp_tool_permissions"),
-        existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
-        prisma_client=prisma_client,
-    )
+    for field in ("mcp_tool_permissions", "mcp_event_permissions"):
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions=new_object_permission.get(field),
+            existing_mcp_tool_permissions=existing_fields.get(field),
+            prisma_client=prisma_client,
+            field=field,
+        )
     merged: Final[dict[str, object]] = {
         key: value
         for key, value in (
@@ -255,11 +257,13 @@ async def set_object_permission(
     }
 
     reject_app_grant_change(clean_data.get("apps"), None, can_grant_apps)
-    await reject_ambiguous_mcp_tool_permission_keys(
-        new_mcp_tool_permissions=clean_data.get("mcp_tool_permissions"),
-        existing_mcp_tool_permissions=None,
-        prisma_client=prisma_client,
-    )
+    for field in ("mcp_tool_permissions", "mcp_event_permissions"):
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions=clean_data.get(field),
+            existing_mcp_tool_permissions=None,
+            prisma_client=prisma_client,
+            field=field,
+        )
 
     # Serialize the JSON permission columns to strings for GraphQL compatibility
     serialized: Final = {
@@ -380,6 +384,7 @@ async def reject_ambiguous_mcp_tool_permission_keys(
     new_mcp_tool_permissions: object,
     existing_mcp_tool_permissions: object,
     prisma_client: PrismaClient | None,
+    field: str = "mcp_tool_permissions",
 ) -> None:
     """
     A name or alias shared by several MCP servers cannot key ``mcp_tool_permissions``:
@@ -408,8 +413,9 @@ async def reject_ambiguous_mcp_tool_permission_keys(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail={
             "error": (
-                f"Ambiguous mcp_tool_permissions key: {collisions}. "
-                "Key tool permissions by server_id when servers share a name or alias."
+                f"Ambiguous {field} key: {collisions}. "
+                f"Key {'event' if field == 'mcp_event_permissions' else 'tool'} permissions by server_id "
+                "when servers share a name or alias."
             )
         },
     )
@@ -691,7 +697,9 @@ def _extract_requested_mcp_server_ids(
 
     Includes:
     - mcp_servers list
-    - Keys from mcp_tool_permissions and mcp_event_permissions
+    - Keys from mcp_tool_permissions
+
+    mcp_event_permissions only narrow event types on servers granted elsewhere, so their keys grant nothing.
     """
     if not object_permission or not isinstance(object_permission, dict):
         return set()
@@ -702,9 +710,9 @@ def _extract_requested_mcp_server_ids(
         server_ids.update(mcp_servers)
         server_ids.discard(SpecialMCPServerNames.no_mcp_servers.value)
 
-    for per_server in (object_permission.get("mcp_tool_permissions"), object_permission.get("mcp_event_permissions")):
-        if per_server is not None:
-            server_ids.update(per_server.keys())
+    mcp_tool_permissions: Final = object_permission.get("mcp_tool_permissions")
+    if isinstance(mcp_tool_permissions, dict):
+        server_ids.update(mcp_tool_permissions.keys())
 
     return server_ids
 

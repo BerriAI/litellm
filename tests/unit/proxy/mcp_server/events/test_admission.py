@@ -91,3 +91,10 @@ async def test_a_wrong_mcp_name_is_a_header_mismatch_even_for_an_unknown_event(n
         context(), name, ARGS, "poll", {"mcp-name": "something-else"}, SETTINGS, runtime((server(),))
     )
     assert isinstance(admitted, Error) and admitted.error.code is EventsErrorCode.HEADER_MISMATCH
+
+
+@pytest.mark.asyncio
+async def test_a_header_mismatch_names_the_header_that_disagrees() -> None:
+    headers: Final = {"mcp-name": "ci-build.failed", "mcp-param-repo": "acme/other"}
+    admitted: Final = await admit(context(), "ci-build.failed", ARGS, "poll", headers, SETTINGS, runtime((server(),)))
+    assert isinstance(admitted, Error) and admitted.error.data == {"header": "Mcp-Param-Repo"}

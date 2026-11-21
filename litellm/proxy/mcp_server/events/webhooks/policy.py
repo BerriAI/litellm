@@ -47,11 +47,13 @@ def credential_outlives_request(server: MCPServer) -> bool:
 
 
 def granted_ttl_ms(params: SubscribeEventsParams, server: MCPServer) -> int | None:
+    """Clamp the client's suggestion into this server's bounds; a suggestion below the floor is raised to it."""
     if not credential_outlives_request(server):
-        return min(params.ttl_ms or REQUEST_SCOPED_TTL_MS, REQUEST_SCOPED_TTL_MS)
+        suggested: Final = params.ttl_ms if params.ttl_ms is not None else REQUEST_SCOPED_TTL_MS
+        return min(max(suggested, MIN_TTL_MS), REQUEST_SCOPED_TTL_MS)
     if "ttl_ms" in params.model_fields_set and params.ttl_ms is None:
         return None
-    return min(max(params.ttl_ms or DEFAULT_TTL_MS, MIN_TTL_MS), MAX_TTL_MS)
+    return min(max(params.ttl_ms if params.ttl_ms is not None else DEFAULT_TTL_MS, MIN_TTL_MS), MAX_TTL_MS)
 
 
 def client_grant(now: datetime, ttl_ms: int | None, upstream: datetime | None) -> datetime | None:

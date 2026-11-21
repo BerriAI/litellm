@@ -46,7 +46,12 @@ def check_routing_headers(
     if named is not None:
         return named
     rejection: Final = validate_mcp_param_headers(dict(prepared.descriptor.input_schema), arguments, headers)
-    return header_mismatch(rejection.message) if rejection is not None else None
+    return header_mismatch(_header_named_in(rejection.message)) if rejection is not None else None
+
+
+def _header_named_in(message: str) -> str:
+    """The SDK names the offending header first, e.g. ``Mcp-Param-Repo header is missing ...``."""
+    return message.split(" header", 1)[0]
 
 
 async def admit(

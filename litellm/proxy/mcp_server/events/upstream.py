@@ -44,6 +44,7 @@ _STREAM_METHODS: Final[Mapping[str, StreamMethod]] = MappingProxyType(
     }
 )
 _FRAME_BUFFER: Final = 256
+_HELD_LIMIT: Final = 32
 _JSON_OBJECT: Final = TypeAdapter[dict[str, JsonValue]](dict[str, JsonValue])
 _stream_ids: Final = itertools.count(1)
 
@@ -66,10 +67,16 @@ class Frames(Protocol):
     async def receive(self) -> StreamFrame | Overflow: ...
 
 
+_FELL_BEHIND: Final = StreamFrame(
+    "notifications/events/terminated",
+    {"error": {"code": -32603, "message": "The event stream fell too far behind and was ended; resubscribe"}},
+)
+
+
 class StreamRoute:
     """A bounded buffer between the upstream stream and the relay. Under backpressure, event and heartbeat
-    frames are dropped and reported as one overflow notice; error and terminated frames are held and always
-    delivered, in order, after it."""
+    frames are dropped and reported as one overflow notice; error and terminated frames are held and delivered,
+    in order, after it. A reader that falls so far behind that the held frames reach their limit is terminated."""
 
     def __init__(self) -> None:
         streams: Final = anyio.create_memory_object_stream[StreamFrame | Overflow](_FRAME_BUFFER)
@@ -79,8 +86,11 @@ class StreamRoute:
         self._dropped_cursor: str | None = None
         self._dropping = False
         self._held: deque[StreamFrame] = deque()  # mutable-ok: control frames waiting for buffer space
+        self._overrun = False
 
     def deliver(self, frame: StreamFrame) -> None:
+        if self._overrun:
+            return
         if not self._flush():
             self._defer(frame)
             return
@@ -97,8 +107,11 @@ class StreamRoute:
             cursor: Final = frame.params.get("cursor")
             if isinstance(cursor, str):
                 self._dropped_cursor = cursor
-        else:
+        elif len(self._held) < _HELD_LIMIT:
             self._held.append(frame)
+        else:
+            self._overrun = True
+            self._held.append(_FELL_BEHIND)
 
     def _flush(self) -> bool:
         """Send the overflow notice, then held control frames, while there is room; True once none remain."""
