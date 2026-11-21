@@ -344,5 +344,11 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "wiro": {
+    "base_url": "https://llm.wiro.ai/v1",
+    "api_key_env": "WIRO_API_KEY",
+    "api_base_env": "WIRO_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   }
 }
