@@ -16,6 +16,7 @@ import re
 from collections.abc import Mapping
 from functools import partial
 from typing import Final, Literal
+from urllib.parse import urlparse
 
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
@@ -56,6 +57,12 @@ def mantle_catalog_id(model: str) -> str:
     model_id: Final = split_mantle_region_prefix(model)[1]
     geo, sep, profiled_id = model_id.partition(".")
     return profiled_id if sep and geo in BEDROCK_GEO_PROFILES else model_id
+
+
+def is_bedrock_runtime_host(api_base: str | None) -> bool:
+    """Whether a Mantle deployment points at bedrock-runtime, whose Responses endpoint takes fewer tool types."""
+    host: Final = urlparse(api_base).hostname if api_base else None
+    return host is not None and host.startswith("bedrock-runtime")
 
 
 def aws_error_envelope_type(body: object) -> str | None:
