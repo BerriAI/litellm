@@ -1424,6 +1424,20 @@ def test_azure_realtime_protocol_configured_by_the_operator_wins(
     assert protocol.name == "beta"
 
 
+def test_a_sideband_joining_a_webrtc_call_uses_ga_on_a_deployment_configured_for_beta(local_model_cost_map) -> None:
+    from litellm.llms.azure.realtime.handler import azure_realtime_protocol_for_client
+
+    protocol: Final = azure_realtime_protocol_for_client(
+        "beta",
+        model="my-realtime-deployment",
+        realtime_mode="realtime",
+        query_params={"call_id": "rtc_123"},
+        websocket=_GA_CLIENT,
+    )
+
+    assert protocol.name == "GA"
+
+
 async def _azure_backend_url_dialed_for(websocket: _ClientWebSocketWithHeaders, **kwargs: object) -> str | None:
     connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
     with patch("websockets.connect", connect):

@@ -83,6 +83,8 @@ def azure_realtime_protocol_for_client(
     query_params: RealtimeQueryParams | None,
     websocket: ScopedWebSocket,
 ) -> AzureRealtimeProtocol:
+    if (query_params or {}).get("call_id"):
+        return AzureRealtimeProtocol(name="GA")
     serves_a_ga_only_session: Final = (
         realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription"
     )
