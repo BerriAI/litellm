@@ -9,6 +9,7 @@ repository.workspace = true
 schema = ["dep:schemars", "litellm-cost/schema"]
 
 [dependencies]
+litellm-python-compat.workspace = true
 litellm-cost = { workspace = true, features = ["serde"] }
 litellm-error.workspace = true
 litellm-tracing.workspace = true

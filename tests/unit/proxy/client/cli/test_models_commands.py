@@ -11,8 +11,6 @@ import pytest
 # third party imports
 from click.testing import CliRunner
 
-
-
 # local imports
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.models import (

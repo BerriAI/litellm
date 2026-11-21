@@ -22,6 +22,7 @@ from litellm.constants import (
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
     MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
 from litellm.litellm_core_utils.clientside_credential_handler import (
@@ -47,6 +48,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     read_request_path_params,
     resolve_inference_model,
 )
+from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -588,6 +590,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # order and reviewable diffs.
     *sorted(_build_banned_observability_params()),
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
+    PRICING_CURRENCY_FIELD,
 )
 
 _SECRET_REFERENCE_PREFIXES: Final[tuple[str, ...]] = ("os.environ/", OIDC_SECRET_REFERENCE_PREFIX)
@@ -616,6 +619,7 @@ def _reject_secret_reference_in(params: Mapping[str, object]) -> None:
         )
 
 
+_BANNED_EXTRA_BODY_PARAMS: Final[tuple[str, ...]] = (*_BANNED_REQUEST_BODY_PARAMS, "fallbacks")
 _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
     param for param in _BANNED_REQUEST_BODY_PARAMS if param not in _BANNED_PARAMS_ALLOWED_IN_METADATA
 )
@@ -1044,6 +1048,7 @@ def is_request_body_safe(
                 general_settings,
                 llm_router,
                 manages_deployments=manages_deployments,
+                banned_params=_BANNED_EXTRA_BODY_PARAMS if nested_key == "extra_body" else _BANNED_REQUEST_BODY_PARAMS,
                 opt_in_groups=opt_in_groups,
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
@@ -1085,6 +1090,16 @@ def is_request_body_safe(
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
             )
+            _check_banned_params(
+                _fallbacks_only(_coerce_metadata_to_dict(target.get("extra_body")) or {}),
+                general_settings,
+                llm_router,
+                manages_deployments=manages_deployments,
+                banned_params=("fallbacks",),
+                opt_in_groups=opt_in_groups,
+                defer_model_checks=defer_model_checks,
+                defer_s3_buckets=defer_s3_buckets,
+            )
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
@@ -1112,6 +1127,10 @@ def is_request_body_safe(
         reject_api_key_secret_reference(user_config_params)
         _reject_user_config_secret_references(user_config_params)
     return True
+
+
+def _fallbacks_only(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in extra_body.items() if key == "fallbacks"})
 
 
 def _reject_user_config_secret_references(litellm_params: Mapping[str, object]) -> None:
@@ -1705,10 +1724,9 @@ def get_key_model_rpm_limit(
         return key_own_limit
 
     # 3. Fallback to team metadata
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("model_rpm_limit")
-        if team_limit is not None:
-            return team_limit
+    team_limit: Final = get_team_model_rpm_limit(user_api_key_dict)
+    if team_limit is not None:
+        return team_limit
 
     # 4. Fallback to deployment default_api_key_rpm_limit
     if model_name is not None:
@@ -1737,10 +1755,9 @@ def get_key_model_tpm_limit(
         return key_own_limit
 
     # 3. Fallback to team metadata
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("model_tpm_limit")
-        if team_limit is not None:
-            return team_limit
+    team_limit: Final = get_team_model_tpm_limit(user_api_key_dict)
+    if team_limit is not None:
+        return team_limit
 
     # 4. Fallback to deployment default_api_key_tpm_limit
     if model_name is not None:
@@ -1922,7 +1939,21 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+_ADMIN_ONLY_METADATA_KEYS: Final = (
+    *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+)
+_ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: (
+            "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        ),
+        MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
+            "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+    }
+)
 
 
 def enforce_batch_limits_are_admin_only(
@@ -1955,10 +1986,8 @@ def enforce_batch_limits_are_admin_only(
     )
     if changed is None:
         return
-    reason: Final = (
-        "It lets the holder read and write those buckets with the proxy's AWS credentials."
-        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
-        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    reason: Final = _ADMIN_ONLY_METADATA_REASONS.get(
+        changed, "It limits what the holder can do with batches, so the holder cannot raise it."
     )
     raise HTTPException(
         status_code=403,
@@ -2059,12 +2088,7 @@ def get_key_mcp_rpm_limit(
         if result is not None:
             return result
 
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("mcp_rpm_limit")
-        if team_limit is not None:
-            return team_limit
-
-    return None
+    return get_team_mcp_rpm_limit(user_api_key_dict)
 
 
 def get_team_mcp_rpm_limit(
@@ -2665,7 +2689,7 @@ def _cache_prediction_model_candidates(
 
 
 def _extract_model_candidates_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,
@@ -2719,10 +2743,11 @@ def _extract_model_candidates_from_request(
         _append_model_candidates(candidates, request_data.get("target_model_names"))
     if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS):
         session: Final = request_data.get("session")
-        if isinstance(session, dict):
+        if isinstance(session, Mapping):
             _append_model_candidates(candidates, session.get("model"))
-    if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
-        _append_model_candidates(candidates, request_data["completion"].get("model"))
+    completion: Final = request_data.get("completion")
+    if uses_completion_model_sources and isinstance(completion, Mapping):
+        _append_model_candidates(candidates, completion.get("model"))
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:
@@ -2792,7 +2817,7 @@ def request_dispatched_to_provider_pass_through(request: Request) -> bool:
 
 
 def get_model_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,
@@ -2816,6 +2841,8 @@ def get_model_from_request(
     routes (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
     """
     if request_dispatched_to_pass_through_endpoint(request):
+        return None
+    if route in LiteLLMRoutes.compliance_check_routes.value:
         return None
 
     handler_request_data: Final = _MODEL_REQUEST_DATA.validate_python(request_data)

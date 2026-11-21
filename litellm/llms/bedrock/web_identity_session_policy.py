@@ -27,20 +27,26 @@ _KmsViaService: TypeAlias = Literal["s3.*", "sqs.*", "secretsmanager.*"]
 
 _ViaServiceLike: Final = TypedDict("_ViaServiceLike", {"kms:ViaService": ReadOnly[_KmsViaService]})
 
-_StatementResource: TypeAlias = Literal["*", "arn:*:iam::*:role/litellm-bedrock-kb-*"]
+_S3ViaServiceEquals: Final = TypedDict("_S3ViaServiceEquals", {"kms:ViaService": ReadOnly[str]})
+
+_S3EncryptionContextLike: Final = TypedDict(
+    "_S3EncryptionContextLike", {"kms:EncryptionContext:aws:s3:arn": ReadOnly[tuple[str, ...]]}
+)
 
 
 class _SessionPolicyCondition(TypedDict):
     Bool: ReadOnly[_SecureTransportBool]
-    StringEquals: NotRequired[ReadOnly[_CalledViaLastEquals | _PassedToServiceEquals | _ServiceLinkedRoleEquals]]
-    StringLike: NotRequired[ReadOnly[_ViaServiceLike]]
+    StringEquals: NotRequired[
+        ReadOnly[_CalledViaLastEquals | _PassedToServiceEquals | _ServiceLinkedRoleEquals | _S3ViaServiceEquals]
+    ]
+    StringLike: NotRequired[ReadOnly[_ViaServiceLike | _S3EncryptionContextLike]]
 
 
 class _SessionPolicyStatement(TypedDict):
     Sid: ReadOnly[str]
     Effect: ReadOnly[Literal["Allow"]]
     Action: ReadOnly[tuple[str, ...]]
-    Resource: ReadOnly[_StatementResource]
+    Resource: ReadOnly[str]
     Condition: NotRequired[ReadOnly[_SessionPolicyCondition]]
 
 
@@ -58,7 +64,7 @@ def _allow(
     sid: str,
     actions: tuple[str, ...],
     condition: _SessionPolicyCondition = _SECURE_TRANSPORT_ONLY,
-    resource: _StatementResource = "*",
+    resource: str = "*",
 ) -> _SessionPolicyStatement:
     return _SessionPolicyStatement(Sid=sid, Effect="Allow", Action=actions, Resource=resource, Condition=condition)
 

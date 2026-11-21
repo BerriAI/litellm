@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.images.fan_out import image_request_count
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -72,6 +73,11 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         if is_gemini_image_model(model):
             mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
         return mapped_params
+
+    def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
+        if not is_gemini_image_model(model):
+            return 1
+        return image_request_count(optional_params.get("sampleCount"), model=model, llm_provider="gemini")
 
     def get_complete_url(
         self,

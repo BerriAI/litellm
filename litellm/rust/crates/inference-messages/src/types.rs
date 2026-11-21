@@ -1,15 +1,13 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_host::call::CallOutput;
-use litellm_inference::provider::resolve_llm_provider;
 use litellm_llms::{
     ErrorDetail,
     base_llm::messages::context::{MessagesModelCapabilities, MessagesShapeOptions},
 };
 use litellm_llms_types::{
-    formats::messages::{MessagesRequest, MessagesResponse, SystemPrompt},
+    formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
 };
 use litellm_router_types::LitellmParams;
@@ -31,30 +29,8 @@ pub struct MessagesCall {
     pub shaping: MessagesShaping,
 }
 
-/// The request body. `custom_llm_provider` is the call's, as the provider is resolved from it
-/// and the model.
-pub fn messages_body(
-    body: Map<String, Value>,
-    custom_llm_provider: Option<&str>,
-) -> Result<MessagesRequest, Error> {
-    if !reads_unparsed_system(&body, custom_llm_provider)
-        && let Some(system) = body.get(SYSTEM).filter(|system| !system.is_null())
-        && let Err(err) = SystemPrompt::deserialize(system)
-    {
-        return Err(invalid_request(err));
-    }
+pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error> {
     serde_json::from_value(Value::Object(body)).map_err(invalid_request)
-}
-
-const SYSTEM: &str = "system";
-
-/// Only `azure_ai` keeps a system prompt Rust could not type as sent, as Python does. By the
-/// owner's ruling every other provider, `anthropic` included, keeps main's request error for it.
-fn reads_unparsed_system(body: &Map<String, Value>, custom_llm_provider: Option<&str>) -> bool {
-    body.get("model")
-        .and_then(Value::as_str)
-        .and_then(|model| resolve_llm_provider(model, custom_llm_provider, "messages").ok())
-        .is_some_and(|resolved| resolved.provider == LlmProviders::AzureAi)
 }
 
 /// The caller's litellm params, projected by a host from the keys [`LitellmParams::fields`]
@@ -85,8 +61,19 @@ pub enum MessagesBody {
 pub struct MessagesShaping {
     #[serde(default)]
     pub capabilities: MessagesModelCapabilities,
+    #[serde(default)]
+    pub vertex: VertexShaping,
     #[serde(flatten)]
     pub settings: MessagesSettings,
+}
+
+/// What a Python host knows of a Claude on Vertex AI call that the login and URL depend on.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VertexShaping {
+    /// The model map's `supported_regions`, which Python's `VertexBase.get_vertex_region`
+    /// routes the call by.
+    #[serde(default)]
+    pub supported_regions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -110,6 +97,8 @@ pub struct MessagesSettings {
     #[serde(default)]
     pub drops_unsupported_params: bool,
     #[serde(default)]
+    pub global_drop_params: bool,
+    #[serde(default)]
     pub intercepted: bool,
     #[serde(default)]
     pub mcp_gateway: bool,
@@ -126,6 +115,15 @@ pub struct MessagesSettings {
     /// settings dict.
     #[serde(skip)]
     pub module_api_key: Option<SecretValue>,
+    #[serde(default)]
+    pub base_model: Option<String>,
+    #[serde(default)]
+    pub detached_drain_timeout: Option<f64>,
+    #[serde(default)]
+    pub detached_drain_limit: Option<usize>,
+    /// Python's async client retries a request whose connection failed to open, once.
+    #[serde(default)]
+    pub connect_retry: bool,
 }
 
 impl MessagesSettings {
@@ -133,8 +131,16 @@ impl MessagesSettings {
         MessagesShapeOptions {
             reasoning_auto_summary: self.reasoning_auto_summary,
             presanitized: self.presanitized,
-            ..MessagesShapeOptions::default()
         }
+    }
+
+    /// Python's Bedrock Messages relay keeps reading the provider stream after its client leaves,
+    /// for at most this long and in at most this many calls at once.
+    pub fn detached_drain(&self) -> Option<litellm_host::protocol::DetachedDrain> {
+        Some(litellm_host::protocol::DetachedDrain {
+            timeout: Duration::try_from_secs_f64(self.detached_drain_timeout?).ok()?,
+            limit: self.detached_drain_limit?,
+        })
     }
 
     pub fn request_timeout(&self) -> Option<Duration> {
@@ -207,6 +213,7 @@ mod tests {
             "drops_unsupported_params": true
         }),
         MessagesShaping {
+            vertex: VertexShaping::default(),
             settings: MessagesSettings {
                 drop_params: true,
                 reasoning_auto_summary: true,
@@ -225,6 +232,7 @@ mod tests {
                 supports_sampling_params: false,
                 supports_speed: true,
                 supports_mid_conversation_system: false,
+                bedrock: Default::default(),
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,

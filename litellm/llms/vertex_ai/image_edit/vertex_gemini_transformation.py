@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -9,6 +10,7 @@ from httpx._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.images.fan_out import image_request_count
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
@@ -56,7 +58,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     Uses generateContent API for Gemini models on Vertex AI
     """
 
-    SUPPORTED_PARAMS: list[str] = ["size"]
+    SUPPORTED_PARAMS: list[str] = ["n", "size"]
 
     def __init__(self) -> None:
         BaseImageEditConfig.__init__(self)
@@ -70,13 +72,18 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, str]:
-        supported_params: Final = self.get_supported_openai_params(model)
-        if "size" not in supported_params or "size" not in image_edit_optional_params:
-            return {}
+    ) -> dict[str, object]:
+        request_count: Final[Mapping[str, object]] = (
+            {"n": image_edit_optional_params["n"]} if "n" in image_edit_optional_params else {}
+        )
+        if "size" not in image_edit_optional_params:
+            return dict(request_count)
 
         size: Final = image_edit_optional_params.get("size")
-        return dict(map_vertex_image_size(size, model) or {"aspectRatio": "1:1"})
+        return {**request_count, **(map_vertex_image_size(size, model) or {"aspectRatio": "1:1"})}
+
+    def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
+        return image_request_count(image_edit_optional_request_params.get("n"), model=model, llm_provider="vertex_ai")
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -168,7 +175,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
@@ -252,8 +259,8 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             else {},
         )
 
-    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[HttpxPartType]:
-        images: Final[list[FileTypes]] = image if isinstance(image, list) else [image]
+    def _prepare_inline_image_parts(self, image: FileTypes | Sequence[FileTypes | None]) -> list[HttpxPartType]:
+        images: Final[Sequence[object]] = image if isinstance(image, list) else [image]
         return [
             {
                 "inlineData": {
@@ -265,7 +272,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             if img is not None
         ]
 
-    def _read_all_bytes(self, image: FileTypes) -> bytes:
+    def _read_all_bytes(self, image: object) -> bytes:
         if isinstance(image, bytes):
             return image
         if isinstance(image, BytesIO):
