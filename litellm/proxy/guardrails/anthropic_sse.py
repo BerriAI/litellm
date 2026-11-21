@@ -177,7 +177,8 @@ def anthropic_sse_chunks_from_response(
     block left open unless another block follows it, and with no finished text block when it read
     no text, since Claude Code does not retry a stream that shows a finished block. A response that
     cannot be re-emitted, such as one with a tool input that cannot be parsed, leaves a failed stream
-    its error alone. ``error_events`` stands in for the source stream's own, for a caller that rewrote
+    its error alone. No empty text block is re-emitted, since the OpenAI round trip adds one to a response
+    with only tool calls. ``error_events`` stands in for the source stream's own, for a caller that rewrote
     their text.
     """
     sent_error_events: Final = anthropic_sse_error_events(source_chunks) if error_events is None else error_events
@@ -212,7 +213,7 @@ def _rebuilt_sse_chunks(
         source_content or (), anthropic_response.get("content") or ()
     )
     rewritten_chunks: Final = FakeAnthropicMessagesStreamIterator(
-        response=_without_empty_text(anthropic_response) if error_events else anthropic_response,
+        response=_without_empty_text(anthropic_response),
         message_delta_fields=_rewritten_message_delta_fields(source_chunks, unchanged_tool_use_ids, keep_explanations),
     ).chunks
     if not error_events:

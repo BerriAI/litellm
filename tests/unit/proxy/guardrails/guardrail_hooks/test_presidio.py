@@ -26,6 +26,7 @@ import litellm
 from litellm import mock_completion
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.llms.anthropic.messages.stream_assembly import anthropic_sse_started_blocks
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     OPTIONAL_PresidioPIIMasking,
@@ -2780,6 +2781,16 @@ async def test_apply_to_output_streaming_anthropic_sse_masks_pii_in_every_frame_
     assert len(joined) > 0 and all(isinstance(chunk, bytes) for chunk in collected)
     assert _PHONE not in joined
     assert "<PHONE_NUMBER>" in joined
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_masked_tool_input_keeps_the_upstream_blocks():
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = [chunk async for chunk in _post_call_stream(guardrail, _PHONE_IN_A_TOOL_INPUT)]
+
+    started: Final = anthropic_sse_started_blocks(collected)
+    assert {index: block.get("type") for index, block in started.items()} == {0: "tool_use"}
+    assert "<PHONE_NUMBER>" in b"".join(chunk for chunk in collected if isinstance(chunk, bytes)).decode()
 
 
 @pytest.mark.asyncio
