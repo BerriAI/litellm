@@ -39,7 +39,7 @@ class AnthropicBatchesHandler:
         batch_id: str,
         api_base: str | None,
         api_key: str | None,
-        timeout: float | httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
         litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
@@ -111,7 +111,7 @@ class AnthropicBatchesHandler:
         )
         # Make the request
         async_client: Final = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
-        response: Final = await async_client.get(url=retrieve_url, headers=headers)
+        response: Final = await async_client.get(url=retrieve_url, headers=headers, timeout=timeout)
         response.raise_for_status()
 
         # Transform response to LiteLLM format
@@ -128,7 +128,7 @@ class AnthropicBatchesHandler:
         batch_id: str,
         api_base: str | None,
         api_key: str | None,
-        timeout: float | httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
         litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
