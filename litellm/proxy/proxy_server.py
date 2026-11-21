@@ -19503,6 +19503,11 @@ async def model_recommend(
         llm_router,
         lookup,
         GatewaySpeedClient(prisma_client.db) if prisma_client else None,
+        catalog=TypeAdapter(Mapping[str, object]).validate_python(
+            litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # Legacy catalog is validated at this boundary.
+        )
+        if request.include_external
+        else None,
     )
 
 

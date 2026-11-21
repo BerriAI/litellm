@@ -67,3 +67,35 @@ async def test_zero_speed_priority_does_not_query_database() -> None:
     )
     assert response.recommendations[0].signals.speed.unknown
     assert response.recommendations[0].latency_seconds is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_external", (False, True))
+async def test_external_catalog_is_opt_in_and_marks_recommendations(include_external: bool) -> None:
+    response: Final = await recommend_models(
+        RecommendationRequest(
+            include_external=include_external, priorities=Priorities(intelligence=0, speed=0, cost=3)
+        ),
+        UserAPIKeyAuth(),
+        {
+            "data": (
+                {"model_group": "chat", "mode": "chat", "input_cost_per_token": 0.01, "output_cost_per_token": 0.01},
+            )
+        },
+        None,
+        {"chat": "chat"},
+        None,
+        catalog={
+            "openai/external": {
+                "mode": "chat",
+                "litellm_provider": "openai",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.001,
+            }
+        },
+    )
+    first: Final = response.recommendations[0]
+    assert first.on_gateway is (not include_external)
+    assert first.model_group == ("openai/external" if include_external else "chat")
+    assert first.signals.speed.unknown
+    assert all(c.on_gateway for c in response.recommendations) is (not include_external)

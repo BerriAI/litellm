@@ -46223,6 +46223,11 @@ export interface components {
             latency_seconds: number | null;
             /** Model Group */
             model_group: string;
+            /**
+             * On Gateway
+             * @default true
+             */
+            on_gateway: boolean;
             /** Output Tokens Per Second */
             output_tokens_per_second: number | null;
             /** Providers */
@@ -46242,6 +46247,11 @@ export interface components {
              *     ]
              */
             focus: ("general" | "math" | "coding" | "agentic")[];
+            /**
+             * Include External
+             * @default false
+             */
+            include_external: boolean;
             /**
              * Limit
              * @default 3

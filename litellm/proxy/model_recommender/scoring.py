@@ -119,6 +119,7 @@ def recommendation(
     speed: Final = speeds.get(candidate.model_group)
     return Recommendation(
         model_group=candidate.model_group,
+        on_gateway=candidate.on_gateway,
         providers=candidate.providers,
         score=round(100 * weighted / total, 2) if total else 50,
         signals=signals,

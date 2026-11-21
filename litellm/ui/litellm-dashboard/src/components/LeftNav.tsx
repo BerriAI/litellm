@@ -273,6 +273,12 @@ const menuGroups: MenuGroup[] = [
         roles: rolesAllowedToViewWriteScopedPages,
       },
       {
+        key: "model-recommender",
+        page: "model-recommender",
+        label: <Trans i18nKey="modelRecommender.title" />,
+        icon: <LayoutGrid {...ICON} />,
+      },
+      {
         key: "agentic",
         page: "agentic",
         label: "shell.nav.items.agentic",
@@ -439,12 +445,6 @@ const menuGroups: MenuGroup[] = [
         key: "model-hub-table",
         page: "model-hub-table",
         label: "shell.nav.items.aiHub",
-        icon: <LayoutGrid {...ICON} />,
-      },
-      {
-        key: "model-recommender",
-        page: "model-recommender",
-        label: <Trans i18nKey="modelRecommender.title" />,
         icon: <LayoutGrid {...ICON} />,
       },
       {

@@ -27,10 +27,12 @@ class RecommendationRequest(FrozenModel):
     focus: frozenset[Focus] = frozenset({"general"})
     requirements: Requirements = Field(default_factory=Requirements)
     limit: int = Field(default=3, ge=1, le=20)
+    include_external: bool = False
 
 
 class Candidate(FrozenModel):
     model_group: str
+    on_gateway: bool = True
     providers: tuple[str, ...] = ()
     underlying_models: tuple[str, ...] = ()
     mode: str | None = None
@@ -62,6 +64,7 @@ class Signals(FrozenModel):
 
 class Recommendation(FrozenModel):
     model_group: str
+    on_gateway: bool = True
     providers: tuple[str, ...]
     score: float
     signals: Signals

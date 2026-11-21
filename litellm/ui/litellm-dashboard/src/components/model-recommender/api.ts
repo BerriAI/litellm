@@ -38,6 +38,7 @@ export type RecommenderState = {
   vision: boolean;
   function_calling: boolean;
   context: number | null;
+  include_external?: boolean;
 };
 
 export function buildRequest(state: RecommenderState): RecommendationRequest {
@@ -51,6 +52,7 @@ export function buildRequest(state: RecommenderState): RecommendationRequest {
       min_context_tokens: state.context,
     },
     limit: 3,
+    include_external: state.include_external ?? false,
   };
 }
 

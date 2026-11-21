@@ -9,6 +9,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router import Router
 
 from .benchmarks import EPOCH_URL, BenchmarkCache
+from .catalog import external_candidates
 from .models import Candidate, DataSource, FrozenModel, RecommendationRequest, RecommendationResponse
 from .scoring import matches, rank
 from .speed import QueryClient, SpeedCache
@@ -46,6 +47,7 @@ async def recommend_models(
     client: QueryClient | None,
     cache: BenchmarkCache = BENCHMARK_CACHE,
     speed_cache: SpeedCache = SPEED_CACHE,
+    catalog: Mapping[str, object] | None = None,
 ) -> RecommendationResponse:
     rows: Final = TypeAdapter(Mapping[str, tuple[object, ...]]).validate_python(listing)
     candidates: Final = tuple(candidate(row, ()) for row in rows.get("data", ()))
@@ -57,16 +59,22 @@ async def recommend_models(
         )
         if llm_router
         else lookup[c.model_group]
-        for c in eligible
+        for c in chat
     }
-    resolved: Final = tuple(
+    gateway: Final = tuple(
         candidate(
             c, llm_router.registry().deployments(group_names[c.model_group], team_id=auth.team_id) if llm_router else ()
         )
-        for c in eligible
+        for c in chat
     )
+    external: Final = external_candidates(catalog or {}, gateway) if request.include_external else ()
+    resolved: Final = tuple(c for c in (*gateway, *external) if matches(c, request.requirements))
     benchmarks: Final = await cache.get() if request.priorities.intelligence and request.focus else ()
-    speeds: Final = await speed_cache.get(client, tuple(group_names.values())) if request.priorities.speed else ()
+    speeds: Final = (
+        await speed_cache.get(client, tuple(group_names[c.model_group] for c in eligible))
+        if request.priorities.speed
+        else ()
+    )
     speed_by_group: Final = {speed.model_group: speed for speed in speeds}
     now: Final = datetime.now(timezone.utc).date().isoformat()
     return RecommendationResponse(
@@ -80,8 +88,8 @@ async def recommend_models(
                 if internal in speed_by_group
             },
         ),
-        candidates_considered=len(chat),
-        candidates_filtered=len(chat) - len(eligible),
+        candidates_considered=len(chat) + len(external),
+        candidates_filtered=len(chat) + len(external) - len(resolved),
         data_sources=(
             DataSource(
                 name="Epoch AI Benchmarking Hub",
@@ -97,10 +105,10 @@ async def recommend_models(
                 description="Last 7 days, at most the latest 100,000 gateway requests. Median latency and output tokens/sec.",
             ),
             DataSource(
-                name="Gateway pricing",
+                name="Gateway and catalog pricing" if request.include_external else "Gateway pricing",
                 as_of=now,
                 available=True,
-                description="Configured model group prices, blended 3:1 input to output per million tokens.",
+                description="Configured group prices and opt-in catalog prices, blended 3:1 input to output per million tokens.",
             ),
         ),
     )

@@ -1,279 +1,277 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useQueryStates } from "nuqs";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, Brain, Gauge, Loader2, SlidersHorizontal, Sparkles, Wallet } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { Panel, Segmented } from "@/app/(dashboard)/usage/_components/components/overview/Primitives";
+import { Page } from "@/components/shared/Page";
+import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  buildRequest,
-  FOCUS,
-  PRIORITIES,
-  recommenderParsers,
-  requestRecommendations,
-  type RecommendationResponse,
-} from "./api";
+import { FOCUS, requestRecommendations, type RecommendationResponse } from "./api";
+import { answersToRequest, EMPTY_ANSWERS, flowParsers, GOALS, REQUIREMENTS, type Answers } from "./flow";
 import { RecommendationCard } from "./RecommendationCard";
 
-const icons = { intelligence: Brain, speed: Gauge, cost: Wallet };
-const REQUIREMENTS = ["reasoning", "vision", "function_calling"] as const;
-const IMPORTANCE_LEVELS = [0, 1, 2, 3] as const;
+type ChangeAnswers = (patch: Partial<Answers>) => void;
 
 export default function ModelRecommender() {
   const { t } = useTranslation(undefined, { keyPrefix: "modelRecommender" });
   const { accessToken } = useAuthorized();
-  const [state, setState] = useQueryStates(recommenderParsers);
-  const [result, setResult] = useState<RecommendationResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState<string | null>(null);
-  const controller = useRef<AbortController | null>(null);
-  const body = buildRequest(state);
-  const fingerprint = JSON.stringify(body);
-  const stale = submitted !== null && submitted !== fingerprint;
-  useEffect(() => () => controller.current?.abort(), []);
-
-  const recommend = async () => {
-    if (!accessToken) return;
-    controller.current?.abort();
-    const current = new AbortController();
-    controller.current = current;
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await requestRecommendations(body, accessToken, current.signal);
-      if (current.signal.aborted) return;
-      setResult(response);
-      setSubmitted(fingerprint);
-    } catch (failure) {
-      if (!current.signal.aborted)
-        setError(failure instanceof Error ? failure.message : "Could not reach your gateway. Please try again.");
-    } finally {
-      if (!current.signal.aborted) setLoading(false);
-    }
+  const [answers, setAnswers] = useQueryStates(flowParsers, { history: "push" });
+  const body = useMemo(() => answersToRequest(answers), [answers]);
+  const queryOptions = {
+    queryKey: ["model-recommendations", accessToken, body],
+    queryFn: ({ signal }: { signal: AbortSignal }) => requestRecommendations(body, accessToken ?? "", signal),
+    enabled: answers.step === "results" && Boolean(accessToken),
+    retry: false,
+    staleTime: 30000,
   };
-
+  const { data: result, isFetching: loading, error, refetch } = useQuery(queryOptions);
+  const showResults = !loading && !error && result !== undefined;
   return (
-    <main className="mx-auto w-full max-w-[1440px] space-y-8 p-6 lg:p-10">
-      <header className="flex flex-col justify-between gap-5 border-b pb-8 sm:flex-row sm:items-end">
-        <div className="max-w-2xl space-y-3">
-          <span className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
-            <Sparkles className="size-3.5" />
-            {t("badge")}
-          </span>
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-            {t("heading")}
-            <br />
-            <span className="text-muted-foreground">{t("subheading")}</span>
-          </h1>
-          <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">{t("intro")}</p>
-        </div>
-        <span className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="size-2 rounded-full bg-emerald-500" />
-          {t("gatewayOnly")}
-        </span>
-      </header>
-      <div className="grid items-start gap-8 xl:grid-cols-[340px_minmax(0,1fr)]">
-        <Card className="xl:sticky xl:top-6">
-          <CardContent className="space-y-7 pt-1">
-            <div className="flex items-center gap-2">
-              <SlidersHorizontal className="size-4 text-primary" />
-              <h2 className="font-semibold">{t("brief")}</h2>
-            </div>
-            <div className="space-y-5">
-              {PRIORITIES.map((kind) => {
-                const Icon = icons[kind];
-                return (
-                  <fieldset key={kind} className="space-y-2.5">
-                    <legend className="mb-2 flex items-center gap-2 text-sm font-medium capitalize">
-                      <Icon className="size-4 text-muted-foreground" />
-                      {t(`priorities.${kind}`)}
-                    </legend>
-                    <div className="grid grid-cols-4 gap-1 rounded-lg bg-muted/70 p-1">
-                      {IMPORTANCE_LEVELS.map((value) => (
-                        <button
-                          type="button"
-                          key={value}
-                          aria-pressed={state[kind] === value}
-                          onClick={() => setState({ [kind]: value })}
-                          className={`rounded-md px-1 py-2 text-[10px] font-medium leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-primary ${state[kind] === value ? "bg-background text-primary shadow-sm ring-1 ring-border" : "text-muted-foreground hover:bg-background/60"}`}
-                        >
-                          {t(`importance.${value}`)}
-                        </button>
-                      ))}
-                    </div>
-                  </fieldset>
-                );
-              })}
-            </div>
-            <fieldset className="space-y-3 border-t pt-5">
-              <legend className="mb-3 text-sm font-medium">{t("focusTitle")}</legend>
-              <div className="flex flex-wrap gap-2">
-                {FOCUS.map((focus) => (
-                  <Button
-                    key={focus}
-                    size="sm"
-                    variant={state.focus.includes(focus) ? "default" : "outline"}
-                    aria-pressed={state.focus.includes(focus)}
-                    onClick={() =>
-                      setState({
-                        focus: state.focus.includes(focus)
-                          ? state.focus.filter((item) => item !== focus)
-                          : [...state.focus, focus],
-                      })
-                    }
-                    className="rounded-full capitalize"
-                  >
-                    {t(`focus.${focus}`)}
-                  </Button>
-                ))}
-              </div>
-            </fieldset>
-            <fieldset className="space-y-4 border-t pt-5">
-              <legend className="mb-4 text-sm font-medium">{t("requirements")}</legend>
-              {REQUIREMENTS.map((key) => (
-                <label
-                  key={key}
-                  className="flex items-center justify-between gap-3 text-sm text-muted-foreground"
-                  htmlFor={`require-${key}`}
-                >
-                  {t(`capabilities.${key}`)}
-                  <Switch
-                    id={`require-${key}`}
-                    checked={state[key]}
-                    onCheckedChange={(checked) => setState({ [key]: checked })}
-                  />
-                </label>
-              ))}
-              <div className="space-y-2">
-                <label htmlFor="min-context" className="text-xs text-muted-foreground">
-                  {t("context")}
-                </label>
-                <Input
-                  id="min-context"
-                  type="number"
-                  min={0}
-                  placeholder={t("noMinimum")}
-                  value={state.context ?? ""}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setState({ context: value === "" ? null : recommenderParsers.context.parse(value) });
-                  }}
-                />
-              </div>
-            </fieldset>
-            <Button className="w-full" size="lg" disabled={loading || !accessToken} onClick={recommend}>
-              {loading ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-              {loading ? t("finding") : t("recommend")}
-            </Button>
-            <p className="text-center text-[11px] text-muted-foreground">{t("noInference")}</p>
-          </CardContent>
-        </Card>
-        <section className="min-w-0 space-y-5" aria-label={t("shortlist")} aria-busy={loading}>
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">{t("shortlist")}</h2>
-            {result && (
-              <span className="text-xs text-muted-foreground">
-                {t("counts", {
-                  matching: result.candidates_considered - result.candidates_filtered,
-                  filtered: result.candidates_filtered,
-                })}
-              </span>
-            )}
-          </div>
-          {stale && (
-            <p role="status" className="rounded-lg bg-muted px-4 py-3 text-sm">
-              {t("stale")}
-            </p>
+    <Page>
+      <PageHeader>
+        <PageHeaderTitle>{t("title")}</PageHeaderTitle>
+        <PageHeaderDescription>{t("guidedIntro")}</PageHeaderDescription>
+      </PageHeader>
+      {answers.step === "results" ? (
+        <>
+          <AnswerSummary answers={answers} onChange={setAnswers} />
+          {loading && (
+            <Panel title={t("finding")}>
+              <Skeleton className="h-64 w-full rounded-xl" />
+            </Panel>
           )}
           {error && (
-            <div
-              role="alert"
-              className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive"
-            >
-              {error}
-            </div>
-          )}
-          {loading && (
-            <div role="status" className="space-y-4">
-              <p className="text-sm text-muted-foreground">{t("loading")}</p>
-              <div className="space-y-5 rounded-2xl border border-blue-200/60 bg-blue-50/30 p-7 dark:border-blue-900/60 dark:bg-blue-950/20">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-3">
-                    <Skeleton className="h-4 w-32" />
-                    <Skeleton className="h-8 w-48" />
-                  </div>
-                  <Skeleton className="size-20 rounded-full" />
-                </div>
-                <div className="grid grid-cols-3 gap-5">
-                  {[0, 1, 2].map((index) => (
-                    <Skeleton key={index} className="h-10" />
-                  ))}
-                </div>
-                <Skeleton className="h-4 w-3/4" />
-                <Skeleton className="h-4 w-1/2" />
-              </div>
-            </div>
-          )}
-          {!loading && !!result?.recommendations.length && (
-            <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
-              <RecommendationCard model={result.recommendations[0]} position={0} />
-              <div className="grid gap-5 lg:grid-cols-2">
-                {result.recommendations.slice(1).map((model, index) => (
-                  <RecommendationCard key={model.model_group} model={model} position={index + 1} />
-                ))}
-              </div>
-              <p className="text-xs leading-relaxed text-muted-foreground">{t("relativeScores")}</p>
-            </div>
-          )}
-          {!loading && !result?.recommendations.length && (
-            <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed bg-muted/20 px-8 text-center">
-              <div className="mb-6 flex size-16 items-center justify-center rounded-2xl border bg-background shadow-sm">
-                <Sparkles className="size-7 text-primary" />
-              </div>
-              <h3 className="text-xl font-semibold tracking-tight">{result ? t("noMatchTitle") : t("emptyTitle")}</h3>
-              <p className="mt-3 max-w-sm text-sm leading-relaxed text-muted-foreground">
-                {result ? t("noMatchDescription") : t("emptyDescription")}
+            <Panel title={t("requestFailed")}>
+              <p role="alert" className="mb-4 text-sm text-destructive">
+                {error.message}
               </p>
-            </div>
+              <Button variant="outline" onClick={() => void refetch()}>
+                {t("retry")}
+              </Button>
+            </Panel>
           )}
-          <footer className="space-y-2 border-t pt-5 text-[11px] leading-relaxed text-muted-foreground">
-            <p>
-              <a
-                href="https://epoch.ai/benchmarks"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 underline underline-offset-4"
-              >
-                {t("epoch")} <ArrowUpRight className="size-3" />
-              </a>
-              {" · "}
-              <a
-                href="https://creativecommons.org/licenses/by/4.0/"
-                target="_blank"
-                rel="noreferrer"
-                className="underline underline-offset-4"
-              >
-                {t("license")}
-              </a>
-              {". "}
-              {t("sources")}
-            </p>
-            {result?.data_sources.map((source) => (
-              <p key={source.name}>
-                <span className="font-medium">{source.name}</span> ·{" "}
-                {source.available ? t("asOf", { date: source.as_of ?? t("thisRequest") }) : t("unavailable")}.{" "}
-                {source.description}
-              </p>
-            ))}
-          </footer>
-        </section>
+          {showResults && <Results result={result} />}
+        </>
+      ) : (
+        <Questions answers={answers} onChange={setAnswers} />
+      )}
+    </Page>
+  );
+}
+
+function ExternalSwitch({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) {
+  const { t } = useTranslation(undefined, { keyPrefix: "modelRecommender" });
+  return (
+    <label className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border p-4 text-sm">
+      <span>{t("includeExternal")}</span>
+      <Switch checked={checked} onCheckedChange={onChange} />
+    </label>
+  );
+}
+
+function Questions({ answers, onChange }: { answers: Answers; onChange: ChangeAnswers }) {
+  const { t } = useTranslation(undefined, { keyPrefix: "modelRecommender" });
+  const options = ["1", "2", "3"].map((step) => ({ value: step, label: t("stepNumber", { step }) }));
+  const onStep = (step: string) => onChange({ step: flowParsers.step.parse(step) ?? "1" });
+  const question = { "1": t("question1"), "2": t("question2"), "3": t("question3"), results: "" }[answers.step];
+  const next = { "1": "2", "2": "3", "3": "results", results: "results" } as const;
+  const skipAnswers: Answers = { ...EMPTY_ANSWERS, focus: answers.focus, goal: answers.goal, step: "results" };
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm text-muted-foreground">{t("stepOf", { step: answers.step })}</span>
+        <Segmented value={answers.step} options={options} onChange={onStep} label={t("steps")} />
       </div>
-    </main>
+      <Panel title={question} bodyClassName="gap-5">
+        {answers.step === "1" && <FocusOptions answers={answers} onChange={onChange} />}
+        {answers.step === "2" && <GoalOptions answers={answers} onChange={onChange} />}
+        {answers.step === "3" && <MustHaves answers={answers} onChange={onChange} />}
+        <div className="flex items-center justify-between gap-3 border-t pt-5">
+          <Button
+            variant="ghost"
+            disabled={answers.step === "1"}
+            onClick={() => onChange({ step: answers.step === "3" ? "2" : "1" })}
+          >
+            <ArrowLeft />
+            {t("back")}
+          </Button>
+          <div className="flex gap-2">
+            {answers.step === "3" && (
+              <Button variant="outline" onClick={() => onChange(skipAnswers)}>
+                {t("skip")}
+              </Button>
+            )}
+            <Button onClick={() => onChange({ step: next[answers.step] })}>
+              {answers.step === "3" ? t("recommend") : t("continue")}
+              <ArrowRight />
+            </Button>
+          </div>
+        </div>
+      </Panel>
+      <p className="text-center text-xs text-muted-foreground">{t("noInference")}</p>
+    </div>
+  );
+}
+
+function FocusOptions({ answers, onChange }: { answers: Answers; onChange: ChangeAnswers }) {
+  const { t } = useTranslation(undefined, { keyPrefix: "modelRecommender" });
+  return (
+    <>
+      <p className="text-sm text-muted-foreground">{t("chooseFocus")}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {FOCUS.map((focus) => (
+          <button
+            key={focus}
+            type="button"
+            aria-pressed={answers.focus.includes(focus)}
+            onClick={() =>
+              onChange({
+                focus: answers.focus.includes(focus)
+                  ? answers.focus.filter((item) => item !== focus)
+                  : [...answers.focus, focus],
+              })
+            }
+            className="rounded-xl border bg-card p-5 text-left text-sm font-medium transition-colors hover:bg-muted/50 aria-pressed:border-[#2b3fd6] aria-pressed:bg-[#2b3fd6]/5 focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            {t(`building.${focus}`)}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function GoalOptions({ answers, onChange }: { answers: Answers; onChange: ChangeAnswers }) {
+  const { t } = useTranslation(undefined, { keyPrefix: "modelRecommender" });
+  return (
+    <div role="group" aria-label={t("question2")} className="grid gap-3 sm:grid-cols-2">
+      {GOALS.map((goal) => (
+        <button
+          key={goal}
+          type="button"
+          aria-pressed={answers.goal === goal}
+          onClick={() => onChange({ goal })}
+          className="space-y-1 rounded-xl border bg-card p-5 text-left transition-colors hover:bg-muted/50 aria-pressed:border-[#2b3fd6] aria-pressed:bg-[#2b3fd6]/5 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <span className="block text-sm font-medium">{t(`goals.${goal}`)}</span>
+          <span className="block text-xs text-muted-foreground">{t(`goalHints.${goal}`)}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function MustHaves({ answers, onChange }: { answers: Answers; onChange: ChangeAnswers }) {
+  const { t } = useTranslation(undefined, { keyPrefix: "modelRecommender" });
+  return (
+    <>
+      <p className="text-sm text-muted-foreground">{t("optionalRequirements")}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {REQUIREMENTS.map((requirement) => (
+          <label
+            key={requirement}
+            className="flex cursor-pointer items-center justify-between gap-4 rounded-xl border p-5 text-sm"
+          >
+            <span>{t(`mustHaves.${requirement}`)}</span>
+            <Switch checked={answers[requirement]} onCheckedChange={(value) => onChange({ [requirement]: value })} />
+          </label>
+        ))}
+      </div>
+      <ExternalSwitch
+        checked={answers.include_external}
+        onChange={(include_external) => onChange({ include_external })}
+      />
+    </>
+  );
+}
+
+function AnswerSummary({ answers, onChange }: { answers: Answers; onChange: ChangeAnswers }) {
+  const { t } = useTranslation(undefined, { keyPrefix: "modelRecommender" });
+  const focus = (answers.focus.length ? answers.focus : (["general"] as const))
+    .map((area) => t(`building.${area}`))
+    .join(", ");
+  const requirements = REQUIREMENTS.filter((key) => answers[key])
+    .map((key) => t(`mustHaves.${key}`))
+    .join(", ");
+  return (
+    <Panel
+      title={t("yourAnswers")}
+      action={
+        <>
+          <Button variant="outline" size="sm" onClick={() => onChange({ step: "1" })}>
+            {t("editAnswers")}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => onChange(EMPTY_ANSWERS)}>
+            {t("startOver")}
+          </Button>
+        </>
+      }
+      bodyClassName="gap-4"
+    >
+      <p className="text-sm text-muted-foreground">
+        {focus} · {t(`goals.${answers.goal}`)}
+        {requirements && ` · ${requirements}`}
+      </p>
+      <ExternalSwitch
+        checked={answers.include_external}
+        onChange={(include_external) => onChange({ include_external })}
+      />
+    </Panel>
+  );
+}
+
+function Results({ result }: { result: RecommendationResponse }) {
+  const { t } = useTranslation(undefined, { keyPrefix: "modelRecommender" });
+  const [first, ...rest] = result.recommendations;
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">{t("shortlist")}</h2>
+        <p className="text-xs text-muted-foreground">
+          {t("counts", {
+            matching: result.candidates_considered - result.candidates_filtered,
+            filtered: result.candidates_filtered,
+          })}
+        </p>
+      </div>
+      {first ? (
+        <>
+          <RecommendationCard model={first} position={0} />
+          <div className="grid gap-5 lg:grid-cols-2">
+            {rest.map((model, index) => (
+              <RecommendationCard key={model.model_group} model={model} position={index + 1} />
+            ))}
+          </div>
+        </>
+      ) : (
+        <Panel title={t("noMatchTitle")}>
+          <p className="text-sm text-muted-foreground">{t("noMatchDescription")}</p>
+        </Panel>
+      )}
+      <footer className="space-y-2 border-t pt-4 text-xs text-muted-foreground">
+        <p>{t("relativeScores")}</p>
+        <p>
+          {t("sources")}{" "}
+          <a href="https://epoch.ai/benchmarks" target="_blank" rel="noreferrer" className="underline">
+            {t("epoch")}
+          </a>{" "}
+          ·{" "}
+          <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer" className="underline">
+            {t("license")}
+          </a>
+        </p>
+        {result.data_sources.map((source) => (
+          <span key={source.name} className="mr-4 inline-block">
+            {source.name} · {source.as_of ? t("asOf", { date: source.as_of }) : t("unavailable")}
+          </span>
+        ))}
+      </footer>
+    </div>
   );
 }
