@@ -3197,6 +3197,26 @@ def test_assistant_image_replays_its_own_thought_signature(
         pytest.param(
             {
                 "role": "assistant",
+                "content": "",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("", None), ("Y2F0", "sig-cat")),
+            id="empty-string-content-leaves-signature-for-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": ""}],
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("", None), ("Y2F0", "sig-cat")),
+            id="empty-list-text-leaves-signature-for-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
                 "content": "Drawing it now.",
                 "images": [_generated_image("Y2F0")],
                 "tool_calls": [
