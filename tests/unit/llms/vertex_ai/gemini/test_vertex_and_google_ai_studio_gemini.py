@@ -5525,7 +5525,7 @@ def _cached_vertex_credentials(monkeypatch: pytest.MonkeyPatch) -> str:
         ("gemini/gemini-2.5-flash", "PRIORITY", None, "priority"),
         ("gemini/gemini-2.5-flash", "standard", None, "standard"),
         ("gemini/gemini-2.5-flash", "auto", None, "priority"),
-        ("gemini/gemini-2.5-flash", "default", None, None),
+        ("gemini/gemini-2.5-flash", "default", None, "standard"),
         ("gemini/gemini-2.5-flash", "unspecified", None, None),
         ("gemini/gemini-2.5-flash", "SERVICE_TIER_STANDARD_ONLY", None, "standard"),
     ],
@@ -5628,7 +5628,9 @@ _SERVED_TIER_BY_TRAFFIC_TYPE: Final = pytest.mark.parametrize(
         ("ON_DEMAND", "default"),
         ("ON_DEMAND_PRIORITY", "priority"),
         ("ON_DEMAND_FLEX", "flex"),
-        ("PROVISIONED_THROUGHPUT", None),
+        ("FLEX", "flex"),
+        ("BATCH", "flex"),
+        ("PROVISIONED_THROUGHPUT", "default"),
     ],
 )
 
@@ -5682,12 +5684,15 @@ def test_vertex_stream_reports_the_served_tier_from_traffic_type(
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_ai_studio_service_tier_header_outranks_traffic_type(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize(("header_tier", "served_tier"), [("priority", "priority"), ("STANDARD", "default")])
+def test_ai_studio_service_tier_header_outranks_traffic_type(
+    respx_mock: respx.MockRouter, header_tier: str, served_tier: str
+) -> None:
     respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:generateContent").mock(
         return_value=httpx.Response(
             200,
-            json=_vertex_response_with_traffic_type("ON_DEMAND"),
-            headers={"x-gemini-service-tier": "priority"},
+            json=_vertex_response_with_traffic_type("ON_DEMAND_FLEX"),
+            headers={"x-gemini-service-tier": header_tier},
         )
     )
 
@@ -5699,7 +5704,7 @@ def test_ai_studio_service_tier_header_outranks_traffic_type(respx_mock: respx.M
         client=HTTPHandler(),
     )
 
-    assert getattr(response, "service_tier", None) == "priority"
+    assert getattr(response, "service_tier", None) == served_tier
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():

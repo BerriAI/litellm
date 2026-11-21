@@ -1030,7 +1030,10 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
     openai_request_body: Final = openai_entry["body"]
     chat_request_body: Final = (
-        responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai")
+        {
+            **responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai"),
+            **{key: value for key, value in openai_request_body.items() if key == "drop_params" and value is not None},
+        }
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
@@ -1050,11 +1053,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     vertex_request_body: Final = transform_request_body(
         messages=chat_messages,
         model=chat_request_body.get("model", ""),
-        optional_params=map_openai_to_vertex_params(
-            {**chat_request_body, "drop_params": entry_body["drop_params"]}
-            if "drop_params" in entry_body
-            else chat_request_body
-        ),
+        optional_params=map_openai_to_vertex_params(chat_request_body),
         custom_llm_provider="vertex_ai",
         litellm_params={},
         cached_content=None,
