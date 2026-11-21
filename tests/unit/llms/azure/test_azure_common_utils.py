@@ -2,10 +2,12 @@ import json
 import os
 import traceback
 from typing import Callable, Final, Literal, Optional
+from urllib.parse import parse_qs
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from respx import MockRouter
 from typing_extensions import assert_never
 
 import litellm
@@ -15,6 +17,7 @@ from litellm.llms.azure.common_utils import (
     _cached_entra_id_token_provider,
     get_azure_ad_token,
     get_azure_ad_token_from_entra_id,
+    get_azure_ad_token_from_oidc,
 )
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -1384,6 +1387,34 @@ def test_get_azure_ad_token_with_oidc_token(setup_mocks, monkeypatch):
 
     # Verify the token is what we expect from our mock
     assert token == "mock-oidc-token"
+
+
+def _token_for_requested_scope(request: httpx.Request) -> httpx.Response:
+    scope: Final = parse_qs(request.content.decode())["scope"][0]
+    return httpx.Response(200, json={"access_token": f"token-for-{scope}", "expires_in": 3600})
+
+
+def test_oidc_tokens_for_different_scopes_are_not_shared(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    monkeypatch.setenv("CIRCLE_OIDC_TOKEN", "shared-oidc-assertion")
+    respx_mock.post("https://login.microsoftonline.com/scope-cache-tenant/oauth2/v2.0/token").mock(
+        side_effect=_token_for_requested_scope
+    )
+    scopes: Final = ("https://ai.azure.com/.default", "https://cognitiveservices.azure.com/.default")
+
+    tokens: Final = tuple(
+        get_azure_ad_token_from_oidc(
+            azure_ad_token="oidc/circleci/",
+            azure_client_id="scope-cache-client",
+            azure_tenant_id="scope-cache-tenant",
+            scope=scope,
+        )
+        for scope in scopes
+    )
+
+    assert tokens == tuple(f"token-for-{scope}" for scope in scopes)
 
 
 def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
