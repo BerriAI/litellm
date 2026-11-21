@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, TypeAlias
 
@@ -39,6 +39,13 @@ def _screens_events(callback: CustomGuardrail, request_data: Mapping[str, object
     )
 
 
+async def _assigned_guardrails(request_data: dict[str, object], caller: UserAPIKeyAuth) -> None:
+    """The key, team and policy guardrails a request from this caller would carry, as the tool path assigns them."""
+    from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
+
+    await move_guardrails_to_metadata(data=request_data, _metadata_variable_name="metadata", user_api_key_dict=caller)
+
+
 async def screen_event(
     occurrence: EventOccurrence,
     *,
@@ -47,13 +54,15 @@ async def screen_event(
     subscription_id: str | None,
     caller: UserAPIKeyAuth | None,
     callbacks: Callable[[], Sequence[object]] = _registered_guardrails,
+    assign: Callable[[dict[str, object], UserAPIKeyAuth], Awaitable[None]] = _assigned_guardrails,
 ) -> ScreenOutcome:
     from mcp.types import CallToolResult
 
     from litellm.proxy.mcp_server.guardrail_translation.handler import MCPGuardrailTranslationHandler
     from litellm.proxy.mcp_server.utils import mcp_tool_result_structured_content
 
-    request_data: Final[Mapping[str, object]] = {
+    request_data: Final[dict[str, object]] = {
+        "metadata": {},
         "mcp_event": {
             "server": server_name,
             "event_name": gateway_name,
@@ -61,6 +70,11 @@ async def screen_event(
             "event_id": occurrence.event_id,
         },
     }
+    if caller is not None:
+        try:
+            await assign(request_data, caller)
+        except Exception:  # noqa: BLE001  # an assigned guardrail that cannot be resolved must not be skipped
+            return Blocked("guardrail-assignment")
     guardrails: Final = tuple(
         callback for callback in _guardrails(callbacks()) if _screens_events(callback, request_data)
     )

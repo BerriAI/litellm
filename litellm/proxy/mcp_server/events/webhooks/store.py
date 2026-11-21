@@ -179,9 +179,10 @@ class PrismaEventStore:
     def __init__(self, prisma_client: "PrismaClient") -> None:
         from litellm.repositories.table_repositories import MCPEventDeliveryRepository, MCPEventSubscriptionRepository
 
-        self._subscriptions: Final = MCPEventSubscriptionRepository(prisma_client).table
-        self._deliveries: Final = MCPEventDeliveryRepository(prisma_client).table
-        self._raw: Final[_RawQueries] = prisma_client.db  # pyright: ignore[reportAttributeAccessIssue]  # PrismaWrapper forwards raw queries via __getattr__
+        # Every read follows a write it must see and the raw statements are UPDATEs, so a read replica is never used.
+        self._subscriptions: Final = MCPEventSubscriptionRepository(prisma_client, use_writer=True).table
+        self._deliveries: Final = MCPEventDeliveryRepository(prisma_client, use_writer=True).table
+        self._raw: Final[_RawQueries] = prisma_client.writer_db  # pyright: ignore[reportAttributeAccessIssue]  # PrismaWrapper forwards raw queries via __getattr__
 
     async def get(self, subscription_id: str) -> SubscriptionRow | None:
         record: Final = await self._subscriptions.find_unique(where={"id": subscription_id})

@@ -26,6 +26,15 @@ class Outgoing:
     cursor: str | None = None
 
 
+def envelope_type(body: str) -> str | None:
+    """The control envelope's ``type``; None for an event occurrence or an unreadable body."""
+    try:
+        kind: Final = _JSON_OBJECT.validate_json(body).get("type")
+    except ValidationError:
+        return None
+    return kind if isinstance(kind, str) else None
+
+
 def prepared_outgoing(delivery: QueuedDelivery) -> Outgoing | None:
     """The delivery as it was first built, so a retry resends the same bytes and webhook-id."""
     try:

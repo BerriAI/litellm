@@ -12,6 +12,7 @@ from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.policy import subscription_id
 from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret
+from litellm.proxy.mcp_server.events.webhooks.store import Activation
 from litellm.proxy.mcp_server.events.webhooks.subscribe import (
     _prepare,  # pyright: ignore[reportPrivateUsage]  # the reservation step is the unit under test
     _Request,  # pyright: ignore[reportPrivateUsage]  # see above
@@ -260,3 +261,17 @@ async def test_a_failed_subscribe_never_deletes_a_row_another_request_activated(
     await _subscribe(store, ok_upstream, _Client())
     await store.discard_pending(SID)
     assert store.rows[SID].status == "active"
+
+
+@pytest.mark.asyncio
+async def test_a_subscription_terminated_while_upstream_answers_is_ended_upstream_too() -> None:
+    class _TerminatingStore(MemoryStore):
+        async def activate(self, subscription_id: str, activation: Activation) -> bool:
+            await self.terminate(subscription_id)
+            return await super().activate(subscription_id, activation)
+
+    store: Final = _TerminatingStore()
+    upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
+    result: Final = await _subscribe(store, upstream, _Client())
+    assert isinstance(result, Error) and result.error.code is EventsErrorCode.NOT_FOUND
+    assert [method for method, *_ in upstream.calls] == ["events/subscribe", "events/unsubscribe"]

@@ -70,7 +70,7 @@ class StreamRoute:
         self.failure: MCPError | None = None
         self._dropped_cursor: str | None = None
         self._dropping = False
-        self._trailing: Overflow | None = None  # rebind-ok: set once when finish cannot enqueue the notice
+        self._trailing: Overflow | None = None
 
     def deliver(self, frame: StreamFrame) -> None:
         if self._dropping and self._flush_overflow():

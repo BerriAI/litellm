@@ -342,3 +342,36 @@ async def test_a_delivered_message_stays_a_duplicate_until_its_tombstone_is_purg
     assert await store.enqueue(replay) is False
     await store.purge_delivered(NOW + timedelta(minutes=11))
     assert await store.enqueue(replay) is True
+
+
+@pytest.mark.parametrize(
+    ("body", "sent"),
+    (
+        (None, False),
+        ({"type": "gap", "cursor": "41"}, True),
+        ({"type": "terminated", "error": {"code": -32024, "message": "Forbidden"}}, True),
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_suspended_subscription_receives_only_gap_and_terminated_notices(body: object, sent: bool) -> None:
+    store: Final = _store(row=ROW.model_copy(update={"status": "suspended"}), body=body)
+    client: Final = _Client(200)
+    await _worker(store, client).run_once()
+    assert (len(client.posts) == 1) is sent
+
+
+@pytest.mark.asyncio
+async def test_turning_events_off_stops_a_running_worker_from_sending() -> None:
+    store: Final = _store()
+    client: Final = _Client(200)
+    assert await _worker(store, client, settings=EventsSettings(enabled=False)).run_once() == 0
+    assert client.posts == [] and "d1" in store.queue
+
+
+@pytest.mark.asyncio
+async def test_an_abandoned_event_stays_queued_when_its_gap_cannot_be_written() -> None:
+    store: Final = _store(attempt=len(RETRY_DELAYS_SECONDS))
+    store.fail_enqueue = True
+    with pytest.raises(ConnectionError):
+        await _worker(store, _Client("timeout")).process(store.queue["d1"])
+    assert "d1" in store.queue

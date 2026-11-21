@@ -97,7 +97,7 @@ async def _team_org(team_id: str) -> str | None:
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=True,
     )
-    return team.organization_id if team is not None else None
+    return team.organization_id
 
 
 async def with_team_org(key: UserAPIKeyAuth, team_org: Callable[[str], Awaitable[str | None]]) -> UserAPIKeyAuth:

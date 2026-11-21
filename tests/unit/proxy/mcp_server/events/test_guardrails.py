@@ -3,6 +3,7 @@ from typing import Final, Literal
 import pytest
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.events.guardrails import Blocked, Screened, screen_event
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -67,3 +68,39 @@ async def test_an_event_guardrail_that_rejects_blocks_the_event() -> None:
 @pytest.mark.asyncio
 async def test_guardrails_that_did_not_opt_into_events_leave_the_payload_alone(callback: object) -> None:
     assert await _screen((callback,)) == Screened({"title": "the secret plan", "count": 3})
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_assigned_to_the_key_screens_events_without_default_on() -> None:
+    assigned: Final = _Masker(guardrail_name="assigned", event_hook=GuardrailEventHooks.mcp_event, default_on=False)
+
+    async def from_key_metadata(data: dict[str, object], caller: UserAPIKeyAuth) -> None:
+        data["metadata"] = {"guardrails": list((caller.metadata or {}).get("guardrails") or [])}
+
+    outcome: Final = await screen_event(
+        occurrence(data={"title": "the secret plan", "count": 3}),
+        server_name="ci",
+        gateway_name="ci-build.failed",
+        subscription_id="sub_1",
+        caller=UserAPIKeyAuth(api_key="sk-a", metadata={"guardrails": ["assigned"]}),
+        callbacks=lambda: (assigned,),
+        assign=from_key_metadata,
+    )
+    assert outcome == Screened({"title": "the [REDACTED] plan", "count": 3})
+
+
+@pytest.mark.asyncio
+async def test_an_assignment_that_cannot_be_resolved_blocks_the_event() -> None:
+    async def broken(_data: dict[str, object], _caller: UserAPIKeyAuth) -> None:
+        raise RuntimeError("policy registry unavailable")
+
+    outcome: Final = await screen_event(
+        occurrence(data={"title": "x"}),
+        server_name="ci",
+        gateway_name="ci-build.failed",
+        subscription_id=None,
+        caller=CALLER,
+        callbacks=lambda: (),
+        assign=broken,
+    )
+    assert outcome == Blocked("guardrail-assignment")

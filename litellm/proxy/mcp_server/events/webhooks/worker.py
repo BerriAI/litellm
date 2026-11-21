@@ -18,6 +18,7 @@ from litellm.proxy.mcp_server.events.webhooks.outgoing import (
     DeliveryContext,
     Outgoing,
     build_outgoing,
+    envelope_type,
     prepared_outgoing,
 )
 from litellm.proxy.mcp_server.events.webhooks.reauth import (
@@ -91,6 +92,8 @@ class DeliveryWorker:
                 await asyncio.sleep(_IDLE_SECONDS)
 
     async def run_once(self) -> int:
+        if not self._settings().enabled:
+            return 0
         now: Final = self._clock()
         claimed: Final = await self._store.claim(now, now + timedelta(seconds=LEASE_SECONDS), CLAIM_BATCH)
         limiter: Final = anyio.CapacityLimiter(CONCURRENCY)
@@ -115,7 +118,8 @@ class DeliveryWorker:
 
     async def process(self, delivery: QueuedDelivery) -> None:
         row: Final = await self._store.get(delivery.subscription_id)
-        if row is None or row.status in ("terminated", "pending") or self._expired(row):
+        paused: Final = row is not None and row.status == "suspended" and not _is_control(delivery)
+        if row is None or row.status in ("terminated", "pending") or self._expired(row) or paused:
             await self._store.finish(delivery.delivery_id, self._clock())
             return
         authorization: Final = await authorize_row(row, self._runtime, self._load_caller)
@@ -208,10 +212,10 @@ class DeliveryWorker:
             delay: Final = timedelta(seconds=RETRY_DELAYS_SECONDS[attempt - 1])
             await self._store.reschedule(delivery.delivery_id, attempt, self._clock() + delay)
             return
-        await self._store.finish(delivery.delivery_id, self._clock())
-        await self._store.mark_failed(row.id, failure, self._clock(), SUSPEND_AFTER_FAILURES)
         if outgoing.event_id is not None:
             await self._report_abandoned(row, outgoing)
+        await self._store.finish(delivery.delivery_id, self._clock())
+        await self._store.mark_failed(row.id, failure, self._clock(), SUSPEND_AFTER_FAILURES)
 
     async def _report_abandoned(self, row: SubscriptionRow, outgoing: Outgoing) -> None:
         """An event given up after its retries becomes a gap, so the client knows to resume from its cursor."""
@@ -226,6 +230,11 @@ class DeliveryWorker:
                 prepared=True,
             )
         )
+
+
+def _is_control(delivery: QueuedDelivery) -> bool:
+    """A gap or terminated notice, which a suspended subscription still receives."""
+    return envelope_type(delivery.body) in ("gap", "terminated")
 
 
 class _WorkerHandle:

@@ -205,6 +205,7 @@ async def _activate(
     subscription: _Subscription,
     upstream: SubscribeEventsResult,
     context: OperationContext,
+    settings: EventsSettings,
     runtime: EventsRuntime,
 ) -> Result[SubscribeEventsResult, EventsFailure]:
     base: Final = subscription.base
@@ -226,6 +227,9 @@ async def _activate(
         cursor=sealed.ok,
     )
     if not await subscription.request.store.activate(base.id, activation):
+        orphan: Final = base.model_copy(update={"upstream_subscription_id": upstream.id})
+        await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
+        await _discard_pending(subscription)
         return Error(subscription_not_found())
     refreshed: Final = existing if existing is not None and existing.status != "terminated" else None
     if refreshed is not None and refreshed.status == "suspended":
@@ -326,7 +330,7 @@ async def subscribe(
     if isinstance(upstream, Error):
         await _discard_pending(subscription)
         return Error(upstream.error)
-    return await _activate(subscription, upstream.ok, context, runtime)
+    return await _activate(subscription, upstream.ok, context, settings, runtime)
 
 
 async def unsubscribe(

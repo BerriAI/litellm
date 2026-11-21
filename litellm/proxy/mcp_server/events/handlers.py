@@ -6,7 +6,7 @@ from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.shared.exceptions import MCPError
 from mcp.types import METHOD_NOT_FOUND, EmptyResult
 from mcp_types import CLIENT_CAPABILITIES_META_KEY
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
 
 from litellm.proxy.mcp_server.contracts import OperationContext
@@ -46,6 +46,7 @@ AuthorizationScope: TypeAlias = Callable[
 ]
 Middleware: TypeAlias = Callable[[ServerRequestContext[object, object], CallNext], Awaitable[HandlerResult]]
 
+_META: Final = TypeAdapter[dict[str, object]](dict[str, object])
 EVENT_METHODS: Final = frozenset(
     {"events/list", "events/poll", "events/stream", "events/subscribe", "events/unsubscribe"}
 )
@@ -76,8 +77,10 @@ def gated_events_method(
 
 
 def _request_meta(ctx: ServerRequestContext[object, object]) -> Mapping[str, object] | None:
-    raw: Final = (ctx.params or {}).get("_meta")
-    return raw if isinstance(raw, Mapping) else None
+    try:
+        return _META.validate_python((ctx.params or {}).get("_meta") or {})
+    except ValidationError:
+        return None
 
 
 def _method_not_found(method: str) -> MCPError:
