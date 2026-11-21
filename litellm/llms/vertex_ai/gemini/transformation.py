@@ -66,6 +66,7 @@ from ..common_utils import (
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
+    normalize_youtube_url,
     youtube_video_mime_type,
 )
 
@@ -579,7 +580,7 @@ def _process_gemini_media(
             # Vertex rejects a fileData without mimeType, so YouTube links default to video/mp4.
             uri_mime_type: Final = format or youtube_video_mime_type(image_url)
             if uri_mime_type:
-                file_data = FileDataType(mime_type=uri_mime_type, file_uri=image_url)
+                file_data = FileDataType(mime_type=uri_mime_type, file_uri=normalize_youtube_url(image_url))
             else:
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})

@@ -6,6 +6,7 @@ from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -49,6 +50,13 @@ def gemini_fetches_url_itself(url: str) -> bool:
 
 def youtube_video_mime_type(url: str) -> str | None:
     return "video/mp4" if _YOUTUBE_VIDEO_URL.match(url) else None
+
+
+def normalize_youtube_url(url: str) -> str:
+    if _YOUTUBE_VIDEO_URL.match(url) is None:
+        return url
+    parts: Final = urlsplit(url)
+    return urlunsplit(parts._replace(scheme=parts.scheme.lower(), netloc=parts.hostname or parts.netloc))
 
 
 def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:

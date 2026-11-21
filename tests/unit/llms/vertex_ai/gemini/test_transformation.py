@@ -561,12 +561,12 @@ async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video
         ),
         pytest.param(
             {"type": "video_url", "video_url": {"url": "HTTPS://WWW.YouTube.com/watch?v=aqz-KE-bpKQ"}},
-            {"file_data": {"mime_type": "video/mp4", "file_uri": "HTTPS://WWW.YouTube.com/watch?v=aqz-KE-bpKQ"}},
+            {"file_data": {"mime_type": "video/mp4", "file_uri": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}},
             id="youtube-link-in-capitals",
         ),
         pytest.param(
             {"type": "video_url", "video_url": {"url": "https://youtu.be:443/aqz-KE-bpKQ"}},
-            {"file_data": {"mime_type": "video/mp4", "file_uri": "https://youtu.be:443/aqz-KE-bpKQ"}},
+            {"file_data": {"mime_type": "video/mp4", "file_uri": "https://youtu.be/aqz-KE-bpKQ"}},
             id="youtube-link-with-port",
         ),
     ],
