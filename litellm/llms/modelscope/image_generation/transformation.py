@@ -10,13 +10,21 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 from typing_extensions import override
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
+)
+from litellm.llms.modelscope.common_utils import (
+    ASYNC_MODE_HEADER,
+    IMAGE_GENERATION_TASK_TYPE,
+    TASK_STATUS_FAILED,
+    TASK_STATUS_SUCCEED,
+    TASK_TYPE_HEADER,
+    ModelScopeError,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -35,49 +43,43 @@ else:
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_JSON_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _as_json_dict(value: JsonValue) -> dict[str, JsonValue]:  # mutable-ok: request body fields
+    return value if isinstance(value, dict) else {}
 
 
 class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
-    """
-    Configuration for ModelScope image generation.
-
-    Supports text-to-image models like:
-    - Qwen/Qwen-Image-Edit
-    - And other ModelScope-hosted image generation models
-    """
+    """Configuration for ModelScope image generation and editing models."""
 
     DEFAULT_BASE_URL: str = "https://api-inference.modelscope.cn/v1"
 
+    @override
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
-        """
-        Return list of OpenAI params supported by ModelScope.
+        # Only size is honored (verified via real API: n is silently ignored,
+        # response_format/user are not honored by ModelScope).
+        # Provider-specific fields (negative_prompt, seed, steps, guidance,
+        # loras, image_url) pass through via extra_body, not this list.
+        return ["size"]
 
-        ModelScope supports standard OpenAI image generation parameters.
-        """
-        return [
-            "n",  # Number of images to generate
-            "size",  # Size of the generated images
-            "response_format",  # url or b64_json
-            "user",  # User identifier
-        ]
-
+    @override
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, JsonValue],
+        optional_params: dict[str, JsonValue],
         model: str,
         drop_params: bool,
-    ) -> dict:
-        """
-        Map OpenAI parameters to ModelScope parameters.
-
-        ModelScope uses the same parameter names as OpenAI.
-        """
+    ) -> dict[str, JsonValue]:
         supported_params: Final = self.get_supported_openai_params(model)
         if drop_params:
             non_default_params = {k: v for k, v in non_default_params.items() if k in supported_params}
         optional_params.update(non_default_params)
         return optional_params
+
+    def _get_base_url(self, api_base: str | None) -> str:
+        base_url: Final[str] = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
+        return base_url.rstrip("/")
 
     @override
     def get_complete_url(
@@ -85,29 +87,27 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, JsonValue],
+        litellm_params: dict[str, JsonValue],
         stream: bool | None = None,
     ) -> str:
-        """
-        Get the complete URL for the ModelScope image generation API request.
-        """
-        base_url: Final = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
+        return join_api_base(self._get_base_url(api_base), "images/generations")
 
-        # Return the images endpoint
-        return join_api_base(base_url, "images/generations")
+    def get_task_status_url(self, api_base: str | None, task_id: str) -> str:
+        """Build the URL used to poll an async image generation task."""
+        return join_api_base(self._get_base_url(api_base), f"tasks/{task_id}")
 
     @override
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, JsonValue],
+        litellm_params: dict[str, JsonValue],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate environment and set up headers for ModelScope.
         """
@@ -121,33 +121,40 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         default_headers: Final = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {final_api_key}",
+            # ModelScope image-gen only supports async mode: the submit call
+            # returns a task_id and the caller must poll GET /v1/tasks/{task_id}.
+            ASYNC_MODE_HEADER: "true",
         }
 
         headers = {**headers, **default_headers}
         return headers
 
+    def get_polling_headers(self, headers: Mapping[str, str]) -> Mapping[str, str]:
+        return {
+            "Authorization": headers.get("Authorization", ""),
+            TASK_TYPE_HEADER: IMAGE_GENERATION_TASK_TYPE,
+        }
+
+    @override
     def transform_image_generation_request(
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        """
-        Transform OpenAI-style request to ModelScope request format.
+        optional_params: dict[str, JsonValue],
+        litellm_params: dict[str, JsonValue],
+        headers: dict[str, str],
+    ) -> dict[str, JsonValue]:
+        request_data: Final[dict[str, JsonValue]] = {"model": model, "prompt": prompt}  # mutable-ok: request body
 
-        ModelScope uses the same format as OpenAI for image generation.
-        """
-        # Build the request body (same as OpenAI)
-        request_data: Final[dict] = {
-            "model": model,
-            "prompt": prompt,
-        }
-
-        # Add optional params
-        for key, value in optional_params.items():
-            if key.startswith("_"):
+        # litellm wraps provider fields (e.g. image_url) in extra_body; flatten
+        # them into the body. Skip extra_headers/extra_query (litellm control
+        # params swept in alongside, may carry secrets) and model/prompt (set
+        # above from the routed values; a client-controlled extra_body must not
+        # override the authorized model or prompt).
+        extra_body_raw: Final = optional_params.get("extra_body") or {}
+        extra_body: Final[dict[str, JsonValue]] = _as_json_dict(extra_body_raw)
+        for key, value in {**optional_params, **extra_body}.items():
+            if key in ("extra_body", "extra_headers", "extra_query", "model", "prompt") or key.startswith("_"):
                 continue
             request_data[key] = value
 
@@ -160,21 +167,21 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: dict[str, JsonValue],
+        optional_params: dict[str, JsonValue],
+        litellm_params: dict[str, JsonValue],
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
         """
-        Transform ModelScope response to OpenAI-compatible ImageResponse.
+        Transform a completed ModelScope task response into an ImageResponse.
 
-        ModelScope returns the same format as OpenAI:
-        {"created": timestamp, "data": [{"url": "..."}]}
+        The polled response looks like:
+        {"task_status": "SUCCEED", "output_images": ["https://..."], ...}
         """
         try:
-            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
+            response_data: Final = _JSON_RESPONSE.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing ModelScope response: {e}",
@@ -182,66 +189,59 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
                 headers=raw_response.headers,
             )
 
-        # Check for errors in response
-        response_object: Final = _JSON_OBJECT.validate_python(response_data)
-        if "error" in response_object:
-            error: Final = _JSON_OBJECT.validate_python(response_object["error"])
-            error_msg: Final = error.get("message", str(error))
+        if "errors" in response_data:
+            errors: Final = response_data["errors"]
+            error_msg: Final = errors.get("message", str(errors)) if isinstance(errors, dict) else str(errors)
             raise self.get_error_class(
                 error_message=f"ModelScope error: {error_msg}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
-        # Extract images from response
-        data_list: Final = _JSON_OBJECTS.validate_python(response_object.get("data", []))
-        if not model_response.data:
-            model_response.data = []
-
-        for item in data_list:
-            image_obj = ImageObject(
-                url=item.get("url"),
-                b64_json=item.get("b64_json"),
-                revised_prompt=item.get("revised_prompt"),
+        task_status: Final = response_data.get("task_status")
+        if task_status == TASK_STATUS_FAILED:
+            raise self.get_error_class(
+                error_message="ModelScope image generation task failed",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
-            model_response.data.append(image_obj)
+        if task_status != TASK_STATUS_SUCCEED:
+            raise self.get_error_class(
+                error_message=(f"ModelScope task did not succeed: status={task_status}"),
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
+        raw_output: Final = response_data.get("output_images")
+        output_images: Final[tuple[str, ...]] = (
+            tuple(url for url in raw_output if isinstance(url, str)) if isinstance(raw_output, list) else ()
+        )
+
+        if not model_response.data:
+            model_response.data = []  # rebind-ok: litellm response contract expects the passed-in object populated
+
+        for image_url in output_images:
+            model_response.data.append(ImageObject(url=image_url))
+
+        if not model_response.data:
+            raise self.get_error_class(
+                error_message="ModelScope task SUCCEED but no output_images",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
 
         return model_response
 
+    @override
     def get_error_class(
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, str] | httpx.Headers,  # mutable-ok: litellm override signature
     ) -> BaseLLMException:
-        """Return the appropriate error class for ModelScope."""
-        from litellm.exceptions import (
-            AuthenticationError,
-            BadRequestError,
-            InternalServerError,
+        """Return the ModelScope error class, preserving the real status code."""
+        return ModelScopeError(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
         )
-
-        if status_code == 400:
-            return BadRequestError(
-                message=error_message,
-                model="",
-                llm_provider="modelscope",
-            )
-        elif status_code == 401:
-            return AuthenticationError(
-                message=error_message,
-                model="",
-                llm_provider="modelscope",
-            )
-        elif status_code >= 500:
-            return InternalServerError(
-                message=error_message,
-                model="",
-                llm_provider="modelscope",
-            )
-        else:
-            return BadRequestError(
-                message=error_message,
-                model="",
-                llm_provider="modelscope",
-            )
