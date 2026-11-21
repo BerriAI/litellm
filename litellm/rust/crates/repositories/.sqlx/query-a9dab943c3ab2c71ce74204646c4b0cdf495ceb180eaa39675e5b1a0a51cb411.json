@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM \"LiteLLM_SpendLogDelivery\" WHERE delivery_id = ANY($1::text[])\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a9dab943c3ab2c71ce74204646c4b0cdf495ceb180eaa39675e5b1a0a51cb411"
+}

@@ -100,6 +100,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
 
+    def supports_diagnostics(self) -> bool:
+        return False
+
     def model_specific_anthropic_betas(self, model: str, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
         if bedrock_supports_per_turn_control(
             model, _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None))

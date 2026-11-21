@@ -1,6 +1,6 @@
 import type { Formatter } from "i18next";
 
-import { DEFAULT_LANGUAGE } from "./languages";
+import { DEFAULT_LANGUAGE } from "./defaultLanguage";
 
 type DateInput = Date | number | string;
 type InterpolationOptions = { readonly interpolationkey?: string };

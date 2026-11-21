@@ -15,7 +15,6 @@ from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
     NoReturn,
@@ -42,9 +41,14 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUn
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
+    attribute_or_none,
+    callable_of,
     error_status_code,
+    int_of,
     process_response_headers,
     provider_reported_usage_cost,
+    require_attributes,
+    set_item,
     set_response_cost_in_hidden_params,
     stamp_litellm_bill_on_usage,
 )
@@ -157,12 +161,12 @@ class _GetsLitellmParams(Protocol):
     def __call__(self, key: str, default: Mapping[str, object], /) -> LiteLLM_Params: ...
 
 
-class _UnmasksPiiText(Protocol):
-    def __call__(self, text: str, pii_tokens: Mapping[str, str]) -> str: ...
+class _GetsByKey(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
-class _ShouldStoreResultInCache(Protocol):
-    def __call__(self, *, original_function: Callable[..., object] | None, kwargs: Mapping[str, object]) -> bool: ...
+class _TerminalEvent(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
 
 
 class _PostStreamingDeploymentHook(Protocol):
@@ -188,11 +192,19 @@ _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
 _DECODED_JSON: Final = TypeAdapter(object)
 _HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+def _required_attribute(source: object, name: str) -> object:
+    return attribute_or_none(require_attributes(source, object, name), name)
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
     """Parse a JSON payload that the caller consumes as an object."""
-    return json.loads(payload)
+    decoded: Final = _load_json_value(payload)
+    if _is_json_object(decoded):
+        return decoded
+    return _JSON_OBJECT.validate_python(require_attributes(decoded, _GetsByKey, "get"))
 
 
 def _load_json_value(payload: str | bytes) -> object:
@@ -400,6 +412,7 @@ class BaseResponsesAPIStreamingIterator:
     _started_tool_call: bool = False
     _earlier_rounds_spend: BilledRoundsSpend | None = None
     _replays_stored_stream: bool = False
+    _caches_incomplete_response: bool = False
 
     def __init__(
         self,
@@ -805,14 +818,14 @@ class BaseResponsesAPIStreamingIterator:
         mapped_exception: Final = self._map_error_event_exception(error_obj)
         if not _mid_stream_fallback_eligible(mapped_exception):
             raise mapped_exception
-        mapped_status: Final = getattr(mapped_exception, "status_code", None)
+        mapped_status: Final[object] = getattr(mapped_exception, "status_code", None)
         raise MidStreamFallbackError(
             message=str(mapped_exception),
             model=self.model or "",
             llm_provider=self.custom_llm_provider or "",
             original_exception=mapped_exception,
             response=httpx.Response(
-                status_code=int(mapped_status) if mapped_status is not None else 503,
+                status_code=int_of(mapped_status) if mapped_status is not None else 503,
                 headers=provider_request_id_headers(self._raw_response_headers),
                 request=httpx.Request(method="POST", url=f"https://{self.custom_llm_provider or ''}.com/v1/"),
             ),
@@ -838,7 +851,15 @@ class BaseResponsesAPIStreamingIterator:
 
         completed_response: Final = self.completed_response
         openai_types: Final = get_openai_response_types()
-        if getattr(completed_response, "type", None) != openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        cacheable_event_types: Final = (
+            (
+                openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            )
+            if self._caches_incomplete_response
+            else (openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,)
+        )
+        if getattr(completed_response, "type", None) not in cacheable_event_types:
             return
 
         from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
@@ -867,13 +888,9 @@ class BaseResponsesAPIStreamingIterator:
         if preset_cache_key is not None:
             request_kwargs["cache_key"] = preset_cache_key
 
-        should_store_result_in_cache: Final[_ShouldStoreResultInCache] = getattr(
-            caching_handler, _SHOULD_STORE_RESULT_IN_CACHE_ATTR
-        )
-        if not should_store_result_in_cache(
-            original_function=getattr(caching_handler, "original_function", None),
-            kwargs=request_kwargs,
-        ):
+        should_store_result_in_cache: Final = _required_attribute(caching_handler, _SHOULD_STORE_RESULT_IN_CACHE_ATTR)
+        original_function: Final = attribute_or_none(caching_handler, "original_function")
+        if not callable_of(should_store_result_in_cache)(original_function=original_function, kwargs=request_kwargs):
             return
 
         cache: Final = litellm.cache
@@ -1430,10 +1447,12 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     """
     Mock iterator—fake a stream by slicing the full response text into
-    5 char deltas, then emit a completed event.
+    5 char deltas, then emit a completed or incomplete event.
 
     Models like o1-pro don't support streaming, so we fake it.
     """
+
+    _caches_incomplete_response: bool = True
 
     CHUNK_SIZE = 5
 
@@ -1487,7 +1506,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -1501,7 +1523,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
@@ -1554,7 +1579,10 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -1568,7 +1596,10 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt: Final = self._events[self._idx]
         self._idx += 1
         openai_types: Final = get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
@@ -2094,7 +2125,12 @@ def build_synthetic_response_events(
         )
 
     events.append(
-        openai_types.ResponseCompletedEvent(
+        openai_types.ResponseIncompleteEvent(
+            type=openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            response=transformed,
+        )
+        if transformed.status == "incomplete"
+        else openai_types.ResponseCompletedEvent(
             type=openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
             response=transformed,
         )
@@ -2304,15 +2340,15 @@ _PII_DELTA_EVENT_TYPES: Final = frozenset(
 )
 
 
-def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], unmask_pii_text: _UnmasksPiiText) -> str:
-    """Put the original PII back into one client-bound event: ``response.completed`` output text, or a delta."""
+def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], unmask_pii_text: object) -> str:
+    """Put the original PII back into one client-bound event: a completed or incomplete response's text, or a delta."""
     try:
         evt_obj: Final = _load_json_object(response_str)
     except (json.JSONDecodeError, TypeError):
         return response_str
     event_type: Final = evt_obj.get("type")
 
-    if event_type == "response.completed":
+    if event_type in _HISTORY_TERMINAL_EVENT_TYPES:
         modified = False
         response_obj: Final = evt_obj.get("response")
         if not _is_json_object(response_obj):
@@ -2329,7 +2365,7 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
                     continue
                 text = content_block.get("text")
                 if isinstance(text, str):
-                    unmasked = unmask_pii_text(text, pii_tokens)
+                    unmasked = callable_of(unmask_pii_text)(text, pii_tokens)
                     if unmasked != text:
                         content_block["text"] = unmasked
                         modified = True
@@ -2338,7 +2374,7 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
     if event_type in _PII_DELTA_EVENT_TYPES:
         delta: Final = evt_obj.get("delta")
         if isinstance(delta, str):
-            unmasked = unmask_pii_text(delta, pii_tokens)
+            unmasked = callable_of(unmask_pii_text)(delta, pii_tokens)
             if unmasked != delta:
                 evt_obj["delta"] = unmasked
                 return json.dumps(evt_obj)
@@ -2771,10 +2807,10 @@ class ResponsesWebSocketStreaming:
                 # and the text-bearing "done" events. Per-fragment Presidio
                 # cannot reliably catch PII spanning multiple delta chunks (e.g.
                 # "alice@" + "example.com"), and the done events carry the full
-                # output text that response.completed already delivers in
-                # fully-masked form; forwarding them would leak unmasked PII
-                # before response.completed arrives. The client receives only the
-                # masked response.completed.
+                # output text that the terminal event (response.completed or
+                # response.incomplete) already delivers in fully-masked form;
+                # forwarding them would leak unmasked PII before it arrives. The
+                # client receives only the masked terminal event.
                 if self.output_guardrail_callbacks:
                     try:
                         _evt_payload: Mapping[str, object] = _load_json_object(response_str)
@@ -2982,13 +3018,14 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         cb: Final = self.guardrail_callbacks[0]
-        unmask_pii_text: Final[_UnmasksPiiText] = getattr(cb, _UNMASK_PII_TEXT_ATTR)
+        unmask_pii_text: Final = _required_attribute(cb, _UNMASK_PII_TEXT_ATTR)
         return _unmask_responses_event(response_str, pii_tokens, unmask_pii_text)
 
     async def _mask_response_completed(self, response_str: str) -> str:
         """
-        Apply Presidio output masking (apply_to_output=True) to the
-        ``response.completed`` event before it is forwarded to the client.
+        Apply Presidio output masking (apply_to_output=True) to the terminal
+        ``response.completed`` or ``response.incomplete`` event before it is
+        forwarded to the client.
 
         Walks ``response.output[*].content[*].text`` and masks every text block,
         as well as ``response.output[*].arguments`` on function-call items and
@@ -3005,7 +3042,7 @@ class ResponsesWebSocketStreaming:
         except (json.JSONDecodeError, TypeError):
             return response_str
 
-        if evt_obj.get("type") != "response.completed":
+        if evt_obj.get("type") not in _HISTORY_TERMINAL_EVENT_TYPES:
             return response_str
 
         modified = False
@@ -3268,7 +3305,7 @@ class ManagedResponsesWebSocketHandler:
         self._session_history[response_id] = messages
 
     @staticmethod
-    def _extract_response_id(completed_event: _MutableJsonObject) -> str | None:
+    def _extract_response_id(completed_event: _TerminalEvent) -> str | None:
         """
         Pull the raw (decoded) response ID out of a terminal (``response.completed`` or ``response.incomplete``) event.
         Returns *None* if the event doesn't contain a usable ID.
@@ -3283,7 +3320,7 @@ class ManagedResponsesWebSocketHandler:
 
     @staticmethod
     def _extract_output_messages(
-        completed_event: _MutableJsonObject,
+        completed_event: _TerminalEvent,
     ) -> list[dict[str, object]]:
         """
         Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
@@ -3527,9 +3564,12 @@ class ManagedResponsesWebSocketHandler:
         }
 
     @staticmethod
-    def _update_proxy_request(call_kwargs: dict[str, Any], model: str) -> None:
+    def _update_proxy_request(call_kwargs: dict[str, object], model: str) -> None:
         """Update proxy_server_request body so spend logs record the full request."""
-        proxy_server_request = (call_kwargs.get("litellm_metadata") or {}).get("proxy_server_request") or {}
+        litellm_metadata: Final = require_attributes(
+            call_kwargs.get("litellm_metadata") or dict[str, object](), _GetsByKey, "get"
+        )
+        proxy_server_request: Final = litellm_metadata.get("proxy_server_request") or {}
         if not isinstance(proxy_server_request, dict):
             return
         body: Final = dict(proxy_server_request.get("body") or {})
@@ -3539,13 +3579,13 @@ class ManagedResponsesWebSocketHandler:
         for k in ("tools", "tool_choice", "instructions", "metadata"):
             if k in call_kwargs and call_kwargs[k] is not None:
                 body[k] = call_kwargs[k]
-        proxy_server_request = {**proxy_server_request, "body": body}
+        forwarded_request: Final[dict[str, object]] = {**proxy_server_request, "body": body}
         if "litellm_metadata" not in call_kwargs:
             call_kwargs["litellm_metadata"] = {}
-        call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
-        call_kwargs["proxy_server_request"] = proxy_server_request
+        set_item(call_kwargs["litellm_metadata"], "proxy_server_request", forwarded_request)
+        call_kwargs["proxy_server_request"] = forwarded_request
 
-    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> _MutableJsonObject | None:
+    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> object:
         """
         Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
 
@@ -3553,7 +3593,7 @@ class ManagedResponsesWebSocketHandler:
         directly (before serialization) to avoid a redundant JSON round-trip on every chunk. Returns the terminal
         event dict, or ``None``.
         """
-        terminal_event: _MutableJsonObject | None = None
+        terminal_event: object = None
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
         async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
             if chunk is None:
@@ -3565,7 +3605,7 @@ class ManagedResponsesWebSocketHandler:
                 continue
             if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
                 try:
-                    terminal_event = _load_json_object(serialized)
+                    terminal_event = _load_json_value(serialized)
                 except Exception:
                     pass
             try:
@@ -3579,22 +3619,23 @@ class ManagedResponsesWebSocketHandler:
         """The provider and the turn history keep Presidio's tokens, the client gets the original text back."""
         if not self._pii_tokens or not self.guardrail_callbacks:
             return serialized
-        unmask_pii_text: Final[_UnmasksPiiText] = getattr(self.guardrail_callbacks[0], _UNMASK_PII_TEXT_ATTR)
+        unmask_pii_text: Final = _required_attribute(self.guardrail_callbacks[0], _UNMASK_PII_TEXT_ATTR)
         return _unmask_responses_event(serialized, self._pii_tokens, unmask_pii_text)
 
     def _save_turn_history(
         self,
-        terminal_event: _MutableJsonObject | None,
+        terminal_event: object,
         prior_history: list[dict[str, object]],
         current_messages: list[dict[str, object]],
     ) -> None:
         """Store this terminal (``response.completed`` or ``response.incomplete``) event for future history lookups."""
         if terminal_event is None:
             return
-        new_response_id: Final = self._extract_response_id(terminal_event)
+        event: Final = require_attributes(terminal_event, _TerminalEvent, "get")
+        new_response_id: Final = self._extract_response_id(event)
         if not new_response_id:
             return
-        output_msgs: Final = self._extract_output_messages(terminal_event)
+        output_msgs: Final = self._extract_output_messages(event)
         all_messages: Final = prior_history + current_messages + output_msgs
         self._store_history(new_response_id, all_messages)
         verbose_logger.debug(

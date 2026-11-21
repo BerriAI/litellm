@@ -60,12 +60,9 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
-import {
-  InheritedBudgetHint,
-  inheritedBudgetGates,
-  keyOwnerBudgetSource,
-  teamMemberBudgetGate,
-} from "../shared/InheritedBudgetHint";
+import { AppliedBudgetsCard } from "../shared/AppliedBudgetsCard";
+import { appliedBudgets } from "../shared/appliedBudgets";
+import { inheritedBudgetGates, keyOwnerBudgetSource, teamMemberBudgetGate } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 import { keyOrganizationId } from "./keyEditFieldNormalizers";
 import { isTeamAdminEditingMemberKey, teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
@@ -145,9 +142,7 @@ export default function KeyInfoView({
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const memberBudgetUserIds = useMemo(
     (): Record<string, string[]> =>
-      currentKeyData?.max_budget === null && currentKeyData.team_id && currentKeyData.user_id
-        ? { [currentKeyData.team_id]: [currentKeyData.user_id] }
-        : {},
+      currentKeyData?.team_id && currentKeyData.user_id ? { [currentKeyData.team_id]: [currentKeyData.user_id] } : {},
     [currentKeyData],
   );
   const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
@@ -582,13 +577,11 @@ export default function KeyInfoView({
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
   const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
-  const memberGate = hasOwnBudget
-    ? null
-    : teamMemberBudgetGate(
-        teamMemberBudgets[currentKeyData.team_id ?? ""],
-        currentKeyData.user_id,
-        currentKeyData.user?.user_email,
-      );
+  const memberGate = teamMemberBudgetGate(
+    teamMemberBudgets[currentKeyData.team_id ?? ""],
+    currentKeyData.user_id,
+    currentKeyData.user?.user_email,
+  );
   const budgetDisplay = (() => {
     if (hasOwnBudget) return `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`;
     if (memberGate)
@@ -597,7 +590,11 @@ export default function KeyInfoView({
       });
     return t("keyDetail.keyInfoView.budget.unlimited");
   })();
-  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate);
+  const budgetsThatApply = appliedBudgets(
+    currentKeyData,
+    currentKeyData.key_alias || t("shared.appliedBudgets.thisKey"),
+    inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate),
+  );
   const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at, t, locale.language);
 
   return (
@@ -797,13 +794,12 @@ export default function KeyInfoView({
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
                   <p className="text-sm">
-                    {memberGate
+                    {memberGate && !hasOwnBudget
                       ? t("keyDetail.keyInfoView.overview.teamMemberSpend", {
                           spend: formatNumberWithCommas(memberGate.spend ?? 0, 4),
                           maxBudget: formatNumberWithCommas(memberGate.maxBudget, 2),
                         })
                       : t("keyDetail.keyInfoView.overview.ofBudget", { budget: budgetDisplay })}
-                    <InheritedBudgetHint gates={inheritedGates} />
                   </p>
                   {budgetResetTime && (
                     <p className="text-sm">
@@ -836,6 +832,8 @@ export default function KeyInfoView({
                   </p>
                 </div>
               </Card>
+
+              <AppliedBudgetsCard budgets={budgetsThatApply} className="sm:col-span-2" />
 
               <Card className="block p-6">
                 <p className="text-sm">{t("keyDetail.keyInfoView.overview.rateLimits")}</p>

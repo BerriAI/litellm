@@ -858,15 +858,16 @@ async def test_a_wildcard_key_gets_the_team_key_through_the_one_model_its_team_a
 @pytest.mark.asyncio
 async def test_a_wildcard_key_gets_the_team_key_through_the_one_model_its_project_allows():
     from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     key_wildcard, family_models = _a_family_with_several_models(litellm.open_ai_chat_completion_models)
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="team_id:team-a", value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["openai/*"])
+        key=AuthObject.team("team-a"), value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["openai/*"])
     )
     await cache.async_set_cache(
-        key=project_cache_key("proj-1"),
+        key=AuthObject.project("proj-1"),
         value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=[family_models[-1]]),
     )
     data: Final[dict[str, object]] = {}
@@ -1223,6 +1224,13 @@ def test_provider_file_id_spellings_unwraps_a_model_encoded_id_and_covers_the_st
         "https://example.invalid/batch-out1",
         "http://example.invalid/batch-out1?alt=media#download",
         "https%3A%2F%2Fexample.invalid%2Fbatch-out1",
+        "https://example.invalid/%23/files/batch-out1",
+        "https://example.invalid/%3F/files/batch-out1",
+        "https://generativelanguage.googleapis.com/%23/files/batch-out1",
+        "https://generativelanguage.googleapis.com/%3F/files/batch-out1",
+        "https://x%23/batch-out1",
+        "https://x%3F/batch-out1",
+        "https://x%2Ffiles%2F/batch-out1",
     ),
 )
 def test_provider_file_id_spellings_reduce_any_scheme_the_way_gemini_does(respelling: str):
