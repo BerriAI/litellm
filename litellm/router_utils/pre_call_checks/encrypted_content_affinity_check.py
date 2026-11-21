@@ -163,8 +163,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _extract_model_id_from_input(request_input: object) -> str | None:
         """
-        Scan ``input`` items for litellm-encoded encrypted-content markers and
-        return the ``model_id`` embedded in the first one found.
+        Scan ``input`` items in reverse order for litellm-encoded encrypted-content markers and
+        return the ``model_id`` embedded in the newest one found.
 
         Checks both:
         1. Encoded item IDs (encitem_...) - for clients that send IDs
@@ -180,7 +180,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return next(
             (
                 model_id
-                for item in request_input
+                for item in reversed(request_input)
                 if (model_id := EncryptedContentAffinityCheck._model_id_of_input_item(item)) is not None
             ),
             None,
@@ -233,7 +233,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return next(
             (
                 model_id
-                for block in EncryptedContentAffinityCheck._anthropic_content_blocks(messages)
+                for block in reversed(list(EncryptedContentAffinityCheck._anthropic_content_blocks(messages)))
                 if (model_id := EncryptedContentAffinityCheck._model_id_of_anthropic_block(block)) is not None
             ),
             None,
