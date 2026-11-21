@@ -6180,6 +6180,62 @@ def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize(
+    ("role", "media"),
+    [
+        ("user", "file"),
+        ("user", "image_url"),
+        ("user", "input_image"),
+        ("tool", "file"),
+        ("tool", "image_url"),
+        ("tool", "input_image"),
+        ("assistant", "image_url"),
+    ],
+)
+@pytest.mark.parametrize("has_access", [True, False], ids=["owner", "different-key"])
+async def test_chat_file_references_use_managed_file_access(
+    version: str, role: str, media: str, has_access: bool
+) -> None:
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    caller: Final = (
+        UserAPIKeyAuth(user_id="owner", team_id="team-owner")
+        if has_access
+        else UserAPIKeyAuth(user_id="other", team_id="team-other")
+    )
+    uri: Final = f"https://generativelanguage.googleapis.com/{version}/files/batch-out1"
+    part: Final = (
+        {"type": "file", "file": {"file_id": uri, "format": "application/pdf"}}
+        if media == "file"
+        else {"type": media, "image_url": {"url": uri, "format": "image/png"}}
+    )
+    content_key: Final = "images" if role == "assistant" else "content"
+    request: Final = {"model": "gemini/gemini-4-argon", "messages": [{"role": role, content_key: [part]}]}
+    if has_access:
+        result: Final = await managed_files.async_pre_call_hook(caller, DualCache(), request, "acompletion")
+        assert result == request
+    else:
+        with pytest.raises(HTTPException) as denied:
+            await managed_files.async_pre_call_hook(caller, DualCache(), request, "acompletion")
+        assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "message-content"])
+async def test_responses_input_checks_managed_file_access(nested: bool) -> None:
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    caller: Final = UserAPIKeyAuth(user_id="other", team_id="team-other")
+    file: Final = {"type": "input_file", "file_id": "https://generativelanguage.googleapis.com/v1/files/batch-out1"}
+    item: Final = {"role": "user", "content": [file]} if nested else file
+    request: Final = {"model": "gemini/gemini-4-argon", "input": [item]}
+
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.async_pre_call_hook(caller, DualCache(), request, "aresponses")
+
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("spelling", _GEMINI_OUTPUT_SPELLINGS)
 async def test_enforce_provider_file_access_denies_every_spelling_of_another_keys_output_file(spelling: str):
     managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
