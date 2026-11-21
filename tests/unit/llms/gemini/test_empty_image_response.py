@@ -97,7 +97,7 @@ def test_blocked_prompt_is_a_400_carrying_the_block_reason(route: str, model: st
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
-@pytest.mark.parametrize("finish_reason", ("NO_IMAGE", "IMAGE_OTHER", "STOP"))
+@pytest.mark.parametrize("finish_reason", ("NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE", "STOP"))
 def test_answer_without_an_image_is_a_422_that_does_not_echo_the_model_output(
     route: str, model: str, provider: str, finish_reason: str
 ):
@@ -124,6 +124,7 @@ def test_answer_without_an_image_is_a_422_that_does_not_echo_the_model_output(
     assert f"finishReason={finish_reason}" in str(unanswered.value)
     assert "red dot" not in str(unanswered.value)
     assert "planning the dot" not in str(unanswered.value)
+    assert "dot" not in unanswered.value.response.text
 
 
 def _failure_cost(
@@ -157,7 +158,11 @@ def test_answer_without_an_image_bills_its_tokens_while_a_refusal_bills_nothing(
     unanswered_cost: Final = _failure_cost(monkeypatch, route, model, unanswered, litellm.UnprocessableEntityError)
     refused_cost: Final = _failure_cost(monkeypatch, route, model, refused, litellm.ContentPolicyViolationError)
 
-    assert unanswered_cost is not None and unanswered_cost > 0
+    prices: Final = litellm.get_model_info(model)
+    text_price: Final = sum(litellm.cost_per_token(model=model, prompt_tokens=9, completion_tokens=7))
+    image_price: Final = text_price + 7 * (prices["output_cost_per_image_token"] - prices["output_cost_per_token"])
+
+    assert unanswered_cost is not None and text_price <= unanswered_cost < image_price
     assert refused_cost == 0
 
 

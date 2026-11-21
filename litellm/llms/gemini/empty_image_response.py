@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.utils import ImageResponse, Usage
 
-_REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER"})
+_REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE"})
 _ERROR_DOCS_URL: Final = "https://docs.litellm.ai/docs"
 
 
@@ -79,6 +79,14 @@ def _answered_as(status_code: int, raw_response: httpx.Response) -> httpx.Respon
     return error_response_without_credentials(status_code, raw_response, _ERROR_DOCS_URL)
 
 
+def _answered_without_model_output(raw_response: httpx.Response, result: _GenerateContentResult) -> httpx.Response:
+    return httpx.Response(
+        status_code=422,
+        content=result.model_dump_json(by_alias=True, exclude_none=True),
+        request=_answered_as(422, raw_response).request,
+    )
+
+
 def empty_image_response_error(
     response: Mapping[str, object],
     model: str,
@@ -123,5 +131,5 @@ def empty_image_response_error(
         message=f"Gemini returned no image, finishReason={finish_reasons}",
         model=model,
         llm_provider=llm_provider,
-        response=_answered_as(422, raw_response),
+        response=_answered_without_model_output(raw_response, result),
     )
