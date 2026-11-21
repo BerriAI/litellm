@@ -32,6 +32,9 @@ else:
     LoggingClass = Any
 
 
+ROUTER_BASE_URL: Final = "https://router.huggingface.co"
+
+
 class HuggingFaceRerankResponseItem(TypedDict):
     """Type definition for HuggingFace rerank API response items."""
 
@@ -59,7 +62,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         elif os.getenv("HUGGINGFACE_API_BASE") is not None:
             return os.getenv("HUGGINGFACE_API_BASE", "")
         else:
-            return "https://api-inference.huggingface.co"
+            return ROUTER_BASE_URL
 
     def get_complete_url(
         self,
@@ -70,7 +73,17 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         """
         Get the complete URL for the API call, including the /rerank suffix if necessary.
         """
-        return ensure_api_route(self.get_api_base(model=model, api_base=api_base), "rerank")
+        if model.startswith(("http://", "https://")):
+            return model
+
+        resolved_api_base: Final = self.get_api_base(model=model, api_base=api_base)
+        clean_model: Final = model.removeprefix("huggingface/")
+        base: Final = resolved_api_base.rstrip("/")
+        if base == ROUTER_BASE_URL:
+            return f"{ROUTER_BASE_URL}/hf-inference/models/{clean_model}"
+        if "/models/" in base or base.endswith("/rerank"):
+            return resolved_api_base
+        return ensure_api_route(resolved_api_base, "rerank")
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [
@@ -153,9 +166,15 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             raise ValueError("query is required for HuggingFace rerank")
         if "texts" not in optional_rerank_params:
             raise ValueError("Cohere 'documents' param is required for HuggingFace rerank")
-        # Ensure return_text is a boolean value
-        # HuggingFace API expects return_text parameter, corresponding to our return_documents parameter
+
+        query: Final = optional_rerank_params["query"]
+        texts: Final = optional_rerank_params["texts"]
+
         request_body: Final = {
+            "inputs": {
+                "query": query,
+                "texts": texts,
+            },
             "raw_scores": False,
             "truncation_direction": "Right",
         }
@@ -181,6 +200,12 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             raise HuggingFaceError(
                 message=getattr(raw_response, "text", str(raw_response)),
                 status_code=getattr(raw_response, "status_code", 500),
+            )
+
+        if isinstance(raw_response_json, dict) and "error" in raw_response_json:
+            raise HuggingFaceError(
+                message=str(raw_response_json["error"]),
+                status_code=getattr(raw_response, "status_code", 400),
             )
 
         # Use standard litellm token counter for proper token estimation
