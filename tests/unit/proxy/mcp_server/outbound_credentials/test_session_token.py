@@ -1,13 +1,15 @@
 """Tests for the identity-only gateway session token (mint/open, hostile-input totality)."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Final
+from unittest.mock import patch
 
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from jwt.utils import base64url_decode, base64url_encode
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr, TypeAdapter, ValidationError
 
 from litellm.proxy.mcp_server.outbound_credentials.session_token import (
     MAX_SESSION_TOKEN_BYTES,
@@ -360,6 +362,98 @@ def test_principal_rejects_an_unknown_audience_at_construction():
 
 RSA_KEYS = AsymmetricSessionKeys(private_key_pem=SecretStr(_RSA_PEM_A), kid="2026-01")
 OTHER_RSA_KEYS = AsymmetricSessionKeys(private_key_pem=SecretStr(_RSA_PEM_B), kid="2025-06")
+
+
+@pytest.mark.parametrize("bits", (2048, 4096))
+def test_rs256_reuses_one_private_key_load_for_validation_public_key_and_token_pairs(bits: int) -> None:
+    private_pem: Final = _rsa_private_pem(bits)
+    public_key: Final = serialization.load_pem_private_key(private_pem.encode(), password=None).public_key()
+    expected_public_pem: Final = public_key.public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+    with (
+        patch(
+            "cryptography.hazmat.primitives.serialization.load_pem_private_key",
+            wraps=serialization.load_pem_private_key,
+        ) as load_private_key,
+        patch("jwt.algorithms.load_pem_private_key", load_private_key),
+    ):
+        for kid in ("first", "second", "first"):
+            keys: Final = AsymmetricSessionKeys(private_key_pem=SecretStr(private_pem), kid=kid)
+            assert session_public_key_pem(keys) == expected_public_pem
+            for mint, prefix, kind, ttl in (
+                (mint_session_token, SESSION_TOKEN_PREFIX, "session", SESSION_TTL_SECONDS),
+                (mint_session_refresh_token, SESSION_REFRESH_PREFIX, "session_refresh", SESSION_REFRESH_TTL_SECONDS),
+            ):
+                minted: Final = mint(PRINCIPAL, keys, NOW)
+                assert isinstance(minted, MintedSessionToken)
+                encoded: Final = minted.token.get_secret_value().removeprefix(prefix)
+                claims: Final = TypeAdapter(dict[str, object]).validate_python(
+                    jwt.decode(
+                        encoded, public_key, algorithms=["RS256"], issuer=SESSION_ISSUER, options={"verify_exp": False}
+                    )
+                )
+                header: Final = jwt.get_unverified_header(encoded)
+                assert (header["alg"], header["kid"]) == ("RS256", kid)
+                assert (claims["user_id"], claims["client_id"], claims["kind"]) == (
+                    PRINCIPAL.user_id,
+                    PRINCIPAL.client_id,
+                    kind,
+                )
+                assert claims["exp"] == int((NOW + timedelta(seconds=ttl)).timestamp())
+        assert load_private_key.call_count == 1
+
+
+@pytest.mark.parametrize("refresh", (False, True))
+def test_rs256_changed_pem_with_the_same_kid_signs_and_verifies_with_the_new_key(refresh: bool) -> None:
+    first: Final = AsymmetricSessionKeys(private_key_pem=SecretStr(_RSA_PEM_A), kid="same-kid")
+    rotated: Final = AsymmetricSessionKeys(private_key_pem=SecretStr(_RSA_PEM_B), kid=first.kid)
+    mint: Final = mint_session_refresh_token if refresh else mint_session_token
+    open_token: Final = open_session_refresh_token if refresh else open_session_token
+    original: Final = mint(PRINCIPAL, first, NOW)
+    current: Final = mint(PRINCIPAL, rotated, NOW)
+    assert isinstance(original, MintedSessionToken)
+    assert isinstance(current, MintedSessionToken)
+    assert session_public_key_pem(first) != session_public_key_pem(rotated)
+    assert isinstance(open_token(original.token.get_secret_value(), rotated, NOW), SessionBadSignature)
+    assert isinstance(open_token(current.token.get_secret_value(), first, NOW), SessionBadSignature)
+    opened: Final = open_token(current.token.get_secret_value(), rotated, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == PRINCIPAL
+
+
+@pytest.mark.parametrize(
+    "private_pem, error",
+    (
+        ("not a pem", "private_key_pem is not a loadable unencrypted PEM private key"),
+        (_rsa_private_pem(bits=1024), "private_key_pem must be an RSA key of at least 2048 bits"),
+        (
+            ec.generate_private_key(ec.SECP256R1())
+            .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+            .decode(),
+            "private_key_pem must be an unencrypted RSA private key in PEM format",
+        ),
+        (
+            rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            .private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.BestAvailableEncryption(b"test-password"),
+            )
+            .decode(),
+            "private_key_pem is not a loadable unencrypted PEM private key",
+        ),
+    ),
+    ids=("invalid", "weak", "non-rsa", "encrypted"),
+)
+def test_rs256_invalid_private_keys_are_rejected_on_every_attempt(private_pem: str, error: str) -> None:
+    with patch(
+        "cryptography.hazmat.primitives.serialization.load_pem_private_key", wraps=serialization.load_pem_private_key
+    ) as load_private_key:
+        for _ in range(2):
+            with pytest.raises(ValidationError, match=error):
+                AsymmetricSessionKeys(private_key_pem=SecretStr(private_pem), kid="rejected")
+        assert load_private_key.call_count == 2
 
 
 def test_rs256_access_round_trip_with_kid_and_alg_pinned_in_header():
