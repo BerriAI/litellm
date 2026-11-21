@@ -157,11 +157,11 @@ def test_jwks_5xx_with_nothing_cached_answers_503_and_backs_off(tmp_path: Path) 
         assert first.json()["error"]["type"] == "auth_provider_unavailable"
         assert jwks.received.qsize() == 1
         reason: Final = f"Error: JWT Auth: JWKS endpoint {jwks.url}/jwks returned status 500"
-        for reply in (first, second):
-            message = reply.json()["error"]["message"]
-            assert message.endswith(reason), message
-            assert "TransportError" not in message
-            assert "internal" not in message
+        messages: Final = tuple(reply.json()["error"]["message"] for reply in (first, second))
+        assert messages[0] == messages[1]
+        assert messages[0].endswith(reason), messages[0]
+        assert "TransportError" not in messages[0]
+        assert "internal" not in messages[0]
 
 
 def test_refused_jwks_connection_with_nothing_cached_answers_503_naming_the_transport_error(tmp_path: Path) -> None:
