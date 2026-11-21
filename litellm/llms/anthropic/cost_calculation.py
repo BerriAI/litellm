@@ -3,9 +3,10 @@ Helper util for handling anthropic-specific cost calculation
 - e.g.: prompt caching
 """
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
@@ -18,6 +19,14 @@ from litellm.types.llms.base import LiteLLMBaseModel
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 import litellm
+
+# A refusal before any output is billed only in these categories, per
+# https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#how-refusals-are-billed (2026-11-03)
+BILLED_REFUSAL_CATEGORIES: Final = frozenset({"bio", "frontier_llm", "reasoning_extraction"})
+
+_USAGE_ITERATIONS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_REFUSAL_CATEGORIES: Final = TypeAdapter(tuple[str | None, ...])
+_PRICING_FIELDS: Final = ("inference_geo", "speed")
 
 
 def cost_per_token(
@@ -36,6 +45,80 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
+    iterations: Final = _USAGE_ITERATIONS.validate_python(getattr(usage, "iterations", None) or ())
+    served_by: Final = tuple(attempt for attempt in iterations if attempt.get("type") == "fallback_message")
+    if not served_by:
+        return _single_model_cost_per_token(model, usage, service_tier, model_info)
+    # Pricing by any model other than the one that answered means the deployment set its own prices or base_model
+    prices_each_attempt_at_its_model: Final = _attempt_model(served_by[-1], model) == model
+    costs: Final = tuple(
+        _attempt_cost(
+            attempt=attempt,
+            attempt_model=_attempt_model(attempt, model) if prices_each_attempt_at_its_model else model,
+            model=model,
+            usage=usage,
+            service_tier=service_tier,
+            model_info=model_info,
+        )
+        for attempt in _billed_fallback_attempts(iterations, usage)
+    )
+    return sum(prompt_cost for prompt_cost, _ in costs), sum(completion_cost for _, completion_cost in costs)
+
+
+def _billed_fallback_attempts(
+    iterations: Sequence[Mapping[str, object]], usage: "Usage"
+) -> Sequence[Mapping[str, object]]:
+    """The billed entries of a server-side fallback chain's ``usage.iterations``. The first
+    ``fallback_refusal_categories`` entries declined, and one that declined before any output is billed only in a
+    billed category."""
+    categories: Final = _REFUSAL_CATEGORIES.validate_python(getattr(usage, "fallback_refusal_categories", None) or ())
+    return tuple(
+        attempt
+        for index, attempt in enumerate(iterations)
+        if index >= len(categories) or _produced_output(attempt) or categories[index] in BILLED_REFUSAL_CATEGORIES
+    )
+
+
+def _produced_output(attempt: Mapping[str, object]) -> bool:
+    match attempt:
+        case {"output_tokens": int() as output_tokens}:
+            return output_tokens > 0
+        case _:
+            return False
+
+
+def _attempt_model(attempt: Mapping[str, object], default: str) -> str:
+    match attempt:
+        case {"model": str() as attempt_model}:
+            return attempt_model
+        case _:
+            return default
+
+
+def _attempt_cost(
+    attempt: Mapping[str, object],
+    attempt_model: str,
+    model: str,
+    usage: "Usage",
+    service_tier: str | None,
+    model_info: "ModelInfo | None",
+) -> tuple[float, float]:
+    return _single_model_cost_per_token(
+        model=attempt_model,
+        usage=_attempt_usage(attempt, usage),
+        service_tier=service_tier,
+        model_info=model_info if attempt_model == model else None,
+    )
+
+
+def _attempt_usage(attempt: Mapping[str, object], usage: "Usage") -> "Usage":
+    pricing_fields: Final = {field: getattr(usage, field) for field in _PRICING_FIELDS if hasattr(usage, field)}
+    return litellm.AnthropicConfig().calculate_usage(usage_object={**attempt, **pricing_fields}, reasoning_content=None)
+
+
+def _single_model_cost_per_token(
+    model: str, usage: "Usage", service_tier: str | None, model_info: "ModelInfo | None"
+) -> tuple[float, float]:
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,

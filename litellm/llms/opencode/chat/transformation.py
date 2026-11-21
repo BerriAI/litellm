@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
@@ -121,8 +122,12 @@ class OpenCodeGoChatConfig(_GoReportedCostMixin, OpenAILikeChatConfig):
 class _GoMessagesResponseIterator(AnthropicModelResponseIterator, BaseModelResponseIterator):
     http_response: httpx.Response | None = None
 
-    def _handle_usage(self, anthropic_usage_chunk: Mapping[str, object]) -> Usage:
-        usage: Final = super()._handle_usage(anthropic_usage_chunk)
+    def _handle_usage(
+        self,
+        anthropic_usage_chunk: Mapping[str, object],
+        stop: Mapping[str, object] = MappingProxyType({}),
+    ) -> Usage:
+        usage: Final = super()._handle_usage(anthropic_usage_chunk, stop)
         reported_usage: Final = {key: value for key, value in self._cumulative_usage.items() if key == "opencode"}
         return usage.model_copy(update=reported_usage)
 
