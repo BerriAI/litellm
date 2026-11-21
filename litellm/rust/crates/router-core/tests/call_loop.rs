@@ -1,15 +1,19 @@
 //! A call through the router end to end: selection, retries, fallbacks and cooldowns against a
 //! scripted host.
 
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap, VecDeque},
+    sync::Arc,
+    time::Duration,
+};
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HostFacts, InMemoryRouterCache, Op, PreRoute, PreRouted, Router,
-    RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
+    FailureReport, Health, HealthState, InMemoryRouterCache, Op, Outcomes, PreRoute, PreRouted,
+    Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
     RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport,
-    UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
-    host::UncountedRetries, select, select::PassThrough,
+    UsageCounts, UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::CooldownValue,
+    health::current_minute, host::UncountedRetries, select, select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -20,7 +24,7 @@ struct ScriptedHost {
     /// Failures handed out in order, keyed by model group; a group with none left succeeds.
     script: Mutex<Vec<(String, VecDeque<AttemptError>)>>,
     events: Mutex<Vec<RouterEvent>>,
-    cache: InMemoryRouterCache,
+    cache: RecordingCache,
     /// Answer every success as a stream whose outcome the host reports when it ends.
     deferred: bool,
     /// [`Served::tracks_usage`] on every success.
@@ -79,6 +83,112 @@ impl ScriptedHost {
     }
 }
 
+/// An [`InMemoryRouterCache`] that keeps the ids of every cooldown read, in order, and answers
+/// the cooldowns a test holds with no expiry of their own, so only the router's clock ends them.
+#[derive(Default)]
+struct RecordingCache {
+    inner: InMemoryRouterCache,
+    cooldown_reads: Mutex<Vec<Vec<String>>>,
+    held: Mutex<HashMap<String, CooldownValue>>,
+}
+
+impl RecordingCache {
+    fn hold_cooldown(&self, id: &str, timestamp: f64, cooldown_time: f64) {
+        let cooldown = CooldownValue {
+            exception_received: "rate limited".to_owned(),
+            status_code: "429".to_owned(),
+            timestamp,
+            cooldown_time,
+        };
+        self.held.lock().insert(id.to_owned(), cooldown);
+    }
+
+    /// Every deployment id any cooldown read asked for.
+    fn cooldown_ids_read(&self) -> BTreeSet<String> {
+        self.cooldown_reads
+            .lock()
+            .iter()
+            .flatten()
+            .cloned()
+            .collect()
+    }
+}
+
+impl std::ops::Deref for RecordingCache {
+    type Target = InMemoryRouterCache;
+
+    fn deref(&self) -> &InMemoryRouterCache {
+        &self.inner
+    }
+}
+
+impl RouterCache for RecordingCache {
+    async fn cooldowns(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<Option<CooldownValue>>, litellm_cache::Error> {
+        self.cooldown_reads.lock().push(ids.to_vec());
+        let stored = self.inner.cooldowns(ids).await?;
+        let held = self.held.lock();
+        Ok(ids
+            .iter()
+            .zip(stored)
+            .map(|(id, stored)| held.get(id).cloned().or(stored))
+            .collect())
+    }
+
+    async fn put_cooldown(
+        &self,
+        id: &str,
+        cooldown: &CooldownValue,
+        ttl: Duration,
+    ) -> Result<(), litellm_cache::Error> {
+        self.inner.put_cooldown(id, cooldown, ttl).await
+    }
+
+    async fn increment_allowed_fails(
+        &self,
+        id: &str,
+        suffix: Option<&str>,
+        ttl: Duration,
+    ) -> Result<f64, litellm_cache::Error> {
+        self.inner.increment_allowed_fails(id, suffix, ttl).await
+    }
+
+    async fn add_usage(
+        &self,
+        window: &UsageWindow,
+        tokens: f64,
+        requests: f64,
+    ) -> Result<(), litellm_cache::Error> {
+        self.inner.add_usage(window, tokens, requests).await
+    }
+
+    async fn add_request(&self, window: &UsageWindow) -> Result<(), litellm_cache::Error> {
+        self.inner.add_request(window).await
+    }
+
+    async fn usage(&self, window: &UsageWindow) -> Result<UsageCounts, litellm_cache::Error> {
+        self.inner.usage(window).await
+    }
+
+    async fn health_states(&self) -> Result<HashMap<String, HealthState>, litellm_cache::Error> {
+        self.inner.health_states().await
+    }
+
+    async fn outcomes(&self, id: &str) -> Result<Outcomes, litellm_cache::Error> {
+        self.inner.outcomes(id).await
+    }
+
+    async fn count_success(&self, id: &str) -> Result<(), litellm_cache::Error> {
+        self.inner.count_success(id).await
+    }
+
+    async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
+        self.inner.count_failure(id).await
+    }
+}
+
 /// The host error behind a scripted failure: the deployment it was raised on.
 #[derive(Debug, PartialEq)]
 struct Raised(String);
@@ -95,7 +205,7 @@ impl ScriptedHost {
 impl RouterHost for ScriptedHost {
     type Response = String;
     type Failure = Raised;
-    type Cache = InMemoryRouterCache;
+    type Cache = RecordingCache;
 
     async fn attempt(&self, attempt: &Attempt) -> Result<Served<String>, AttemptFailure<Raised>> {
         if let Some(failure) = self.first_failure.lock().take() {
@@ -181,7 +291,7 @@ impl RouterHost for ScriptedHost {
         self.events.lock().push(event.clone());
     }
 
-    fn cache(&self) -> &InMemoryRouterCache {
+    fn cache(&self) -> &RecordingCache {
         &self.cache
     }
 }
@@ -216,7 +326,7 @@ impl Hosted {
         self.router.healthy(&*self.host, op, request).await
     }
 
-    fn health(&self) -> Health<&InMemoryRouterCache> {
+    fn health(&self) -> Health<&RecordingCache> {
         self.router.health(self.host.cache())
     }
 
@@ -271,7 +381,7 @@ fn config() -> RouterConfig {
 
 fn router(config: RouterConfig, dynamic: serde_json::Value, host: Arc<ScriptedHost>) -> Hosted {
     let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
-    let router = Router::builder(config, dynamic, HostFacts::everything())
+    let router = Router::builder(config, dynamic)
         .randomness(Arc::new(SeededRandomness::new(7)))
         .build()
         .unwrap();
@@ -400,7 +510,10 @@ async fn a_failed_call_hands_back_the_host_error_of_the_attempt_it_ends_on(confi
         ),
         (
             Some(FailureKind::BadRequest),
-            Some(Raised(selected[0].clone())),
+            Some(litellm_router_core::Raised {
+                failure: Raised(selected[0].clone()),
+                deployment_id: Some(selected[0].clone()),
+            }),
             2,
         )
     );
@@ -431,7 +544,14 @@ async fn a_refused_attempt_ends_the_call_without_retries_or_fallbacks(config: Ro
     );
     assert_eq!(
         (ended.raised, selected.len(), host.retries()),
-        (Some(Raised(selected[0].clone())), 1, 0)
+        (
+            Some(litellm_router_core::Raised {
+                failure: Raised(selected[0].clone()),
+                deployment_id: Some(selected[0].clone()),
+            }),
+            1,
+            0
+        )
     );
 }
 
@@ -474,7 +594,11 @@ async fn a_call_whose_retry_fails_too_hands_back_the_host_error_of_the_retry(con
         .unwrap_err();
     let selected = host.selected();
     assert_eq!(
-        (selected.len(), selected[0] == selected[1], ended.raised),
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
         (2, false, Some(Raised(selected[1].clone())))
     );
 }
@@ -500,7 +624,11 @@ async fn a_retry_the_host_refuses_hands_back_the_host_error_of_the_retry(config:
         ended.error
     );
     assert_eq!(
-        (selected.len(), selected[0] == selected[1], ended.raised),
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
         (2, false, Some(Raised(selected[1].clone())))
     );
 }
@@ -531,7 +659,11 @@ async fn stream_retries_that_all_fail_hand_back_the_host_error_of_the_last_one(
         .unwrap_err();
     let selected = host.selected();
     assert_eq!(
-        (selected.len(), selected[0] == selected[1], ended.raised),
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
         (2, false, Some(Raised(selected[1].clone())))
     );
 }
@@ -709,6 +841,211 @@ async fn a_rate_limit_cools_the_deployment_down(config: RouterConfig) {
         (error.attempt().map(|failure| failure.kind), cooled.len()),
         (Some(FailureKind::RateLimit), 1)
     );
+}
+
+/// `model_list` and `settings`, with a group no request in these tests names.
+fn beside_an_unrelated_group(model_list: Value, settings: Value) -> RouterConfig {
+    let Value::Array(mut deployments) = model_list else {
+        panic!("a model list is a list");
+    };
+    deployments.push(json!(
+        {"model_name": "unrelated", "litellm_params": {"model": "openai/u"}, "model_info": {"id": "u1"}}
+    ));
+    let Value::Object(mut config) = settings else {
+        panic!("settings are a mapping");
+    };
+    config.insert("model_list".to_owned(), Value::Array(deployments));
+    serde_json::from_value(Value::Object(config)).unwrap()
+}
+
+fn primary_and_backup() -> Value {
+    json!([
+        {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+        {"model_name": "primary", "litellm_params": {"model": "openai/b"}, "model_info": {"id": "a2"}},
+        {"model_name": "backup", "litellm_params": {"model": "anthropic/c"}, "model_info": {"id": "b1"}},
+    ])
+}
+
+fn ids(ids: &[&str]) -> BTreeSet<String> {
+    ids.iter().map(|id| (*id).to_owned()).collect()
+}
+
+/// What [`stopped_router`]'s clock reads, in Unix seconds.
+fn stopped_now() -> f64 {
+    utc_hour(10) as f64
+}
+
+fn stopped_router(config: RouterConfig, dynamic: Value, host: Arc<ScriptedHost>) -> Hosted {
+    let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
+    let router = Router::builder(config, dynamic)
+        .randomness(Arc::new(SeededRandomness::new(7)))
+        .clock(Arc::new(StoppedClock(utc_hour(10))))
+        .build()
+        .unwrap();
+    Hosted { router, host }
+}
+
+#[rstest]
+#[case::a_group(primary_and_backup(), json!({}), "primary", None, &["a1", "a2"])]
+#[case::an_alias(
+    json!([
+        {"model_name": "gg", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "w1"}},
+        {"model_name": "gg", "litellm_params": {"model": "openai/b"}, "model_info": {"id": "w2"}},
+    ]),
+    json!({"model_group_alias": {"al": "gg"}}),
+    "al",
+    None,
+    &["w1", "w2"]
+)]
+#[case::a_wildcard(
+    json!([{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "w1"}}]),
+    json!({}),
+    "openai/gpt-4o",
+    None,
+    &["w1"]
+)]
+#[case::a_team_public_name(
+    json!([
+        {"model_name": "t1a", "litellm_params": {"model": "openai/a"},
+         "model_info": {"id": "w1", "team_id": "T1", "team_public_model_name": "tp"}},
+        {"model_name": "t1b", "litellm_params": {"model": "openai/b"},
+         "model_info": {"id": "w2", "team_id": "T1", "team_public_model_name": "tp"}},
+    ]),
+    json!({}),
+    "tp",
+    Some("T1"),
+    &["w1", "w2"]
+)]
+#[case::a_deployment_id(primary_and_backup(), json!({}), "a1", None, &[])]
+#[tokio::test]
+async fn a_pick_reads_only_the_cooldowns_of_the_deployments_it_could_route_to(
+    #[case] model_list: Value,
+    #[case] dynamic: Value,
+    #[case] model: &str,
+    #[case] team: Option<&str>,
+    #[case] expected: &[&str],
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(
+        beside_an_unrelated_group(model_list, json!({})),
+        dynamic,
+        host.clone(),
+    );
+    let request = RouterRequest {
+        model: model.to_owned(),
+        team_id: team.map(str::to_owned),
+        listing_team_id: team.map(str::to_owned),
+        ..RouterRequest::default()
+    };
+    router
+        .select(&Op::from("acompletion"), &request)
+        .await
+        .unwrap();
+    assert_eq!(host.cache.cooldown_ids_read(), ids(expected));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_cooling_candidate_is_still_skipped_when_the_read_is_scoped_to_the_candidates() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = stopped_router(
+        beside_an_unrelated_group(primary_and_backup(), json!({})),
+        json!({}),
+        host.clone(),
+    );
+    host.cache.hold_cooldown("a2", stopped_now(), 60.0);
+    let picked = router
+        .select(&Op::from("acompletion"), &request())
+        .await
+        .unwrap();
+    assert_eq!(
+        (picked.id.as_str(), host.cache.cooldown_ids_read()),
+        ("a1", ids(&["a1", "a2"]))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_group_cooling_down_falls_back_reading_only_each_hops_candidates() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = stopped_router(
+        beside_an_unrelated_group(primary_and_backup(), json!({})),
+        json!({"fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    host.cache.hold_cooldown("a1", stopped_now(), 60.0);
+    host.cache.hold_cooldown("a2", stopped_now(), 60.0);
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            response.deployment_id.as_str(),
+            host.cache.cooldown_ids_read()
+        ),
+        ("b1", ids(&["a1", "a2", "b1"]))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn weighted_failover_reads_only_the_failed_groups_cooldowns() {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::RateLimit, 429)],
+    ));
+    let router = stopped_router(
+        beside_an_unrelated_group(
+            primary_and_backup(),
+            json!({"enable_weighted_failover": true}),
+        ),
+        json!({"num_retries": 0}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(host.selected().len(), 2);
+    assert_eq!(
+        (
+            response.model_group.as_str(),
+            host.cache.cooldown_ids_read()
+        ),
+        ("primary", ids(&["a1", "a2"]))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_pick_left_with_no_candidates_reads_no_cooldowns_and_names_none() {
+    let host = Arc::new(ScriptedHost::default());
+    let unsupported = json!([
+        {"model_name": "primary", "litellm_params": {"model": "openai/a"},
+         "model_info": {"id": "a1", "supports_web_search": false}},
+        {"model_name": "primary", "litellm_params": {"model": "openai/b"},
+         "model_info": {"id": "a2", "supports_web_search": false}},
+    ]);
+    let router = router(
+        beside_an_unrelated_group(unsupported, json!({})),
+        json!({}),
+        host.clone(),
+    );
+    let request = RouterRequest {
+        web_search: true,
+        ..request()
+    };
+    let error = router
+        .select(&Op::from("acompletion"), &request)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, Error::NoHealthyDeployments { model, request_ids: Some(listed) }
+            if model == "primary" && listed.is_empty()),
+        "{error:?}"
+    );
+    assert!(host.cache.cooldown_reads.lock().is_empty());
 }
 
 #[rstest]
@@ -2518,15 +2855,11 @@ async fn access_windows_follow_the_routers_clock(#[case] now: u64, #[case] expec
     }))
     .unwrap();
     let host = ScriptedHost::default();
-    let router = Router::builder(
-        config,
-        RouterDynamicConfig::default(),
-        HostFacts::everything(),
-    )
-    .randomness(Arc::new(SeededRandomness::new(7)))
-    .clock(Arc::new(StoppedClock(now)))
-    .build()
-    .unwrap();
+    let router = Router::builder(config, RouterDynamicConfig::default())
+        .randomness(Arc::new(SeededRandomness::new(7)))
+        .clock(Arc::new(StoppedClock(now)))
+        .build()
+        .unwrap();
     let mut picked = std::collections::BTreeSet::new();
     for _ in 0..40 {
         let deployment = router

@@ -2675,6 +2675,73 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
     ]
 
 
+_GEMINI_CUT_STREAM_PARTS: Final[Mapping[str, dict[str, object]]] = {
+    "text": {"text": "One, two,"},
+    "thought": {"text": "Thinking about the request", "thought": True},
+    "tool_call": {"functionCall": {"name": "get_weather", "args": {"location": "Lima, Peru"}}},
+}
+_GEMINI_STREAM_USAGE: Final = {"promptTokenCount": 8, "candidatesTokenCount": 4, "totalTokenCount": 12}
+
+
+def _gemini_stream_chunk(part: Mapping[str, object], finish_reason: str | None = None) -> dict[str, object]:
+    candidate: Final = {"content": {"role": "model", "parts": [part]}, "index": 0}
+    if finish_reason is None:
+        return {"candidates": [candidate]}
+    return {"candidates": [{**candidate, "finishReason": finish_reason}], "usageMetadata": _GEMINI_STREAM_USAGE}
+
+
+def _gemini_stream_finish_reasons(respx_mock: respx.MockRouter, *events: dict[str, object]) -> list[str]:
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:streamGenerateContent?alt=sse").mock(
+        return_value=_gemini_sse(*events)
+    )
+    response: Final = litellm.completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Count to three"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    return [chunk.choices[0].finish_reason for chunk in response if chunk.choices and chunk.choices[0].finish_reason]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("part", _GEMINI_CUT_STREAM_PARTS.values(), ids=_GEMINI_CUT_STREAM_PARTS.keys())
+def test_gemini_stream_cut_before_any_finish_reason_raises(
+    respx_mock: respx.MockRouter, part: Mapping[str, object]
+) -> None:
+    with pytest.raises(
+        litellm.exceptions.MidStreamFallbackError, match="Stream ended before a finish_reason was received"
+    ):
+        _gemini_stream_finish_reasons(respx_mock, _gemini_stream_chunk(part))
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_stream_that_ends_on_an_unspecified_finish_reason_still_completes(respx_mock: respx.MockRouter) -> None:
+    finish_reasons: Final = _gemini_stream_finish_reasons(
+        respx_mock, _gemini_stream_chunk({"text": "One, two,"}, finish_reason="FINISH_REASON_UNSPECIFIED")
+    )
+
+    assert finish_reasons == ["stop"]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("first_part", "expected"),
+    [(_GEMINI_CUT_STREAM_PARTS["text"], "stop"), (_GEMINI_CUT_STREAM_PARTS["tool_call"], "tool_calls")],
+    ids=["text", "tool_call"],
+)
+def test_gemini_stream_that_names_its_finish_after_earlier_chunks_completes(
+    respx_mock: respx.MockRouter, first_part: Mapping[str, object], expected: str
+) -> None:
+    finish_reasons: Final = _gemini_stream_finish_reasons(
+        respx_mock, _gemini_stream_chunk(first_part), _gemini_stream_chunk({"text": ""}, finish_reason="STOP")
+    )
+
+    assert finish_reasons == [expected]
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_system_message_with_no_user_message(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:generateContent").mock(
@@ -6819,7 +6886,6 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
         ModelResponseIterator,
     )
 
-    # Arrange - 模拟一个包含 usageMetadata 的 blocked response
     blocked_chunk = {
         "promptFeedback": {
             "blockReason": "PROHIBITED_CONTENT",
@@ -6839,18 +6905,14 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
 
     streaming_obj = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
-    # Act
     result = streaming_obj.chunk_parser(blocked_chunk)
 
-    # Assert - 验证 content_filter 响应和 usage 都被正确处理
     assert result is not None, "Result should not be None"
     assert len(result.choices) == 1, "Should have exactly one choice"
     assert result.choices[0].finish_reason == "content_filter", (
         f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
     )
     assert result.choices[0].delta.content is None, "content should be None"
-
-    # 验证 usage 信息被正确提取
     assert hasattr(result, "usage"), "result should have usage attribute"
     assert result.usage is not None, "usage should not be None"
     assert result.usage.prompt_tokens == 8175, f"prompt_tokens should be 8175, got {result.usage.prompt_tokens}"
@@ -8680,6 +8742,39 @@ def test_non_streamed_content_filter_choice_keeps_google_reason(
     assert resp.choices[0].message.content is None
     assert resp.choices[0].provider_specific_fields == expected_provider_specific_fields
     assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (23, 4, 27)
+
+
+@pytest.mark.parametrize(
+    "google_signal",
+    [
+        {"candidates": [{"finishReason": "IMAGE_SAFETY", "index": 0}]},
+        {"candidates": [{"finishReason": "SAFETY", "index": 0}]},
+        {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}},
+    ],
+)
+def test_non_streamed_content_filter_reply_counts_thinking_tokens(google_signal: dict[str, object]):
+    completion_response: Final = {
+        **google_signal,
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "thoughtsTokenCount": 156,
+            "totalTokenCount": 165,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+        },
+    }
+
+    resp: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-3-pro-image",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (9, 156, 165)
+    assert resp.usage.completion_tokens_details.reasoning_tokens == 156
+    assert resp.usage.prompt_tokens_details.text_tokens == 9
 
 
 @dataclass(frozen=True, slots=True)

@@ -13,7 +13,7 @@ use tracing::warn;
 use crate::{
     Call, RouterStateSnapshot,
     config::Op,
-    error::{AttemptError, ConfigError, Error, FailureKind, Unsupported},
+    error::{AttemptError, Error, FailureKind},
     fallback::{FallbackKeys, FallbackTarget, Fallbacks},
     health::{GroupShape, should_retry_status, team_model_has_alternatives},
     host::{
@@ -45,6 +45,9 @@ const MAX_HONOURED_RETRY_AFTER: Duration = Duration::from_secs(60);
 pub struct RouterResponse<R> {
     pub output: Served<R>,
     pub deployment_id: String,
+    /// The name the serving attempt ran under: the requested name as written, an alias included,
+    /// or a fallback target.
+    pub name: String,
     pub model_group: String,
     pub attempted_retries: u32,
     /// The retry budget of the loop a retry succeeded in (`x-litellm-max-retries`); `None`
@@ -724,7 +727,7 @@ impl<H: RouterHost> Call<'_, H> {
             .collect();
         let cooling = self
             .health()
-            .active_cooldowns(&snapshot.registry.ids())
+            .active_cooldowns(&ids)
             .await
             .unwrap_or_default();
         let remaining = ids
@@ -1270,13 +1273,6 @@ impl<H: RouterHost> Call<'_, H> {
                 .duration_since(pick_started)
                 .unwrap_or_default(),
         });
-        if !(self.facts.supports)(op, deployment.provider()) {
-            return Err(Error::Config(ConfigError::Unsupported(Unsupported::Op {
-                op: op.clone(),
-                provider: deployment.provider().to_owned(),
-            }))
-            .into());
-        }
         // A name no deployment serves is routed to the first default fallback
         // (`_common_checks_available_deployment`), still stamped as the name.
         let defaulted = candidates.model_group != target.group
@@ -1290,6 +1286,9 @@ impl<H: RouterHost> Call<'_, H> {
                         proxy_admin: request.proxy_admin,
                         allowed_models: &request.allowed_models,
                         wildcard_request: candidates.wildcard_request.as_deref(),
+                        refuse_cross_group_litellm_model: snapshot
+                            .settings
+                            .enable_cross_model_group_collision_check,
                         ..crate::resolve::Caller::default()
                     },
                     None,
@@ -1391,6 +1390,7 @@ impl<H: RouterHost> Call<'_, H> {
                 Ok(RouterResponse {
                     output,
                     deployment_id: deployment.id.clone(),
+                    name: target.group.clone(),
                     model_group: candidates.model_group,
                     attempted_retries: retry,
                     max_retries: None,
@@ -1398,7 +1398,7 @@ impl<H: RouterHost> Call<'_, H> {
                 })
             }
             Err(failure) => {
-                let error = self.failed(failure);
+                let error = self.failed(failure, Some(&deployment.id));
                 let failed_deployment = match &error {
                     Error::Attempt { failure, .. } => {
                         if !failure.recorded && !failure.queue_rejected() {
@@ -1548,12 +1548,13 @@ impl<H: RouterHost> Call<'_, H> {
             Ok(output) => Ok(RouterResponse {
                 output,
                 deployment_id: String::new(),
+                name: target.group.clone(),
                 model_group: target.group.clone(),
                 attempted_retries: retry,
                 max_retries: None,
                 attempted_fallbacks: at.depth,
             }),
-            Err(failure) => Err(self.failed(failure).into()),
+            Err(failure) => Err(self.failed(failure, None).into()),
         }
     }
 

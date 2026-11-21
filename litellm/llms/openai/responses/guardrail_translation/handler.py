@@ -62,6 +62,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
     effective_scan_only_tool_results_for_guardrail,
+    effective_scan_tool_calls_as_text_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     list_field,
@@ -398,6 +399,15 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 
 
 _TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+# Every output item the client acts on, as the Responses stream iterator classes them. Wider than the items
+# whose payload a guardrail scans.
+_CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {
+    "mcp_approval_request",
+    "computer_call",
+    "local_shell_call",
+    "shell_call",
+    "apply_patch_call",
+}
 _TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
 _WEB_SEARCH_CALL_TYPE: Final = "web_search_call"
 _ITEM_ID_KEYED_TOOL_CALL_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, _WEB_SEARCH_CALL_TYPE})
@@ -1341,7 +1351,19 @@ class OpenAIResponsesHandler(BaseTranslation):
             skip_tool=skip_tool,
             scan_only=scan_only,
         )
-        if not extracted.inputs.get("texts"):
+        if (
+            effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
+            and not scan_only
+            and not isinstance(input_data, str)
+        ):
+            history_tool_calls: Final = [
+                _scanned_tool_call(item, item_idx)
+                for item_idx, item in enumerate(input_data)
+                if item.get("type") in _TOOL_CALL_ITEM_TYPES
+            ]
+            if history_tool_calls:
+                extracted.inputs["tool_calls"] = history_tool_calls
+        if not extracted.inputs.get("texts") and not extracted.inputs.get("tool_calls"):
             return data
         if scoped_structured_messages:
             extracted.inputs["structured_messages"] = scoped_structured_messages
@@ -2447,6 +2469,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         ):
             return tuple(responses_so_far)
         return (*responses_so_far, _released_envelope(responses_so_far))
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        return self._has_streamed_tool_call_events((item,)) or (
+            stream_item_field(item, "type") in _OUTPUT_ITEM_EVENT_TYPES
+            and stream_item_field(stream_item_field(item, "item"), "type") in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES
+        )
 
     @staticmethod
     def _has_streamed_tool_call_events(responses_so_far: Sequence[object]) -> bool:

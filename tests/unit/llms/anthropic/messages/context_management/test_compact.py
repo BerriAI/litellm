@@ -1549,12 +1549,10 @@ async def test_summary_model_denied_when_team_member_over_model_budget(monkeypat
     )
     from litellm.proxy.auth.auth_checks import get_team_member_default_budget
     from litellm.proxy.auth.user_api_key_auth import _load_team_member_default_model_budget
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        UserApiKeyCache,
-        team_membership_reservation_cache_key,
-    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
     from litellm.proxy.proxy_server import general_settings
+    from litellm.redis.stores.auth_cache import AuthObject
 
     budget_id: Final = "summary-budget"
     member_budget: Final = {"claude-haiku-4-5": {"max_budget": 0.0, "budget_duration": "1d"}}
@@ -1574,17 +1572,17 @@ async def test_summary_model_denied_when_team_member_over_model_budget(monkeypat
         litellm_budget_table=LiteLLM_BudgetTable(budget_id=budget_id, model_max_budget={}),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
     await user_api_key_cache.async_set_cache(
-        key=f"team_member_default_budget:{budget_id}",
+        key=AuthObject.team_member_default_budget(budget_id),
         value=LiteLLM_BudgetTable(budget_id=budget_id, model_max_budget=member_budget),
         model_type=LiteLLM_BudgetTable,
     )
     await user_api_key_cache.async_set_cache(
-        key=f"team_id:{team_id}",
+        key=AuthObject.team(team_id),
         value=team_object,
         model_type=LiteLLM_TeamTableCachedObj,
     )

@@ -388,11 +388,11 @@ async def read_request_body(request: Request | None) -> dict:
     except ValidationError as e:
         from fastapi.routing import APIRoute
 
+        from litellm.integrations.lens.proxy.buffering import LensRoute
         from litellm.proxy.auth.auth_utils import (
             request_dispatched_to_pass_through_endpoint,
             request_dispatched_to_provider_pass_through,
         )
-        from litellm.proxy.lens.buffering import LensRoute
 
         route: Final[object] = request.scope.get("route")
         if (
