@@ -2,15 +2,18 @@
 //! then runs it through [`litellm_router_core::Router::call`], where the core picks a deployment,
 //! retries and falls back, and each attempt runs the request's own [`RouteAttempt`]. Every other
 //! hostcall the core makes is answered by the [`Host`] the gateway was built with. The route's
-//! typed outcome comes back with the routing facts, and the route renders it once.
+//! typed outcome comes back with the routing facts, and the route renders it once. A served
+//! stream is held until it sends content, so one the provider fails before that is answered by
+//! a retry or a fallback instead.
 
 use std::{future::Future, time::Duration};
 
+use futures_util::{StreamExt, stream};
 use litellm_gateway_auth::{AccessRequest, AuthenticatedRequest, Permissions};
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
-    Attempt, AttemptError, AttemptFailure, CallError, Deployment, FailureKind, Op, RouterHost,
-    RouterRequest, RouterResponse, Served, resolve,
+    Attempt, AttemptError, AttemptFailure, CallError, Deployment, FailureKind, Op, Router,
+    RouterHost, RouterRequest, RouterResponse, Served, call::Unanswered, resolve,
 };
 use litellm_router_types::Spelled;
 use serde_json::{Map, Value};
@@ -18,7 +21,14 @@ use serde_json::{Map, Value};
 use crate::{
     Error, Gateway,
     error::{Ended, NoDeployments},
+    headers::Routing,
+    stream_event::Read,
+    stream_hold::{self, Cause, Chunks, Held},
+    stream_outcome,
 };
+
+/// The chunks of a route's stream.
+pub type RouteChunks = Chunks<litellm_host_http::Error<InferenceError>>;
 
 /// The host the routes are served through. It answers router-core's hostcalls for one call, and
 /// the gateway crate attaches the native one.
@@ -45,6 +55,14 @@ pub trait RouteAttempt: Send + Sync {
         &self,
         attempt: &Attempt,
     ) -> impl Future<Output = Result<Served<Self::Outcome>, Error>> + Send;
+
+    /// The stream of a served outcome and the reader of its format, for a route whose stream
+    /// another attempt may answer in place of while it has sent no content. `None` for a
+    /// complete answer, and for a route whose streams are never taken over.
+    fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Read)> {
+        let _ = outcome;
+        None
+    }
 }
 
 /// The litellm model of the first deployment the request's name resolves to for its caller,
@@ -190,7 +208,21 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
     })?;
     authorize(identity, model, first).await?;
     let host = gateway.host.router_host(gateway, identity, route);
-    let ended = match gateway.router.call(&host, op, request).await {
+    let ended = gateway
+        .router
+        .call(&host, op.clone(), request.clone())
+        .await;
+    let routed = answered(gateway, path, ended).await?;
+    taken_over_while_held::<A, _>(&gateway.router, &host, &op, &request, routed).await
+}
+
+/// How a call the router ran ended, as its route answers it.
+async fn answered<H: Host, O>(
+    gateway: &Gateway<H>,
+    path: &'static str,
+    ended: Result<RouterResponse<O>, Box<CallError<Error>>>,
+) -> Result<RouterResponse<O>, Ended> {
+    let ended = match ended {
         Ok(routed) => return Ok(routed),
         Err(ended) => ended,
     };
@@ -200,7 +232,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
             ..
         } => Ended {
             error: Box::new(raised.failure),
-            deployment_id: raised.deployment_id,
+            routing: raised.deployment_id.as_deref().map(Routing::failed_on),
         },
         CallError {
             error: litellm_router_core::Error::UnknownModel { model },
@@ -212,6 +244,91 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
         } => no_deployments(gateway, model).await.into(),
         CallError { error, .. } => Error::Routing(error).into(),
     })
+}
+
+/// `routed`, or the answer of the attempt that took its stream over (`wrap_anthropic_stream`).
+/// A stream is held while it has sent no content and the core says a retry or a fallback could
+/// still answer in its place, and the stream that answers is held the same way. A stream the
+/// provider fails there ends one of three ways:
+///
+/// - the core lets an attempt take it over: the stream is closed and the take-over runs, and
+///   when that serves nothing the call ends on an error
+/// - no attempt may answer and the provider sent its error as an event: the stream goes out as
+///   the provider sent it
+/// - no attempt may answer and the stream broke: the call ends on that failure, since nothing
+///   reached the client yet
+///
+/// A call that ends on an error carries the routing headers of the stream that failed.
+async fn taken_over_while_held<A, RH>(
+    router: &Router,
+    host: &RH,
+    op: &Op,
+    request: &RouterRequest,
+    routed: RouterResponse<A::Outcome>,
+) -> Result<RouterResponse<A::Outcome>, Ended>
+where
+    A: RouteAttempt,
+    RH: RouterHost<Response = A::Outcome, Failure = Error>,
+{
+    let mut routed = routed;
+    loop {
+        let Some((chunks, read)) = A::held(&mut routed.output.response) else {
+            return Ok(routed);
+        };
+        if !router.may_take_over(request, &routed.origin) {
+            return Ok(routed);
+        }
+        let unsent = std::mem::replace(chunks, stream::empty().boxed());
+        let failed = match stream_hold::hold(unsent, read, stream_hold::HELD).await {
+            Held::Committed(sent) => {
+                *chunks = sent;
+                return Ok(routed);
+            }
+            Held::Failed(failed) => failed,
+        };
+        let take_over = router.take_over_stream(request, &routed.origin, &failure(&failed.cause));
+        if take_over.is_none() && matches!(failed.cause, Cause::ErrorEvent { .. }) {
+            *chunks = failed.replayed();
+            return Ok(routed);
+        }
+        // Python closes the attempt a take-over supersedes before the take-over runs.
+        let own = ended_on(failed.closed());
+        let routing = Some(Routing::served(&routed));
+        let answered = match take_over {
+            Some(take_over) => take_over.run(host, op.clone()).await,
+            None => Err(Unanswered { raised: None }),
+        };
+        match answered {
+            Ok(answer) => routed = answer,
+            Err(Unanswered { raised }) => {
+                return Err(Ended {
+                    error: Box::new(raised.unwrap_or(own)),
+                    routing,
+                });
+            }
+        }
+    }
+}
+
+/// How a held stream failed, as router-core reads it to decide what may take the stream over.
+fn failure(cause: &Cause<litellm_host_http::Error<InferenceError>>) -> AttemptError {
+    match cause {
+        Cause::ErrorEvent { status, answer, .. } => {
+            AttemptError::from_provider(*status, answer, None)
+        }
+        Cause::Broke(error) => stream_outcome::broke(error),
+    }
+}
+
+/// How a held stream failed, as the error its call ends on when no attempt answers in its place
+/// and none raised an error of its own (`_raise_stream_failure`).
+fn ended_on(cause: Cause<litellm_host_http::Error<InferenceError>>) -> Error {
+    match cause {
+        Cause::ErrorEvent { status, answer, .. } => {
+            Error::Route(litellm_http::Error::upstream(status, answer).into())
+        }
+        Cause::Broke(error) => error.into(),
+    }
 }
 
 /// `async_raise_no_deployment_exception`: when `model`'s deployments can be tried again, and
@@ -366,6 +483,171 @@ mod tests {
         assert_eq!(
             timeout(&attempt(params, router_timeout), streamed),
             expected.map(Duration::from_secs)
+        );
+    }
+
+    const START: &str =
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n";
+    const OVERLOADED: &str = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n";
+
+    /// A route whose every stream fails before content, with an overloaded error or by breaking.
+    /// Each run notes how many of the streams served before it were still open.
+    #[derive(Default)]
+    struct Failing {
+        breaks: bool,
+        open: Arc<()>,
+        open_at_each_run: parking_lot::Mutex<Vec<usize>>,
+    }
+
+    impl RouteAttempt for Failing {
+        type Outcome = RouteChunks;
+
+        async fn run(&self, _attempt: &Attempt) -> Result<Served<RouteChunks>, Error> {
+            self.open_at_each_run
+                .lock()
+                .push(Arc::strong_count(&self.open) - 1);
+            let open = self.open.clone();
+            let failure = if self.breaks {
+                Err(litellm_host_http::Error::Protocol)
+            } else {
+                Ok(OVERLOADED)
+            };
+            let sent = stream::iter([Ok(START), failure]).map(move |event| {
+                let _open = &open;
+                event.map(|event| bytes::Bytes::from_static(event.as_bytes()))
+            });
+            Ok(Served {
+                deferred: true,
+                ..Served::new(litellm_framer::sse::blocks(sent).boxed(), 0)
+            })
+        }
+
+        fn held(outcome: &mut RouteChunks) -> Option<(&mut RouteChunks, Read)> {
+            Some((outcome, crate::messages::read_event))
+        }
+    }
+
+    struct RouteHost<'a> {
+        route: &'a Failing,
+        cache: litellm_router_core::InMemoryRouterCache,
+    }
+
+    impl RouterHost for RouteHost<'_> {
+        type Response = RouteChunks;
+        type Failure = Error;
+        type Cache = litellm_router_core::InMemoryRouterCache;
+
+        async fn attempt(
+            &self,
+            attempt: &Attempt,
+        ) -> Result<Served<RouteChunks>, AttemptFailure<Error>> {
+            self.route
+                .run(attempt)
+                .await
+                .map_err(|error| attempt_failure(attempt, error))
+        }
+
+        async fn select(
+            &self,
+            _stage: &litellm_router_core::SelectStage,
+            _ctx: &litellm_router_core::RoutingContext<'_>,
+            candidates: Vec<Arc<Deployment>>,
+        ) -> Result<Vec<Arc<Deployment>>, litellm_router_core::Error> {
+            Ok(candidates)
+        }
+
+        async fn allow_fallback(&self, _target: &str) -> Result<bool, AttemptError> {
+            Ok(true)
+        }
+
+        fn cache(&self) -> &Self::Cache {
+            &self.cache
+        }
+
+        async fn sleep(&self, _duration: Duration) {}
+
+        fn observe(&self, _event: &litellm_router_core::RouterEvent) {}
+    }
+
+    /// A router of one deployment of `primary`, under `retry_policy` and `num_retries`.
+    fn lone_primary(retry_policy: Value, num_retries: u32) -> Router {
+        let config = json!({
+            "model_list": [{
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/test-model"},
+                "model_info": {"id": "d1"},
+            }],
+            "retry_policy": retry_policy,
+        });
+        Router::builder(
+            serde_json::from_value(config).unwrap(),
+            serde_json::from_value(json!({"num_retries": num_retries})).unwrap(),
+        )
+        .build()
+        .unwrap()
+    }
+
+    /// How a stream of `route` that `router` served for `primary` was answered once it failed
+    /// before content.
+    async fn answered_after_failing(
+        router: &Router,
+        route: &Failing,
+    ) -> Result<RouterResponse<RouteChunks>, Ended> {
+        let host = RouteHost {
+            route,
+            cache: litellm_router_core::InMemoryRouterCache::default(),
+        };
+        let request = RouterRequest {
+            model: "primary".to_owned(),
+            ..RouterRequest::default()
+        };
+        let op = Op::ANTHROPIC_MESSAGES;
+        let first = router
+            .call(&host, op.clone(), request.clone())
+            .await
+            .unwrap();
+        taken_over_while_held::<Failing, _>(router, &host, &op, &request, first).await
+    }
+
+    /// Python closes the attempt a take-over supersedes before the take-over runs, so a retry
+    /// never runs while the stream it replaces still holds its connection.
+    #[tokio::test]
+    async fn a_failed_stream_is_closed_before_the_attempt_that_takes_it_over_runs() {
+        let router = lone_primary(json!(null), 2);
+        let route = Failing::default();
+
+        let last = answered_after_failing(&router, &route).await.unwrap();
+
+        assert_eq!(
+            (
+                last.attempted_retries,
+                route.open_at_each_run.lock().as_slice()
+            ),
+            (2, [0, 0, 0].as_slice())
+        );
+    }
+
+    /// The stream is held because a rate limit could still be retried, and a break is not one.
+    /// Nothing reached the client yet, so it hears the failure and not a stream that ends early.
+    #[tokio::test]
+    async fn a_stream_that_breaks_before_content_ends_the_call_when_no_attempt_may_answer() {
+        let router = lone_primary(json!({"RateLimitErrorRetries": 2}), 0);
+        let route = Failing {
+            breaks: true,
+            ..Failing::default()
+        };
+
+        let ended = answered_after_failing(&router, &route).await;
+
+        assert_eq!(
+            (
+                ended.err().map(|ended| ended.error.status()),
+                route.open_at_each_run.lock().as_slice()
+            ),
+            (
+                Some(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+                [0].as_slice()
+            )
         );
     }
 }

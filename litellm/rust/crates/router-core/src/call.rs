@@ -32,7 +32,7 @@ use crate::{
 
 mod stream;
 
-pub use self::stream::{StreamOrigin, StreamPolicy};
+pub use self::stream::{StreamOrigin, StreamPolicy, TakeOver, Unanswered};
 
 /// `INITIAL_RETRY_DELAY`, `MAX_RETRY_DELAY` and `JITTER` in `litellm/constants.py`.
 const INITIAL_RETRY_DELAY: f64 = 0.5;
@@ -54,6 +54,9 @@ pub struct RouterResponse<R> {
     /// when the first attempt succeeded.
     pub max_retries: Option<u32>,
     pub attempted_fallbacks: u32,
+    /// Where a stream this response carries came from, which the take-over of that stream
+    /// starts from ([`Router::take_over_stream`]).
+    pub origin: StreamOrigin,
 }
 
 /// A failed attempt with the deployment it ran on, when one was picked.
@@ -98,7 +101,7 @@ struct FallbackChain {
 
 /// What one level of the chain serves: a group, or the same group at a later `order`, with the
 /// request params the chain's dict targets merged so far (`kwargs.update(target)`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct Target {
     group: String,
     order: Option<i64>,
@@ -1395,6 +1398,15 @@ impl<H: RouterHost> Call<'_, H> {
                     attempted_retries: retry,
                     max_retries: None,
                     attempted_fallbacks: at.depth,
+                    origin: StreamOrigin::of(
+                        Target {
+                            routed,
+                            ..target.clone()
+                        },
+                        at,
+                        Some(deployment.id.clone()),
+                        retry,
+                    ),
                 })
             }
             Err(failure) => {
@@ -1553,6 +1565,15 @@ impl<H: RouterHost> Call<'_, H> {
                 attempted_retries: retry,
                 max_retries: None,
                 attempted_fallbacks: at.depth,
+                origin: StreamOrigin::of(
+                    Target {
+                        routed: None,
+                        ..target.clone()
+                    },
+                    at,
+                    None,
+                    retry,
+                ),
             }),
             Err(failure) => Err(self.failed(failure, None).into()),
         }
