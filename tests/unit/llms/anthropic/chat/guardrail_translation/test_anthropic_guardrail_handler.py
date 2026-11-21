@@ -3268,7 +3268,7 @@ class ToolsCopyingGuardrail(CustomGuardrail):
 
 
 class ToolDescriptionMaskingGuardrail(CustomGuardrail):
-    def __init__(self, tool_name: str, in_place: bool):
+    def __init__(self, tool_name: str, in_place: bool) -> None:
         super().__init__(guardrail_name="test")
         self._tool_name: Final = tool_name
         self._in_place: Final = in_place
@@ -3280,8 +3280,8 @@ class ToolDescriptionMaskingGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
-        tools = inputs.get("tools") or []
-        target = tools if self._in_place else json.loads(json.dumps(tools))
+        tools: Final = inputs.get("tools") or []
+        target: Final = tools if self._in_place else json.loads(json.dumps(tools))
         for tool in target:
             if tool.get("function", {}).get("name") == self._tool_name:
                 tool["function"]["description"] = "[MASKED]"
@@ -3289,7 +3289,7 @@ class ToolDescriptionMaskingGuardrail(CustomGuardrail):
 
 
 class ToolDroppingGuardrail(CustomGuardrail):
-    def __init__(self, tool_name: str, reverses_request_tools: bool = False):
+    def __init__(self, tool_name: str, reverses_request_tools: bool = False) -> None:
         super().__init__(guardrail_name="test")
         self._tool_name: Final = tool_name
         self._reverses_request_tools: Final = reverses_request_tools
@@ -3303,7 +3303,9 @@ class ToolDroppingGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         if self._reverses_request_tools:
             request_data["tools"].reverse()
-        kept = [tool for tool in inputs.get("tools") or [] if tool.get("function", {}).get("name") != self._tool_name]
+        kept: Final = [
+            tool for tool in inputs.get("tools") or [] if tool.get("function", {}).get("name") != self._tool_name
+        ]
         return {**inputs, "tools": kept}
 
 
@@ -3319,7 +3321,7 @@ class AllToolsRemovingGuardrail(CustomGuardrail):
 
 
 class ReturnedToolsRewritingGuardrail(CustomGuardrail):
-    def __init__(self, rewrite: Callable[[list], list]):
+    def __init__(self, rewrite: Callable[[list[object]], list[object]]) -> None:
         super().__init__(guardrail_name="test")
         self._rewrite: Final = rewrite
 
@@ -3355,7 +3357,7 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
     }
     _GOOGLE_MAPS: Final = {"googleMaps": {"enable_widget": True}}
 
-    def _sent_tools(self) -> list:
+    def _sent_tools(self) -> list[object]:
         return json.loads(
             json.dumps(
                 [
@@ -3370,14 +3372,14 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
             )
         )
 
-    async def _tools_after(self, guardrail: CustomGuardrail, sent_tools: list | None = None) -> list:
-        data = {
+    async def _tools_after(self, guardrail: CustomGuardrail, sent_tools: list[object] | None = None) -> list[object]:
+        data: Final[dict[str, object]] = {
             "model": "claude-haiku-4-5",
             "messages": [{"role": "user", "content": "search the docs"}],
             "tools": self._sent_tools() if sent_tools is None else sent_tools,
         }
         await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
-        return data["tools"]
+        return cast(list[object], data["tools"])
 
     @pytest.mark.parametrize(
         "guardrail",
@@ -3389,29 +3391,29 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
 
     @pytest.mark.parametrize("in_place", [True, False], ids=["edited-in-place", "edited-on-a-copy"])
     async def test_only_the_tool_the_guardrail_changed_is_rewritten(self, in_place):
-        tools = await self._tools_after(ToolDescriptionMaskingGuardrail(tool_name="Read", in_place=in_place))
+        tools: Final = await self._tools_after(ToolDescriptionMaskingGuardrail(tool_name="Read", in_place=in_place))
 
         assert tools[:-1] == self._sent_tools()[1:]
         assert (tools[-1]["name"], tools[-1]["description"]) == ("Read", "[MASKED]")
         assert tools[-1]["input_schema"] == self._READ["input_schema"]
 
     async def test_a_tool_the_guardrail_removed_stays_removed_and_the_rest_are_not_rewritten(self):
-        tools = await self._tools_after(ToolDroppingGuardrail(tool_name="Write"))
+        tools: Final = await self._tools_after(ToolDroppingGuardrail(tool_name="Write"))
 
         assert tools == self._sent_tools()[:-1]
 
     async def test_a_removed_tool_stays_removed_when_the_guardrail_reorders_the_request_tools(self):
-        tools = await self._tools_after(ToolDroppingGuardrail(tool_name="Write", reverses_request_tools=True))
+        tools: Final = await self._tools_after(ToolDroppingGuardrail(tool_name="Write", reverses_request_tools=True))
 
         assert tools == self._sent_tools()[:-1]
 
     async def test_a_guardrail_removing_every_tool_it_saw_leaves_only_the_tools_it_never_saw(self):
-        tools = await self._tools_after(AllToolsRemovingGuardrail(guardrail_name="test"))
+        tools: Final = await self._tools_after(AllToolsRemovingGuardrail(guardrail_name="test"))
 
         assert tools == [self._WEB_SEARCH, self._GOOGLE_MAPS]
 
     async def test_a_tool_the_guardrail_added_joins_the_tools_that_are_not_rewritten(self):
-        tools = await self._tools_after(ToolAppendingGuardrail(guardrail_name="test"))
+        tools: Final = await self._tools_after(ToolAppendingGuardrail(guardrail_name="test"))
 
         assert tools[-1]["name"] == "injected_tool"
         assert tools[:-1] == self._sent_tools()
@@ -3421,11 +3423,35 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
             "type": "function",
             "function": {"name": "Grep", "description": "Searches files", "parameters": self._READ["input_schema"]},
         }
-        tools = await self._tools_after(MockPassThroughGuardrail(guardrail_name="test"), [openai_format, self._READ])
+        tools: Final = await self._tools_after(
+            MockPassThroughGuardrail(guardrail_name="test"), [openai_format, self._READ]
+        )
 
         assert tools[0] == self._READ
         assert (tools[1]["name"], tools[1]["input_schema"]) == ("Grep", self._READ["input_schema"])
         assert "function" not in tools[1]
+
+    async def test_one_returned_tool_keeps_only_the_last_of_two_tools_the_guardrail_cannot_tell_apart(self):
+        first, last = (
+            {**self._READ, "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_7aeb"},
+            {**self._READ, "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_c034"},
+        )
+        assert truncate_tool_name(first["name"]) == truncate_tool_name(last["name"])
+
+        tools: Final = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(lambda returned: returned[-1:]),
+            json.loads(json.dumps([first, self._WEB_SEARCH, last])),
+        )
+
+        assert tools == [self._WEB_SEARCH, last]
+
+    async def test_a_tool_the_guardrail_returns_twice_reaches_the_provider_twice(self):
+        tools: Final = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(lambda returned: [*returned, returned[0]]),
+            json.loads(json.dumps([self._READ, self._DEFERRED])),
+        )
+
+        assert tools == [self._READ, self._DEFERRED, {**self._READ, "type": "custom"}]
 
 
 class TestAnthropicMessagesHandlerStreamingScanKey:
@@ -3914,25 +3940,3 @@ def test_request_sent_to_a_model_never_carries_tool_failure_marker() -> None:
         anthropic_message_request=FAILED_TOOL_RESULT_REQUEST  # pyright: ignore[reportArgumentType]  # a JSON request in the Anthropic shape
     )
     assert "is_error" not in json.dumps(request["messages"], default=str)
-
-    async def test_one_returned_tool_keeps_only_the_last_of_two_tools_the_guardrail_cannot_tell_apart(self):
-        first, last = (
-            {**self._READ, "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_7aeb"},
-            {**self._READ, "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_c034"},
-        )
-        assert truncate_tool_name(first["name"]) == truncate_tool_name(last["name"])
-
-        tools = await self._tools_after(
-            ReturnedToolsRewritingGuardrail(lambda returned: returned[-1:]),
-            json.loads(json.dumps([first, self._WEB_SEARCH, last])),
-        )
-
-        assert tools == [self._WEB_SEARCH, last]
-
-    async def test_a_tool_the_guardrail_returns_twice_reaches_the_provider_twice(self):
-        tools = await self._tools_after(
-            ReturnedToolsRewritingGuardrail(lambda returned: [*returned, returned[0]]),
-            json.loads(json.dumps([self._READ, self._DEFERRED])),
-        )
-
-        assert tools == [self._READ, self._DEFERRED, {**self._READ, "type": "custom"}]
