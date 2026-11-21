@@ -85,4 +85,3 @@ BEGIN
         ALTER TABLE "LiteLLM_AppTable" ADD CONSTRAINT "LiteLLM_AppTable_app_group_id_fkey" FOREIGN KEY ("app_group_id") REFERENCES "LiteLLM_AppGroupTable"("app_group_id") ON DELETE RESTRICT ON UPDATE CASCADE;
     END IF;
 END $$;
-

@@ -2,9 +2,9 @@ import asyncio
 from collections.abc import Mapping
 from typing import Final
 
-from litellm.proxy.common_utils.user_api_key_cache import app_cache_key, app_customer_cache_key
 from litellm.proxy.management_helpers.apps import AppStore, app_budget_selection
 from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope, PrismaRecord
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.types.proxy.management_endpoints.app_groups import (
     AppGroup,
@@ -38,7 +38,7 @@ class AppGroupStore:
         async def read() -> PrismaRecord | None:
             return await self.groups.find_unique(where={"app_group_id": app_group_id})
 
-        row: Final = await self.apps.cached_row(app_cache_key("app_group", app_group_id), read)
+        row: Final = await self.apps.cached_row(AuthObject.customer_app("app_group", app_group_id).key, read)
         return (
             await self.response(AppGroup.model_validate(row.values))
             if row.values is not None
@@ -103,7 +103,7 @@ class AppGroupStore:
         if row is None:
             return AppFailure(404, "App group not found.")
         updated: Final = await self.response(row)
-        self.apps.customers.auth_cache_keys += (app_cache_key("app_group", app_group_id),)
+        self.apps.customers.auth_cache_keys += (AuthObject.customer_app("app_group", app_group_id).key,)
         await self.apps.customers.delete_released_budget(current.budget_id, updated.budget_id)
         return updated
 
@@ -124,7 +124,7 @@ class AppGroupStore:
             )
 
         row: Final = await self.apps.cached_row(
-            app_customer_cache_key("group_organization", app_group_id, customer_org_id), read
+            AuthObject.customer_app_association("group_organization", app_group_id, customer_org_id).key, read
         )
         return await self.organization_response(AppGroupOrganization.model_validate(row.values))
 
@@ -157,7 +157,7 @@ class AppGroupStore:
         if row is None:
             return AppFailure(404, "App group customer organization not found.")
         self.apps.customers.auth_cache_keys += (
-            app_customer_cache_key("group_organization", app_group_id, customer_org_id),
+            AuthObject.customer_app_association("group_organization", app_group_id, customer_org_id).key,
         )
         await self.apps.customers.delete_released_budget(current.budget_id, selected)
         return await self.organization_response(row)

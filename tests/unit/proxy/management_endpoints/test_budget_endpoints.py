@@ -16,6 +16,7 @@ from prisma.builder import QueryBuilder
 import litellm.proxy.proxy_server as ps
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.timezone_utils import get_budget_window_reset_fields
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import app
 
@@ -885,3 +886,44 @@ async def test_delete_missing_budget_preserves_prisma_missing_record_error() -> 
     )
     with pytest.raises(RecordNotFoundError):
         await delete_unattached_customer_budget(table, "missing")
+
+
+def test_new_customer_window_start_is_set_by_the_server(client_and_mocks: tuple[TestClient, MagicMock, MagicMock]) -> None:
+    client, _, _ = client_and_mocks
+    response: Final = client.post("/budget/new", json={
+        "budget_id": "windows",
+        "budget_limits": [{"budget_duration": "1mo", "max_budget": 10, "window_start": "2000-01-01T00:00:00Z"}],
+    })
+    assert response.status_code == 200, response.text
+    (window,) = response.json()["budget_limits"]
+    expected: Final = get_budget_window_reset_fields("1mo")
+    assert datetime.fromisoformat(window["window_start"]) == datetime.fromisoformat(expected["window_start"])
+    assert datetime.fromisoformat(window["reset_at"]) == datetime.fromisoformat(expected["reset_at"])
+
+
+def test_budget_update_keeps_the_stored_window_start(client_and_mocks: tuple[TestClient, MagicMock, MagicMock]) -> None:
+    client, database, table = client_and_mocks
+    stored: Final = [{
+        "budget_duration": "1mo", "max_budget": 10.0,
+        "reset_at": "2030-02-01T00:00:00+00:00", "window_start": "2030-01-01T03:00:00+00:00",
+    }]
+    table.find_unique.return_value = types.SimpleNamespace(budget_limits=stored)
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": stored}])
+    response: Final = client.post("/budget/update", json={"budget_id": "shared", "budget_limits": [
+        {"budget_duration": "1mo", "max_budget": 20.0, "window_start": "2000-01-01T00:00:00Z"},
+    ]})
+    assert response.status_code == 200, response.text
+    assert response.json()["budget_limits"] == [{**stored[0], "max_budget": 20.0}]
+
+
+def test_admin_set_customer_reset_keeps_a_derived_window_start(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+) -> None:
+    client, _, _ = client_and_mocks
+    window: Final = {"budget_duration": "1mo", "max_budget": 10, "reset_at": "2030-02-01T00:00:00+00:00"}
+    response: Final = client.post(
+        "/budget/new", json={"budget_id": "windows", "budget_limits": [{**window, "window_start": "2000-01-01T00:00:00Z"}]}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["budget_limits"] == [window]

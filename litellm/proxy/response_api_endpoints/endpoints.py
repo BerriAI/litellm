@@ -2740,6 +2740,12 @@ async def _bill_rejected_frame(
                 )
             except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
                 verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
+    from litellm.proxy.hooks.rust_spend_logger import bill_failure_in_rust
+
+    try:
+        await bill_failure_in_rust(user_api_key_dict, exception, frame_data)
+    except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
+        verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
 
 
 def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
