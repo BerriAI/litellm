@@ -278,8 +278,12 @@ _MALFORMED_FINISH_REASONS: Final[frozenset[GeminiFinishReason]] = frozenset(
 _OUTPUT_FIELDS: Final = ("content", "tool_calls", "function_call", "images", "audio")
 
 
+_CHOICE_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
 def _native_finish_reason(choice: object) -> object:
-    return (getattr(choice, "provider_specific_fields", None) or {}).get("native_finish_reason")
+    fields: Final[object] = getattr(choice, "provider_specific_fields", None)
+    return _CHOICE_FIELDS.validate_python(fields).get("native_finish_reason") if isinstance(fields, dict) else None
 
 
 def _is_malformed_without_output(choice: object) -> bool:
