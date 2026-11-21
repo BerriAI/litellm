@@ -49,6 +49,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def supports_diagnostics(self) -> bool:
+        return False
+
     def transform_anthropic_messages_request(
         self,
         model: str,
