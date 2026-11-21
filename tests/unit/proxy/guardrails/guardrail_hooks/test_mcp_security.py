@@ -6,6 +6,8 @@ and allows requests with only registered servers. Covers both /chat/completions
 and /responses API paths (same pre_call_hook logic, different call_type).
 """
 
+import io
+import json
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +22,11 @@ from litellm.proxy.guardrails.guardrail_hooks.mcp_security.mcp_security_guardrai
     MCPSecurityGuardrail,
 )
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+from litellm.proxy.openai_files_endpoints.batch_guardrails import (
+    BatchScanResult,
+    RecordDropped,
+    scan_batch_input_file,
+)
 from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -247,3 +254,127 @@ async def test_allows_saved_toolset_by_name_and_blocks_unknown_name(guardrail, c
     ):
         await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
     assert exc.value.detail["unregistered_servers"] == ["evil_server"]
+
+
+def _prisma_whose_toolset_read_fails() -> MagicMock:
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcptoolsettable.find_first = AsyncMock(side_effect=RuntimeError("toolset table unavailable"))
+    return prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+async def test_blocks_the_name_with_the_policy_result_when_the_toolset_read_fails(guardrail, call_type):
+    data: Final = {
+        "tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/research"}],
+        "guardrails": ["test-mcp-security"],
+    }
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _prisma_whose_toolset_read_fails()),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
+    assert exc.value.status_code == 400
+    assert exc.value.detail["unregistered_servers"] == ["research"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+async def test_alert_mode_lets_the_request_through_when_the_toolset_read_fails(call_type, caplog):
+    alerting: Final = MCPSecurityGuardrail(
+        guardrail_name="test-mcp-security",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+        on_violation="alert",
+    )
+    data: Final = {
+        "tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/research"}],
+        "guardrails": ["test-mcp-security"],
+    }
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _prisma_whose_toolset_read_fails()),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+        caplog.at_level("WARNING"),
+    ):
+        result: Final = await alerting.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
+    assert result == data
+    assert any("unregistered MCP server(s): research" in record.getMessage() for record in caplog.records)
+
+
+def _batch_record_naming(server: str) -> io.BytesIO:
+    record: Final = {
+        "custom_id": "row-mcp",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "us.amazon.nova-2-lite-v1:0",
+            "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+            "tools": [{"type": "mcp", "server_url": f"litellm_proxy/mcp/{server}"}],
+        },
+    }
+    return io.BytesIO(json.dumps(record).encode())
+
+
+def _proxy_logging_running(guardrail: MCPSecurityGuardrail) -> MagicMock:
+    async def pre_call_hook(
+        user_api_key_dict: UserAPIKeyAuth, data: dict, call_type: str, guardrails_only: bool = False
+    ) -> Exception | str | dict | None:
+        return await guardrail.async_pre_call_hook(user_api_key_dict, MagicMock(), data, call_type)
+
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = pre_call_hook
+    return proxy_logging
+
+
+def _prisma_without_toolsets() -> MagicMock:
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcptoolsettable.find_first = AsyncMock(return_value=None)
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_a_batch_record_naming_an_unknown_server_is_dropped_while_the_toolset_read_works(guardrail):
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _prisma_without_toolsets()),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+    ):
+        result: Final = await scan_batch_input_file(
+            file_source=_batch_record_naming("research"),
+            request_metadata={},
+            user_api_key_dict=UserAPIKeyAuth(),
+            proxy_logging_obj=_proxy_logging_running(guardrail),
+        )
+    assert isinstance(result, BatchScanResult)
+    assert result.changes == (RecordDropped(line_number=1, custom_id="row-mcp", guardrail=None),)
+
+
+@pytest.mark.asyncio
+async def test_a_batch_upload_is_refused_instead_of_dropping_a_record_when_the_toolset_read_fails(guardrail):
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _prisma_whose_toolset_read_fails()),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await scan_batch_input_file(
+            file_source=_batch_record_naming("research"),
+            request_metadata={},
+            user_api_key_dict=UserAPIKeyAuth(),
+            proxy_logging_obj=_proxy_logging_running(guardrail),
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail["unregistered_servers"] == ["research"]
