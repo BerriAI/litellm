@@ -19,6 +19,10 @@ pub enum Error {
     #[error("operation is not permitted")]
     #[strum(serialize = "forbidden")]
     Forbidden,
+    /// The credential is held, with something this server does not serve.
+    #[error("credential is not served by this server")]
+    #[strum(serialize = "not_native")]
+    NotNative,
     #[error("authentication service unavailable")]
     #[strum(serialize = "unavailable")]
     Unavailable(#[source] Source),
@@ -34,7 +38,7 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::InvalidToken | Self::InvalidApiKey | Self::Expired => StatusCode::UNAUTHORIZED,
-            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::NotNative => StatusCode::FORBIDDEN,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Unconfigured | Self::MissingIdentity => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -42,7 +46,11 @@ impl Error {
 
     pub fn is_denied(&self) -> bool {
         match self {
-            Self::InvalidToken | Self::InvalidApiKey | Self::Expired | Self::Forbidden => true,
+            Self::InvalidToken
+            | Self::InvalidApiKey
+            | Self::Expired
+            | Self::Forbidden
+            | Self::NotNative => true,
             Self::Unavailable(_) | Self::Unconfigured | Self::MissingIdentity => false,
         }
     }
@@ -53,6 +61,7 @@ impl Error {
 impl From<auth_core::Error> for Error {
     fn from(error: auth_core::Error) -> Self {
         match error {
+            auth_core::Error::HostDeclined => Self::NotNative,
             auth_core::Error::HostFailed => Self::Unavailable(Source::new(error)),
             auth_core::Error::Key(KeyDenial::Expired { .. }) => Self::Expired,
             auth_core::Error::Key(
@@ -78,13 +87,13 @@ impl From<auth_core::Error> for Error {
 }
 
 /// An identity the core authenticated and this server serves no request for. Only a missing
-/// master key is the server's own fault.
+/// master key is the server's own fault. The others are held by a host that serves them.
 impl From<NotACaller> for Error {
     fn from(identity: NotACaller) -> Self {
         match identity {
             NotACaller::NoMasterKey => Self::Unconfigured,
             NotACaller::UserAuthRoute | NotACaller::CachedAdmin | NotACaller::Jwt => {
-                Self::InvalidToken
+                Self::NotNative
             }
         }
     }
@@ -129,6 +138,7 @@ mod tests {
 
     #[rstest]
     #[case::a_host_that_failed(auth_core::Error::HostFailed, "unavailable")]
+    #[case::a_key_the_host_does_not_serve(auth_core::Error::HostDeclined, "not_native")]
     #[case::an_expired_key(expired(), "expired")]
     #[case::a_route_for_the_master_key_alone(master_key_only(), "forbidden")]
     #[case::a_feature_the_license_lacks(PremiumRequired::Jwt.into(), "forbidden")]
@@ -145,9 +155,9 @@ mod tests {
 
     #[rstest]
     #[case::no_master_key(NotACaller::NoMasterKey, "unconfigured")]
-    #[case::the_user_auth_route(NotACaller::UserAuthRoute, "invalid_token")]
-    #[case::a_cached_admin_key(NotACaller::CachedAdmin, "invalid_token")]
-    #[case::a_jwt(NotACaller::Jwt, "invalid_token")]
+    #[case::the_user_auth_route(NotACaller::UserAuthRoute, "not_native")]
+    #[case::a_cached_admin_key(NotACaller::CachedAdmin, "not_native")]
+    #[case::a_jwt(NotACaller::Jwt, "not_native")]
     fn an_identity_no_host_serves_is_refused(#[case] identity: NotACaller, #[case] answered: &str) {
         assert_eq!(<&'static str>::from(Error::from(identity)), answered);
     }
