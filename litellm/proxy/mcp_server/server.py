@@ -684,7 +684,7 @@ if MCP_AVAILABLE:
             return None
         entry: Final = (
             None
-            if gated_events_method(ctx.method, ctx.protocol_version, _mcp_proxy_mode.get())
+            if gated_events_method(ctx, _mcp_proxy_mode.get())
             else server.get_request_handler(ctx.method)
         )
         if entry is None:

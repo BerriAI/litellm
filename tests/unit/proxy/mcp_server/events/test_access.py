@@ -52,13 +52,13 @@ def test_an_anonymous_caller_has_no_principal() -> None:
         ((), None),
         ((None, _level(None)), None),
         ((_level({"other": ["x"]}),), None),
-        ((_level({"srv": ["a", "b"]}),), frozenset({"a", "b"})),
-        ((_level({"srv": ["a", "b"]}), _level({"srv": ["b", "c"]})), frozenset({"b"})),
-        ((_level({"srv": ["a"]}), _level({"other": ["z"]})), frozenset({"a"})),
-        ((_level({"srv": []}),), frozenset()),
+        ((_level({"srv": ["a", "b"]}),), (frozenset({"a", "b"}),)),
+        ((_level({"srv": ["a", "b"]}), _level({"srv": ["b", "c"]})), (frozenset({"a", "b"}), frozenset({"b", "c"}))),
+        ((_level({"srv": ["a"]}), _level({"other": ["z"]})), (frozenset({"a"}),)),
+        ((_level({"srv": []}),), (frozenset(),)),
     ),
 )
-def test_event_grants_intersect_across_levels(
+def test_event_grants_keep_every_level_that_restricts_the_server(
     levels: tuple[LiteLLM_ObjectPermissionTable | None, ...], expected: EventGrant
 ) -> None:
     assert intersect_grants(levels, "srv", _identity) == expected
@@ -66,7 +66,17 @@ def test_event_grants_intersect_across_levels(
 
 @pytest.mark.parametrize(
     ("grant", "name", "allowed"),
-    ((None, "a", True), (frozenset({"a"}), "a", True), (frozenset({"a"}), "b", False), (frozenset(), "a", False)),
+    (
+        (None, "a", True),
+        ((frozenset({"a"}),), "a", True),
+        ((frozenset({"a"}),), "b", False),
+        ((frozenset(),), "a", False),
+        ((frozenset({"build.*"}),), "build.failed", True),
+        ((frozenset({"build.*"}),), "deploy.done", False),
+        ((frozenset({"a", "b"}), frozenset({"b", "c"})), "b", True),
+        ((frozenset({"a", "b"}), frozenset({"b", "c"})), "a", False),
+        ((frozenset({"*"}), frozenset({"deploy.*"})), "build.failed", False),
+    ),
 )
 def test_grant_allows(grant: EventGrant, name: str, allowed: bool) -> None:
     assert grant_allows(grant, name) is allowed

@@ -59,7 +59,11 @@ def _server(settings: EventsSettings | None, events_runtime: EventsRuntime | Non
 
 
 async def _call(
-    gateway: Server[object], method: str, params: Mapping[str, object], headers: Mapping[str, str] | None = None
+    gateway: Server[object],
+    method: str,
+    params: Mapping[str, object],
+    headers: Mapping[str, str] | None = None,
+    meta: Mapping[str, object] = META,
 ) -> tuple[int, list[dict[str, object]]]:
     manager: Final = StreamableHTTPSessionManager(gateway, stateless=True)
     async with manager.run(), httpx2.AsyncClient(transport=httpx2.ASGITransport(app=manager.handle_request)) as client:
@@ -71,7 +75,7 @@ async def _call(
                 "Mcp-Method": method,
                 **(headers or {}),
             },
-            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {**params, "_meta": META}},
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {**params, "_meta": meta}},
         )
     text: Final = response.text
     frames: Final = (
@@ -99,6 +103,17 @@ async def test_with_events_off_every_events_method_answers_like_a_server_without
     gated: Final = await _call(_server(EventsSettings(), runtime((server(),))), method, params)
     assert gated == baseline
     assert baseline[1][0]["error"] == {"code": -32601, "message": "Method not found", "data": method}
+
+
+@pytest.mark.parametrize(("method", "params"), (("events/list", {}), ("events/poll", {"name": "ci-build.failed"})))
+@pytest.mark.asyncio
+async def test_a_client_that_does_not_declare_events_gets_what_a_server_without_them_returns(
+    method: str, params: Mapping[str, object]
+) -> None:
+    undeclared: Final = {**META, "io.modelcontextprotocol/clientCapabilities": {}}
+    baseline: Final = await _call(_server(None, None), method, params, meta=undeclared)
+    served: Final = await _call(_server(SETTINGS, runtime((server(),))), method, params, meta=undeclared)
+    assert served == baseline and baseline[0] == 404
 
 
 @pytest.mark.asyncio
@@ -177,15 +192,29 @@ async def test_discovery_advertises_events_only_when_everything_lines_up(
     assert (extensions == {"io.modelcontextprotocol/events": {}}) is advertised
 
 
+UNDECLARED: Final = {**META, "io.modelcontextprotocol/clientCapabilities": {}}
+
+
 @pytest.mark.parametrize(
-    ("method", "settings", "protocol", "proxy", "gated"),
+    ("method", "settings", "protocol", "proxy", "meta", "gated"),
     (
-        ("events/poll", EventsSettings(), "2026-07-28", False, True),
-        ("events/poll", SETTINGS, "2026-07-28", False, False),
-        ("events/poll", SETTINGS, "2025-11-25", False, True),
-        ("events/poll", SETTINGS, "2026-07-28", True, True),
-        ("tools/list", EventsSettings(), "2026-07-28", False, False),
+        ("events/poll", EventsSettings(), "2026-07-28", False, META, True),
+        ("events/poll", SETTINGS, "2026-07-28", False, META, False),
+        ("events/poll", SETTINGS, "2026-07-28", False, UNDECLARED, True),
+        ("events/list", SETTINGS, "2026-07-28", False, None, True),
+        ("events/poll", SETTINGS, "2025-11-25", False, META, True),
+        ("events/poll", SETTINGS, "2026-07-28", True, META, True),
+        ("tools/list", EventsSettings(), "2026-07-28", False, None, False),
     ),
 )
-def test_gating(method: str, settings: EventsSettings, protocol: str, proxy: bool, gated: bool) -> None:
-    assert gated_events_method(method, protocol, proxy, lambda: settings) is gated
+def test_gating(
+    method: str, settings: EventsSettings, protocol: str, proxy: bool, meta: Mapping[str, object] | None, gated: bool
+) -> None:
+    request: Final = ServerRequestContext(
+        session=None,  # pyright: ignore[reportArgumentType]  # the gate reads only method, version and params
+        lifespan_context=None,
+        protocol_version=protocol,
+        method=method,
+        params={"_meta": meta} if meta is not None else {},
+    )
+    assert gated_events_method(request, proxy, lambda: settings) is gated

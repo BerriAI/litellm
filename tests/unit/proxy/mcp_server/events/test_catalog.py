@@ -65,7 +65,7 @@ def test_webhook_is_offered_only_with_a_public_url_and_an_authenticated_caller(
 async def test_listing_prefixes_names_and_drops_events_the_server_or_caller_cannot_use() -> None:
     servers: Final = (server("srv", "ci", MCPServerEventsConfig(enabled=True, allowed_events=("build.*", "bad.*"))),)
     events: Final = await list_events(
-        context(), SETTINGS, runtime(servers, (BUILD_FAILED, DEPLOY, BAD_HEADER), grant=frozenset({"build.failed"}))
+        context(), SETTINGS, runtime(servers, (BUILD_FAILED, DEPLOY, BAD_HEADER), grant=(frozenset({"build.failed"}),))
     )
     assert [(item.name, item.delivery) for item in events] == [("ci-build.failed", ("poll", "push", "webhook"))]
     assert events[0].input_schema == BUILD_FAILED.input_schema

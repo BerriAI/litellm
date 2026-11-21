@@ -63,12 +63,21 @@ def events_served(settings: EventsSettings, protocol_version: str | None, proxy_
 
 
 def gated_events_method(
-    method: str,
-    protocol_version: str | None,
+    ctx: ServerRequestContext[object, object],
     proxy_mode: bool,
     settings: Callable[[], EventsSettings] = events_settings,
 ) -> bool:
-    return method in EVENT_METHODS and not events_served(settings(), protocol_version, proxy_mode)
+    """An events/* method the gateway answers as unknown: events are off, or this request did not declare them."""
+    if ctx.method not in EVENT_METHODS:
+        return False
+    return not events_served(settings(), ctx.protocol_version, proxy_mode) or not client_declares_events(
+        _request_meta(ctx)
+    )
+
+
+def _request_meta(ctx: ServerRequestContext[object, object]) -> Mapping[str, object] | None:
+    raw: Final = (ctx.params or {}).get("_meta")
+    return raw if isinstance(raw, Mapping) else None
 
 
 def _method_not_found(method: str) -> MCPError:
@@ -77,7 +86,7 @@ def _method_not_found(method: str) -> MCPError:
 
 def events_gate(proxy_mode: Callable[[], bool], settings: Callable[[], EventsSettings] = events_settings) -> Middleware:
     async def gate(ctx: ServerRequestContext[object, object], call_next: CallNext) -> HandlerResult:
-        if gated_events_method(ctx.method, ctx.protocol_version, proxy_mode(), settings):
+        if gated_events_method(ctx, proxy_mode(), settings):
             raise _method_not_found(ctx.method)
         return await call_next(ctx)
 

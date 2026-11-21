@@ -1,3 +1,4 @@
+import fnmatch
 import hashlib
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -7,7 +8,7 @@ from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-EventGrant: TypeAlias = frozenset[str] | None
+EventGrant: TypeAlias = tuple[frozenset[str], ...] | None
 
 
 _TOKEN_HASH: Final = re.compile(r"[0-9a-f]{64}")
@@ -93,7 +94,7 @@ def intersect_grants(
         )
         if entries is not None
     )
-    return restrictions[0].intersection(*restrictions[1:]) if restrictions else None
+    return restrictions or None
 
 
 async def event_grant(
@@ -107,4 +108,7 @@ async def event_grant(
 
 
 def grant_allows(grant: EventGrant, upstream_name: str) -> bool:
-    return grant is None or upstream_name in grant
+    """Every restricting level must list the event, by exact name or glob like a server's allowed_events."""
+    return grant is None or all(
+        any(fnmatch.fnmatchcase(upstream_name, pattern) for pattern in level) for level in grant
+    )

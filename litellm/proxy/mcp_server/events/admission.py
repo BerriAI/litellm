@@ -31,13 +31,20 @@ def caller_key(context: OperationContext) -> str:
     return principal_of(context.user_api_key_auth) or "anonymous"
 
 
+def check_name_header(headers: Mapping[str, str] | None, name: str) -> EventsFailure | None:
+    if headers is None or decode_header_value(headers.get(MCP_NAME_HEADER)) == name:
+        return None
+    return header_mismatch("Mcp-Name")
+
+
 def check_routing_headers(
     headers: Mapping[str, str] | None, name: str, arguments: JsonObject, prepared: PreparedEvent
 ) -> EventsFailure | None:
     if headers is None:
         return None
-    if decode_header_value(headers.get(MCP_NAME_HEADER)) != name:
-        return header_mismatch("Mcp-Name")
+    named: Final = check_name_header(headers, name)
+    if named is not None:
+        return named
     rejection: Final = validate_mcp_param_headers(dict(prepared.descriptor.input_schema), arguments, headers)
     return header_mismatch(rejection.message) if rejection is not None else None
 
@@ -51,6 +58,9 @@ async def admit(
     settings: EventsSettings,
     runtime: EventsRuntime,
 ) -> Result[PreparedEvent, EventsFailure]:
+    misnamed: Final = check_name_header(headers, name)
+    if misnamed is not None:
+        return Error(misnamed)
     prepared: Final = await prepare_event(context, name, runtime)
     if isinstance(prepared, Error):
         return prepared

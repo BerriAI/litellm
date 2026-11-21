@@ -80,3 +80,12 @@ async def test_reauthorization_follows_server_access_and_event_grants(
     prepared: Final = await prepare_event(context(), "ci-build.failed", runtime((server(),)))
     assert isinstance(prepared, Ok)
     assert await still_authorized(context(), prepared.ok, runtime(servers, grant=grant)) is authorized  # pyright: ignore[reportArgumentType]  # servers are MCPServer
+
+
+@pytest.mark.parametrize("name", ("ci-unknown.event", "ci-build.failed"))
+@pytest.mark.asyncio
+async def test_a_wrong_mcp_name_is_a_header_mismatch_even_for_an_unknown_event(name: str) -> None:
+    admitted: Final = await admit(
+        context(), name, ARGS, "poll", {"mcp-name": "something-else"}, SETTINGS, runtime((server(),))
+    )
+    assert isinstance(admitted, Error) and admitted.error.code is EventsErrorCode.HEADER_MISMATCH
