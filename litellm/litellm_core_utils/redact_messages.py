@@ -21,6 +21,7 @@ from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
@@ -195,8 +196,29 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
     return {
         **fields,
         **({"reasoning_content": REDACTED_BY_LITELLM} if fields.get("reasoning_content") is not None else {}),
-        **{key: None for key in ("thinking_blocks", "reasoningContentBlocks", "citations") if key in fields},
+        **{
+            key: None
+            for key in ("thinking_blocks", "reasoningContentBlocks", "citations", "tool_results")
+            if key in fields
+        },
+        **(
+            {"server_tool_calls": _redacted_tool_call_dicts(fields["server_tool_calls"])}
+            if "server_tool_calls" in fields
+            else {}
+        ),
     }
+
+
+def _redacted_tool_call_dict(call: object) -> object:
+    if (mapping := _as_mapping(call)) is None or (function := _as_mapping(mapping.get("function"))) is None:
+        return call
+    return {**mapping, "function": {**function, "arguments": REDACTED_BY_LITELLM}}
+
+
+def _redacted_tool_call_dicts(calls: object) -> object:
+    if (call_list := as_object_list(calls)) is None:
+        return calls
+    return [_redacted_tool_call_dict(call) for call in call_list]
 
 
 _MCP_CALL_CONTENT_FIELDS: Final = ("arguments", "output", "error")

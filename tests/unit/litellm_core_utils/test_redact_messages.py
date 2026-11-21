@@ -163,6 +163,54 @@ def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_
     assert fields == _provider_fields()
 
 
+@pytest.mark.parametrize("shape", ["object", "dict"])
+def test_redaction_hides_claude_mcp_call_inputs_and_results_but_keeps_the_calls(shape: str) -> None:
+    response: Final = ModelResponse(
+        model="claude-opus-5-5",
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "Done.",
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            {
+                                "id": "mcptoolu_01Wiki",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_wiki_structure",
+                                    "arguments": json.dumps({"repoName": SECRET}),
+                                    "provider_specific_fields": {"server_name": "deepwiki"},
+                                },
+                            }
+                        ],
+                        "tool_results": [
+                            {
+                                "type": "mcp_tool_result",
+                                "tool_use_id": "mcptoolu_01Wiki",
+                                "is_error": False,
+                                "content": [{"type": "text", "text": SECRET}],
+                            }
+                        ],
+                    },
+                }
+            }
+        ],
+    )
+    result: Final = response if shape == "object" else response.model_dump()
+
+    redacted: Final = perform_redaction({}, result)
+
+    message: Final = (
+        redacted.choices[0].message if shape == "object" else SimpleNamespace(**redacted["choices"][0]["message"])
+    )
+    fields: Final = message.provider_specific_fields
+    assert SECRET not in str(redacted), redacted
+    assert [(call["id"], call["function"]["name"]) for call in fields["server_tool_calls"]] == [
+        ("mcptoolu_01Wiki", "read_wiki_structure")
+    ]
+
+
 @pytest.fixture(autouse=True)
 def _reset_global_redaction():
     """Ensure the global setting is off for every test."""
