@@ -1,5 +1,7 @@
+import { OnChangeFn, PaginationState } from "@tanstack/react-table";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ModelData } from "@/components/model_dashboard/types";
@@ -546,6 +548,35 @@ describe("AllModelsTable", () => {
     render(<AllModelsTable {...baseProps} rowCount={137} />);
 
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 137");
+  });
+
+  it("offers 100 rows per page and pages the server query by that size", async () => {
+    const user = userEvent.setup();
+    const onPaginationChange = vi.fn();
+
+    function Harness() {
+      const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
+      const handlePaginationChange: OnChangeFn<PaginationState> = (updater) => {
+        setPagination(updater);
+        onPaginationChange(updater);
+      };
+      return (
+        <AllModelsTable
+          {...baseProps}
+          rowCount={226}
+          pagination={pagination}
+          onPaginationChange={handlePaginationChange}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    await user.click(screen.getByTestId("pagination-page-size"));
+    await user.click(await screen.findByRole("option", { name: "100" }));
+
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-100 of 226");
+    expect(onPaginationChange).toHaveBeenCalled();
   });
 
   it("shows the empty state when there are no models", () => {
