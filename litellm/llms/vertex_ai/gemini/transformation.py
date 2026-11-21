@@ -759,8 +759,10 @@ def _sourced_assistant_images(
 
 
 def _has_text(content: object) -> bool:
+    if isinstance(content, str):
+        return content != ""
     elements: Final = tuple(filter(None, map(as_str_mapping, as_object_list(content) or ())))
-    return isinstance(content, str) or any(element.get("type") == "text" for element in elements)
+    return any(element.get("type") == "text" and bool(element.get("text")) for element in elements)
 
 
 def _assistant_text_thought_signature(
