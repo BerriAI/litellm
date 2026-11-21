@@ -8,7 +8,11 @@ from typing import Final
 import pytest
 
 from litellm import (
+    AgentInput,
+    AgentOutput,
     CommandCheck,
+    EvalAgent,
+    EvalOutput,
     EvalStatus,
     EvalTarget,
     EvalTask,
@@ -21,7 +25,7 @@ from litellm.harness.errors import SandboxError
 from litellm.harness.options import ToolLoopOptions
 from litellm.harness.sandbox.base import CompletedRun, Process
 from litellm.harness.sandbox.local import LocalSandbox
-from litellm.harness.types import Harness, Result
+from litellm.harness.types import FileChange, Harness, ToolCall, ToolResult, Usage
 from litellm.types.utils import ModelResponse
 
 CommandHandler = Callable[["RecordingSandbox", Sequence[str]], Awaitable[CompletedRun]]
@@ -100,7 +104,7 @@ def _target(label: str = "agent", response: str | ModelResponse | Exception = "d
     )
 
 
-def _passes(result: Result) -> bool:
+def _passes(result: EvalOutput) -> bool:
     return result.text == "done"
 
 
@@ -329,7 +333,7 @@ async def test_should_preserve_failed_and_error_rows_and_finish_the_other_tasks(
 async def test_should_run_async_predicates_before_closing_the_sandbox() -> None:
     factory: Final = RecordingFactory()
 
-    async def check(result: Result) -> bool:
+    async def check(result: EvalOutput) -> bool:
         assert factory.boxes[0].close_count == 0
         return result.text == "done"
 
@@ -398,7 +402,7 @@ async def test_should_record_sandbox_startup_failure_without_aborting_other_targ
 
 
 async def test_should_record_checker_exceptions_and_preserve_the_agent_result() -> None:
-    def broken_check(result: Result) -> bool:
+    def broken_check(result: EvalOutput) -> bool:
         raise ValueError("invalid evaluation input")
 
     report: Final = await aagent_eval(
@@ -547,3 +551,132 @@ async def test_should_direct_async_callers_to_the_async_entrypoint() -> None:
             (_target(),),
             sandbox=RecordingFactory(),
         )
+
+
+async def test_should_compare_custom_agents_and_harness_targets_in_one_suite() -> None:
+    observed: Final[asyncio.Queue[AgentInput]] = asyncio.Queue()
+
+    class CustomAgent(EvalAgent):
+        async def run(self, task: AgentInput) -> AgentOutput:
+            observed.put_nowait(task)
+            return AgentOutput(task.prompt)
+
+    report: Final = await aagent_eval(
+        (EvalTask("answer", "done", check=PredicateCheck(_passes)),),
+        (_target("builtin"), CustomAgent("custom")),
+        trials=2,
+        max_concurrency=2,
+        metadata={"experiment": "mixed"},
+    )
+
+    assert tuple((run.target, run.trial, run.status) for run in report.runs) == (
+        ("builtin", 1, EvalStatus.PASS),
+        ("builtin", 2, EvalStatus.PASS),
+        ("custom", 1, EvalStatus.PASS),
+        ("custom", 2, EvalStatus.PASS),
+    )
+    inputs: Final = tuple(observed.get_nowait() for _ in range(2))
+    assert {task.trial for task in inputs} == {1, 2}
+    assert all(task.task_id == "answer" and task.metadata["experiment"] == "mixed" for task in inputs)
+    assert all(task.metadata["agent_eval_suite"] == report.suite_id for task in inputs)
+    assert all(not Path(task.sandbox.workdir).exists() for task in inputs)
+    summary: Final = report.summaries[1]
+    assert summary.cost is None and summary.usage is None and summary.tool_calls is None
+    assert not summary.metrics_complete
+    assert report.runs[2].cost is None and report.runs[2].usage is None and report.runs[2].tool_calls is None
+    assert '"cost": null' in report.to_json()
+    assert "unknown" in report.to_markdown()
+
+
+async def test_should_run_custom_agents_and_command_checks_in_the_prepared_sandbox(tmp_path: Path) -> None:
+    original: Final = tmp_path / "project"
+    original.mkdir()
+    (original / "state.txt").write_text("original")
+
+    async def command(box: RecordingSandbox, cmd: Sequence[str]) -> CompletedRun:
+        if tuple(cmd) == ("prepare",):
+            await box.write("state.txt", b"prepared")
+        else:
+            assert await box.read("answer.txt") == b"prepared"
+            assert box.close_count == 0
+        return CompletedRun(stdout="verified", stderr="", exit_code=0)
+
+    class CustomAgent(EvalAgent):
+        async def run(self, task: AgentInput) -> AgentOutput:
+            assert task.trial == 3 and task.task_id == "workspace"
+            assert task.metadata["agent_eval_suite"] == "custom-suite"
+            assert task.metadata["agent_eval_trial"] == task.trial
+            await task.sandbox.write("answer.txt", await task.sandbox.read("state.txt"))
+            return AgentOutput(
+                "done",
+                cost=0.25,
+                usage=Usage(3, 2, 1),
+                events=(ToolCall("read", "read", "read", {}), ToolResult("read", "prepared")),
+                files=(FileChange("answer.txt", "created"),),
+            )
+
+    factory: Final = RecordingFactory(command)
+    run: Final = await aagent_eval_attempt(
+        EvalTask("workspace", "Answer", check=CommandCheck(("verify",)), workspace=original, setup=(("prepare",),)),
+        CustomAgent("custom", model="declared-model"),
+        trial=3,
+        suite_id="custom-suite",
+        sandbox=factory,
+    )
+    assert run.status is EvalStatus.PASS
+    assert run.cost == 0.25 and run.usage == Usage(3, 2, 1) and run.tool_calls == 1
+    assert run.result is not None and run.result.files[0].path == "answer.txt"
+    assert factory.boxes[0].commands == (("prepare",), ("verify",))
+    assert factory.boxes[0].close_count == 1
+    assert not Path(factory.boxes[0].workdir).exists()
+    assert (original / "state.txt").read_text() == "original"
+    assert not (original / "answer.txt").exists()
+
+
+@pytest.mark.parametrize("failure", ("exception", "timeout", "turn-limit"))
+async def test_should_preserve_custom_agent_failures_and_cleanup(failure: str) -> None:
+    class CustomAgent(EvalAgent):
+        async def run(self, task: AgentInput) -> AgentOutput:
+            if failure == "exception":
+                raise RuntimeError("custom agent failed")
+            if failure == "timeout":
+                await asyncio.Event().wait()
+            return AgentOutput("partial", stop_reason="max_turns")
+
+    factory: Final = RecordingFactory()
+    run: Final = await aagent_eval_attempt(
+        EvalTask("failure", "Answer", check=PredicateCheck(lambda result: True)),
+        CustomAgent("custom"),
+        timeout=0.001 if failure == "timeout" else 300,
+        sandbox=factory,
+    )
+    assert run.status is (EvalStatus.FAIL if failure == "turn-limit" else EvalStatus.ERROR)
+    assert run.check is None
+    assert run.stop_reason == ("max_turns" if failure == "turn-limit" else None)
+    assert run.cost is None and run.usage is None and run.tool_calls is None
+    assert "TimeoutError" in run.detail if failure == "timeout" else "agent" in run.detail
+    assert factory.boxes[0].close_count == 1
+    assert not Path(factory.boxes[0].workdir).exists()
+
+
+async def test_should_cleanup_custom_agents_when_the_caller_cancels() -> None:
+    entered: Final = asyncio.Event()
+
+    class CustomAgent(EvalAgent):
+        async def run(self, task: AgentInput) -> AgentOutput:
+            entered.set()
+            await asyncio.Event().wait()
+            return AgentOutput("unreachable")
+
+    factory: Final = RecordingFactory()
+    pending: Final = asyncio.create_task(
+        aagent_eval_attempt(
+            EvalTask("cancelled", "Answer", check=PredicateCheck(_passes)), CustomAgent("custom"), sandbox=factory
+        )
+    )
+    await entered.wait()
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert factory.boxes[0].close_count == 1
+    assert not Path(factory.boxes[0].workdir).exists()

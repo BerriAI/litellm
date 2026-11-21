@@ -801,7 +801,7 @@ impl Request<'_> {
 }
 
 /// The descriptor keys a router fallback target reserves: every limit scoped to one model.
-pub const FALLBACK_TARGET_KEYS: [&str; 13] = [
+pub const FALLBACK_TARGET_KEYS: [&str; 15] = [
     "model_per_key",
     "model_per_team",
     "model_per_end_user",
@@ -815,6 +815,8 @@ pub const FALLBACK_TARGET_KEYS: [&str; 13] = [
     "model_per_app",
     "model_per_app_customer_org",
     "model_per_app_customer_member",
+    "model_per_app_group",
+    "model_per_app_group_customer_org",
 ];
 const MODEL_SCOPED_PREFIX: &str = "model_per_";
 const SKILL_HUB_PUBLISH: &str = "skill_hub_publish";
