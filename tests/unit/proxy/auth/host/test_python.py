@@ -24,8 +24,20 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
-from litellm.proxy.auth.host.facts import AliasMissing, EndUserRow, RegisteredAgentFacts, TeamMissing
-from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
+from litellm.proxy.auth.host.facts import (
+    AliasMissing,
+    EndUserRow,
+    FetchUnreachable,
+    RegisteredAgentFacts,
+    TeamMissing,
+)
+from litellm.proxy.auth.host.python import (
+    AgentLookup,
+    HttpCall,
+    NoRegisteredAgents,
+    PythonAuthHost,
+    SharedFetches,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -454,10 +466,15 @@ DISCOVERY_URL: Final = "https://idp.example/.well-known/openid-configuration"
 @pytest.mark.asyncio
 @pytest.mark.parametrize("url", [JWKS_URL, DISCOVERY_URL], ids=["jwks", "discovery"])
 @pytest.mark.parametrize("status", [500, 503, 429])
-async def test_a_jwt_endpoint_answering_5xx_or_429_reads_as_no_document_without_a_retry(url: str, status: int) -> None:
+async def test_a_jwt_endpoint_answering_5xx_or_429_is_unreachable_for_its_status_without_a_retry(
+    url: str, status: int
+) -> None:
     http: Final = _ScriptedHttp(_reply(status, url, text="down"))
+    what: Final = "OIDC discovery endpoint" if url == DISCOVERY_URL else "JWKS endpoint"
 
-    assert await _scripted_host(http).fetch_json(url) is None
+    assert await _scripted_host(http).fetch_json(url) == FetchUnreachable(
+        reason=f"JWT Auth: {what} {url} returned status {status}"
+    )
     assert http.replies == []
 
 

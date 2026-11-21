@@ -12,6 +12,7 @@ from jwt.algorithms import RSAAlgorithm
 from pydantic import JsonValue, TypeAdapter
 
 from tests.integration._support.client import eventually, gateway_from_environment
+from tests.integration._support.ports import allocate_port
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
@@ -155,3 +156,26 @@ def test_jwks_5xx_with_nothing_cached_answers_503_and_backs_off(tmp_path: Path) 
         assert (first.status_code, second.status_code) == (503, 503), (first.text, second.text)
         assert first.json()["error"]["type"] == "auth_provider_unavailable"
         assert jwks.received.qsize() == 1
+        reason: Final = f"Error: JWT Auth: JWKS endpoint {jwks.url}/jwks returned status 500"
+        for reply in (first, second):
+            message = reply.json()["error"]["message"]
+            assert message.endswith(reason), message
+            assert "TransportError" not in message
+            assert "internal" not in message
+
+
+def test_refused_jwks_connection_with_nothing_cached_answers_503_naming_the_transport_error(tmp_path: Path) -> None:
+    token: Final = _admin_jwt(rsa.generate_private_key(public_exponent=65537, key_size=2048))
+    url: Final = f"http://127.0.0.1:{allocate_port()}/jwks"
+    with (
+        gateway_from_environment() as base,
+        owned_proxy(base, tmp_path / "proxy", {"JWT_PUBLIC_KEY_URL": url}, config=_proxy_config(tmp_path)) as gateway,
+    ):
+        first: Final = gateway.request("GET", "/v1/models", key=token)
+        second: Final = gateway.request("GET", "/v1/models", key=token)
+
+        assert (first.status_code, second.status_code) == (503, 503), (first.text, second.text)
+        assert first.json()["error"]["type"] == "auth_provider_unavailable"
+        reason: Final = f"Error: TransportError fetching {url} after 3 attempts"
+        assert first.json()["error"]["message"].endswith(reason), first.text
+        assert second.json()["error"]["message"] == first.json()["error"]["message"]

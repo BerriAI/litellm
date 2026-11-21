@@ -2,8 +2,8 @@ use http::Method;
 use jiff::Timestamp;
 use litellm_config::RouteList;
 use litellm_gateway_auth_core::{
-    self as core, AgentIdentityFailure, BudgetExceeded, Error, Identity, JwtDenial, KeyHash,
-    Outcome, PublicDenial, Request, Token, VerifyDenial,
+    self as core, AgentIdentityFailure, BudgetExceeded, Error, Fetched, Identity, JwtDenial,
+    KeyHash, Outcome, PublicDenial, Request, Token, VerifyDenial,
     authn::{
         jwt::{self, Expected, KeyMappingWrite, KeyOrigin, MappedJwt, MappedKey},
         key::{CachedTeam, KeyRecord, Keyed},
@@ -1598,8 +1598,11 @@ impl AuthCall {
             .map(|value| from_py(&value))
             .transpose()?;
         self.stepper.answer("a JSON document", |ask| match ask {
-            Ask::FetchJson { reply, .. }
-            | Ask::FetchUserinfo { reply, .. }
+            Ask::FetchJson { reply, .. } => {
+                reply.send(value.map_or(Fetched::TransportFailed, Fetched::Document));
+                Ok(())
+            }
+            Ask::FetchUserinfo { reply, .. }
             | Ask::CachedDocument { reply, .. }
             | Ask::CachedKeyMapping { reply, .. } => {
                 reply.send(value);
@@ -1607,6 +1610,18 @@ impl AuthCall {
             }
             other => Err(other),
         })
+    }
+
+    /// A JWKS or OIDC discovery endpoint that answered 5xx or 429, with the reason the client reads.
+    fn fetch_unavailable(&self, reason: String) -> PyResult<()> {
+        self.stepper
+            .answer("an unavailable fetch", |ask| match ask {
+                Ask::FetchJson { reply, .. } => {
+                    reply.send(Fetched::Unavailable(reason));
+                    Ok(())
+                }
+                other => Err(other),
+            })
     }
 
     /// A `get_team_object` read: the team and its row, or a `facts.TeamMissing`.
