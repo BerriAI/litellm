@@ -10,6 +10,7 @@ import respx
 from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.redact_messages import perform_redaction
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
@@ -1534,6 +1535,38 @@ async def test_previous_response_id_sends_a_stored_mcp_call_and_its_result_back_
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_turn",
+    [
+        pytest.param(_STORED_CHAT_COMPLETION_MCP_TURN, id="chat_completion_message"),
+    ],
+)
+async def test_previous_response_id_leaves_out_a_stored_mcp_call_that_message_logging_redacted(
+    stored_turn: Mapping[str, object],
+) -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    redacted_turn: Final = {
+        **stored_turn,
+        "response": perform_redaction(model_call_details={}, result=json.loads(json.dumps(stored_turn["response"]))),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([redacted_turn])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-mcp-turn",
+            input="Which page covers the reconciler?",
+            tools=[_DEEPWIKI_SERVER],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    messages: Final = json.loads(anthropic.body)["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant", "user"]
+    assert "mcp_tool_use" not in json.dumps(messages)
+    assert "mcp_tool_result" not in json.dumps(messages)
+
+
 _LOCAL_TIME_FUNCTION: Final = {
     "type": "function",
     "name": LOCAL_TIME_TOOL["name"],
@@ -1780,6 +1813,26 @@ _STORED_DEFERRED_MCP_TURN_ONE: Final = _stored_deferred_mcp_turn(
         },
     ),
 )
+
+
+@pytest.mark.asyncio
+async def test_a_paused_mcp_call_replayed_next_to_its_result_sends_the_result_once() -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    await litellm.aresponses(
+        model=_MODEL,
+        input=[
+            _DEFERRED_MCP_PROMPT_ITEM,
+            _PENDING_MCP_CALL_ITEM,
+            _ANSWERED_MCP_CALL_ITEM,
+            {"role": "user", "content": "Thanks, which page covers the reconciler?"},
+        ],
+        tools=list(_DEFERRED_MCP_TOOLS),
+        api_key="sk-ant-fake",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+    )
+
+    assert _assistant_turns(anthropic.body) == [[MCP_TOOL_USE, DEFERRED_MCP_TOOL_RESULT]]
 
 
 @pytest.mark.asyncio

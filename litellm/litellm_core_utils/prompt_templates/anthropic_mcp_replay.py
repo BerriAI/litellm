@@ -113,7 +113,12 @@ def _plan(turns: Sequence[_AssistantTurn]) -> McpReplayPlan:
     )
     last_run: Final = turns[-1].run
     repeated_uses: Final = chain.from_iterable(
-        ((turn.message_index, use_id) for use_id in turn.use_ids if first_uses[use_id].run < turn.run) for turn in turns
+        (
+            (turn.message_index, use_id)
+            for use_id in turn.use_ids
+            if first_uses[use_id].message_index < turn.message_index
+        )
+        for turn in turns
     )
     never_answered_uses: Final = (
         (use.message_index, use_id)

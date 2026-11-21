@@ -7,6 +7,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -29,6 +30,20 @@ else:
 ########################################################
 COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
 ########################################################
+
+
+def _has_redacted_arguments(server_tool_call: object) -> bool:
+    function: Final = as_str_mapping((as_str_mapping(server_tool_call) or {}).get("function"))
+    return function is not None and function.get("arguments") == REDACTED_BY_LITELLM
+
+
+def _without_redacted_server_tool_calls(message: Message) -> Message:
+    fields: Final = message.provider_specific_fields or {}
+    calls: Final = as_object_list(fields.get("server_tool_calls"))
+    if calls is None or not any(_has_redacted_arguments(call) for call in calls):
+        return message
+    kept: Final = [call for call in calls if not _has_redacted_arguments(call)]
+    return message.model_copy(update={"provider_specific_fields": {**fields, "server_tool_calls": kept}})
 
 
 def _normalize_redacted_tool_call_arguments(message: Message) -> None:
@@ -181,7 +196,7 @@ class ResponsesSessionHandler:
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
                     _normalize_redacted_tool_call_arguments(choice.message)
-                    chat_completion_message_history.append(choice.message)
+                    chat_completion_message_history.append(_without_redacted_server_tool_calls(choice.message))
         return chat_completion_message_history
 
     @staticmethod
