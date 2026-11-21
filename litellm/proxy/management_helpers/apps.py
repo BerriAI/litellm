@@ -16,7 +16,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm.constants import AUTH_OBJECTS_TARGET
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.management_helpers.customer_budget_usage import app_budget_usage
 from litellm.proxy.management_helpers.customer_hierarchy import (
@@ -102,7 +102,7 @@ class _SharedProfiles(BaseModel):
 
 
 _DEFINITION_PARAM: Final = "customer_app_definition"
-_DEFINITION_CACHE_KEY: Final = "customer_app_definition:global"
+_DEFINITION: Final = AuthObject.customer_app_definition()
 _PARENT_ORG_ID: Final = TypeAdapter(str)
 AppEntity: Final = TypeVar("AppEntity", App, AppOrganization, AppMember, AppGroup, AppGroupOrganization)
 AppAssociation: Final = TypeVar("AppAssociation", AppOrganization, AppMember)
@@ -258,7 +258,7 @@ class AppStore:
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def cached(
-        self, key: str, model: type[CachedModel], load: Callable[[], Awaitable[CachedModel]]
+        self, key: AuthObject, model: type[CachedModel], load: Callable[[], Awaitable[CachedModel]]
     ) -> CachedModel:
         if self.cache is None or not self.cache_reads:
             return await load()
@@ -271,7 +271,7 @@ class AppStore:
             _ = await self.cache.async_set_leased(lease, value, get_management_object_ttl(self.cache))
         return value
 
-    async def cached_row(self, key: str, load: Callable[[], Awaitable[PrismaRecord | None]]) -> _CachedRow:
+    async def cached_row(self, key: AuthObject, load: Callable[[], Awaitable[PrismaRecord | None]]) -> _CachedRow:
         async def read() -> _CachedRow:
             row: Final = await load()
             return _CachedRow(values=row.model_dump() if row is not None else None)
@@ -300,10 +300,10 @@ class AppStore:
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def definition(self) -> AppDefinition:
         if self.cache is not None and self.cache_reads:
-            cached: Final = await self.cache.async_get_cache(key=_DEFINITION_CACHE_KEY, model_type=AppDefinition)
+            cached: Final = await self.cache.async_get_cache(key=_DEFINITION, model_type=AppDefinition)
             if cached is not None:
                 return cached
-            lease: Final = await self.cache.lease(_DEFINITION_CACHE_KEY)
+            lease: Final = await self.cache.lease(_DEFINITION)
             definition: Final = await self._read_definition()
             _ = await self.cache.async_set_leased(lease, definition, get_management_object_ttl(self.cache))
             return definition
@@ -323,7 +323,7 @@ class AppStore:
             return
         self._definition_cache_dirty = False
         if self.cache is not None:
-            await evict_and_broadcast((_DEFINITION_CACHE_KEY,), self.cache)
+            await evict_and_broadcast((_DEFINITION.key,), self.cache)
 
     async def lock_definition(self) -> _DefinitionState:
         from prisma import Json
@@ -419,7 +419,7 @@ class AppStore:
             )
             return _CachedRow(values={"key_id": key_id} if key_id is not None else None)
 
-        cached: Final = await self.cached(AuthObject.customer_app_key_resource(token_hash).key, _CachedRow, read)
+        cached: Final = await self.cached(AuthObject.customer_app_key_resource(token_hash), _CachedRow, read)
         return _ResourceRecord.model_validate(cached.values).key_id if cached.values is not None else None
 
     async def resource(self, resource_type: AppResourceType, resource_id: str) -> AppResource | AppFailure:
@@ -461,7 +461,7 @@ class AppStore:
         async def read() -> PrismaRecord | None:
             return await self.customers.budgets.find_unique(where={"budget_id": budget_id})
 
-        row: Final = await self.cached_row(AuthObject.customer_app_budget(budget_id).key, read)
+        row: Final = await self.cached_row(AuthObject.customer_app_budget(budget_id), read)
         return _AssociationBudget(related_budget(row.values), related_budget(row.values, self.now))
 
     async def with_budget_usage(self, entity: AppEntity) -> AppEntity:
@@ -486,7 +486,7 @@ class AppStore:
                 )
             )
 
-        return frozenset((await self.cached(AuthObject.customer_app_shared_profiles().key, _SharedProfiles, read)).ids)
+        return frozenset((await self.cached(AuthObject.customer_app_shared_profiles(), _SharedProfiles, read)).ids)
 
     async def valid_profile(self, budget_id: str | None, scope: BudgetGroupScope | None = None) -> bool:
         if budget_id is None:
@@ -563,7 +563,7 @@ class AppStore:
                 update={"alias": resource.alias if isinstance(resource, AppResource) else resource_id}
             )
 
-        row: Final = await self.cached_row(AuthObject.customer_app(resource_type.value, resource_id).key, read)
+        row: Final = await self.cached_row(AuthObject.customer_app(resource_type.value, resource_id), read)
         if row.values is None:
             return None
         app: Final = App.model_validate(row.values)
@@ -748,7 +748,7 @@ class AppStore:
             )
 
         row: Final = await self.cached_row(
-            AuthObject.customer_app_association("organization", app.app_id, customer_org_id).key, read
+            AuthObject.customer_app_association("organization", app.app_id, customer_org_id), read
         )
         return await self.organization_response(app, AppOrganization.model_validate(row.values))
 
@@ -890,7 +890,7 @@ class AppStore:
             )
 
         row: Final = await self.cached_row(
-            AuthObject.customer_app_association("member", app.app_id, customer_member_id).key, read
+            AuthObject.customer_app_association("member", app.app_id, customer_member_id), read
         )
         member: Final = AppMember.model_validate(row.values)
         return await self.member_response(app, member, org)

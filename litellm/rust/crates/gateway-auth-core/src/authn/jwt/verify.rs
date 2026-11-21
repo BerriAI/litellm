@@ -328,7 +328,8 @@ async fn issuer_key(
     key_from_jwks_url(host, &jwks_url_for_issuer(issuer), kid, settings, now).await
 }
 
-/// `get_public_key`: the first of the `JWT_PUBLIC_KEY_URL` endpoints that holds the kid.
+/// `get_public_key`: the first of the global JWKS endpoints (`litellm_jwtauth.public_key_url`, else
+/// `JWT_PUBLIC_KEY_URL`) that holds the kid.
 async fn global_key(
     host: &impl AuthHost,
     kid: Option<&str>,

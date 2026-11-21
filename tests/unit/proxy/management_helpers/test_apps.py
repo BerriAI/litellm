@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_id, app_scope_identity
 from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope, CustomerHierarchy, ErrorCode, Failure
@@ -621,25 +620,17 @@ async def test_customer_deletion_evicts_cached_app_associations(
             await offline.organization(app, "org")
 
 
-class AppCacheClock:
-    seconds: float = 0
-
-    def __call__(self) -> float:
-        return self.seconds
-
-
 @pytest.mark.asyncio
 async def test_app_cache_hits_do_not_extend_configured_ttl(
     app_store: tuple[AppDatabase, AppStore, App],
 ) -> None:
     database, _, app = app_store
-    clock: Final = AppCacheClock()
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(clock=clock), default_in_memory_ttl=10)
+    cache: Final = UserApiKeyCache(default_in_memory_ttl=0.3)
     assert await AppStore(database, NOW, cache).by_resource(AppResourceType.TEAM, "chat") == app
     offline: Final = AppStore(UnavailableAppDatabase(), NOW, cache)
-    clock.seconds = 9
+    await asyncio.sleep(0.2)
     assert await offline.by_resource(AppResourceType.TEAM, "chat") == app
-    clock.seconds = 11
+    await asyncio.sleep(0.15)
     with pytest.raises(ConnectionError, match="database unavailable"):
         await offline.by_resource(AppResourceType.TEAM, "chat")
 

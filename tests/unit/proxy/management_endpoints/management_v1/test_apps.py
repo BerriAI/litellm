@@ -15,12 +15,13 @@ from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1.apps import get_app_store, router
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 from tests.unit.proxy.management_helpers.test_apps import (
     AppDatabase,
     profile,
     seed_resources,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW
 
 
@@ -288,7 +289,6 @@ def model_client(
     from litellm import Router
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.auth.auth_checks import project_cache_key
     from litellm.proxy.utils import PrismaClient
 
     http, store = client()
@@ -298,9 +298,9 @@ def model_client(
     key: Final = UserAPIKeyAuth(
         token="token-a", team_id="chat", team_models=team_models, models=key_models, project_id="project"
     )
-    cache.set_cache("team_id:chat", team, model_type=LiteLLM_TeamTableCachedObj)
-    cache.set_cache(project_cache_key("project"), project, model_type=LiteLLM_ProjectTableCachedObj)
-    cache.set_cache("token-a", key, model_type=UserAPIKeyAuth)
+    cache.set_cache(AuthObject.team("chat"), team, model_type=LiteLLM_TeamTableCachedObj)
+    cache.set_cache(AuthObject.project("project"), project, model_type=LiteLLM_ProjectTableCachedObj)
+    cache.set_cache(AuthObject.virtual_key("token-a"), key, model_type=UserAPIKeyAuth)
     asyncio.run(store.keys.update(where={"token": "token-a"}, data={"key_id": "key-id"}))
     asyncio.run(store.projects.update(where={"project_id": "project"}, data={"team_id": "chat"}))
     router_models: Final = [

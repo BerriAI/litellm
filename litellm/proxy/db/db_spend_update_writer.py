@@ -58,7 +58,7 @@ from litellm.proxy._types import (
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
 )
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, project_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
@@ -100,6 +100,7 @@ from litellm.proxy.spend_tracking.savings import (
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.proxy.auth.customer_hierarchy import (
@@ -2630,7 +2631,9 @@ class DBSpendUpdateWriter:
                 for item in contributions:
                     if item.table == "LiteLLM_TeamMembership":
                         await user_api_key_cache.async_delete_cache(
-                            key=f"team_membership:{dict(item.key)['user_id']}:{dict(item.key)['team_id']}"
+                            key=AuthObject.team_membership_reservation(
+                                user_id=dict(item.key)["user_id"], team_id=dict(item.key)["team_id"]
+                            ).key
                         )
 
     async def apply_accounting_entities(
@@ -2849,8 +2852,9 @@ class DBSpendUpdateWriter:
                 if user_api_key_cache is not None:
                     with service_target(AUTH_OBJECTS_TARGET):
                         for user_id, team_id in team_memberships_to_invalidate:
-                            cache_key = f"team_membership:{user_id}:{team_id}"
-                            await user_api_key_cache.async_delete_cache(key=cache_key)
+                            await user_api_key_cache.async_delete_cache(
+                                key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key
+                            )
                             verbose_proxy_logger.debug(
                                 "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
                             )
@@ -3070,7 +3074,7 @@ class DBSpendUpdateWriter:
         if user_api_key_cache is None:
             return
         for project_id in project_ids:
-            await user_api_key_cache.async_delete_cache(key=project_cache_key(project_id))
+            await user_api_key_cache.async_delete_cache(key=AuthObject.project(project_id).key)
 
     @staticmethod
     async def _update_entity_spend_in_db(

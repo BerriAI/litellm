@@ -39,7 +39,7 @@ class AppGroupStore:
         async def read() -> PrismaRecord | None:
             return await self.groups.find_unique(where={"app_group_id": app_group_id})
 
-        row: Final = await self.apps.cached_row(AuthObject.customer_app("app_group", app_group_id).key, read)
+        row: Final = await self.apps.cached_row(AuthObject.customer_app("app_group", app_group_id), read)
         return (
             await self.response(AppGroup.model_validate(row.values))
             if row.values is not None
@@ -184,7 +184,7 @@ class AppGroupStore:
             )
 
         row: Final = await self.apps.cached_row(
-            AuthObject.customer_app_association("group_organization", app_group_id, customer_org_id).key, read
+            AuthObject.customer_app_association("group_organization", app_group_id, customer_org_id), read
         )
         return await self.organization_response(AppGroupOrganization.model_validate(row.values))
 

@@ -13,7 +13,7 @@ use tracing::warn;
 use crate::{
     Call, RouterStateSnapshot,
     config::Op,
-    error::{AttemptError, ConfigError, Error, FailureKind, Unsupported},
+    error::{AttemptError, Error, FailureKind},
     fallback::{FallbackKeys, FallbackTarget, Fallbacks},
     health::{GroupShape, should_retry_status, team_model_has_alternatives},
     host::{
@@ -32,7 +32,7 @@ use crate::{
 
 mod stream;
 
-pub use self::stream::{StreamOrigin, StreamPolicy};
+pub use self::stream::{StreamOrigin, StreamPolicy, TakeOver, Unanswered};
 
 /// `INITIAL_RETRY_DELAY`, `MAX_RETRY_DELAY` and `JITTER` in `litellm/constants.py`.
 const INITIAL_RETRY_DELAY: f64 = 0.5;
@@ -45,12 +45,18 @@ const MAX_HONOURED_RETRY_AFTER: Duration = Duration::from_secs(60);
 pub struct RouterResponse<R> {
     pub output: Served<R>,
     pub deployment_id: String,
+    /// The name the serving attempt ran under: the requested name as written, an alias included,
+    /// or a fallback target.
+    pub name: String,
     pub model_group: String,
     pub attempted_retries: u32,
     /// The retry budget of the loop a retry succeeded in (`x-litellm-max-retries`); `None`
     /// when the first attempt succeeded.
     pub max_retries: Option<u32>,
     pub attempted_fallbacks: u32,
+    /// Where a stream this response carries came from, which the take-over of that stream
+    /// starts from ([`Router::take_over_stream`]).
+    pub origin: StreamOrigin,
 }
 
 /// A failed attempt with the deployment it ran on, when one was picked.
@@ -95,7 +101,7 @@ struct FallbackChain {
 
 /// What one level of the chain serves: a group, or the same group at a later `order`, with the
 /// request params the chain's dict targets merged so far (`kwargs.update(target)`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct Target {
     group: String,
     order: Option<i64>,
@@ -1270,13 +1276,6 @@ impl<H: RouterHost> Call<'_, H> {
                 .duration_since(pick_started)
                 .unwrap_or_default(),
         });
-        if !(self.facts.supports)(op, deployment.provider()) {
-            return Err(Error::Config(ConfigError::Unsupported(Unsupported::Op {
-                op: op.clone(),
-                provider: deployment.provider().to_owned(),
-            }))
-            .into());
-        }
         // A name no deployment serves is routed to the first default fallback
         // (`_common_checks_available_deployment`), still stamped as the name.
         let defaulted = candidates.model_group != target.group
@@ -1394,14 +1393,24 @@ impl<H: RouterHost> Call<'_, H> {
                 Ok(RouterResponse {
                     output,
                     deployment_id: deployment.id.clone(),
+                    name: target.group.clone(),
                     model_group: candidates.model_group,
                     attempted_retries: retry,
                     max_retries: None,
                     attempted_fallbacks: at.depth,
+                    origin: StreamOrigin::of(
+                        Target {
+                            routed,
+                            ..target.clone()
+                        },
+                        at,
+                        Some(deployment.id.clone()),
+                        retry,
+                    ),
                 })
             }
             Err(failure) => {
-                let error = self.failed(failure);
+                let error = self.failed(failure, Some(&deployment.id));
                 let failed_deployment = match &error {
                     Error::Attempt { failure, .. } => {
                         if !failure.recorded && !failure.queue_rejected() {
@@ -1551,12 +1560,22 @@ impl<H: RouterHost> Call<'_, H> {
             Ok(output) => Ok(RouterResponse {
                 output,
                 deployment_id: String::new(),
+                name: target.group.clone(),
                 model_group: target.group.clone(),
                 attempted_retries: retry,
                 max_retries: None,
                 attempted_fallbacks: at.depth,
+                origin: StreamOrigin::of(
+                    Target {
+                        routed: None,
+                        ..target.clone()
+                    },
+                    at,
+                    None,
+                    retry,
+                ),
             }),
-            Err(failure) => Err(self.failed(failure).into()),
+            Err(failure) => Err(self.failed(failure, None).into()),
         }
     }
 
