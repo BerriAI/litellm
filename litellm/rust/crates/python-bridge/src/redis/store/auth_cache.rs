@@ -109,6 +109,38 @@ impl PyAuthObject {
     }
 
     #[staticmethod]
+    fn customer_app(resource_type: String, resource_id: String) -> Self {
+        Self(AuthObject::CustomerApp {
+            resource_type,
+            resource_id,
+        })
+    }
+
+    #[staticmethod]
+    fn customer_app_association(scope: String, app_id: String, customer_id: String) -> Self {
+        Self(AuthObject::CustomerAppAssociation {
+            scope,
+            app_id,
+            customer_id,
+        })
+    }
+
+    #[staticmethod]
+    fn customer_app_budget(budget_id: String) -> Self {
+        Self(AuthObject::CustomerAppBudget(budget_id))
+    }
+
+    #[staticmethod]
+    fn customer_app_key_resource(hashed_token: String) -> Self {
+        Self(AuthObject::CustomerAppKeyResource(hashed_token))
+    }
+
+    #[staticmethod]
+    fn customer_app_shared_profiles() -> Self {
+        Self(AuthObject::CustomerAppSharedProfiles)
+    }
+
+    #[staticmethod]
     fn default_end_user_budget(budget_id: String) -> Self {
         Self(AuthObject::DefaultEndUserBudget(budget_id))
     }
