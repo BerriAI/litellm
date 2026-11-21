@@ -44,10 +44,13 @@ def test_live_delegation_names_every_model_and_vector_store_the_session_hands_wo
     assert live_delegation(session) == delegation
 
 
-def _key(models: list[str], vector_stores: list[str] | None = None) -> UserAPIKeyAuth:
+def _key(
+    models: list[str], vector_stores: list[str] | None = None, allowed_tools: list[str] | None = None
+) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(
         token="owner-key-hash",
         models=models,
+        metadata={} if allowed_tools is None else {"allowed_tools": allowed_tools},
         object_permission=None
         if vector_stores is None
         else LiteLLM_ObjectPermissionTable(object_permission_id="permission-1", vector_stores=vector_stores),
@@ -104,8 +107,15 @@ def _create(key: UserAPIKeyAuth, session: dict[str, object], monkeypatch: pytest
     [
         (_key(["live-group"]), {"model": "text-group"}),
         (_key(["live-group", "text-group"], ["vs_granted"]), {"model": "text-group", "tools": [_FILE_SEARCH]}),
+        (
+            _key(["live-group", "text-group"], allowed_tools=["lookup"]),
+            {
+                "model": "text-group",
+                "tools": [{"type": "function", "name": "lookup"}, {"type": "function", "name": "wire"}],
+            },
+        ),
     ],
-    ids=["model-the-key-cannot-call", "vector-store-the-key-was-not-granted"],
+    ids=["model-the-key-cannot-call", "vector-store-the-key-was-not-granted", "tool-outside-the-key-allowlist"],
 )
 def test_create_refuses_a_session_that_delegates_to_what_the_key_cannot_use(
     key: UserAPIKeyAuth,
@@ -134,9 +144,14 @@ def test_create_forwards_a_delegation_the_key_may_use(
             201, json={"session": {"id": "live_upstream"}, "transport": {"type": "webrtc", "sdp": "v=0 answer"}}
         )
     )
-    responses: Final = {"model": "text-group", "tools": [{"type": "file_search", "vector_store_ids": ["vs_granted"]}]}
+    responses: Final = {
+        "model": "text-group",
+        "tools": [{"type": "file_search", "vector_store_ids": ["vs_granted"]}, {"type": "function", "name": "lookup"}],
+    }
 
-    response: Final = _create(_key(["live-group", "text-group"], ["vs_granted"]), _session(responses), monkeypatch)
+    response: Final = _create(
+        _key(["live-group", "text-group"], ["vs_granted"], ["lookup", "file_search"]), _session(responses), monkeypatch
+    )
 
     assert response.status_code == 201, response.text
     assert json.loads(upstream.calls.last.request.content)["session"] == {
@@ -164,3 +179,13 @@ async def test_a_client_frame_is_denied_only_when_it_delegates_to_what_the_key_c
     denial: Final = await live_delegation_denial(json.dumps(client_frame), _key(["live-group"]))
 
     assert (denial is not None) is denied, denial
+
+
+@pytest.mark.asyncio
+async def test_a_client_frame_that_spells_delegation_with_a_json_escape_is_still_checked() -> None:
+    client_frame: Final = json.dumps({"type": "session.update", "session": _session({"model": "other-group"})}).replace(
+        '"delegation"', '"deleg\\u0061tion"'
+    )
+
+    assert "delegation" not in client_frame
+    assert await live_delegation_denial(client_frame, _key(["live-group"])) is not None

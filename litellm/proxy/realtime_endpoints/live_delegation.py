@@ -1,6 +1,6 @@
 """Access checks for the models and vector stores a GPT-Live session delegates to."""
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -8,9 +8,15 @@ from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, vector_store_access_check_for_caller
+from litellm.proxy.auth.auth_checks import (
+    can_key_call_resolved_model,
+    check_tools_allowlist,  # pyright: ignore[reportUnknownVariableType]  # its request_body is declared as a bare dict
+    vector_store_access_check_for_caller,
+)
 
 _DELEGATION_KEY: Final = "delegation"
+_JSON_ESCAPE: Final = "\\u"
+_DELEGATED_TOOLS_ROUTE: Final = "/v1/responses"
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
@@ -34,6 +40,25 @@ def _named(value: JsonValue, key: str) -> Iterator[str]:
     elif isinstance(value, list):
         for nested in value:
             yield from _named(nested, key)
+
+
+def _tool_requests(value: JsonValue) -> Iterator[Mapping[str, JsonValue]]:
+    if isinstance(value, dict):
+        if "tools" in value:
+            yield value
+        for nested in value.values():
+            yield from _tool_requests(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _tool_requests(nested)
+
+
+def _delegated_tool_requests(session: object) -> tuple[Mapping[str, JsonValue], ...]:
+    try:
+        parsed: Final = _JSON.validate_python(session)
+    except ValidationError:
+        return ()
+    return tuple(_tool_requests(parsed.get(_DELEGATION_KEY))) if isinstance(parsed, dict) else ()
 
 
 def live_delegation(session: object) -> LiveDelegation:
@@ -64,10 +89,14 @@ async def authorize_live_delegation(session: object, caller: UserAPIKeyAuth) -> 
         )
     if delegation.vector_store_ids:
         await vector_store_access_check_for_caller(delegation.vector_store_ids, caller)
+    for tool_request in _delegated_tool_requests(session):
+        await check_tools_allowlist(
+            request_body=dict(tool_request), valid_token=caller, team_object=None, route=_DELEGATED_TOOLS_ROUTE
+        )
 
 
 async def live_delegation_denial(client_frame: str, caller: UserAPIKeyAuth) -> str | None:
-    if _DELEGATION_KEY not in client_frame:
+    if _DELEGATION_KEY not in client_frame and _JSON_ESCAPE not in client_frame:
         return None
     try:
         frame: Final = _JSON.validate_json(client_frame)
