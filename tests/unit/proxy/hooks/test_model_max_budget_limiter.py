@@ -152,6 +152,20 @@ async def test_team_member_budget_is_charged_and_enforced_after_success():
         )
 
 
+@pytest.mark.asyncio
+async def test_a_failure_the_provider_billed_uses_up_the_key_model_budget():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await limiter.async_log_failure_event(
+        _event("anthropic_messages", CHAT_COST), response_obj=None, start_time=None, end_time=None
+    )
+
+    with pytest.raises(litellm.BudgetExceededError, match=f"exceeded budget for model={MODEL_GROUP}"):
+        await limiter.is_key_within_model_budget(
+            _key({MODEL_GROUP: {"max_budget": 0.0001, "budget_duration": "1d"}}), MODEL_GROUP
+        )
+
+
 def test_team_member_budget_entity_id_is_unambiguous():
     first_entity_id: Final = team_member_budget_entity_id(user_id="a:b", team_id="c")
     second_entity_id: Final = team_member_budget_entity_id(user_id="a", team_id="b:c")

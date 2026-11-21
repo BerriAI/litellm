@@ -123,6 +123,25 @@ async def test_budget_of_other_provider_is_untouched(disable_budget_sync):
 
 
 @pytest.mark.asyncio
+async def test_a_failure_the_provider_billed_counts_toward_the_provider_budget(disable_budget_sync: None):
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}},
+    )
+
+    await limiter.async_log_failure_event(
+        kwargs=_success_kwargs(
+            provider_in_litellm_params=None, provider_in_payload="openai", call_type="anthropic_messages"
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await limiter.dual_cache.async_get_cache("provider_spend:openai:1d") == 0.25
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("shadowed", [False, True])
 async def test_tag_spend_is_incremented_for_request_metadata(
     disable_budget_sync: None,

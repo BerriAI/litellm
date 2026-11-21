@@ -64,6 +64,12 @@ class _SupportsGet(Protocol):
     def get(self, key: str, default: object = None, /) -> object: ...
 
 
+def _billed_failure_cost(kwargs: Mapping[str, object]) -> float:
+    payload: Final = kwargs.get("standard_logging_object")
+    cost: Final = _CALLBACK_FIELDS.validate_python(payload).get("response_cost") if isinstance(payload, dict) else None
+    return float(cost) if isinstance(cost, int | float) else 0.0
+
+
 def _model_info_id(deployment: Mapping[str, object]) -> object:
     return require_attributes(deployment.get("model_info", {}), _SupportsGet, "get").get("id")
 
@@ -629,6 +635,12 @@ class RouterBudgetLimiting(CustomLogger):
                         response_cost=response_cost,
                         job=job,
                     )
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if _billed_failure_cost(kwargs) > 0:
+            await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     async def _increment_spend_for_key(
         self,
