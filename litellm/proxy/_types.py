@@ -3971,6 +3971,7 @@ class SpendLogsRouterMetadata(TypedDict):
 class SpendLogsMetadata(TypedDict):
     user_api_key_customer_org_id: ReadOnly[NotRequired[str | None]]
     user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_group_id: ReadOnly[NotRequired[str | None]]
     user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_team_id: ReadOnly[NotRequired[str | None]]
@@ -5564,6 +5565,7 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
 
 
 class DailyCustomerMemberSpendTransaction(BaseDailySpendTransaction):
+    app_group_id: ReadOnly[NotRequired[str]]
     app_id: ReadOnly[NotRequired[str]]
     customer_member_id: ReadOnly[str]
     customer_team_id: ReadOnly[str]
@@ -5589,6 +5591,8 @@ class DBSpendUpdateTransactions(TypedDict):
     customer_org_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_team_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_member_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    app_group_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
+    app_group_customer_org_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
     app_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
     app_customer_org_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
     app_customer_member_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups

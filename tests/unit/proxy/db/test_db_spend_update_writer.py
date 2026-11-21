@@ -1216,7 +1216,8 @@ async def test_update_customer_hierarchy_db_enqueues_one_increment_per_level():
 
 
 @pytest.mark.asyncio
-async def test_app_spend_flush_updates_global_and_composite_app_rows() -> None:
+@pytest.mark.parametrize("app_group_id", (None, "group"))
+async def test_app_spend_flush_updates_global_and_composite_app_rows(app_group_id: str | None) -> None:
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds
 
     writer: Final = DBSpendUpdateWriter()
@@ -1225,6 +1226,7 @@ async def test_app_spend_flush_updates_global_and_composite_app_rows() -> None:
         customer_team_id="team",
         customer_member_id="member:local",
         app_id="app",
+        app_group_id=app_group_id,
     )
     await writer._update_customer_hierarchy_db(response_cost=0.25, customer_hierarchy=ids, prisma_client=MagicMock())
     queued: Final = await writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
@@ -1258,6 +1260,18 @@ async def test_app_spend_flush_updates_global_and_composite_app_rows() -> None:
     )
     batcher.litellm_appcustomermembertable.update_many.assert_called_once_with(
         where={"app_id": "app", "customer_member_id": "member:local"},
+        data={"spend": {"increment": 0.25}},
+    )
+    if app_group_id is None:
+        batcher.litellm_appgrouptable.update_many.assert_not_called()
+        batcher.litellm_appgroupcustomerorgtable.update_many.assert_not_called()
+        return
+    batcher.litellm_appgrouptable.update_many.assert_called_once_with(
+        where={"app_group_id": app_group_id},
+        data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_appgroupcustomerorgtable.update_many.assert_called_once_with(
+        where={"app_group_id": app_group_id, "customer_org_id": "org"},
         data={"spend": {"increment": 0.25}},
     )
 

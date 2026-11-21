@@ -176,6 +176,55 @@ export const budgetPolicyChanges = (policy: Budget | null | undefined, original:
     original,
   );
 
+interface BudgetSelectionOwner {
+  budget_id?: string | null;
+  budget?: Budget | null;
+}
+
+type BudgetPreset = Budget & { budget_id: string };
+
+export const budgetSelectionFields = (
+  entity: BudgetSelectionOwner | undefined,
+  presets: readonly BudgetPreset[],
+  defaultBudgetId?: string | null,
+) => {
+  const selectedId = entity ? entity.budget_id : defaultBudgetId;
+  const customSource = entity?.budget ? "custom" : "inherit";
+  return {
+    budget: budgetEditorFields(entity?.budget),
+    policy: entity?.budget,
+    budgetSource: presets.some((preset) => preset.budget_id === selectedId) ? `profile:${selectedId}` : customSource,
+  };
+};
+
+type BudgetSelectionFields = ReturnType<typeof budgetSelectionFields>;
+
+export const budgetSelectionValue = (fields: BudgetSelectionFields, original?: Budget | null) => {
+  if (fields.budgetSource !== "custom") {
+    return {
+      ok: true,
+      value: { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null },
+    } as const;
+  }
+  const parsed = permanentBudgetEditorValue(fields.budget, original);
+  if (!parsed.ok) return parsed;
+  return { ok: true, value: { budget: { ...parsed.value, ...budgetPolicyChanges(fields.policy, original) } } } as const;
+};
+
+export const changeBudgetSelection = (
+  fields: BudgetSelectionFields,
+  source: string,
+  presets: readonly BudgetPreset[],
+): BudgetSelectionFields => {
+  const selected =
+    source === "custom" ? presets.find((preset) => `profile:${preset.budget_id}` === fields.budgetSource) : null;
+  return {
+    budgetSource: source,
+    budget: { ...(selected ? budgetEditorFields(selected) : fields.budget), budgetEnabled: source === "custom" },
+    policy: selected ?? fields.policy,
+  };
+};
+
 interface BudgetAssignment {
   budget?: Budget | null;
   budget_override?: Budget | null;
