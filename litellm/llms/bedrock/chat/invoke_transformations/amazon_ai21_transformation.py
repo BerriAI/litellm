@@ -56,9 +56,10 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(

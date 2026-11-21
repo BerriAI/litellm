@@ -1,0 +1,7 @@
+{{- include "litellm.pdb" (dict
+  "root" $
+  "enabled" .Values.monolith.enabled
+  "component" .Values.gateway
+  "componentName" "proxy"
+  "fullname" (include "litellm.proxy.fullname" .)
+  "selectorLabels" (include "litellm.proxy.selectorLabels" .)) }}

@@ -1,0 +1,2 @@
+- `Resolution` and the target, node, TLS and auth types inside it: what `redis-resolve` interprets merged kwargs into, `redis-connect` turns into a client and `redis-client` connects with, so none of them converts another's copy.
+- Data only. It depends on `secret-value`, `serde_json` and `veil` and nothing else, so `redis-resolve` never pulls in redis-rs or tokio. Anything that needs redis-rs, like building a `ConnectionInfo` or reading TLS files, lives in `redis-client`

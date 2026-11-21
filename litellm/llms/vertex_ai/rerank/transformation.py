@@ -10,13 +10,14 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import int_of, iter_items, json_contains, require_get, subscript
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.llms.vertex_ai.common_utils import (
-    vertex_request_labels_from_litellm_params,
-)
+from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
+from litellm.llms.vertex_ai.request_labels import without_caller_labels_header
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
@@ -25,6 +26,8 @@ from litellm.types.rerank import (
     RerankResponseMeta,
     RerankResponseResult,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
@@ -75,7 +78,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
@@ -107,7 +110,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
             default_headers["Authorization"] = headers["Authorization"]
 
         # Merge other headers, overriding any default ones except Authorization
-        return {**default_headers, **headers}
+        return {**default_headers, **without_caller_labels_header(headers)}
 
     def transform_rerank_request(
         self,
@@ -151,7 +154,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         # When return_documents is False, we want to ignore record details (return only IDs)
         request_data["ignoreRecordDetailsInResponse"] = not return_documents
 
-        user_labels: Final = vertex_request_labels_from_litellm_params(litellm_params)
+        user_labels: Final = pop_vertex_request_labels(None, litellm_params)
         if user_labels:
             request_data["userLabels"] = user_labels
 
@@ -172,23 +175,23 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Transform Vertex AI Discovery Engine response to Cohere format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Failed to parse response: {e}")
 
         # Extract records from response
-        records: Final = raw_response_json.get("records", [])
+        records: Final = require_get(raw_response_json).get("records", [])
 
         # Convert to Cohere format
         results: Final = []
-        for record in records:
+        for record in iter_items(records):
             # Handle both cases: with full details and with only IDs
-            if "score" in record:
+            if json_contains(record, "score"):
                 # Full response with score and details
                 results.append(
                     {
-                        "index": int(record["id"]),
-                        "relevance_score": record.get("score", 0.0),
+                        "index": int_of(subscript(record, "id")),
+                        "relevance_score": require_get(record).get("score", 0.0),
                     }
                 )
             else:
@@ -196,7 +199,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
                 # We can't provide a relevance score, so we'll use a default
                 results.append(
                     {
-                        "index": int(record["id"]),
+                        "index": int_of(subscript(record, "id")),
                         "relevance_score": 1.0,  # Default score when details are ignored
                     }
                 )

@@ -156,7 +156,7 @@ def test_apply_guardrail_returns_a_block_error_for_generic_guardrails(gateway: G
         assert error.model_dump() == {
             "error": {
                 "message": _BLOCK_REASON,
-                "type": "internal_server_error",
+                "type": "invalid_request_error",
                 "param": None,
                 "code": 400,
             }

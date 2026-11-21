@@ -4,17 +4,20 @@ Translate from OpenAI's `/v1/embeddings` to Sagemaker's `/invoke`
 In the Huggingface TGI format.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import AllEmbeddingInputValues
 
 from httpx._models import Headers, Response
+from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import SagemakerError
@@ -22,6 +25,7 @@ from .cohere_transformation import SagemakerCohereEmbeddingConfig
 from .openai_transformation import SagemakerOpenAIEmbeddingConfig
 
 OPENAI_COMPATIBLE_ROUTE: Final = "openai/"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _model_specific_config(model: str) -> BaseEmbeddingConfig | None:
@@ -106,7 +110,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         Transform embedding response for Hugging Face models on SageMaker
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise SagemakerError(
                 message=f"Failed to parse response: {e}",
@@ -158,7 +162,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

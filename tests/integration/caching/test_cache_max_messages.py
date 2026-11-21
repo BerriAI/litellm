@@ -15,9 +15,12 @@ from integration._support.openai_wire import chat_reply, responses_reply
 from integration._support.process import owned_proxy
 from integration._support.provider import SharedProvider
 from integration._support.wire import Reply, Request, wire_server
+from integration.caching.response_cache_case import await_entry, redis_store
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 from redis.exceptions import ResponseError
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _Turns = Callable[[str], tuple[list[JsonValue], list[JsonValue]]]
 _INDEXES: Final = TypeAdapter(tuple[bytes, ...])
@@ -131,11 +134,6 @@ def _first(value: JsonValue) -> dict[str, JsonValue]:
     return object_value(value[0])
 
 
-def _cached_responses(redis: Redis[bytes]) -> frozenset[bytes]:
-    digests: Final = tuple(key for key in redis.scan_iter() if len(key) == 64)
-    return frozenset(key for key in digests if b'"response"' in (redis.get(key) or b""))
-
-
 _SCENARIOS: Final = (
     pytest.param("/v1/messages", "anthropic/claude-sonnet-5-5", _claude_code_turns, id="messages"),
     pytest.param("/v1/chat/completions", "openai/gpt-5.4", _agent_turns, id="chat-completions"),
@@ -147,22 +145,22 @@ _SCENARIOS: Final = (
 def test_cache_serves_a_turn_under_max_messages_and_skips_one_past_it(
     gateway: Gateway, provider: SharedProvider, path: str, model: str, turns: _Turns
 ) -> None:
-    under_cap, past_cap = turns(f"update the config {uuid.uuid4().hex}")
-    provider.expect(_reply(path, "first answer"), _reply(path, "second answer"), _reply(path, "third answer"))
+    task: Final = uuid.uuid4().hex
+    under_cap, past_cap = turns(f"update the config {task}")
+    answers: Final = tuple(f"{ordinal} answer {task}" for ordinal in ("first", "second", "third"))
+    provider.expect(*(_reply(path, answer) for answer in answers))
 
-    redis_client: Final[Redis[bytes]] = Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
-    with redis_client as redis:
-        cached_before: Final = _cached_responses(redis)
+    with redis_store() as store:
         gateway.post(path, _body(path, model, under_cap))
-        eventually(lambda: _cached_responses(redis) - cached_before, lambda written: len(written) == 1)
+        await_entry(store, answers[0])
     repeated: Final = gateway.post(path, _body(path, model, under_cap))
     past_cap_twice: Final = (
         gateway.post(path, _body(path, model, past_cap)),
         gateway.post(path, _body(path, model, past_cap)),
     )
 
-    assert _answer(path, repeated) == "first answer", "a repeated turn under max_messages was not served from the cache"
-    assert tuple(_answer(path, answer) for answer in past_cap_twice) == ("second answer", "third answer"), (
+    assert _answer(path, repeated) == answers[0], "a repeated turn under max_messages was not served from the cache"
+    assert tuple(_answer(path, answer) for answer in past_cap_twice) == answers[1:], (
         "a turn past max_messages was served from the cache"
     )
     assert len(provider.received()) == 3

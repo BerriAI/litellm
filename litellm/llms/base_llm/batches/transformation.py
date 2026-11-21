@@ -47,8 +47,7 @@ class BaseBatchesConfig(ABC):
         return {
             k: v
             for k, v in class_attributes.items()
-            if not k.startswith("__")
-            and not k.startswith("_abc")
+            if not k.startswith("_")
             and not isinstance(
                 v,
                 (
@@ -120,7 +119,7 @@ class BaseBatchesConfig(ABC):
         create_batch_data: CreateBatchRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> bytes | str | dict[str, Any]:
+    ) -> bytes | str | dict[str, object]:
         """
         Transform the batch creation request to provider-specific format.
 
@@ -161,7 +160,7 @@ class BaseBatchesConfig(ABC):
         batch_id: str,
         optional_params: dict,
         litellm_params: dict,
-    ) -> bytes | str | dict[str, Any]:
+    ) -> bytes | str | dict[str, object]:
         """
         Transform the batch retrieval request to provider-specific format.
 

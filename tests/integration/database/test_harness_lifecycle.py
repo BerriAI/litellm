@@ -79,8 +79,7 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
             "INTEGRATION_COVERAGE_FILE",
             "INTEGRATION_CASE_SHARDS",
             "INTEGRATION_CASE_SHARD_INDEX",
-            "CIRCLE_NODE_TOTAL",
-            "CIRCLE_NODE_INDEX",
+            "INTEGRATION_SHARD_FILES",
             "PYTEST_XDIST_WORKER",
             "PYTEST_XDIST_WORKER_COUNT",
             "PYTEST_XDIST_TESTRUNUID",
@@ -217,6 +216,49 @@ def test_relay_closes_active_connections_and_releases_its_listener(factory: Rela
 
 async def _unused_peer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     await reader.read()
+
+
+async def _echo_protocol(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    while chunk := await reader.read(65536):
+        writer.write(chunk)
+        await writer.drain()
+
+
+def _protocol_message(kind: bytes, payload: bytes) -> bytes:
+    return kind + (len(payload) + 4).to_bytes(4, "big") + payload
+
+
+@pytest.mark.parametrize("prepared_trigger", (False, True))
+def test_relay_holds_cached_statements_parsed_before_arming(prepared_trigger: bool) -> None:
+    upstream_port: Final = allocate_port()
+    upstream: Final = LoopbackServer(upstream_port, _echo_protocol)
+    relay: Final = HeldStatementRelay("127.0.0.1", upstream_port, b"trigger", after=b"snapshot", armed=False)
+    startup: Final = b"\x00\x00\x00\x08\x00\x03\x00\x00"
+    snapshot: Final = _protocol_message(b"P", b"s1\x00SELECT snapshot\x00\x00\x00")
+    trigger: Final = _protocol_message(b"P", b"s2\x00SELECT trigger\x00\x00\x00")
+    bind_snapshot: Final = _protocol_message(b"B", b"\x00s1\x00\x00\x00\x00\x00\x00\x00")
+    bind_trigger: Final = _protocol_message(b"B", b"\x00s2\x00\x00\x00\x00\x00\x00\x00")
+    upstream.start()
+    try:
+        relay.start()
+        with (
+            socket.create_connection(("127.0.0.1", relay.port), timeout=5) as client,
+            client.makefile("rb") as replies,
+        ):
+            before: Final = startup + snapshot + bind_snapshot + (trigger if prepared_trigger else b"")
+            client.sendall(before)
+            assert replies.read(len(before)) == before
+            relay.arm()
+            client.sendall(bind_snapshot)
+            assert replies.read(len(bind_snapshot)) == bind_snapshot
+            held: Final = bind_trigger if prepared_trigger else _protocol_message(b"Q", b"SELECT trigger\x00")
+            client.sendall(held)
+            assert relay.held.wait(timeout=5), "cached snapshot did not open the relay barrier"
+            relay.release()
+            assert replies.read(len(held)) == held
+    finally:
+        relay.stop()
+        upstream.stop()
 
 
 def test_relay_bind_failure_closes_its_loop_and_allows_repeated_cleanup() -> None:
@@ -707,8 +749,6 @@ def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path
                 **os.environ,
                 "INTEGRATION_CASE_SHARDS": "2",
                 "INTEGRATION_CASE_SHARD_INDEX": "1",
-                "CIRCLE_NODE_TOTAL": "2",
-                "CIRCLE_NODE_INDEX": "1",
             }
         ),
         capture_output=True,
@@ -784,9 +824,16 @@ def test_worker_crash_keeps_the_original_junit_identity_and_an_incomplete_execut
         assert cases[0].find("error") is not None
 
 
-@pytest.mark.parametrize("assignment", ("absent", "missing", "foreign"))
+@pytest.mark.parametrize(
+    ("assignment", "exit_code"),
+    (
+        ("absent", pytest.ExitCode.USAGE_ERROR),
+        ("missing", pytest.ExitCode.USAGE_ERROR),
+        ("foreign", pytest.ExitCode.INTERRUPTED),
+    ),
+)
 def test_invalid_native_selections_fail_before_any_case_runs(
-    tmp_path: Path, assignment: Literal["absent", "missing", "foreign"]
+    tmp_path: Path, assignment: Literal["absent", "missing", "foreign"], exit_code: pytest.ExitCode
 ) -> None:
     root: Final = Path(__file__).resolve().parents[3]
     events: Final = tmp_path / "executed.txt"
@@ -823,7 +870,7 @@ def test_invalid_native_selections_fail_before_any_case_runs(
             timeout=15,
             check=False,
         )
-        assert result.returncode == pytest.ExitCode.USAGE_ERROR, result.stdout + result.stderr
+        assert result.returncode == exit_code, result.stdout + result.stderr
         assert not events.exists()
 
 

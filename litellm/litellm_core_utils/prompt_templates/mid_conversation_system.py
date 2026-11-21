@@ -35,11 +35,15 @@ from operator import itemgetter
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
 
+from pydantic import ValidationError
+
+from litellm.litellm_core_utils.core_helpers import spread
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
     AnthropicMessagesSystemMessageParam,
     AnthropicSystemMessageContent,
+    AnthropicToolSearchToolResultBlock,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -49,7 +53,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
 )
 
-from .common_utils import is_unsignable_thinking_block
+from .common_utils import has_blank_redacted_data, is_unsignable_thinking_block
 
 CONVERTED_SYSTEM_NOTE: Final = (
     "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
@@ -83,6 +87,11 @@ def message_field(message: object, key: str) -> object:
     """
     mapping: Final = _as_mapping(message)
     return mapping.get(key) if mapping is not None else getattr(message, key, None)
+
+
+def string_field(message: object, key: str) -> str | None:
+    value: Final = message_field(message, key)
+    return value if isinstance(value, str) else None
 
 
 def is_system_message(message: object) -> bool:
@@ -267,42 +276,50 @@ def _block_index_by_message(blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> M
 
 def _thinking_block_renders(block: object) -> bool:
     """A thinking block the converter keeps: one Anthropic can verify, so never bridged encrypted reasoning."""
-    return message_field(block, "type") in _THINKING_BLOCK_TYPES and not is_unsignable_thinking_block(block)
+    return message_field(block, "type") in _THINKING_BLOCK_TYPES and not (
+        is_unsignable_thinking_block(block) or has_blank_redacted_data(block)
+    )
 
 
 def _assistant_part_renders(part: object) -> bool:
     """A text part always renders: the converter pads empty text with a placeholder."""
     part_type: Final = message_field(part, "type")
-    if part_type == "thinking":
+    if part_type in _THINKING_BLOCK_TYPES:
         return _thinking_block_renders(part)
     return part_type in _RENDERED_ASSISTANT_PART_TYPES or (
         isinstance(part_type, str) and part_type.endswith("_tool_result")
     )
 
 
-def _separate_thinking_blocks_render(message: object, parts: Sequence[object]) -> bool:
-    """``thinking_blocks`` reach the wire only when no inline thinking part claims the slot.
-
-    The converter skips the separate blocks as soon as the content list carries a
-    ``thinking`` or ``redacted_thinking`` part, whether or not that part itself renders.
-    """
-    if any(message_field(part, "type") in _THINKING_BLOCK_TYPES for part in parts):
-        return False
+def _separate_thinking_blocks_render(message: object) -> bool:
     return any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
+
+
+def is_anthropic_server_tool_use(tool_id: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
 
 
 def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
 
 
+def anthropic_tool_search_result(block: object) -> AnthropicToolSearchToolResultBlock | None:
+    if message_field(block, "type") != "tool_search_tool_result":
+        return None
+    try:
+        return AnthropicToolSearchToolResultBlock.model_validate(block)
+    except ValidationError:
+        return None
+
+
 def find_anthropic_server_tool_result(
     tool_id: str,
-    web_search_results: Sequence[object] | None,
-    tool_results: Sequence[object] | None,
+    web_search_results: object,
+    tool_results: object,
 ) -> dict[str, object] | None:
     if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
         return None
-    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    candidates: Final = (*spread(web_search_results or ()), *spread(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
         None,
@@ -404,7 +421,7 @@ def _assistant_renders(message: object, answered: frozenset[str]) -> bool:
     parts: Final = parts_of(content)
     return (
         any(_assistant_part_renders(part) for part in parts)
-        or _separate_thinking_blocks_render(message, parts)
+        or _separate_thinking_blocks_render(message)
         or _tool_calls_render(message, answered)
         or bool(message_field(message, "function_call"))
         or bool(message_field(message_field(message, "provider_specific_fields"), "compaction_blocks"))
@@ -487,7 +504,7 @@ def _runs_by_anchor(
 ) -> Mapping[int, tuple[tuple[int, ...], ...]]:
     anchored: Final = tuple(sorted(((anchor, run) for run, anchor in anchors if anchor is not None), key=itemgetter(0)))
     return MappingProxyType(
-        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=itemgetter(0))}
+        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=lambda entry: entry[0])}
     )
 
 

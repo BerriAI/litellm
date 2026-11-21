@@ -18,6 +18,10 @@ Plugin iframe auth:
   litellm bearer token, so a compromised plugin learns only the caller's
   identity, never their credential.  LITELLM_SALT_KEY itself is never shared
   with plugins — each plugin holds only its own derived key.
+
+  With general_settings.fips_mode on, the per-plugin key is instead
+  derive_key_from_salt_key(b"litellm-plugin:session-claim:", plugin_name), and
+  the Fernet token is built from the FIPS provider's DRBG, AES-CBC and HMAC.
 """
 
 import base64
@@ -25,19 +29,38 @@ import hashlib
 import hmac as _hmac
 import json
 import os
+import ssl
 import time
 from collections.abc import Mapping
 from typing import Final
 
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import PluginConfig, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import derive_key_from_salt_key
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router: Final = APIRouter()
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class PluginSessionClaim(TypedDict):
+    plugin: NotRequired[ReadOnly[object]]
+    user_id: NotRequired[ReadOnly[str]]
+    user_role: NotRequired[ReadOnly[str]]
+    exp: NotRequired[ReadOnly[int | float | str]]
+
+
+_PLUGIN_SESSION_CLAIM: Final = TypeAdapter(PluginSessionClaim)
+
 
 # Hop-by-hop headers (RFC 7230) and the litellm session cookie — never forwarded
 # to a plugin backend.  Credential headers are added on top per-request from the
@@ -131,9 +154,28 @@ def _plugin_fernet(plugin_name: str) -> Fernet:
     A plugin possessing its own key cannot derive the master salt or
     forge claims intended for a different plugin.
     """
+    if fips_mode_active():
+        return Fernet(base64.urlsafe_b64encode(_fips_plugin_key(plugin_name)))
     salt: Final = os.getenv("LITELLM_SALT_KEY", "").encode()
     derived: Final = _hmac.new(salt, plugin_name.encode(), hashlib.sha256).digest()
     return Fernet(base64.urlsafe_b64encode(derived))
+
+
+_FIPS_PLUGIN_KEY_LABEL: Final = b"litellm-plugin:session-claim:"
+
+
+def _fips_plugin_key(plugin_name: str) -> bytes:
+    return bytes.fromhex(derive_key_from_salt_key(_FIPS_PLUGIN_KEY_LABEL, plugin_name.encode()))
+
+
+def _fips_fernet_token(key: bytes, data: bytes) -> str:
+    """Encrypt data into a standard Fernet token using only the FIPS provider's DRBG, AES-128-CBC and HMAC-SHA256."""
+    iv: Final = ssl.RAND_bytes(16)
+    padder: Final = padding.PKCS7(128).padder()
+    encryptor: Final = Cipher(algorithms.AES(key[16:]), modes.CBC(iv)).encryptor()
+    ciphertext: Final = encryptor.update(padder.update(data) + padder.finalize()) + encryptor.finalize()
+    body: Final = b"\x80" + int(time.time()).to_bytes(8, "big") + iv + ciphertext
+    return base64.urlsafe_b64encode(body + _hmac.digest(key[:16], body, "sha256")).decode()
 
 
 _CLAIM_TTL_SECONDS: Final = 30  # identity claims expire after 30 s
@@ -152,10 +194,12 @@ def issue_plugin_session_claim(plugin_name: str, user_id: str | None, user_role:
         "user_role": user_role or "",
         "exp": int(time.time()) + _CLAIM_TTL_SECONDS,
     }
+    if fips_mode_active():
+        return _fips_fernet_token(_fips_plugin_key(plugin_name), json.dumps(claim).encode())
     return _plugin_fernet(plugin_name).encrypt(json.dumps(claim).encode()).decode()
 
 
-def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict:
+def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> PluginSessionClaim:
     """Verify and decode a plugin session claim.
 
     Raises ValueError if the HMAC is invalid, the audience is wrong, or
@@ -163,7 +207,7 @@ def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict:
     """
     try:
         raw: Final = _plugin_fernet(plugin_name).decrypt(ciphertext.encode(), ttl=_CLAIM_TTL_SECONDS)
-        claim: Final = json.loads(raw)
+        claim: Final = _PLUGIN_SESSION_CLAIM.validate_python(json.loads(raw))
     except (InvalidToken, Exception) as exc:
         raise ValueError("Invalid, tampered, or expired plugin session claim") from exc
 

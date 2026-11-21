@@ -18,6 +18,8 @@ from integration.spend.test_batch_completion_accounting import batch_input_file,
 from integration.streaming.test_stream_contracts import text_stream
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 CACHED_PROMPT_TOKENS: Final = 4
 
 

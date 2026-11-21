@@ -1,11 +1,12 @@
 """Pod-local queue of shadow-eval funnel increments, drained by the spend-update job.
 
 The shadow-eval success hook counts the sampled-traffic outcomes that never produce an
-attempt row (a lost sampling dice roll, an unjudgeable request shape, a concurrency
-shed), so a job's results can state what share of its eligible traffic the judged rows
-represent. Counters are advisory coverage stats: a pod dying loses at most one flush
-interval, and a failed flush drops its batch because a repeated increment is worse
-than an undercount (same call as the auto-router session rollup flush).
+attempt row (a lost sampling dice roll, a reverse sample the baseline itself served, an
+unjudgeable request shape, a concurrency shed), so a job's results can state what share
+of its eligible traffic the judged rows represent. Counters are advisory coverage stats:
+a pod dying loses at most one flush interval, and a failed flush drops its batch because
+a repeated increment is worse than an undercount (same call as the auto-router session
+rollup flush).
 """
 
 from typing import TYPE_CHECKING, Final, Literal
@@ -16,9 +17,15 @@ from litellm.proxy.db.db_span import db_span
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
-ShadowEvalFunnelStage = Literal["not_sampled", "unjudgeable", "shed", "withheld"]
+ShadowEvalFunnelStage = Literal["not_sampled", "same_model", "unjudgeable", "shed", "withheld"]
 
-FUNNEL_STAGES: Final[tuple[ShadowEvalFunnelStage, ...]] = ("not_sampled", "unjudgeable", "shed", "withheld")
+FUNNEL_STAGES: Final[tuple[ShadowEvalFunnelStage, ...]] = (
+    "not_sampled",
+    "same_model",
+    "unjudgeable",
+    "shed",
+    "withheld",
+)
 
 _pending: dict[str, dict[ShadowEvalFunnelStage, int]] = {}  # mutable-ok: module-level queue, single event loop
 

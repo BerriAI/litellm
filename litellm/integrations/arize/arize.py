@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
-    Span = _Span | Any
+    Span = _Span
 else:
     Protocol = Any
     Span = Any
@@ -166,7 +166,7 @@ class ArizeLogger(OpenTelemetry):
         primary ``otel`` callback which handles proxy-level parent spans.
         """
 
-    def set_attributes(self, span: Span, kwargs, response_obj: Any | None):
+    def set_attributes(self, span: Span, kwargs, response_obj: object):
         ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
 
     @staticmethod

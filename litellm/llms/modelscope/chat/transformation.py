@@ -7,6 +7,7 @@ from typing import Final, Literal, cast, overload
 
 from typing_extensions import override
 
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -86,9 +87,4 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default ModelScope /chat/completions endpoint.
         """
-        clean_api_base: Final = (api_base or self.DEFAULT_BASE_URL).rstrip("/")
-
-        if not clean_api_base.endswith("/chat/completions"):
-            return f"{clean_api_base}/chat/completions"
-
-        return clean_api_base
+        return ensure_api_route(api_base or self.DEFAULT_BASE_URL, "chat/completions")
