@@ -54,6 +54,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     tool_call_dict_from_output_item,
 )
 from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -62,6 +63,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
     effective_scan_only_tool_results_for_guardrail,
+    effective_scan_tool_calls_as_text_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     list_field,
@@ -398,6 +400,15 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 
 
 _TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+# Every output item the client acts on, as the Responses stream iterator classes them. Wider than the items
+# whose payload a guardrail scans.
+_CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {
+    "mcp_approval_request",
+    "computer_call",
+    "local_shell_call",
+    "shell_call",
+    "apply_patch_call",
+}
 _TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
 _WEB_SEARCH_CALL_TYPE: Final = "web_search_call"
 _ITEM_ID_KEYED_TOOL_CALL_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, _WEB_SEARCH_CALL_TYPE})
@@ -945,6 +956,7 @@ def _input_item_provenance(
             input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
             responses_api_request=request_params,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
         for item in raw_input
     )
@@ -953,6 +965,7 @@ def _input_item_provenance(
             input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
             responses_api_request=request_params,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
     )
     if full_conversion != tuple(expected_messages):
@@ -966,6 +979,7 @@ def _input_item_provenance(
                 input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
                 responses_api_request=request_params,
                 replay_tool_search=True,
+                member_name=qualified_member_name,
             )
         )
         for start, end in units
@@ -1284,6 +1298,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             input=input_data,
             responses_api_request=data,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
         return cast(list[AllMessageValues], messages) if messages else None
 
@@ -1329,7 +1344,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             () if is_server_tool_search_tool(tool) else form.chat_tools
             for tool, form in zip(
                 scanned_tools,
-                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools),
+                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools, qualified_member_name),
                 strict=True,
             )
         )
@@ -1341,7 +1356,19 @@ class OpenAIResponsesHandler(BaseTranslation):
             skip_tool=skip_tool,
             scan_only=scan_only,
         )
-        if not extracted.inputs.get("texts"):
+        if (
+            effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
+            and not scan_only
+            and not isinstance(input_data, str)
+        ):
+            history_tool_calls: Final = [
+                _scanned_tool_call(item, item_idx)
+                for item_idx, item in enumerate(input_data)
+                if item.get("type") in _TOOL_CALL_ITEM_TYPES
+            ]
+            if history_tool_calls:
+                extracted.inputs["tool_calls"] = history_tool_calls
+        if not extracted.inputs.get("texts") and not extracted.inputs.get("tool_calls"):
             return data
         if scoped_structured_messages:
             extracted.inputs["structured_messages"] = scoped_structured_messages
@@ -1352,7 +1379,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
         self._apply_guardrailed_tools_to_data(
-            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools"), scan_only=scan_only
+            data,
+            original_tools,
+            flattened_tool_groups,
+            guardrailed_inputs.get("tools"),
+            scan_only=scan_only,
+            guardrail_name=guardrail_to_apply.guardrail_name,
         )
         written_back: Final = self._written_back_request_fields(
             data,
@@ -1508,13 +1540,15 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrailed_tools: Sequence[ChatCompletionToolParam] | None,
         *,
         scan_only: bool,
+        guardrail_name: str | None,
     ) -> None:
         if guardrailed_tools is None:
             return
         merge: Final = append_returned_tools if scan_only else merge_guardrailed_tools
-        data["tools"] = list(  # rebind-ok: in-place request rewrite
-            merge(original_tools, flattened_tool_groups, guardrailed_tools)
-        )
+        merged: Final = merge(original_tools, flattened_tool_groups, guardrailed_tools)
+        if merged is None:
+            raise unappliable_request_rewrite(guardrail_name)
+        data["tools"] = list(merged)  # rebind-ok: in-place request rewrite
 
     def _extract_input_text_and_images(
         self,
@@ -2447,6 +2481,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         ):
             return tuple(responses_so_far)
         return (*responses_so_far, _released_envelope(responses_so_far))
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        return self._has_streamed_tool_call_events((item,)) or (
+            stream_item_field(item, "type") in _OUTPUT_ITEM_EVENT_TYPES
+            and stream_item_field(stream_item_field(item, "item"), "type") in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES
+        )
 
     @staticmethod
     def _has_streamed_tool_call_events(responses_so_far: Sequence[object]) -> bool:

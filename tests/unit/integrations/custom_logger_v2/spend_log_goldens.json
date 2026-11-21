@@ -1,0 +1,491 @@
+{
+  "failure": [
+    {
+      "name": "call_id_rows",
+      "request": {
+        "billed_failed_attempts": [
+          {
+            "attempted_retries": 0,
+            "deployment_id": "dep-a",
+            "response_cost": 0.25,
+            "usage": {
+              "completion_tokens": 0,
+              "prompt_tokens": 24,
+              "total_tokens": 24
+            }
+          },
+          {
+            "attempted_retries": 1,
+            "deployment_id": null,
+            "response_cost": 0.125,
+            "usage": {
+              "completion_tokens": 0,
+              "prompt_tokens": 24,
+              "total_tokens": 24
+            }
+          }
+        ],
+        "combined_usage_object": {
+          "completion_tokens": 0,
+          "prompt_tokens": 24,
+          "total_tokens": 24
+        },
+        "litellm_call_id": "call-1",
+        "response_cost": 0.5
+      },
+      "rows": [
+        {
+          "id": "call-1",
+          "litellm_call_id": "call-1",
+          "parent_request_id": null,
+          "response_cost": 0.5
+        },
+        {
+          "id": "call-1-attempt-0",
+          "litellm_call_id": "call-1-attempt-0",
+          "parent_request_id": "call-1",
+          "response_cost": 0.25
+        },
+        {
+          "id": "call-1-attempt-1",
+          "litellm_call_id": "call-1-attempt-1",
+          "parent_request_id": "call-1",
+          "response_cost": 0.125
+        }
+      ]
+    },
+    {
+      "name": "payload_id_rows",
+      "request": {
+        "billed_failed_attempts": [
+          {
+            "attempted_retries": 0,
+            "deployment_id": "dep-a",
+            "response_cost": 0.25,
+            "usage": {
+              "completion_tokens": 0,
+              "prompt_tokens": 24,
+              "total_tokens": 24
+            }
+          },
+          {
+            "attempted_retries": 1,
+            "deployment_id": null,
+            "response_cost": 0.125,
+            "usage": {
+              "completion_tokens": 0,
+              "prompt_tokens": 24,
+              "total_tokens": 24
+            }
+          }
+        ],
+        "combined_usage_object": {
+          "completion_tokens": 0,
+          "prompt_tokens": 24,
+          "total_tokens": 24
+        },
+        "litellm_call_id": "call-1",
+        "response_cost": 0.5,
+        "standard_logging_object": {
+          "hidden_params": {},
+          "id": "payload-1",
+          "metadata": {},
+          "model_map_information": null,
+          "request_tags": []
+        }
+      },
+      "rows": [
+        {
+          "id": "payload-1",
+          "litellm_call_id": "call-1",
+          "parent_request_id": null,
+          "response_cost": 0.5
+        },
+        {
+          "id": "payload-1-attempt-0",
+          "litellm_call_id": "call-1-attempt-0",
+          "parent_request_id": "call-1",
+          "response_cost": 0.25
+        },
+        {
+          "id": "payload-1-attempt-1",
+          "litellm_call_id": "call-1-attempt-1",
+          "parent_request_id": "call-1",
+          "response_cost": 0.125
+        }
+      ]
+    },
+    {
+      "name": "late_guardrails_are_charged",
+      "request": {
+        "litellm_call_id": "call-1",
+        "metadata": {
+          "error_information": {
+            "error_budget_entity_id": null,
+            "error_budget_entity_type": null,
+            "error_budget_limit": null,
+            "error_budget_spend": null,
+            "error_class": "Exception",
+            "error_code": "",
+            "error_cooldown_deployments": null,
+            "error_message": "upstream broke",
+            "error_provider_request_id": null,
+            "error_rate_limit_category": null,
+            "error_rate_limit_type": null,
+            "llm_provider": "",
+            "normalized_error": "UNCLASSIFIED",
+            "traceback": ""
+          },
+          "standard_logging_guardrail_information": [
+            {
+              "guardrail_cost": 0.125,
+              "guardrail_name": "g"
+            }
+          ],
+          "status": "failure",
+          "used_client_oauth_token": null,
+          "user_api_key": "hashed-key",
+          "user_api_key_alias": null,
+          "user_api_key_auth_metadata": {},
+          "user_api_key_budget_reset_at": null,
+          "user_api_key_customer_budget_scopes": null,
+          "user_api_key_customer_hierarchy": null,
+          "user_api_key_customer_member_alias": null,
+          "user_api_key_customer_member_id": null,
+          "user_api_key_customer_org_alias": null,
+          "user_api_key_customer_org_id": null,
+          "user_api_key_customer_team_alias": null,
+          "user_api_key_customer_team_id": null,
+          "user_api_key_end_user_id": null,
+          "user_api_key_hash": "hashed-key",
+          "user_api_key_max_budget": null,
+          "user_api_key_metadata": {},
+          "user_api_key_org_alias": null,
+          "user_api_key_org_id": null,
+          "user_api_key_project_alias": null,
+          "user_api_key_project_id": null,
+          "user_api_key_request_route": null,
+          "user_api_key_spend": 0.0,
+          "user_api_key_team_alias": null,
+          "user_api_key_team_id": "t",
+          "user_api_key_team_max_budget": null,
+          "user_api_key_team_metadata": null,
+          "user_api_key_team_spend": null,
+          "user_api_key_user_email": null,
+          "user_api_key_user_id": "u",
+          "user_api_key_user_max_budget": null,
+          "user_api_key_user_spend": null
+        },
+        "standard_logging_object": {
+          "hidden_params": {},
+          "id": "payload-1",
+          "metadata": {},
+          "model_map_information": null,
+          "request_tags": []
+        }
+      },
+      "rows": [
+        {
+          "id": "payload-1",
+          "litellm_call_id": "call-1",
+          "parent_request_id": null,
+          "response_cost": 0.125
+        }
+      ]
+    },
+    {
+      "name": "guardrails_lifted_from_litellm_metadata",
+      "request": {
+        "combined_usage_object": {
+          "completion_tokens": 0,
+          "prompt_tokens": 24,
+          "total_tokens": 24
+        },
+        "litellm_call_id": "call-1",
+        "litellm_metadata": {
+          "standard_logging_guardrail_information": [
+            {
+              "guardrail_cost": 0.125,
+              "guardrail_name": "g"
+            }
+          ]
+        },
+        "response_cost": 0.5
+      },
+      "rows": [
+        {
+          "id": "call-1",
+          "litellm_call_id": "call-1",
+          "parent_request_id": null,
+          "response_cost": 0.625
+        }
+      ]
+    },
+    {
+      "name": "finalized_cost_wins",
+      "request": {
+        "combined_usage_object": {
+          "completion_tokens": 0,
+          "prompt_tokens": 24,
+          "total_tokens": 24
+        },
+        "litellm_call_id": "call-1",
+        "response_cost": 0.5,
+        "standard_logging_object": {
+          "cost_finalized": true,
+          "hidden_params": {},
+          "id": "payload-1",
+          "metadata": {},
+          "model_map_information": null,
+          "request_tags": [],
+          "response_cost": 0.75
+        }
+      },
+      "rows": [
+        {
+          "id": "payload-1",
+          "litellm_call_id": "call-1",
+          "parent_request_id": null,
+          "response_cost": 0.75
+        }
+      ]
+    },
+    {
+      "name": "stashed_cost_without_usage_is_not_charged",
+      "request": {
+        "litellm_call_id": "call-1",
+        "response_cost": 0.5
+      },
+      "rows": [
+        {
+          "id": "call-1",
+          "litellm_call_id": "call-1",
+          "parent_request_id": null,
+          "response_cost": 0.0
+        }
+      ]
+    },
+    {
+      "name": "call_id_from_litellm_params",
+      "request": {
+        "billed_failed_attempts": [
+          {
+            "attempted_retries": 0,
+            "deployment_id": "dep-a",
+            "response_cost": 0.25,
+            "usage": {
+              "completion_tokens": 0,
+              "prompt_tokens": 24,
+              "total_tokens": 24
+            }
+          }
+        ],
+        "litellm_params": {
+          "litellm_call_id": "call-9",
+          "metadata": {
+            "error_information": {
+              "error_budget_entity_id": null,
+              "error_budget_entity_type": null,
+              "error_budget_limit": null,
+              "error_budget_spend": null,
+              "error_class": "Exception",
+              "error_code": "",
+              "error_cooldown_deployments": null,
+              "error_message": "upstream broke",
+              "error_provider_request_id": null,
+              "error_rate_limit_category": null,
+              "error_rate_limit_type": null,
+              "llm_provider": "",
+              "normalized_error": "UNCLASSIFIED",
+              "traceback": ""
+            },
+            "status": "failure",
+            "used_client_oauth_token": null,
+            "user_api_key": "hashed-key",
+            "user_api_key_alias": null,
+            "user_api_key_auth_metadata": {},
+            "user_api_key_budget_reset_at": null,
+            "user_api_key_customer_budget_scopes": null,
+            "user_api_key_customer_hierarchy": null,
+            "user_api_key_customer_member_alias": null,
+            "user_api_key_customer_member_id": null,
+            "user_api_key_customer_org_alias": null,
+            "user_api_key_customer_org_id": null,
+            "user_api_key_customer_team_alias": null,
+            "user_api_key_customer_team_id": null,
+            "user_api_key_end_user_id": null,
+            "user_api_key_hash": "hashed-key",
+            "user_api_key_max_budget": null,
+            "user_api_key_metadata": {},
+            "user_api_key_org_alias": null,
+            "user_api_key_org_id": null,
+            "user_api_key_project_alias": null,
+            "user_api_key_project_id": null,
+            "user_api_key_request_route": null,
+            "user_api_key_spend": 0.0,
+            "user_api_key_team_alias": null,
+            "user_api_key_team_id": "t",
+            "user_api_key_team_max_budget": null,
+            "user_api_key_team_metadata": null,
+            "user_api_key_team_spend": null,
+            "user_api_key_user_email": null,
+            "user_api_key_user_id": "u",
+            "user_api_key_user_max_budget": null,
+            "user_api_key_user_spend": null
+          },
+          "proxy_server_request": {}
+        }
+      },
+      "rows": [
+        {
+          "id": "None",
+          "litellm_call_id": null,
+          "parent_request_id": null,
+          "response_cost": 0.0
+        },
+        {
+          "id": "call-9-attempt-0",
+          "litellm_call_id": "call-9-attempt-0",
+          "parent_request_id": "call-9",
+          "response_cost": 0.25
+        }
+      ]
+    }
+  ],
+  "recorded_from": "main 4bc7db1448: get_logging_payload and ProxyDBLogger.async_post_call_failure_hook",
+  "success": [
+    {
+      "id": "dict-id",
+      "name": "response_dict_id_wins",
+      "request": {
+        "litellm_call_id": "call-1",
+        "standard_logging_object": {
+          "hidden_params": {},
+          "id": "payload-1",
+          "metadata": {},
+          "model_map_information": null,
+          "request_tags": []
+        }
+      },
+      "response": {
+        "id": "dict-id"
+      }
+    },
+    {
+      "id": "payload-1",
+      "name": "payload_id_when_the_response_has_none",
+      "request": {
+        "litellm_call_id": "call-1",
+        "standard_logging_object": {
+          "hidden_params": {},
+          "id": "payload-1",
+          "metadata": {},
+          "model_map_information": null,
+          "request_tags": []
+        }
+      },
+      "response": "plain text"
+    },
+    {
+      "id": "call-1",
+      "name": "call_id_when_nothing_else",
+      "request": {
+        "litellm_call_id": "call-1"
+      },
+      "response": null
+    },
+    {
+      "id": "batch-1_batch_cost",
+      "name": "batch_suffix",
+      "request": {
+        "call_type": "aretrieve_batch",
+        "litellm_call_id": "call-1",
+        "standard_logging_object": {
+          "hidden_params": {},
+          "id": "batch-1",
+          "metadata": {},
+          "model_map_information": null,
+          "request_tags": []
+        }
+      },
+      "response": {
+        "id": "batch-1"
+      }
+    },
+    {
+      "id": "resp-1_background_cost",
+      "name": "background_suffix",
+      "request": {
+        "call_type": "aget_responses",
+        "litellm_call_id": "call-1",
+        "litellm_params": {
+          "metadata": {
+            "internal_call_origin": "background_response_cost_poll"
+          }
+        }
+      },
+      "response": {
+        "id": "resp-1"
+      }
+    },
+    {
+      "id": "cached-1",
+      "name": "cache_hit",
+      "request": {
+        "cache_hit": true,
+        "litellm_call_id": "call-1"
+      },
+      "response": {
+        "id": "cached-1"
+      }
+    },
+    {
+      "id": "video_abc_video_cost",
+      "name": "completed_video_poll",
+      "request": {
+        "call_type": "avideo_status",
+        "litellm_call_id": "call-1",
+        "litellm_params": {
+          "video_id": "video_abc"
+        },
+        "polled_video_status": "completed",
+        "standard_logging_object": {
+          "hidden_params": {},
+          "id": "payload-1",
+          "metadata": {},
+          "model_map_information": null,
+          "request_tags": [],
+          "response_cost": 2.0
+        }
+      },
+      "response": {
+        "id": "video_abc"
+      }
+    },
+    {
+      "id": "call-1_guardrail_cost",
+      "name": "video_poll_paying_only_its_guardrail",
+      "request": {
+        "call_type": "avideo_status",
+        "litellm_call_id": "call-1",
+        "standard_logging_object": {
+          "guardrail_information": [
+            {
+              "guardrail_cost": 0.125,
+              "guardrail_name": "g"
+            }
+          ],
+          "hidden_params": {},
+          "id": "payload-1",
+          "metadata": {},
+          "model_map_information": null,
+          "request_tags": [],
+          "response_cost": 0.125
+        }
+      },
+      "response": {
+        "id": "video_abc"
+      }
+    }
+  ]
+}

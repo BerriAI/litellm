@@ -34,9 +34,9 @@ from litellm.constants import TOOL_SPEND_TOP_TOOLS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.repositories.table_repositories import (
     DailyToolSpendRepository,
-    SpendLogsRepository,
     SpendLogToolIndexRepository,
 )
 from litellm.repositories.team_repository import TeamRepository

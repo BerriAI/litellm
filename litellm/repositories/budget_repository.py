@@ -88,6 +88,14 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         )
         return _budget_for_auth(budget_id, payload)
 
+    async def find_team_member_default_row(self, budget_id: str) -> Mapping[str, object] | None:
+        """Every column of a team's default per-member budget ``budget_id``, its budget windows included, read from
+        the writer because a member add links the budget it finds."""
+        payload: Final = await rust_database.required_repository(RustBudgetRepository).find_team_member_default_budget(
+            budget_id, use_writer=True
+        )
+        return None if payload is None else _BUDGET_ROW.validate_json(payload)
+
     async def create_budget(
         self,
         created_by: str,

@@ -37,7 +37,13 @@ import litellm
 from litellm import verbose_logger
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, lax_bool, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    int_of,
+    lax_bool,
+    require_attributes,
+    require_get,
+)
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_property_count,
@@ -2627,14 +2633,10 @@ def get_bedrock_response_stream_shape():
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
 
 
-class _ModeledErrorMetadata(TypedDict, total=False):
-    httpStatusCode: ReadOnly[int]
-
-
 def _modeled_error_status(member: Shape) -> int | None:
-    error: Final[_ModeledErrorMetadata] = (member.metadata or {}).get("error", {})
+    error: Final = require_get(_JSON_VALUE.validate_python((member.metadata or {}).get("error", {})))
     status: Final = error.get("httpStatusCode")
-    return None if status is None else int(status)
+    return None if status is None else int_of(status)
 
 
 def _structure_members(shape: Shape | None) -> Mapping[str, Shape]:

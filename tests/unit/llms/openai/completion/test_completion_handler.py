@@ -131,6 +131,29 @@ def test_streaming_completion_surfaces_the_status_and_headers_of_a_rejected_requ
     _assert_carries_the_upstream_rejection(rejected.value)
 
 
+@pytest.mark.parametrize("stream", (False, True))
+@respx.mock
+def test_completion_rejection_names_the_param_and_plain_message_the_provider_sent(stream: bool) -> None:
+    respx.post("https://api.openai.com/v1/completions").mock(
+        return_value=Response(
+            400,
+            json={
+                "error": {
+                    "message": "max_tokens must be at least 1",
+                    "type": "invalid_request_error",
+                    "param": "max_tokens",
+                }
+            },
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        list(text_completion(model="gpt-3.5-turbo-instruct", prompt="hello", stream=stream))
+
+    assert rejected.value.param == "max_tokens"
+    assert rejected.value.message == "litellm.BadRequestError: Text-completion-openaiException - max_tokens must be at least 1"
+
+
 @respx.mock
 async def test_acompletion_surfaces_the_status_and_headers_of_a_rejected_request(
     rejected_completions_endpoint, monkeypatch

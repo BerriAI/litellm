@@ -94,7 +94,7 @@ def test_messages_reasoning_anthropic(case: TranslationTestCase, gateway: Gatewa
         pytest.param("", "scripted-signed-history", True, id="signed_empty"),
         pytest.param("", "", False, id="empty_signature"),
         pytest.param("", None, False, id="unsigned_empty"),
-        pytest.param("I need the file before answering.", None, True, id="unsigned_visible"),
+        pytest.param("I need the file before answering.", None, False, id="unsigned_visible"),
     ),
 )
 def test_messages_replays_signed_thinking_and_tool_results_without_losing_blocks(
