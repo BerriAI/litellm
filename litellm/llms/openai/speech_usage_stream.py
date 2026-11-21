@@ -164,12 +164,12 @@ class _AdtsFrames:
         return Fraction(self._blocks * _AAC_SAMPLES_PER_BLOCK - _AAC_ENCODER_DELAY_SAMPLES, self._sample_rate)
 
 
+def _flac_crc16_shift(crc: int, _bit: int) -> int:
+    return (crc << 1 ^ 0x8005 if crc & 0x8000 else crc << 1) & 0xFFFF
+
+
 def _flac_crc16_step(crc: int, byte: int) -> int:
-    return reduce(
-        lambda shifted, _: (shifted << 1 ^ 0x8005 if shifted & 0x8000 else shifted << 1) & 0xFFFF,
-        range(8),
-        crc ^ byte << 8,
-    )
+    return reduce(_flac_crc16_shift, range(8), crc ^ byte << 8)
 
 
 def _flac_crc16(data: bytes) -> int:
@@ -188,6 +188,10 @@ def _flac_block_size(code: int, extra: bytes) -> int | None:
     return 256 << code - 8
 
 
+def _flac_number_step(high: int, byte: int) -> int:
+    return high << 6 | byte & 0x3F
+
+
 def _flac_frame_end_samples(frame: bytes, block_size: int) -> int | None:
     """Samples played once this fixed-block frame, the last of its stream, ends. None unless its CRC holds."""
     if len(frame) < _FLAC_MIN_FRAME_BYTES:
@@ -201,9 +205,7 @@ def _flac_frame_end_samples(frame: bytes, block_size: int) -> int | None:
         return None
     if _flac_crc16(frame[:-2]) != int.from_bytes(frame[-2:], "big"):
         return None
-    number: Final = reduce(
-        lambda high, byte: high << 6 | byte & 0x3F, frame[5:size_at], frame[4] & 0xFF >> leading_ones
-    )
+    number: Final = reduce(_flac_number_step, frame[5:size_at], frame[4] & 0xFF >> leading_ones)
     return number * block_size + last_block
 
 
