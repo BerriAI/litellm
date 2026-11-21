@@ -427,6 +427,7 @@ async def _handle_stream_message(
     proxy_server_request: dict[str, object] | None = None,
     *,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_name: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     request_data: dict[str, object] | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
@@ -500,6 +501,7 @@ async def _handle_stream_message(
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
                 agent_extra_headers=agent_extra_headers,
+                agent_name=agent_name,
             )
 
             if (
@@ -737,7 +739,7 @@ async def invoke_agent_a2a(
         # Get backend URL and agent name
         agent_card_params: Final = agent.agent_card_params or {}
         agent_url: Final = agent_card_params.get("url")
-        agent_name: Final = agent_card_params.get("name", agent_id)
+        agent_name: Final = agent.agent_name
 
         # Get litellm_params (may include custom_llm_provider for completion bridge)
         litellm_params: dict[str, object] = agent.litellm_params or {}
@@ -885,6 +887,7 @@ async def invoke_agent_a2a(
                 proxy_server_request=data.get("proxy_server_request"),
                 litellm_logging_obj=logging_obj,
                 agent_extra_headers=agent_extra_headers,
+                agent_name=agent_name,
             )
 
             try:
@@ -924,6 +927,7 @@ async def invoke_agent_a2a(
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
                 agent_extra_headers=agent_extra_headers,
+                agent_name=agent_name,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,

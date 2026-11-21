@@ -166,7 +166,7 @@ class TestA2AAgentLifecycle:
         rows = client.proxy.poll_logs_for_request_id(request.id)
         assert rows, f"no spend log row landed for a2a request {request.id}"
         assert rows[0].call_type == "asend_message"
-        assert rows[0].model == f"a2a_agent/{agent.agent_card_params.name}"
+        assert rows[0].model == f"a2a_agent/{agent.agent_name}"
 
     @pytest.mark.covers("other.a2a.version.serves_pinned_0_3")
     @meta(
