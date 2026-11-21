@@ -11,6 +11,7 @@
 # are real coverage gaps awaiting a resource; remove them when the resource lands.
 
 # Read-only analytics and spend reporting; observability, not Terraform-managed state
+POST /model/recommend # Read-only model ranking, not Terraform-managed state
 GET /agent/daily/activity
 GET /agent/daily/activity/aggregated
 GET /agent/daily/activity/aggregated/keys

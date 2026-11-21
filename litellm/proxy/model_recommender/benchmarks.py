@@ -63,11 +63,18 @@ def parse_archive(content: bytes) -> tuple[BenchmarkScore, ...]:
         return tuple(chain.from_iterable(read_csv(archive, focus) for focus in BENCHMARKS))
 
 
-async def fetch_epoch() -> bytes:
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        response: Final = await client.get(EPOCH_URL)
+async def fetch_epoch(client: httpx.AsyncClient | None = None, max_bytes: int = 50_000_000) -> bytes:
+    if client is None:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as owned_client:
+            return await fetch_epoch(owned_client, max_bytes)
+    async with client.stream("GET", EPOCH_URL) as response:
         response.raise_for_status()
-        return response.content
+        with io.BytesIO() as content:
+            async for chunk in response.aiter_bytes():
+                if content.tell() + len(chunk) > max_bytes:
+                    return b""
+                content.write(chunk)
+            return content.getvalue()
 
 
 class BenchmarkCache:

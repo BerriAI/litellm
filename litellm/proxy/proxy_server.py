@@ -19358,11 +19358,15 @@ async def model_group_info(
             }
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
+    listing, _ = await _model_group_listing(user_api_key_dict, model_group)
+    return listing
 
-    # Return empty data array when no models are configured (graceful handling for fresh installs)
+
+async def _model_group_listing(
+    user_api_key_dict: UserAPIKeyAuth, model_group: str | None = None
+) -> tuple[Mapping[str, Sequence[ModelGroupInfoProxy]], Mapping[str, str]]:
     if llm_model_list is None or llm_router is None or not llm_model_list:
-        return {"data": []}
+        return {"data": []}, {}
 
     from litellm.proxy.utils import get_available_models_for_user
 
@@ -19478,7 +19482,7 @@ async def model_group_info(
             ),
             *(group for group in agent_groups if group.model_group not in verdict.hidden),
         ]
-    }
+    }, MappingProxyType(dict((*requested_entries, *((group.model_group, group.model_group) for group in agent_groups))))
 
 
 @router.post(
@@ -19491,16 +19495,14 @@ async def model_recommend(
     request: RecommendationRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> RecommendationResponse:
+    listing, lookup = await _model_group_listing(user_api_key_dict)
     return await recommend_models(
         request,
         user_api_key_dict,
-        TypeAdapter(Mapping[str, tuple[object, ...]]).validate_python(
-            await model_group_info(user_api_key_dict=user_api_key_dict)
-        ),
+        listing,
         llm_router,
-        TypeAdapter(Mapping[str, object]).validate_python(general_settings),
+        lookup,
         GatewaySpeedClient(prisma_client.db) if prisma_client else None,
-        await request_caller_aliases(user_api_key_dict),
     )
 
 

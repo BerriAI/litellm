@@ -10,23 +10,23 @@ afterEach(() => {
 
 describe("recommender request state", () => {
   it("sends priorities, focus and hard requirements without dropping zero values", () => {
-    expect(
-      buildRequest({
-        intelligence: 0,
-        speed: 3,
-        cost: 1,
-        focus: ["coding", "agentic"],
-        reasoning: true,
-        vision: false,
-        function_calling: true,
-        context: 128000,
-      }),
-    ).toEqual({
+    const state: Parameters<typeof buildRequest>[0] = {
+      intelligence: 0,
+      speed: 3,
+      cost: 1,
+      focus: ["coding", "agentic"],
+      reasoning: true,
+      vision: false,
+      function_calling: true,
+      context: 128000,
+    };
+    const expected = {
       priorities: { intelligence: 0, speed: 3, cost: 1 },
       focus: ["coding", "agentic"],
       requirements: { reasoning: true, vision: false, function_calling: true, min_context_tokens: 128000 },
       limit: 3,
-    });
+    };
+    expect(buildRequest(state)).toEqual(expected);
   });
   it("rejects malformed query values rather than sending them to the gateway", () => {
     expect(recommenderParsers.cost.parse("4")).toBeNull();

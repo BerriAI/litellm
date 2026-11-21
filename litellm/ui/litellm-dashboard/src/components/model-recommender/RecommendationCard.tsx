@@ -16,7 +16,6 @@ export function RecommendationCard({ model, position }: { model: Recommendation;
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const router = useRouter();
-  const ringId = useId();
   const hero = position === 0;
   const provider = getProviderLogoAndName(model.providers[0] ?? "");
   const copy = async () => {
@@ -56,47 +55,7 @@ export function RecommendationCard({ model, position }: { model: Recommendation;
               {hero ? t("strongest") : t("alternative", { position: position + 1 })}
             </span>
           </div>
-          <div
-            role="meter"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={model.score}
-            className={`relative flex shrink-0 flex-col items-center justify-center ${hero ? "size-24" : "size-16"}`}
-            aria-label={t("scoreLabel", { score: model.score })}
-          >
-            <svg viewBox="0 0 100 100" className="absolute inset-0 size-full -rotate-90" aria-hidden="true">
-              <defs>
-                <linearGradient id={ringId} x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stopColor="#2563eb" />
-                  <stop offset="100%" stopColor="#22d3ee" />
-                </linearGradient>
-              </defs>
-              <circle
-                cx="50"
-                cy="50"
-                r="43"
-                fill="none"
-                strokeWidth="6"
-                className="stroke-blue-200/60 dark:stroke-blue-900/60"
-              />
-              <circle
-                cx="50"
-                cy="50"
-                r="43"
-                fill="none"
-                strokeWidth="6"
-                stroke={`url(#${ringId})`}
-                strokeLinecap="round"
-                pathLength="100"
-                strokeDasharray={`${model.score} 100`}
-                className="transition-all duration-700 motion-reduce:transition-none"
-              />
-            </svg>
-            <span className={`font-semibold tabular-nums leading-none ${hero ? "text-2xl" : "text-lg"}`}>
-              {Math.round(model.score)}
-            </span>
-            <span className="mt-1 text-[9px] uppercase tracking-wide text-muted-foreground">{t("match")}</span>
-          </div>
+          <MatchScore score={model.score} hero={hero} />
         </div>
         <div className="flex items-center gap-3">
           {provider.logo && (
@@ -193,5 +152,53 @@ export function RecommendationCard({ model, position }: { model: Recommendation;
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function MatchScore({ score, hero }: { score: number; hero: boolean }) {
+  const { t } = useTranslation(undefined, { keyPrefix: "modelRecommender" });
+  const ringId = useId();
+  return (
+    <div
+      role="meter"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={score}
+      className={`relative flex shrink-0 flex-col items-center justify-center ${hero ? "size-24" : "size-16"}`}
+      aria-label={t("scoreLabel", { score })}
+    >
+      <svg viewBox="0 0 100 100" className="absolute inset-0 size-full -rotate-90" aria-hidden="true">
+        <defs>
+          <linearGradient id={ringId} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#2563eb" />
+            <stop offset="100%" stopColor="#22d3ee" />
+          </linearGradient>
+        </defs>
+        <circle
+          cx="50"
+          cy="50"
+          r="43"
+          fill="none"
+          strokeWidth="6"
+          className="stroke-blue-200/60 dark:stroke-blue-900/60"
+        />
+        <circle
+          cx="50"
+          cy="50"
+          r="43"
+          fill="none"
+          strokeWidth="6"
+          stroke={`url(#${ringId})`}
+          strokeLinecap="round"
+          pathLength="100"
+          strokeDasharray={`${score} 100`}
+          className="transition-all duration-700 motion-reduce:transition-none"
+        />
+      </svg>
+      <span className={`font-semibold tabular-nums leading-none ${hero ? "text-2xl" : "text-lg"}`}>
+        {Math.round(score)}
+      </span>
+      <span className="mt-1 text-[9px] uppercase tracking-wide text-muted-foreground">{t("match")}</span>
+    </div>
   );
 }

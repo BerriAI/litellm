@@ -1,10 +1,12 @@
 import io
 import zipfile
+from collections.abc import AsyncIterator
 from typing import Final
 
 import pytest
+import httpx
 
-from litellm.proxy.model_recommender.benchmarks import BenchmarkCache, intelligence_score, parse_archive
+from litellm.proxy.model_recommender.benchmarks import BenchmarkCache, fetch_epoch, intelligence_score, parse_archive
 
 
 def archive() -> bytes:
@@ -63,3 +65,32 @@ async def test_cache_expires_after_day_and_does_not_report_stale_data_on_failure
     assert len(await cache.get()) == 4
     assert await cache.get() == ()
     assert cache.as_of is None
+
+
+@pytest.mark.asyncio
+async def test_oversized_stream_aborts_and_fails_open() -> None:
+    class OversizedStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"1234"
+            yield b"56789"
+            pytest.fail("download continued beyond the cumulative limit")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=OversizedStream()))
+    ) as client:
+
+        async def fetch() -> bytes:
+            return await fetch_epoch(client, max_bytes=8)
+
+        cache: Final = BenchmarkCache(fetcher=fetch)
+        assert await cache.get() == ()
+        assert cache.as_of is None
+
+
+@pytest.mark.asyncio
+async def test_bounded_stream_preserves_valid_archive() -> None:
+    content: Final = archive()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, content=content))
+    ) as client:
+        assert await fetch_epoch(client, max_bytes=len(content)) == content

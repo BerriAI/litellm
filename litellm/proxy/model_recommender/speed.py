@@ -1,5 +1,8 @@
-from collections.abc import Mapping, Sequence
+import asyncio
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Protocol
 
 from pydantic import TypeAdapter
@@ -53,3 +56,24 @@ async def observed_speed(client: QueryClient | None, groups: tuple[str, ...]) ->
         return TypeAdapter(tuple[Speed, ...]).validate_python(rows)
     except Exception:  # noqa: BLE001  # Optional telemetry failures must not block recommendations.
         return ()
+
+
+class SpeedCache:
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._entries: Mapping[tuple[str, ...], tuple[float, tuple[Speed, ...]]] = MappingProxyType({})
+        self._lock = asyncio.Lock()
+
+    async def get(self, client: QueryClient | None, groups: tuple[str, ...]) -> tuple[Speed, ...]:
+        if client is None or not groups:
+            return ()
+        key: Final = tuple(sorted(set(groups)))
+        async with self._lock:
+            now: Final = self._clock()
+            entry: Final = self._entries.get(key)
+            if entry is not None and now < entry[0]:
+                return entry[1]
+            speeds: Final = await observed_speed(client, key)
+            retained: Final = tuple((k, v) for k, v in self._entries.items() if v[0] > now and k != key)[-63:]
+            self._entries = MappingProxyType(dict((*retained, (key, (now + 60, speeds)))))
+            return speeds

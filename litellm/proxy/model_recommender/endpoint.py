@@ -6,15 +6,15 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.model_listing_utils import CallerAliases, TeamModelNameTranslator, dispatched_model
 from litellm.router import Router
 
 from .benchmarks import EPOCH_URL, BenchmarkCache
 from .models import Candidate, DataSource, FrozenModel, RecommendationRequest, RecommendationResponse
 from .scoring import matches, rank
-from .speed import QueryClient, observed_speed
+from .speed import QueryClient, SpeedCache
 
 BENCHMARK_CACHE: Final = BenchmarkCache()
+SPEED_CACHE: Final = SpeedCache()
 
 
 class DeploymentParams(FrozenModel):
@@ -42,26 +42,22 @@ async def recommend_models(
     auth: UserAPIKeyAuth,
     listing: object,
     llm_router: Router | None,
-    general_settings: Mapping[str, object],
+    lookup: Mapping[str, str],
     client: QueryClient | None,
-    aliases: CallerAliases,
     cache: BenchmarkCache = BENCHMARK_CACHE,
+    speed_cache: SpeedCache = SPEED_CACHE,
 ) -> RecommendationResponse:
     rows: Final = TypeAdapter(Mapping[str, tuple[object, ...]]).validate_python(listing)
     candidates: Final = tuple(candidate(row, ()) for row in rows.get("data", ()))
     chat: Final = tuple(c for c in candidates if c.mode == "chat")
     eligible: Final = tuple(c for c in chat if matches(c, request.requirements))
-    public_names: Final = (
-        TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings) if llm_router else {}
-    )
-    internal_names: Final = {public: internal for internal, public in public_names.items()}
-    lookup: Final = {
-        c.model_group: internal_names.get(c.model_group, dispatched_model(c.model_group, aliases) or c.model_group)
-        for c in eligible
-    }
     group_names: Final = {
-        public: (resolve_model_group_alias(llm_router.registry().aliases(), name) or name) if llm_router else name
-        for public, name in lookup.items()
+        c.model_group: (
+            resolve_model_group_alias(llm_router.registry().aliases(), lookup[c.model_group]) or lookup[c.model_group]
+        )
+        if llm_router
+        else lookup[c.model_group]
+        for c in eligible
     }
     resolved: Final = tuple(
         candidate(
@@ -70,7 +66,7 @@ async def recommend_models(
         for c in eligible
     )
     benchmarks: Final = await cache.get() if request.priorities.intelligence and request.focus else ()
-    speeds: Final = await observed_speed(client, tuple(group_names.values()))
+    speeds: Final = await speed_cache.get(client, tuple(group_names.values())) if request.priorities.speed else ()
     speed_by_group: Final = {speed.model_group: speed for speed in speeds}
     now: Final = datetime.now(timezone.utc).date().isoformat()
     return RecommendationResponse(
