@@ -96,6 +96,36 @@ async def test_async_bridged_turn_names_an_upstream_param_as_the_responses_field
     assert raised.value.param == relayed_param
 
 
+@pytest.mark.parametrize(
+    "responses_api_request, upstream_param, relayed_param",
+    [
+        pytest.param({"instructions": "Answer in one word"}, "messages.[0].content", "instructions", id="instructions"),
+        pytest.param({"instructions": "Answer in one word"}, "messages.[1].role", "input", id="input_after_instructions"),
+        pytest.param({"previous_response_id": "resp_stored"}, "messages.[1].role", None, id="stored_turns_first"),
+    ],
+)
+def test_bridged_turn_names_a_message_path_by_the_request_field_the_message_came_from(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    responses_api_request: dict[str, str],  # mutable-ok: response_api_handler takes the request as a dict
+    upstream_param: str,
+    relayed_param: str | None,
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gpt-5.6",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="openai",
+            api_key="sk-bridge-test",
+        )
+
+    assert upstream.call_count == 1
+    assert raised.value.param == relayed_param
+
+
 class _StopForwarding(Exception):
     """Raised by the mocked (a)completion once the forwarded kwargs are captured."""
 

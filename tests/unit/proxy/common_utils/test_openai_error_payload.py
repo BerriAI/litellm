@@ -313,3 +313,14 @@ def test_relayed_provider_specific_fields_keep_a_provider_code_that_is_not_the_h
     )
 
     assert relayed_provider_specific_fields(rejected) == {"code": provider_code}
+
+
+def test_relayed_provider_specific_fields_keep_the_code_of_an_error_body_without_a_message() -> None:
+    rejected: Final = litellm.BadRequestError(
+        message="rejected",
+        model="grok-4.7",
+        llm_provider="xai",
+        body={"code": "invalid-argument", "error": "Maximum number of tokens max_tokens must be positive"},
+    )
+
+    assert relayed_provider_specific_fields(rejected) == {"code": "invalid-argument"}
