@@ -7,7 +7,13 @@ from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.provider import SharedProvider
 from integration._support.upstream import aws_event_stream_frame
 from integration._support.wire import Reply, Request
-from integration.translation.case import EventStreamFrame, SSEFrame, StreamingTranslationTestCase, TranslationTestCase
+from integration.translation.case import (
+    EventStreamFrame,
+    RejectionTestCase,
+    SSEFrame,
+    StreamingTranslationTestCase,
+    TranslationTestCase,
+)
 from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types.chat import ChatCompletionChunk
 from pydantic import JsonValue
@@ -65,6 +71,13 @@ def assert_translation(
         ), "The encoded response ID must match the configured deployment"
     assert response.json() == expected
     return JSON_OBJECT.validate_json(response.content)
+
+
+def assert_rejection(case: RejectionTestCase, gateway: Gateway, provider: SharedProvider) -> None:
+    response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request)
+    assert provider.received() == ()
+    assert response.status_code == case.expected_litellm_status_code, response.text
+    assert response.json() == case.expected_litellm_response
 
 
 def assert_provider_request(
@@ -133,6 +146,14 @@ def _join_stream_frames(endpoint: str, frames: tuple[SSEFrame, ...]) -> Mapping[
                     continue
                 state.handle_chunk(ChatCompletionChunk.model_validate(frame.data))
             return JSON_OBJECT.validate_python(state.get_final_completion().model_dump(mode="json", exclude_none=True))
+        case "/v1/responses":
+            completed: Final = tuple(
+                frame.data
+                for frame in frames
+                if isinstance(frame.data, Mapping) and frame.data.get("type") == "response.completed"
+            )
+            assert len(completed) == 1, f"expected one response.completed frame, got {len(completed)}"
+            return JSON_OBJECT.validate_python(completed[0]["response"])
         case _:
             raise AssertionError(f"no stream accumulator for {endpoint}")
 
