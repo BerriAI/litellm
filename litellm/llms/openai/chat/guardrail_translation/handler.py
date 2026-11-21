@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chun
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     changed_server_tool_call_arguments,
+    is_raw_server_tool_use_input,
     raw_server_tool_use_calls,
     write_anthropic_hosted_web_call_arguments,
     write_anthropic_server_tool_calls,
@@ -281,6 +282,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             len(tool_calls_to_check) + len(server_tool_call_tasks) :
                         ],
                         task_mappings=tuple(mapping for mapping, _ in raw_server_tool_use_tasks),
+                        guardrail_name=guardrail_to_apply.guardrail_name,
                     )
 
         elif (
@@ -1590,6 +1592,7 @@ def _write_raw_server_tool_use_inputs(
     messages: Sequence[object],
     guardrailed_tool_calls: Sequence[object],
     task_mappings: Sequence[tuple[int, int]],
+    guardrail_name: str | None,
 ) -> None:
     arguments_by_task: Final = MappingProxyType(
         {
@@ -1598,6 +1601,8 @@ def _write_raw_server_tool_use_inputs(
             if (arguments := _guardrailed_tool_call_arguments(guardrailed)) is not None
         }
     )
+    if not all(map(is_raw_server_tool_use_input, arguments_by_task.values())):
+        raise unappliable_request_rewrite(guardrail_name)
     for msg_idx in sorted(frozenset(msg_idx for msg_idx, _ in task_mappings)):
         write_raw_server_tool_use_inputs(
             messages[msg_idx],

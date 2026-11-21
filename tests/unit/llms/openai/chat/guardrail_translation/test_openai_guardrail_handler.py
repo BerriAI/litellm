@@ -2896,8 +2896,6 @@ def _response_with_client_and_mcp_calls(client_count: int) -> ModelResponse:
 
 
 class McpUnawareSecretMaskingGuardrail(CustomGuardrail):
-    """Masks the tool calls it recognizes and returns only those, dropping the Claude MCP calls."""
-
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -2974,7 +2972,66 @@ class RecordingGuardrail(CustomGuardrail):
         return inputs
 
 
+class QuotedSecretMaskingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            tool_calls=[
+                {
+                    **call,
+                    "function": {
+                        **call["function"],
+                        "arguments": call["function"]["arguments"].replace('"sk-secret-123?"', "[MASKED]"),
+                    },
+                }
+                for call in inputs.get("tool_calls", [])
+            ],
+        )
+
+
+def _request_with_a_raw_mcp_call() -> dict[str, object]:
+    return {
+        "model": "claude",
+        "messages": [
+            {"role": "user", "content": "Ask deepwiki."},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "mcp_tool_use",
+                        "id": "mcptoolu_01Ask",
+                        "name": "ask_wiki_question",
+                        "server_name": "deepwiki",
+                        "input": json.loads(_MCP_ARGUMENTS),
+                    },
+                    {
+                        "type": "mcp_tool_result",
+                        "tool_use_id": "mcptoolu_01Ask",
+                        "is_error": False,
+                        "content": [{"type": "text", "text": "React is a UI library."}],
+                    },
+                ],
+            },
+        ],
+    }
+
+
 class TestGuardrailToolCallListsAlongsideClaudeMcpCalls:
+    @pytest.mark.asyncio
+    async def test_input_mask_that_breaks_the_json_of_a_raw_mcp_call_input_rejects_the_request(self):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await OpenAIChatCompletionsHandler().process_input_messages(
+                _request_with_a_raw_mcp_call(), QuotedSecretMaskingGuardrail(guardrail_name="mask-secrets")
+            )
+
     @pytest.mark.asyncio
     async def test_output_masks_from_a_guardrail_that_returns_only_client_calls_still_apply(self):
         response = _response_with_client_and_mcp_calls(client_count=1)

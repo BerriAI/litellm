@@ -1066,7 +1066,11 @@ class ModelResponseIterator:
                     # Reverse-map the (sanitized) tool name back to the
                     # caller's original. No-op when the map is empty.
                     _stream_tool_name = content_block_start["content_block"]["name"]
-                    if self.tool_name_reverse_map and _stream_tool_name in self.tool_name_reverse_map:
+                    if (
+                        content_block_start["content_block"]["type"] == "tool_use"
+                        and self.tool_name_reverse_map
+                        and _stream_tool_name in self.tool_name_reverse_map
+                    ):
                         _stream_tool_name = self.tool_name_reverse_map[_stream_tool_name]
                     # Use empty string for arguments in content_block_start - actual arguments
                     # come in subsequent content_block_delta chunks and get accumulated.

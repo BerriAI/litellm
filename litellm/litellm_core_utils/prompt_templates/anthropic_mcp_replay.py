@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate, chain
+from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import Final
 
@@ -85,16 +85,30 @@ def _first_uses(turns: Sequence[_AssistantTurn]) -> Mapping[str, _AssistantTurn]
     )
 
 
-def _later_result_turn(turns: Sequence[_AssistantTurn], use: _AssistantTurn, use_id: str) -> _AssistantTurn | None:
-    return next((turn for turn in turns if turn.message_index > use.message_index and use_id in turn.results), None)
+def _result_message_indexes(turns: Sequence[_AssistantTurn]) -> Mapping[str, tuple[int, ...]]:
+    by_id: Final = tuple(
+        sorted(
+            chain.from_iterable(((use_id, turn.message_index) for use_id in turn.results) for turn in turns),
+            key=lambda pair: pair[0],
+        )
+    )
+    return MappingProxyType(
+        {use_id: tuple(index for _, index in group) for use_id, group in groupby(by_id, key=lambda pair: pair[0])}
+    )
+
+
+def _later_result_message(
+    result_message_indexes: Mapping[str, tuple[int, ...]], use: _AssistantTurn, use_id: str
+) -> int | None:
+    return next((index for index in result_message_indexes.get(use_id, ()) if index > use.message_index), None)
 
 
 def _grouped_by_message(pairs: Iterable[tuple[int, str]]) -> Mapping[int, frozenset[str]]:
-    listed: Final = tuple(pairs)
+    by_message: Final = tuple(sorted(pairs, key=lambda pair: pair[0]))
     return MappingProxyType(
         {
-            index: frozenset(use_id for at, use_id in listed if at == index)
-            for index in frozenset(at for at, _ in listed)
+            index: frozenset(use_id for _, use_id in group)
+            for index, group in groupby(by_message, key=lambda pair: pair[0])
         }
     )
 
@@ -104,11 +118,12 @@ def _plan(turns: Sequence[_AssistantTurn]) -> McpReplayPlan:
     unanswered_in_their_message: Final = MappingProxyType(
         {use_id: use for use_id, use in first_uses.items() if use_id not in use.results}
     )
+    result_message_indexes: Final = _result_message_indexes(turns)
     lone_result_messages: Final = MappingProxyType(
         {
-            use_id: later.message_index
+            use_id: later
             for use_id, use in unanswered_in_their_message.items()
-            if (later := _later_result_turn(turns, use, use_id)) is not None
+            if (later := _later_result_message(result_message_indexes, use, use_id)) is not None
         }
     )
     last_run: Final = turns[-1].run

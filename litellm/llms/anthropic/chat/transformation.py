@@ -3409,6 +3409,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             compaction_blocks,
         ) = self.extract_response_content(completion_response=completion_response)
 
+        server_tool_use_ids: Final = _server_tool_use_ids(_RESPONSE_BODY_ADAPTER.validate_python(completion_response))
         # Reverse-map rewritten tool names back to caller's originals so a
         # downstream OpenAI-style dispatcher can match on the registered name.
         # See build_anthropic_tool_name_maps for why this is keyed on the
@@ -3418,7 +3419,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if tool_name_reverse_map and tool_calls:
             for tc in tool_calls:
                 fn = tc.get("function") if isinstance(tc, dict) else None
-                if fn is None:
+                if fn is None or tc["id"] in server_tool_use_ids:
                     continue
                 _name = fn.get("name")
                 if isinstance(_name, str) and _name in tool_name_reverse_map:
@@ -3431,7 +3432,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             text_content = prefix_prompt + text_content
 
-        server_tool_use_ids: Final = _server_tool_use_ids(_RESPONSE_BODY_ADAPTER.validate_python(completion_response))
         client_tool_calls: Final = [tc for tc in tool_calls if tc["id"] not in server_tool_use_ids]
         provider_specific_fields: Final = self._build_provider_specific_fields(
             completion_response,

@@ -27,7 +27,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import MCP_HISTORY_DROP_WARNING, anthropic_messages_pt
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
@@ -11303,6 +11303,64 @@ def test_a_renamed_tool_search_result_keeps_claudes_names_so_an_older_proxy_acce
     assert tool_names == ["weather.get"]
 
 
+_SANITIZED_CLIENT_TOOL_USE: Final = {"type": "tool_use", "id": "toolu_01Ask", "name": "ask_question", "input": {}}
+_MCP_TOOL_USE_WITH_THE_SANITIZED_NAME: Final = {
+    "type": "mcp_tool_use",
+    "id": "mcptoolu_01Ask",
+    "name": "ask_question",
+    "server_name": "wiki",
+    "input": {},
+}
+
+
+def _parsed_client_and_mcp_call_names(
+    content: list[dict[str, object]], tool_name_reverse_map: dict[str, str]
+) -> tuple[list[str], list[str | None]]:
+    message: Final = _parsed_assistant_message(content, "tool_use", tool_name_reverse_map)
+    return (
+        [call.function.name for call in message.tool_calls or ()],
+        [call["function"].get("name") for call in anthropic_server_tool_call_params(message)],
+    )
+
+
+def _streamed_client_and_mcp_call_names(
+    content: list[dict[str, object]], tool_name_reverse_map: dict[str, str]
+) -> tuple[list[str], list[str | None]]:
+    iterator: Final = ModelResponseIterator(None, sync_stream=True, tool_name_reverse_map=tool_name_reverse_map)
+    events: Final = chain.from_iterable(
+        (
+            {"type": "content_block_start", "index": index, "content_block": block},
+            {"type": "content_block_stop", "index": index},
+        )
+        for index, block in enumerate(content)
+    )
+    deltas: Final = [iterator.chunk_parser(event).choices[0].delta for event in events]
+    server_calls: Final = [
+        delta.provider_specific_fields["server_tool_calls"]
+        for delta in deltas
+        if delta.provider_specific_fields and "server_tool_calls" in delta.provider_specific_fields
+    ]
+    return (
+        [call.function.name for call in chain.from_iterable(delta.tool_calls or () for delta in deltas)],
+        [call["function"]["name"] for call in server_calls[-1]],
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+def test_a_client_tool_name_map_leaves_the_name_of_an_mcp_call_that_matches_it(stream: bool):
+    content: Final = [_SANITIZED_CLIENT_TOOL_USE, _MCP_TOOL_USE_WITH_THE_SANITIZED_NAME]
+    reverse_map: Final = {"ask_question": "ask.question"}
+
+    client_names, mcp_names = (
+        _streamed_client_and_mcp_call_names(content, reverse_map)
+        if stream
+        else _parsed_client_and_mcp_call_names(content, reverse_map)
+    )
+
+    assert client_names == ["ask.question"]
+    assert mcp_names == ["ask_question"]
+
+
 _INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]
 
 
@@ -11497,9 +11555,12 @@ def _sent_mcp_history_turn(config_class: type[AnthropicConfig], native_content: 
 
 @pytest.mark.parametrize("native_content", [False, True], ids=["parsed-message", "native-content"])
 @pytest.mark.parametrize("config_class", [AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig])
-def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config_class, native_content):
-    sent: Final = _sent_mcp_history_turn(config_class, native_content)
+def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config_class, native_content, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = _sent_mcp_history_turn(config_class, native_content)
 
+    warning_prefix: Final = MCP_HISTORY_DROP_WARNING.partition("model=")[0]
+    assert not [message for message in caplog.messages if message.startswith(warning_prefix)]
     assert sent == (
         [_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER]
         if native_content
@@ -11510,9 +11571,13 @@ def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config
 @pytest.mark.parametrize("native_content", [False, True], ids=["parsed-message", "native-content"])
 @pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
 def test_claude_routes_without_the_mcp_connector_send_only_the_text_of_an_mcp_turn_from_history(
-    config_class, route, native_content
+    config_class, route, native_content, caplog
 ):
-    assert _sent_mcp_history_turn(config_class, native_content) == [_HISTORY_MCP_ANSWER]
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = _sent_mcp_history_turn(config_class, native_content)
+
+    assert sent == [_HISTORY_MCP_ANSWER]
+    assert MCP_HISTORY_DROP_WARNING % ("claude-haiku-5-5", route) in caplog.messages
 
 
 _KEPT_SEARCH_CALL: Final = {
