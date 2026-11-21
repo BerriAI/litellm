@@ -7808,6 +7808,7 @@ def test_spend_logs_payload(model_id: str | None):
         "user_api_key_customer_member_alias",
         "user_api_key_app_id",
         "user_api_key_app_alias",
+        "user_api_key_app_group_id",
     }
 
     assert "metadata" in payload
