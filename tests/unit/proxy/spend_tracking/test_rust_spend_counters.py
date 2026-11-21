@@ -20,6 +20,7 @@ from litellm.constants import AUTH_OBJECTS_TARGET
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking import rust_spend_counters
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SpendCounterStore,
@@ -104,6 +105,35 @@ async def test_cold_counters_seed_from_stored_spend_and_take_the_charge(
         }
     )
     assert {call.kwargs["counter_key"] for call in read.await_args_list} >= {"spend:key:hashed", "spend:team:team-1"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_object", "counter"),
+    [
+        (AuthObject.virtual_key("hashed"), "spend:key:hashed"),
+        (AuthObject.team("team-1"), "spend:team:team-1"),
+        (AuthObject.user("user-1"), "spend:user:user-1"),
+        (AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1"), "spend:team_member:user-1:team-1"),
+        (AuthObject.end_user("eu-1"), "spend:end_user:eu-1"),
+        (AuthObject.tag("tag-a"), "spend:tag:tag-a"),
+        (AuthObject.model_access_group("g"), "spend:model_access_group:g"),
+        (AuthObject.org_with_budget("org-1"), "spend:org:org-1"),
+        (AuthObject.org("org-1"), "spend:org:org-1"),
+        (AuthObject.project("p"), "spend:project:p"),
+    ],
+)
+async def test_cold_counter_falls_back_to_its_typed_auth_object(
+    store: SpendCounterStore,
+    key_cache: UserApiKeyCache,
+    auth_object: AuthObject,
+    counter: str,
+) -> None:
+    key_cache.set_cache(key=auth_object, value={"spend": 3.0})
+
+    await _charge_every_bucket(0.5, project_id="p", model_access_groups=["g"])
+
+    assert store.get_local(counter) == 3.5
 
 
 @pytest.mark.asyncio

@@ -7,9 +7,12 @@ from pydantic import BaseModel, ConfigDict
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.common_utils.hook_cache import HookCache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 
-_TEAM_KEY: Final = "team_id:t1"
+_TEAM_OBJECT: Final = AuthObject.team("t1")
+_TEAM_KEY: Final = _TEAM_OBJECT.key
 _TEAM: Final = {"team_id": "t1", "models": ["gpt-5"]}
+_TOKEN: Final = "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
 
 
 def _caches() -> tuple[HookCache, UserApiKeyCache]:
@@ -18,12 +21,19 @@ def _caches() -> tuple[HookCache, UserApiKeyCache]:
 
 
 @pytest.mark.asyncio
-async def test_a_hook_reads_an_auth_object_by_the_key_the_auth_cache_holds_it_under() -> None:
+@pytest.mark.parametrize(
+    ("stored_as", "value"),
+    [(_TEAM_OBJECT, _TEAM), (AuthObject.virtual_key(_TOKEN), {"token": _TOKEN})],
+    ids=["team", "virtual-key"],
+)
+async def test_a_hook_reads_an_auth_object_by_the_key_the_auth_cache_holds_it_under(
+    stored_as: AuthObject, value: object
+) -> None:
     hooks, auth = _caches()
-    await auth.async_set_cache(key=_TEAM_KEY, value=_TEAM)
+    await auth.async_set_cache(stored_as, value)
 
-    assert await hooks.async_get_cache(_TEAM_KEY) == _TEAM
-    assert hooks.get_cache(_TEAM_KEY) == _TEAM
+    assert await hooks.async_get_cache(stored_as.key) == value
+    assert hooks.get_cache(stored_as.key) == value
 
 
 @pytest.mark.asyncio
@@ -35,7 +45,7 @@ async def test_a_hook_reads_back_the_very_object_it_stored() -> None:
 
     assert await hooks.async_get_cache("hook-state") is state
     assert hooks.get_cache("hook-state") is state
-    assert await auth.async_get_cache(key="hook-state") is None
+    assert auth.get_local_by_key("hook-state") is None
 
 
 async def _delete(hooks: HookCache, key: str) -> None:
@@ -58,11 +68,11 @@ _DELETES: Final = (_delete, _delete_sync, _delete_many)
 @pytest.mark.parametrize("delete", _DELETES)
 async def test_a_hook_that_deletes_an_auth_object_drops_it_from_the_auth_cache(delete: _Delete) -> None:
     hooks, auth = _caches()
-    await auth.async_set_cache(key=_TEAM_KEY, value=_TEAM)
+    await auth.async_set_cache(_TEAM_OBJECT, _TEAM)
 
     await delete(hooks, _TEAM_KEY)
 
-    assert await auth.async_get_cache(key=_TEAM_KEY) is None
+    assert await auth.async_get_cache(_TEAM_OBJECT) is None
     assert await hooks.async_get_cache(_TEAM_KEY) is None
 
 

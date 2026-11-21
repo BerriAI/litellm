@@ -10,24 +10,12 @@ import { CustomerDetailLayout } from "../_components/CustomerDetailLayout";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "../_components/CustomerHierarchyNavigation";
 import CustomerBudgetSummary from "../_components/CustomerBudgetSummary";
 import { CustomerUsageStats } from "../_components/CustomerUsageSummary";
-import CustomerUsageRankings from "../_components/CustomerUsageRankings";
-import CustomerUsageTrend from "../_components/CustomerUsageTrend";
+import CustomerUsageAnalysis from "../_components/CustomerUsageAnalysis";
 import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage";
 import CustomerOrganizationApps from "../../apps/_components/CustomerOrganizationApps";
 import CustomerMemberApps from "../../apps/_components/CustomerMemberApps";
 import CustomerUsageAppFilter from "../_components/CustomerUsageAppFilter";
 import { calendarDate } from "../_components/customerUsageRange";
-
-const METRIC_LABELS = {
-  spend: "customerPortal.analytics.spend",
-  tokens: "customerPortal.analytics.tokens",
-  requests: "customerPortal.analytics.requests",
-} as const;
-const TOP_DIMENSION_LABELS = {
-  models: "customerPortal.analytics.topModels",
-  api_keys: "customerPortal.analytics.topKeys",
-  teams: "customerPortal.analytics.topTeams",
-} as const;
 
 export default function CustomerHierarchyUsagePage() {
   const { t } = useTranslation();
@@ -41,22 +29,13 @@ export default function CustomerHierarchyUsagePage() {
     data,
     results,
     totals,
-    modelColors,
-    rankingMetric,
-    rows,
     drillDown,
     setDateRange,
-    setDimension,
     selectOrganization,
     selectTeam,
-    setMetric,
-    setBucket,
-    setSearch,
-    setPage,
     setApp,
     appOrganizationSpend,
   } = useCustomerHierarchyUsage();
-  const metricLabel = t(METRIC_LABELS[rankingMetric]);
   const budgetEntity = data?.member ?? data?.team ?? data?.organization;
 
   if (!scope)
@@ -127,41 +106,14 @@ export default function CustomerHierarchyUsagePage() {
               onAppSelect={setApp}
             />
           )}
-          <CustomerUsageTrend
+          <CustomerUsageAnalysis
             data={data}
-            dimension={params.breakdown}
-            onDimensionChange={setDimension}
-            totals={totals}
-            metric={params.metric}
-            bucket={params.bucket}
             loading={usage.isPending}
-            colorByModel={modelColors}
-            onMetricChange={setMetric}
-            onBucketChange={setBucket}
+            onDrillDown={drillDown}
             appFilter={<CustomerUsageAppFilter value={params.app_id} onChange={setApp} />}
-          />
-          {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
-          {!usage.isPending && (
-            <>
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h2 className="text-base font-medium tracking-tight">{t(TOP_DIMENSION_LABELS[params.breakdown])}</h2>
-                <p className="text-xs text-muted-foreground">
-                  {t("customerPortal.analytics.sortedBy", { metric: metricLabel.toLocaleLowerCase() })}
-                </p>
-              </div>
-              <CustomerUsageRankings
-                rows={rows}
-                dimension={params.breakdown}
-                metric={rankingMetric}
-                search={params.search}
-                page={params.usagePage}
-                colorByModel={modelColors}
-                onSearchChange={setSearch}
-                onPageChange={setPage}
-                onDrillDown={drillDown}
-              />
-            </>
-          )}
+          >
+            {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
+          </CustomerUsageAnalysis>
           {(params.team || params.member) && (
             <Button variant="link" className="h-auto p-0 text-xs text-muted-foreground" onClick={selectOrganization}>
               {t("customerPortal.analytics.allOrganizationUsage")}

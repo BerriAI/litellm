@@ -1943,6 +1943,7 @@ _ADMIN_ONLY_METADATA_KEYS: Final = (
     *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
     TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
     MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
 )
 _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -1951,6 +1952,9 @@ _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         ),
         MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
             "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+        REQUIRED_CUSTOMER_HEADERS_SETTING: (
+            "It requires customer identity headers, so the holder cannot remove the policy."
         ),
     }
 )
