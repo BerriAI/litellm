@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm
-from litellm.proxy.common_utils.semantic_text_index import EmbeddingFailed, SemanticTextIndex, Vector
+from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.proxy import proxy_server
+from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
+from litellm.proxy.common_utils.semantic_text_index import EmbeddingFailed, SemanticTextIndex, Vector, router_embedder
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
+    model_budget_spend_cache_key,
+)
+from litellm.router import Router
+from tests.unit.proxy.proxy_auth_state import ProxyAuthState
 
 QUERY: Final = "weather query"
 TEXTS: Final = (
@@ -208,3 +219,126 @@ class TestSemanticTextIndex:
         assert scores[1] is None
         assert (QUERY, "cached text", "OVERSIZED text") in embedder.calls
         assert ("OVERSIZED text",) in embedder.calls
+
+
+CALLER: Final = UserAPIKeyAuth(api_key="hashed-caller-key", team_id="team-1", user_id="user-1")
+
+
+def _pass_through_key_limits() -> MagicMock:
+    limits = MagicMock()
+    limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    return limits
+
+
+async def _embedding_response(
+    model: str, input: Sequence[str], metadata: Mapping[str, object]
+) -> litellm.EmbeddingResponse:
+    return litellm.EmbeddingResponse(
+        model=model, data=[{"object": "embedding", "index": i, "embedding": [1.0, 0.0]} for i in range(len(input))]
+    )
+
+
+def _embedding_router() -> MagicMock:
+    router = MagicMock()
+    router.aembedding = AsyncMock(side_effect=_embedding_response)
+    return router
+
+
+def _priced_embedding_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "emb",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-fake",
+                    "input_cost_per_token": 0.001,
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_caller_over_budget_is_refused_the_embedding_sub_call(proxy_auth_state: ProxyAuthState) -> None:
+    router: Final = _priced_embedding_router()
+    proxy_auth_state.serve(router)
+    caller: Final = UserAPIKeyAuth(api_key="sk-spent", spend=2.0, max_budget=1.0, request_route="/mcp-rest/tools/call")
+
+    scores: Final = await SemanticTextIndex().scores(
+        QUERY, ("valid one",), router_embedder(router, "emb", caller, _pass_through_key_limits()), "emb"
+    )
+
+    assert scores == EmbeddingFailed(
+        reason="embedding the search query failed: emb is not available to this key (denied)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_key_over_its_model_budget_is_refused_the_embedding_sub_call(
+    proxy_auth_state: ProxyAuthState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router: Final = _priced_embedding_router()
+    proxy_auth_state.serve(router)
+    caller: Final = UserAPIKeyAuth(
+        api_key="sk-model-spent",
+        model_max_budget={"emb": {"max_budget": 0.1, "budget_duration": "1d"}},
+        request_route="/mcp-rest/tools/call",
+    )
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    await limiter.dual_cache.async_set_cache(
+        key=model_budget_spend_cache_key(
+            entity_type=Litellm_EntityType.KEY, entity_id=caller.token, budget_model="emb", budget_duration="1d"
+        ),
+        value=1.0,
+    )
+    monkeypatch.setattr(proxy_server, "model_max_budget_limiter", limiter)
+
+    scores: Final = await SemanticTextIndex().scores(
+        QUERY, ("valid one",), router_embedder(router, "emb", caller, _pass_through_key_limits()), "emb"
+    )
+
+    assert scores == EmbeddingFailed(
+        reason="embedding the search query failed: emb is not available to this key (denied)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_callers_redaction_header_turns_on_redaction_for_the_embedding_call() -> None:
+    router: Final = _embedding_router()
+    headers: Final = {"X-LiteLLM-Enable-Message-Redaction": "true"}
+
+    await router_embedder(router, "emb", CALLER, _pass_through_key_limits(), headers)((QUERY,))
+
+    metadata: Final = router.aembedding.await_args.kwargs["metadata"]
+    assert should_redact_message_logging({"litellm_params": {"metadata": metadata}}) is True
+
+
+@pytest.mark.parametrize(
+    ("headers", "forwarded"),
+    (
+        (
+            {"Authorization": "Bearer sk-caller", "x-litellm-api-key": "sk-caller", "cookie": "session=1"},
+            {},
+        ),
+        (
+            {
+                "authorization": "Bearer sk-caller",
+                "litellm-disable-message-redaction": "true",
+                "litellm-enable-message-redaction": "true",
+            },
+            {"headers": {"litellm-enable-message-redaction": "true"}},
+        ),
+    ),
+    ids=("credentials-only", "credentials-and-opt-out-dropped"),
+)
+@pytest.mark.asyncio
+async def test_only_redaction_headers_reach_the_embedding_calls_metadata(
+    headers: Mapping[str, str], forwarded: Mapping[str, object]
+) -> None:
+    router: Final = _embedding_router()
+
+    await router_embedder(router, "emb", CALLER, _pass_through_key_limits(), headers)((QUERY,))
+
+    metadata: Final = router.aembedding.await_args.kwargs["metadata"]
+    assert {key: metadata[key] for key in metadata if key == "headers"} == forwarded

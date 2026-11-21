@@ -573,7 +573,9 @@ async def handle_mcp_tool_search(
         )
     ranker: Final = (
         SemanticToolRanker(
-            embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict, proxy_logging_obj),
+            embed=router_embedder(
+                llm_router, settings.embedding_model, user_api_key_dict, proxy_logging_obj, raw_headers or {}
+            ),
             embedding_model=settings.embedding_model,
             index=global_mcp_tool_search_index,
         )
@@ -643,7 +645,9 @@ async def handle_mcp_proxy_tool(
             )
         ranker: Final = (
             SemanticToolRanker(
-                embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict, proxy_logging_obj),
+                embed=router_embedder(
+                    llm_router, settings.embedding_model, user_api_key_dict, proxy_logging_obj, raw_headers or {}
+                ),
                 embedding_model=settings.embedding_model,
                 index=global_mcp_tool_search_index,
             )

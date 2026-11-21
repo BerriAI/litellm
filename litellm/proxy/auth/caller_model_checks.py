@@ -1,8 +1,8 @@
 """Checks a proxy-made sub-call runs against the caller of the parent request.
 
-The compaction summary call and the safeguards classifier call go to a model the
-admin configured, not the one the client asked for, and they never pass back
-through the proxy's auth, budget, or rate-limit hooks. These checks apply the
+The Anthropic compaction summary call, the safeguards classifier call and the search
+embedding call go to a model the admin configured, not the one the client asked for,
+and they never pass back through the proxy's auth, budget, or rate-limit hooks. These checks apply the
 caller's model allowlists, per-model budgets, and RPM/TPM limits to that model
 before the sub-call runs.
 """
@@ -79,6 +79,7 @@ async def caller_can_call_model(
     llm_router: Optional["Router"],
     parent_litellm_metadata: Mapping[str, object] | None = None,
     parent_trace_id: str | None = None,
+    sub_call_route: str | None = None,
 ) -> CallerModelVerdict:
     """Run the proxy's own model-access checks for ``model`` against the caller of the parent request.
 
@@ -89,7 +90,8 @@ async def caller_can_call_model(
     a paid one. ``denied`` answers a budget refusal or a 401 or 403, which only an admin or the next budget
     window changes. ``denied_for_now`` answers any other failure, such as a team read that 404s, since the
     parent passed the same checks this turn and the next turn may clear it. ``allowed`` answers a caller
-    outside the proxy.
+    outside the proxy. ``sub_call_route`` names the endpoint the sub-call stands for when it differs from the
+    parent's, so a parent route that skips budget checks (an MCP tool call) does not exempt an embedding call.
     """
     if user_api_key_auth is None:
         return "allowed"
@@ -107,7 +109,7 @@ async def caller_can_call_model(
     except ImportError:
         return "allowed"
 
-    route: Final = user_api_key_auth.request_route or _DEFAULT_SUB_CALL_ROUTE
+    route: Final = sub_call_route or user_api_key_auth.request_route or _DEFAULT_SUB_CALL_ROUTE
     try:
         request: Final = _sub_call_request(route, parent_litellm_metadata)
         request_data: Final = _sub_call_request_data(model, parent_litellm_metadata, parent_trace_id)
