@@ -12468,3 +12468,23 @@ def test_together_speech_row_priced_per_character_is_not_billed_as_a_chat_size_b
 
     per_character: Final = litellm.model_cost[f"together_ai/{model}"]["input_cost_per_character"]
     assert cost == pytest.approx(litellm.utils.count_characters(text=text) * per_character)
+
+
+@pytest.mark.parametrize("call_type", ["speech", "aspeech"])
+def test_openai_speech_bills_whitespace_characters(call_type: str) -> None:
+    text: Final = "Line one of the speech input.\nLine two follows here.\n\tIndented third line ends it."
+    response: Final = HttpxBinaryResponseContent(
+        httpx.Response(200, content=b"ID3....", headers={"content-type": "audio/mpeg"})
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="tts-1",
+        custom_llm_provider="openai",
+        call_type=call_type,
+        prompt=text,
+    )
+
+    per_character: Final = litellm.model_cost["tts-1"]["input_cost_per_character"]
+    assert len(text) > litellm.utils.count_characters(text=text)
+    assert cost == pytest.approx(len(text) * per_character)
