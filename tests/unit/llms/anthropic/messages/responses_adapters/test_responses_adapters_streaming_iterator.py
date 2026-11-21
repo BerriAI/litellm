@@ -14,11 +14,12 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterat
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Final
+from typing import Annotated, Final, Literal
 
 import anyio
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
@@ -1327,7 +1328,7 @@ class _ToolCallProviderStream(httpx.AsyncByteStream):
         yield _RESPONSE_COMPLETED
 
 
-def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple[str, str, str], ...]:
+def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple[str, str, str | None], ...]:
     async def _run() -> list[Mapping[str, object]]:
         upstream: Final = ResponsesAPIStreamingIterator(
             response=httpx.Response(200, stream=provider_stream),
@@ -1337,29 +1338,78 @@ def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple
         )
         return [chunk async for chunk in AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m")]
 
-    chunks: Final = asyncio.run(_run())
-    starts: Final = {c["index"]: c["content_block"] for c in chunks if c["type"] == "content_block_start"}
-    return tuple((starts[i]["id"], starts[i]["name"], _input_before_block_stop(chunks, i)) for i in sorted(starts))
+    events: Final = tuple(
+        _BLOCK_EVENT.validate_python(chunk) for chunk in asyncio.run(_run()) if chunk["type"] in _BLOCK_EVENT_TYPES
+    )
+    return tuple(
+        (event.content_block.id, event.content_block.name, _input_before_block_stop(events, event.index))
+        for event in events
+        if isinstance(event, _BlockStart)
+    )
 
 
-def _input_before_block_stop(chunks: list[Mapping[str, object]], index: int) -> str | None:
+class _ToolUseBlock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: str
+    name: str
+
+
+class _BlockStart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_start"]
+    index: int
+    content_block: _ToolUseBlock
+
+
+class _InputJsonDelta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    partial_json: str
+
+
+class _BlockDelta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_delta"]
+    index: int
+    delta: _InputJsonDelta
+
+
+class _BlockStop(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_stop"]
+    index: int
+
+
+_BlockEvent = Annotated[_BlockStart | _BlockDelta | _BlockStop, Field(discriminator="type")]
+_BLOCK_EVENT: Final[TypeAdapter[_BlockEvent]] = TypeAdapter(_BlockEvent)
+_BLOCK_EVENT_TYPES: Final = frozenset({"content_block_start", "content_block_delta", "content_block_stop"})
+
+
+def _input_before_block_stop(events: tuple[_BlockEvent, ...], index: int) -> str | None:
     stop: Final = next(
-        (pos for pos, c in enumerate(chunks) if c["type"] == "content_block_stop" and c["index"] == index), None
+        (pos for pos, event in enumerate(events) if isinstance(event, _BlockStop) and event.index == index), None
     )
     if stop is None:
         return None
     return "".join(
-        c["delta"]["partial_json"] for c in chunks[:stop] if c["type"] == "content_block_delta" and c["index"] == index
+        event.delta.partial_json for event in events[:stop] if isinstance(event, _BlockDelta) and event.index == index
     )
+
+
+def _no_deltas(arguments: str) -> tuple[str, ...]:
+    return ()
+
+
+def _one_empty_delta(arguments: str) -> tuple[str, ...]:
+    return ("",)
 
 
 @pytest.mark.parametrize(
     ("shape", "split_arguments"),
     [
-        (_ToolCallStreamShape(), lambda arguments: ()),
-        (_ToolCallStreamShape(sends_arguments_done=False), lambda arguments: ()),
-        (_ToolCallStreamShape(output_item_done_carries_arguments=False), lambda arguments: ()),
-        (_ToolCallStreamShape(output_item_done_carries_arguments=False), lambda arguments: ("",)),
+        (_ToolCallStreamShape(), _no_deltas),
+        (_ToolCallStreamShape(sends_arguments_done=False), _no_deltas),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), _no_deltas),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), _one_empty_delta),
         (_ToolCallStreamShape(), _halves),
         (_ToolCallStreamShape(sends_arguments_done=False), _halves),
         (_ToolCallStreamShape(deltas_carry_item_id=False), _halves),

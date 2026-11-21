@@ -276,10 +276,7 @@ class AnthropicResponsesStreamWrapper:
 
     def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
-        event_type = getattr(event, "type", None)
-        if event_type is None and isinstance(event, dict):
-            event_type = event.get("type")
-
+        event_type: Final = self._field(event, "type")
         if event_type is None:
             return
 
@@ -421,10 +418,9 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- output item done -> content_block_stop ----
         if event_type == "response.output_item.done":
-            item = getattr(event, "item", None) or (event.get("item") if isinstance(event, dict) else None)
-            item_id = (
-                getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None) if item else None
-            )
+            item = self._field(event, "item")
+            done_item_id: Final = self._field(item, "id")
+            item_id = done_item_id if isinstance(done_item_id, str) and done_item_id else None
             if self._field(item, "type") == "reasoning":
                 self._close_reasoning_item(item, item_id)
                 return
