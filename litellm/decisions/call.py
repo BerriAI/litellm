@@ -12,6 +12,7 @@ from pydantic_core import ErrorDetails, InitErrorDetails, to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.cost_calculator import cost_map_key_prices_anything
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
 from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_PROVIDERS
@@ -925,8 +926,12 @@ def _with_remote_images_inlined(call: DecisionsCall) -> DecisionsCall:
     if remaining is not None:
         images: Final = _bounded_remote_images(remote_urls, remaining, call.timeout)
         return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, images, strict=True))))
+    download_limit: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
     return _with_data_urls(
-        call, MappingProxyType({url: convert_url_to_base64(url, timeout=call.timeout) for url in remote_urls})
+        call,
+        MappingProxyType(
+            {url: convert_url_to_base64(url, timeout=call.timeout, max_bytes=download_limit) for url in remote_urls}
+        ),
     )
 
 
@@ -936,7 +941,9 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
         return call
     remaining: Final = _remaining_image_bytes(call)
     data_urls: Final = (
-        await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
+        await async_convert_urls_to_base64(
+            remote_urls, timeout=call.timeout, max_bytes=int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+        )
         if remaining is None
         else await _async_bounded_remote_images(remote_urls, remaining, call.timeout)
     )
