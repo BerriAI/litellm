@@ -228,15 +228,19 @@ async def test_unsubscribe_deletes_the_row_and_ends_the_upstream_subscription() 
 
 
 @pytest.mark.asyncio
-async def test_a_racing_first_subscribe_joins_the_winner_and_keeps_its_upstream_secret() -> None:
+async def test_a_subscribe_racing_one_still_being_created_is_told_to_retry_and_touches_nothing() -> None:
     store: Final = MemoryStore()
     upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
-    first: Final = await _subscribe(store, upstream, _Client())
-    winner_secret: Final = store.rows[SID].upstream_secret
+    await _subscribe(store, upstream, _Client())
     store.rows[SID] = store.rows[SID].model_copy(update={"status": "pending"})
+    calls_before: Final = len(upstream.calls)
     second: Final = await _subscribe(store, upstream, _Client(), params=_params(secret=ROTATED))
-    assert isinstance(first, Ok) and isinstance(second, Ok) and second.ok.id == first.ok.id
-    assert (store.rows[SID].upstream_secret, store.rows[SID].client_secret) == (winner_secret, ROTATED)
+    assert isinstance(second, Error) and second.error.code is EventsErrorCode.INTERNAL_ERROR
+    assert (len(upstream.calls), store.rows[SID].status, store.rows[SID].client_secret) == (
+        calls_before,
+        "pending",
+        SECRET,
+    )
 
 
 @pytest.mark.asyncio
@@ -275,3 +279,31 @@ async def test_a_subscription_terminated_while_upstream_answers_is_ended_upstrea
     result: Final = await _subscribe(store, upstream, _Client())
     assert isinstance(result, Error) and result.error.code is EventsErrorCode.NOT_FOUND
     assert [method for method, *_ in upstream.calls] == ["events/subscribe", "events/unsubscribe"]
+
+
+@pytest.mark.asyncio
+async def test_a_cursor_that_cannot_be_sealed_is_refused_before_any_upstream_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    store: Final = MemoryStore()
+    upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+    result: Final = await _subscribe(store, upstream, _Client())
+    assert isinstance(result, Error)
+    assert (upstream.calls, store.rows) == ([], {})
+
+
+@pytest.mark.asyncio
+async def test_a_name_now_served_by_another_server_ends_the_old_subscription_and_starts_fresh() -> None:
+    store: Final = MemoryStore()
+    upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+    await _subscribe(store, upstream, _Client())
+    store.rows[SID] = store.rows[SID].model_copy(update={"server_id": "srv-old", "consecutive_failures": 3})
+    result: Final = await _subscribe(store, upstream, _Client())
+    assert isinstance(result, Ok)
+    assert (store.rows[SID].server_id, store.rows[SID].status, store.rows[SID].consecutive_failures) == (
+        "srv-ci",
+        "active",
+        0,
+    )

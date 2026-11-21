@@ -57,6 +57,7 @@ from litellm.types.mcp_server.events import (
 )
 
 _KNOWN_CODES: Final = frozenset(member.value for member in EventsErrorCode)
+_BEING_CREATED: Final = internal_error("Another request is creating this subscription; retry")
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +202,15 @@ async def _reactivation_gap(row: SubscriptionRow, cursor: str | None, store: Eve
     )
 
 
+async def _roll_back(
+    subscription: _Subscription, upstream: SubscribeEventsResult, settings: EventsSettings, runtime: EventsRuntime
+) -> None:
+    """Undo an upstream subscription this request created but could not record."""
+    orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
+    await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
+    await _discard_pending(subscription)
+
+
 async def _activate(
     subscription: _Subscription,
     upstream: SubscribeEventsResult,
@@ -218,6 +228,7 @@ async def _activate(
     )
     sealed: Final = seal_cursor(subscription.binding, upstream.cursor, runtime.now())
     if isinstance(sealed, Error):
+        await _roll_back(subscription, upstream, settings, runtime)
         return Error(sealed.error)
     activation: Final = Activation(
         client_secret=base.client_secret,
@@ -227,9 +238,7 @@ async def _activate(
         cursor=sealed.ok,
     )
     if not await subscription.request.store.activate(base.id, activation):
-        orphan: Final = base.model_copy(update={"upstream_subscription_id": upstream.id})
-        await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
-        await _discard_pending(subscription)
+        await _roll_back(subscription, upstream, settings, runtime)
         return Error(subscription_not_found())
     refreshed: Final = existing if existing is not None and existing.status != "terminated" else None
     if refreshed is not None and refreshed.status == "suspended":
@@ -255,6 +264,22 @@ async def _activate(
     return Ok(result)
 
 
+async def _retire_if_moved(
+    row: SubscriptionRow | None,
+    prepared: PreparedEvent,
+    settings: EventsSettings,
+    runtime: EventsRuntime,
+    store: EventStore,
+) -> SubscriptionRow | None:
+    """A row for a server the name no longer resolves to is ended there, so the new server starts fresh."""
+    if row is None or row.status == "terminated" or row.server_id == prepared.resolved.target.server.server_id:
+        return row
+    await store.terminate(row.id)
+    await store.drop_deliveries(row.id)
+    await end_upstream(row, settings, runtime)
+    return row.model_copy(update={"status": "terminated"})
+
+
 async def _prepare(
     context: OperationContext,
     params: SubscribeEventsParams,
@@ -272,7 +297,11 @@ async def _prepare(
     opened: Final = open_cursor(params.cursor, binding, runtime.now())
     if isinstance(opened, Error):
         return Error(opened.error)
-    existing: Final = await request.store.get(sid)
+    sealable: Final = seal_cursor(binding, "probe", runtime.now())
+    if isinstance(sealable, Error):
+        return Error(sealable.error)
+    found: Final = await request.store.get(sid)
+    existing: Final = await _retire_if_moved(found, prepared.ok, settings, runtime, request.store)
     live: Final = existing if existing is not None and existing.status != "terminated" else None
     if live is None:
         refused: Final = await _admit_new(sid, request, params, settings, runtime.now(), post)
@@ -288,13 +317,15 @@ async def _prepare(
 
 async def _reserve(subscription: _Subscription, settings: EventsSettings) -> Result[_Subscription, EventsFailure]:
     """Claim the subscription id before any upstream work, so racing subscribes share one row and one secret."""
+    if subscription.existing is not None and subscription.existing.status == "pending":
+        return Error(_BEING_CREATED)
     if subscription.existing is not None and subscription.existing.status != "terminated":
         return Ok(subscription)
     store: Final = subscription.request.store
     if not await store.reserve(subscription.base):
         winner: Final = await store.get(subscription.base.id)
-        if winner is None or winner.status == "terminated":
-            return Error(internal_error("The subscription changed while it was being created; retry"))
+        if winner is None or winner.status in ("terminated", "pending"):
+            return Error(_BEING_CREATED)
         refreshed: Final = winner.model_copy(update={"client_secret": subscription.params.delivery.secret})
         return Ok(replace(subscription, base=refreshed, existing=winner))
     if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
