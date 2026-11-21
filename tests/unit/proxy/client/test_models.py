@@ -9,6 +9,7 @@ import responses
 
 from litellm.proxy.client import Client, ModelsManagementClient
 from litellm.proxy.client.exceptions import NotFoundError, UnauthorizedError
+from litellm.types.router import updateDeployment
 
 
 @pytest.fixture
@@ -617,9 +618,8 @@ def test_update_request_creation(client, base_url, api_key):
 
     # Check request body
     assert request.json == {
-        "id": model_id,
         "litellm_params": model_params,
-        "model_info": model_info,
+        "model_info": {**model_info, "id": model_id},
     }
 
 
@@ -632,8 +632,22 @@ def test_update_without_model_info(client):
         model_id=model_id, model_params=model_params, return_request=True
     )
 
-    # Check request body doesn't include model_info
-    assert request.json == {"id": model_id, "litellm_params": model_params}
+    assert request.json == {"litellm_params": model_params, "model_info": {"id": model_id}}
+
+
+@pytest.mark.parametrize("model_info", [None, {"tier": "paid"}])
+def test_update_targets_model_id_as_proxy_reads_it(client, model_info):
+    """The proxy's /model/update reads the target from model_info.id, so model_id must land there"""
+    request = client.update(
+        model_id="model-123",
+        model_params={"model": "openai/gpt-4"},
+        model_info=model_info,
+        return_request=True,
+    )
+
+    parsed = updateDeployment(**request.json)
+    assert parsed.model_info is not None
+    assert parsed.model_info.id == "model-123"
 
 
 @responses.activate
