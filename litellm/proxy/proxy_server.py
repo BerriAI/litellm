@@ -3248,12 +3248,16 @@ def mount_swagger_ui(application: FastAPI, swagger_url: str | None) -> None:
             swagger_favicon_url=f"{assets}/favicon.png",
         )
         warm_url: Final = json.dumps(f"{root_path}/lazy/warm/").replace("<", "\\u003c")
-        body: Final = bytes(response.body).decode("utf-8").replace(
-            "const ui = SwaggerUIBundle({",
-            f"const LAZY_WARM_URL = {warm_url};"
-            + _lazy_plugin_js
-            + 'const ui = SwaggerUIBundle({plugins:[LazyLoadPlugin],tagsSorter:"alpha",',
-            1,
+        body: Final = (
+            bytes(response.body)
+            .decode("utf-8")
+            .replace(
+                "const ui = SwaggerUIBundle({",
+                f"const LAZY_WARM_URL = {warm_url};"
+                + _lazy_plugin_js
+                + 'const ui = SwaggerUIBundle({plugins:[LazyLoadPlugin],tagsSorter:"alpha",',
+                1,
+            )
         )
         return HTMLResponse(content=body)
 
