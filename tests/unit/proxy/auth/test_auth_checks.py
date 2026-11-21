@@ -3030,6 +3030,14 @@ def test_a_litellm_model_name_grants_nothing_when_routing_would_not_pick_its_dep
     assert _can_call(router, ["group-a"], "openai/granted-raw", "team-1", key_model_aliases) is allowed
 
 
+def test_a_litellm_model_name_grants_nothing_when_a_global_alias_rewrites_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = _namesake_router()
+    assert _can_call(router, ["group-a"], "openai/granted-raw") is True
+    monkeypatch.setattr(litellm, "model_alias_map", {"openai/granted-raw": "shared-b"})
+
+    assert _can_call(router, ["group-a"], "openai/granted-raw") is False
+
+
 @pytest.mark.parametrize(
     "requested,served_by",
     [

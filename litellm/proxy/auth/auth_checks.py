@@ -4969,7 +4969,8 @@ def _routes_to_deployments_by_litellm_model(model: str, llm_router: Router, team
     registry: Final = llm_router.registry()
     settings: Final = llm_router.settings()
     return not (
-        settings.router_general_settings.pass_through_all_models
+        model in litellm.model_alias_map
+        or settings.router_general_settings.pass_through_all_models
         or settings.default_deployment is not None
         or registry.patterns().patterns  # pyright: ignore[reportUnknownMemberType]  # untyped deployment dicts
         or registry.resolve(model, kind="recognized")
