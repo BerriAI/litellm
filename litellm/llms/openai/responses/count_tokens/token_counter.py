@@ -11,7 +11,9 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
+from litellm.llms.anthropic.pass_through.responses_adapters.handler import preserves_system_instructions
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -73,11 +75,17 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object,
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
+        request_params: Mapping[str, object],
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
                 return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
-                    model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
+                    model=model_to_use,
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    output_format=output_format,
+                    preserve_system_instructions=preserves_system_instructions(request_params),
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
@@ -170,6 +178,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            request_params=as_str_mapping(litellm_params) or {},
         )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting
