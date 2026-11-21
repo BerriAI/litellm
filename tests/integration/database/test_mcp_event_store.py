@@ -211,3 +211,16 @@ async def test_a_live_only_query_skips_terminated_rows() -> None:
         assert live.id in ids and ended.id not in ids
         await store.delete(live.id)
         await store.delete(ended.id)
+
+
+@pytest.mark.asyncio
+async def test_ending_and_deleting_only_touch_the_upstream_subscription_that_was_read() -> None:
+    async with _connected() as store:
+        row: Final = await _active(store)
+        assert await store.end_if_current(row.id, "up_other") is False
+        assert await store.end_if_current(row.id, "up_1") is True
+        assert await store.end_if_current(row.id, "up_1") is False
+        await store.delete_ended(row.id, "up_other")
+        assert await store.get(row.id) is not None
+        await store.delete_ended(row.id, "up_1")
+        assert await store.get(row.id) is None

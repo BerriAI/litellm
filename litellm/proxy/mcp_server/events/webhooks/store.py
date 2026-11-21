@@ -97,6 +97,14 @@ class EventStore(Protocol):
 
     async def terminate(self, subscription_id: str) -> None: ...
 
+    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        """Terminate the row only while it is still this upstream subscription; False when it changed or ended."""
+        ...
+
+    async def delete_ended(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+        """Delete the row only while it is still this terminated upstream subscription."""
+        ...
+
     async def delete(self, subscription_id: str) -> None: ...
 
     async def count_live(self, principal: str) -> int: ...
@@ -247,6 +255,22 @@ class PrismaEventStore:
 
     async def terminate(self, subscription_id: str) -> None:
         await self._subscriptions.update_many(where={"id": subscription_id}, data={"status": "terminated"})
+
+    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        ended: Final = await self._subscriptions.update_many(
+            where={
+                "id": subscription_id,
+                "upstream_subscription_id": upstream_subscription_id,
+                "status": _NOT_TERMINATED,
+            },
+            data={"status": "terminated"},
+        )
+        return ended > 0
+
+    async def delete_ended(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+        await self._subscriptions.delete_many(
+            where={"id": subscription_id, "upstream_subscription_id": upstream_subscription_id, "status": "terminated"}
+        )
 
     async def delete(self, subscription_id: str) -> None:
         await self._subscriptions.delete_many(where={"id": subscription_id})

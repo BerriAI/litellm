@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Final
 
 from litellm.proxy.mcp_server.events.webhooks.store import (
     LIVE_STATUSES,
@@ -68,6 +69,26 @@ class MemoryStore:
             failed_since=current.failed_since or at,
             status="suspended" if current.status == "active" and failures >= suspend_after else current.status,
         )
+
+    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        current: Final = self.rows.get(subscription_id)
+        if (
+            current is None
+            or current.status == "terminated"
+            or current.upstream_subscription_id != upstream_subscription_id
+        ):
+            return False
+        self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
+        return True
+
+    async def delete_ended(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+        current: Final = self.rows.get(subscription_id)
+        if (
+            current is not None
+            and current.status == "terminated"
+            and current.upstream_subscription_id == upstream_subscription_id
+        ):
+            self.rows.pop(subscription_id)
 
     async def terminate(self, subscription_id: str) -> None:
         current = self.rows.get(subscription_id)

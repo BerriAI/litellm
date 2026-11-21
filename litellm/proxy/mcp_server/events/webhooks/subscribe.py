@@ -382,15 +382,19 @@ async def unsubscribe(
     row: Final = await events_store.get(sid)
     if row is None or row.status == "terminated":
         return Error(subscription_not_found())
-    prepared: Final = await prepare_event(context, params.name, runtime)
-    if isinstance(prepared, Ok):
-        mismatch: Final = check_routing_headers(headers, params.name, params.arguments, prepared.ok)
+    prepared: Final = await _same_server_event(context, params.name, row, runtime)
+    if prepared is not None:
+        mismatch: Final = check_routing_headers(headers, params.name, params.arguments, prepared)
         if mismatch is not None:
             return Error(mismatch)
-        await _unsubscribe_upstream(row, prepared.ok, settings, runtime)
+    if not await events_store.end_if_current(sid, row.upstream_subscription_id):
+        return Error(subscription_not_found())
+    await events_store.drop_deliveries(sid)
+    if prepared is not None:
+        await _unsubscribe_upstream(row, prepared, settings, runtime)
     else:
         await end_upstream(row, settings, runtime)
-    await events_store.delete(sid)
+    await events_store.delete_ended(sid, row.upstream_subscription_id)
     await runtime.record(
         EventActivity(
             call_type="mcp_event_subscribe",
@@ -403,6 +407,19 @@ async def unsubscribe(
         )
     )
     return Ok(None)
+
+
+async def _same_server_event(
+    context: OperationContext, name: str, row: SubscriptionRow, runtime: EventsRuntime
+) -> PreparedEvent | None:
+    """The event on the server this row was made on; None when the name moved or the catalog is unreachable."""
+    try:
+        prepared: Final = await prepare_event(context, name, runtime)
+    except Exception:  # noqa: BLE001  # an upstream outage must not keep a cancelled subscription delivering
+        return None
+    if isinstance(prepared, Error) or prepared.ok.resolved.target.server.server_id != row.server_id:
+        return None
+    return prepared.ok
 
 
 async def _unsubscribe_upstream(
@@ -421,5 +438,5 @@ async def _unsubscribe_upstream(
             },
             routing_headers(row.event_name, row.arguments, prepared.descriptor),
         )
-    except MCPError:
+    except (MCPError, OSError, TimeoutError):
         return

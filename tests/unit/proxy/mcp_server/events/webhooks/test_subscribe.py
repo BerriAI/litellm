@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -10,10 +11,11 @@ from mcp.shared.exceptions import MCPError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.events.access import principal_of
 from litellm.proxy.mcp_server.events.config import EventsSettings
+from litellm.proxy.mcp_server.events.runtime import DescriptorCache
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.policy import subscription_id
 from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret
-from litellm.proxy.mcp_server.events.webhooks.store import Activation
+from litellm.proxy.mcp_server.events.webhooks.store import Activation, QueuedDelivery
 from litellm.proxy.mcp_server.events.webhooks.subscribe import (
     _prepare,  # pyright: ignore[reportPrivateUsage]  # the reservation step is the unit under test
     _Request,  # pyright: ignore[reportPrivateUsage]  # see above
@@ -225,6 +227,39 @@ async def test_unsubscribe_deletes_the_row_and_ends_the_upstream_subscription() 
         EventsErrorCode.NOT_FOUND,
         {"kind": "subscription"},
     )
+
+
+_UNSUBSCRIBE: Final = UnsubscribeEventsParams(
+    name="ci-build.failed", arguments=ARGS, delivery=UnsubscribeDelivery(url=HOOK)
+)
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_still_stops_local_delivery_when_the_upstream_catalog_is_down() -> None:
+    store: Final = MemoryStore()
+    await _subscribe(store, FakeUpstream(responses={"events/subscribe": UPSTREAM_OK}), _Client())
+    store.queue["d1"] = QueuedDelivery(
+        delivery_id="d1", subscription_id=SID, body="{}", webhook_id="w", next_attempt_at=datetime.now(timezone.utc)
+    )
+
+    async def catalog_down(_target: object) -> tuple[object, ...]:
+        raise ConnectionError("upstream unreachable")
+
+    down: Final = replace(runtime((server(),)), list_upstream=catalog_down, descriptor_cache=DescriptorCache())
+    result: Final = await unsubscribe(context(), _UNSUBSCRIBE, None, SETTINGS, down, store)
+    assert result == Ok(None) and store.rows == {} and store.queue == {}
+
+
+@pytest.mark.asyncio
+async def test_a_delayed_unsubscribe_never_removes_the_subscription_that_replaced_it() -> None:
+    store: Final = MemoryStore()
+    upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
+    await _subscribe(store, upstream, _Client())
+    stale: Final = store.rows[SID]
+    store.rows[SID] = stale.model_copy(update={"upstream_subscription_id": "up_replacement"})
+    assert await store.end_if_current(SID, stale.upstream_subscription_id) is False
+    await store.delete_ended(SID, stale.upstream_subscription_id)
+    assert store.rows[SID].status == "active"
 
 
 @pytest.mark.asyncio
