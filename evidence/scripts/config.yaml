@@ -1,0 +1,27 @@
+model_list:
+  - model_name: mock-anthropic
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_base: http://127.0.0.1:8791
+      api_key: mock-key
+  - model_name: anthropic-sonnet-5-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  redis_host: 127.0.0.1
+  redis_port: 6390
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  coordination_redis:
+    host: 127.0.0.1
+    port: 6390
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: 127.0.0.1
+    port: 6390

@@ -1,0 +1,59 @@
+== adjacent_matrix: 20 lines, 2 differ
+   {"shape": "tool_use+end_turn", "miss_mode": "plain", "hit_mode": "plain", "stored_finish_reason": ["stop"], "provider_hits_total": 1, "hit_asserted": true} 
+      before: {"finish_reason": "tool_calls", "tool_calls": true, "cache_hit": true, "id": "ID"}  
+      after:  {"finish_reason": "stop", "tool_calls": true, "cache_hit": true, "id": "ID"} 
+   {"shape": "tool_use+end_turn", "miss_mode": "aplain", "hit_mode": "aplain", "stored_finish_reason": ["stop"], "provider_hits_total": 1, "hit_asserted": true} 
+      before: {"finish_reason": "tool_calls", "tool_calls": true, "cache_hit": true, "id": "ID"}  
+      after:  {"finish_reason": "stop", "tool_calls": true, "cache_hit": true, "id": "ID"} 
+== compat_seeded: 42 lines, 4 differ
+   {"case": "seeded", "shape": "tool_use+end_turn", "mode": "plain", "seeded_finish_reason": "stop", "provider_hits_total": 1} 
+      before: {"finish_reason": "tool_calls", "tool_calls": true, "cache_hit": true, "id": "ID"}  
+      after:  {"finish_reason": "stop", "tool_calls": true, "cache_hit": true, "id": "ID"} 
+   {"case": "seeded", "shape": "tool_use+end_turn", "mode": "stream", "seeded_finish_reason": "stop", "provider_hits_total": 1} 
+      before: {"last_chunk": "tool_calls", "builder": "tool_calls", "tool_calls": true, "builder_tool_calls": true, "id": "ID"}  
+      after:  {"last_chunk": "stop", "builder": "stop", "tool_calls": true, "builder_tool_calls": true, "id": "ID"} 
+   {"case": "seeded", "shape": "tool_use+end_turn", "mode": "aplain", "seeded_finish_reason": "stop", "provider_hits_total": 1} 
+      before: {"finish_reason": "tool_calls", "tool_calls": true, "cache_hit": true, "id": "ID"}  
+      after:  {"finish_reason": "stop", "tool_calls": true, "cache_hit": true, "id": "ID"} 
+   {"case": "seeded", "shape": "tool_use+end_turn", "mode": "astream", "seeded_finish_reason": "stop", "provider_hits_total": 1} 
+      before: {"last_chunk": "tool_calls", "builder": "tool_calls", "tool_calls": true, "builder_tool_calls": true, "id": "ID"}  
+      after:  {"last_chunk": "stop", "builder": "stop", "tool_calls": true, "builder_tool_calls": true, "id": "ID"} 
+== compat_finish_details: 63 lines, 8 differ
+   {"case": "finish_details", "shape": "tool_use+end_turn", "mode": "plain", "seeded_finish_reason": "stop", "seeded_finish_details": "stop", "provider_hits_total": 1} 
+      before: {"finish_reason": "tool_calls", "tool_calls": true, "cache_hit": true, "id": "ID"}  
+      after:  {"finish_reason": "stop", "tool_calls": true, "cache_hit": true, "id": "ID"} 
+   {"case": "finish_details", "shape": "tool_use+end_turn", "mode": "plain", "seeded_finish_reason": "stop", "seeded_finish_details": "length", "provider_hits_total": 1} 
+      before: {"finish_reason": "tool_calls", "tool_calls": true, "cache_hit": true, "id": "ID"}  
+      after:  {"finish_reason": "stop", "tool_calls": true, "cache_hit": true, "id": "ID"} 
+   {"case": "finish_details", "shape": "tool_use+end_turn", "mode": "stream", "seeded_finish_reason": "stop", "seeded_finish_details": "stop", "provider_hits_total": 1} 
+      before: {"last_chunk": "tool_calls", "builder": "tool_calls", "tool_calls": true, "builder_tool_calls": true, "id": "ID"}  
+      after:  {"last_chunk": "stop", "builder": "stop", "tool_calls": true, "builder_tool_calls": true, "id": "ID"} 
+   {"case": "finish_details", "shape": "tool_use+end_turn", "mode": "stream", "seeded_finish_reason": "stop", "seeded_finish_details": "length", "provider_hits_total": 1} 
+      before: {"last_chunk": "tool_calls", "builder": "tool_calls", "tool_calls": true, "builder_tool_calls": true, "id": "ID"}  
+      after:  {"last_chunk": "stop", "builder": "stop", "tool_calls": true, "builder_tool_calls": true, "id": "ID"} 
+   {"case": "finish_details", "shape": "tool_use+end_turn", "mode": "aplain", "seeded_finish_reason": "stop", "seeded_finish_details": "stop", "provider_hits_total": 1} 
+      before: {"finish_reason": "tool_calls", "tool_calls": true, "cache_hit": true, "id": "ID"}  
+      after:  {"finish_reason": "stop", "tool_calls": true, "cache_hit": true, "id": "ID"} 
+   {"case": "finish_details", "shape": "tool_use+end_turn", "mode": "aplain", "seeded_finish_reason": "stop", "seeded_finish_details": "length", "provider_hits_total": 1} 
+      before: {"finish_reason": "tool_calls", "tool_calls": true, "cache_hit": true, "id": "ID"}  
+      after:  {"finish_reason": "stop", "tool_calls": true, "cache_hit": true, "id": "ID"} 
+   {"case": "finish_details", "shape": "tool_use+end_turn", "mode": "astream", "seeded_finish_reason": "stop", "seeded_finish_details": "stop", "provider_hits_total": 1} 
+      before: {"last_chunk": "tool_calls", "builder": "tool_calls", "tool_calls": true, "builder_tool_calls": true, "id": "ID"}  
+      after:  {"last_chunk": "stop", "builder": "stop", "tool_calls": true, "builder_tool_calls": true, "id": "ID"} 
+   {"case": "finish_details", "shape": "tool_use+end_turn", "mode": "astream", "seeded_finish_reason": "stop", "seeded_finish_details": "length", "provider_hits_total": 1} 
+      before: {"last_chunk": "tool_calls", "builder": "tool_calls", "tool_calls": true, "builder_tool_calls": true, "id": "ID"}  
+      after:  {"last_chunk": "stop", "builder": "stop", "tool_calls": true, "builder_tool_calls": true, "id": "ID"} 
+== bridge_site_probe: 14 lines, 4 differ
+   {"async": false, "variant": "responses_entry_evicted", "seeded": null, "provider_hits_total": 1} 
+      before: {"type": "ResponsesAPIResponse", "status": "completed", "output": ["function_call"]}  
+      after:  {"type": "ResponsesAPIResponse", "status": "completed", "output": ["function_call"]} 
+   {"async": false, "variant": "chat_shaped_under_responses_key", "seeded": "stop", "provider_hits_total": 1} 
+      before: {"type": "ModelResponse", "finish_reason": "tool_calls"}  
+      after:  {"type": "ModelResponse", "finish_reason": "stop"} 
+   {"async": true, "variant": "responses_entry_evicted", "seeded": null, "provider_hits_total": 1} 
+      before: {"type": "ResponsesAPIResponse", "status": "completed", "output": ["function_call"]}  
+      after:  {"type": "ResponsesAPIResponse", "status": "completed", "output": ["function_call"]} 
+   {"async": true, "variant": "chat_shaped_under_responses_key", "seeded": "stop", "provider_hits_total": 1} 
+      before: {"type": "ModelResponse", "finish_reason": "tool_calls"}  
+      after:  {"type": "ModelResponse", "finish_reason": "stop"} 
+== live_anthropic_smoke: 4 lines, 0 differ

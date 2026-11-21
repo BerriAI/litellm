@@ -1,0 +1,3 @@
+sha=6bcc7ff6b9ea7f21c6801cf999429a04fcc78664 ready=1 proxy_cwd=/home/ubuntu/repos/litellm
+driver rc=0
+port_listeners_after_stop=0

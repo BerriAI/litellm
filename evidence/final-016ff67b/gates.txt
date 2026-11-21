@@ -1,0 +1,33 @@
+uv_lock_check rc=0
+ruff_format rc=0
+mcp_operation_boundary rc=0
+ruff_source rc=0
+ruff_tests rc=0
+ruff_strict_gate rc=0
+type_discipline_gate rc=0
+test_quality_gate rc=0
+openapi_docs_gate rc=0
+circular_imports rc=0
+migrations_no_data_rewrites rc=0
+migrations_lock_timeout rc=0
+light gates done
+type_check_gate rc=0
+
+== ruff_format
+3 files already formatted
+== ruff_source
+All checks passed!
+== ruff_tests
+All checks passed!
+== ruff_strict_gate
+OK: no strict rule grew past its merge-base count (base 6bcc7ff6b9ea7f21c6801cf999429a04fcc78664)
+== type_discipline_gate
+OK: no LIT rule grew past its merge-base count (base 6bcc7ff6b9ea7f21c6801cf999429a04fcc78664)
+== test_quality_gate
+OK: no TQ rule grew past its merge-base count (base 6bcc7ff6b9ea7f21c6801cf999429a04fcc78664)
+== openapi_docs_gate
+OK: no OA rule grew past its merge-base count (base 6bcc7ff6b9ea7f21c6801cf999429a04fcc78664)
+== type_check_gate
+OK: every basedpyright rule is within its ceiling (92830 errors total, base 6bcc7ff6b9ea)
+== circular_imports
+No LiteLLM type hints found.

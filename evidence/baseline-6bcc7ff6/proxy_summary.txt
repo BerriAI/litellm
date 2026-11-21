@@ -1,0 +1,15 @@
+mock chat tool_use+end_turn plain seeded=- stored=stop miss=stop hit=tool_calls mock=1
+mock chat tool_use+end_turn stream seeded=- stored=tool_calls miss=tool_calls hit=tool_calls mock=1
+mock chat tool_use+tool_use plain seeded=- stored=tool_calls miss=tool_calls hit=tool_calls mock=1
+mock chat tool_use+tool_use stream seeded=- stored=tool_calls miss=tool_calls hit=tool_calls mock=1
+mock chat text+end_turn plain seeded=- stored=stop miss=stop hit=stop mock=1
+mock chat text+end_turn stream seeded=- stored=stop miss=stop hit=stop mock=1
+mock chat text+max_tokens plain seeded=- stored=length miss=length hit=length mock=1
+mock chat text+max_tokens stream seeded=- stored=length miss=length hit=length mock=1
+mock responses tool_use+end_turn seeded=- stored=stop,<not chat-shaped> miss=completed ['function_call'] hit=completed ['function_call'] mock=1
+mock responses text+end_turn seeded=- stored=<not chat-shaped>,stop miss=completed ['message'] hit=completed ['message'] mock=1
+real anthropic chat tool_auto plain seeded=- stored=tool_calls miss=tool_calls hit=tool_calls mock=-
+real anthropic chat text plain seeded=- stored=stop miss=stop hit=stop mock=-
+real anthropic chat tool_auto stream seeded=- stored=tool_calls miss=tool_calls hit=tool_calls mock=-
+real anthropic chat text stream seeded=- stored=stop miss=stop hit=stop mock=-
+real anthropic responses text seeded=- stored=stop,<not chat-shaped> miss=completed ['message'] hit=completed ['message'] mock=-

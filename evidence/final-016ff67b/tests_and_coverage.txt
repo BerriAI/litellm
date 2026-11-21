@@ -1,0 +1,29 @@
+mapped rc=1
+1 failed, 940 passed, 323 warnings in 260.76s (0:04:20)
+FAILED tests/unit/caching/test_caching_handler.py::test_sync_cache_hits_reach_sync_custom_logger[text_completion-request_kwargs2]
+E       AssertionError: [None, None, True, True]
+E       assert Counter({None: 2, True: 2}) == Counter({True: 2, None: 1})
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {None: 2} != {None: 1}
+E         Use -v to get more diff
+== targeted reruns of the failed test alone
+3 passed, 35 warnings in 3.26s
+3 passed, 35 warnings in 3.76s
+3 passed, 35 warnings in 3.58s
+3 passed, 35 warnings in 3.29s
+3 passed, 35 warnings in 3.29s
+== whole file rerun
+191 passed, 43 warnings in 14.23s
+== changed-line coverage
+litellm/caching/caching_handler.py
+  changed executable lines 7, covered 7, uncovered []
+  branches from changed lines 0, covered 0, uncovered []
+litellm/litellm_core_utils/llm_response_utils/convert_dict_to_response.py
+  changed executable lines 3, covered 3, uncovered []
+  branches from changed lines 4, covered 4, uncovered []
+litellm/litellm_core_utils/streaming_handler.py
+  changed executable lines 3, covered 3, uncovered []
+  branches from changed lines 2, covered 2, uncovered []
+TOTAL lines 13/13, branches 6/6

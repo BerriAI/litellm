@@ -1,0 +1,2 @@
+/home/ubuntu/repos/litellm/litellm/__init__.py
+raises MidStreamFallbackError | original_exception: APIError | litellm.MidStreamFallbackError: litellm.APIError: LiteLLM: provider returned a response with no 'choices'. Raw

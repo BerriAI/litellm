@@ -1,0 +1,5 @@
+stream=False call 1: stop
+stream=False call 2: stop
+stream=True  call 1 (last chunk, stream_chunk_builder): ('tool_calls', 'tool_calls')
+stream=True  call 2 (last chunk, stream_chunk_builder): ('tool_calls', 'tool_calls')
+requests that reached the mock: 2
