@@ -14,6 +14,7 @@ from typing import (
 
 from pydantic import BaseModel
 
+from litellm.harness.config import UNSET, Agent, Unset
 from litellm.harness.context import ApprovalHandler
 from litellm.harness.options import HarnessOptions
 from litellm.harness.runtime import (
@@ -207,25 +208,25 @@ class Session:
 
 
 def _run(
-    harness: Harness,
+    harness: Harness | Agent,
     prompt: str,
     *,
     sandbox: Sandbox,
-    model: str | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    instructions: str | None = None,
-    tools: Sequence[Callable[..., object]] = (),
-    skills: Sequence[str | os.PathLike[str]] = (),
-    disable_tools: Sequence[str] = (),
-    permissions: PermissionMode = "full",
-    on_approval: ApprovalHandler | None = None,
-    output: type[BaseModel] | None = None,
-    max_turns: int | None = None,
-    timeout: float | None = None,
-    metadata: Mapping[str, object] | None = None,
-    options: HarnessOptions | None = None,
-    install: bool = False,
+    model: str | None | Unset = UNSET,
+    api_key: str | None | Unset = UNSET,
+    api_base: str | None | Unset = UNSET,
+    instructions: str | None | Unset = UNSET,
+    tools: Sequence[Callable[..., object]] | Unset = UNSET,
+    skills: Sequence[str | os.PathLike[str]] | Unset = UNSET,
+    disable_tools: Sequence[str] | Unset = UNSET,
+    permissions: PermissionMode | Unset = UNSET,
+    on_approval: ApprovalHandler | None | Unset = UNSET,
+    output: type[BaseModel] | None | Unset = UNSET,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | None | Unset = UNSET,
+    metadata: Mapping[str, object] | None | Unset = UNSET,
+    options: HarnessOptions | None | Unset = UNSET,
+    install: bool | Unset = UNSET,
 ) -> Result:
     """Run one prompt to completion (blocking) and return the Result."""
     return run_sync(
@@ -254,25 +255,25 @@ def _run(
 
 
 def _stream(
-    harness: Harness,
+    harness: Harness | Agent,
     prompt: str,
     *,
     sandbox: Sandbox,
-    model: str | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    instructions: str | None = None,
-    tools: Sequence[Callable[..., object]] = (),
-    skills: Sequence[str | os.PathLike[str]] = (),
-    disable_tools: Sequence[str] = (),
-    permissions: PermissionMode = "full",
-    on_approval: ApprovalHandler | None = None,
-    output: type[BaseModel] | None = None,
-    max_turns: int | None = None,
-    timeout: float | None = None,
-    metadata: Mapping[str, object] | None = None,
-    options: HarnessOptions | None = None,
-    install: bool = False,
+    model: str | None | Unset = UNSET,
+    api_key: str | None | Unset = UNSET,
+    api_base: str | None | Unset = UNSET,
+    instructions: str | None | Unset = UNSET,
+    tools: Sequence[Callable[..., object]] | Unset = UNSET,
+    skills: Sequence[str | os.PathLike[str]] | Unset = UNSET,
+    disable_tools: Sequence[str] | Unset = UNSET,
+    permissions: PermissionMode | Unset = UNSET,
+    on_approval: ApprovalHandler | None | Unset = UNSET,
+    output: type[BaseModel] | None | Unset = UNSET,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | None | Unset = UNSET,
+    metadata: Mapping[str, object] | None | Unset = UNSET,
+    options: HarnessOptions | None | Unset = UNSET,
+    install: bool | Unset = UNSET,
 ) -> EventStream:
     """Stream events for one prompt (sync iterator). Validation errors raise here."""
     _ensure_sync_context("agent")
@@ -300,24 +301,24 @@ def _stream(
 
 
 def agent_session(
-    harness: Harness,
+    harness: Harness | Agent,
     *,
     sandbox: Sandbox,
-    model: str | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    instructions: str | None = None,
-    tools: Sequence[Callable[..., object]] = (),
-    skills: Sequence[str | os.PathLike[str]] = (),
-    disable_tools: Sequence[str] = (),
-    permissions: PermissionMode = "full",
-    on_approval: ApprovalHandler | None = None,
-    output: type[BaseModel] | None = None,
-    max_turns: int | None = None,
-    timeout: float | None = None,
-    metadata: Mapping[str, object] | None = None,
-    options: HarnessOptions | None = None,
-    install: bool = False,
+    model: str | None | Unset = UNSET,
+    api_key: str | None | Unset = UNSET,
+    api_base: str | None | Unset = UNSET,
+    instructions: str | None | Unset = UNSET,
+    tools: Sequence[Callable[..., object]] | Unset = UNSET,
+    skills: Sequence[str | os.PathLike[str]] | Unset = UNSET,
+    disable_tools: Sequence[str] | Unset = UNSET,
+    permissions: PermissionMode | Unset = UNSET,
+    on_approval: ApprovalHandler | None | Unset = UNSET,
+    output: type[BaseModel] | None | Unset = UNSET,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | None | Unset = UNSET,
+    metadata: Mapping[str, object] | None | Unset = UNSET,
+    options: HarnessOptions | None | Unset = UNSET,
+    install: bool | Unset = UNSET,
 ) -> Session:
     """A multi-turn agent session: `with litellm.agent_session(...) as s: s.run(...)`."""
     _ensure_sync_context("agent_session")
@@ -390,26 +391,26 @@ def agent_resume(
 
 
 def agent(
-    harness: Harness,
+    harness: Harness | Agent,
     prompt: str,
     *,
     sandbox: Sandbox,
     stream: bool = False,
-    model: str | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    instructions: str | None = None,
-    tools: Sequence[Callable[..., object]] = (),
-    skills: Sequence[str | os.PathLike[str]] = (),
-    disable_tools: Sequence[str] = (),
-    permissions: PermissionMode = "full",
-    on_approval: ApprovalHandler | None = None,
-    output: type[BaseModel] | None = None,
-    max_turns: int | None = None,
-    timeout: float | None = None,
-    metadata: Mapping[str, object] | None = None,
-    options: HarnessOptions | None = None,
-    install: bool = False,
+    model: str | None | Unset = UNSET,
+    api_key: str | None | Unset = UNSET,
+    api_base: str | None | Unset = UNSET,
+    instructions: str | None | Unset = UNSET,
+    tools: Sequence[Callable[..., object]] | Unset = UNSET,
+    skills: Sequence[str | os.PathLike[str]] | Unset = UNSET,
+    disable_tools: Sequence[str] | Unset = UNSET,
+    permissions: PermissionMode | Unset = UNSET,
+    on_approval: ApprovalHandler | None | Unset = UNSET,
+    output: type[BaseModel] | None | Unset = UNSET,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | None | Unset = UNSET,
+    metadata: Mapping[str, object] | None | Unset = UNSET,
+    options: HarnessOptions | None | Unset = UNSET,
+    install: bool | Unset = UNSET,
 ) -> Result | EventStream:
     """Run an agent harness (Claude Code, Codex, OpenCode, pi, Deep Agents, Tool Loop) on one prompt.
 

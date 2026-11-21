@@ -510,6 +510,7 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         "agent_resume": (".harness", "agent_resume"),
         "aagent_resume": (".harness", "aagent_resume"),
         "agent_capabilities": (".harness", "agent_capabilities"),
+        "Agent": (".harness", "Agent"),
         "Harness": (".harness", "Harness"),
         "ClaudeCodeOptions": (".harness", "ClaudeCodeOptions"),
         "CodexOptions": (".harness", "CodexOptions"),

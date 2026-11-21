@@ -11,11 +11,12 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Coroutine, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
+from litellm.harness.config import UNSET, Agent, Unset, resolve
 from litellm.harness.errors import OutputInvalid
 from litellm.harness.evaluation.checks import run_check
 from litellm.harness.evaluation.types import (
@@ -39,13 +40,8 @@ SandboxFactory: TypeAlias = Callable[[Path], Sandbox]
 
 @dataclass(frozen=True, slots=True)
 class _Settings:
-    max_turns: int | None
-    timeout: float
     setup_timeout: float
     sandbox: SandboxFactory
-    metadata: Mapping[str, object]
-    api_base: str | None
-    api_key: str | None = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,24 +79,51 @@ def _validate_files(files: Mapping[str, object]) -> None:
             raise TypeError("task file contents must be str or bytes")
 
 
-async def _validate_targets(targets: Sequence[EvalTarget], settings: _Settings) -> None:
+def _selected_targets(agent: Agent | None, targets: Sequence[EvalTarget] | None) -> tuple[EvalTarget, ...]:
+    if agent is not None:
+        if targets is not None:
+            raise ValueError("pass either agent or targets to agent_eval")
+        return (EvalTarget(agent=agent),)
+    if targets is None:
+        raise ValueError("agent_eval requires an agent or targets")
+    return tuple(targets)
+
+
+def _configured_target(
+    target: EvalTarget,
+    max_turns: int | None | Unset,
+    timeout: float | Unset,
+    metadata: Mapping[str, object],
+    api_base: str | None,
+    api_key: str | None,
+) -> EvalTarget:
+    definition: Final = target.agent
+    turns: Final = resolve(max_turns, definition.max_turns)
+    deadline: Final = resolve(timeout, definition.timeout if definition.timeout is not None else 300.0)
+    if turns is not None:
+        _positive_integer("max_turns", turns)
+    _positive_timeout("timeout", deadline)
+    merged_metadata: Final = MappingProxyType({**definition.metadata, **metadata})
+    json.dumps(dict(merged_metadata), allow_nan=False)
+    return EvalTarget(
+        agent=replace(
+            definition,
+            max_turns=turns,
+            timeout=deadline,
+            metadata=merged_metadata,
+            api_base=definition.api_base if api_base is None else api_base,
+            api_key=definition.api_key if api_key is None else api_key,
+        ),
+        label=target.label,
+    )
+
+
+async def _validate_targets(targets: Sequence[EvalTarget]) -> None:
     with tempfile.TemporaryDirectory(prefix="litellm-eval-validate-") as directory:
         box: Final = local(directory)
         try:
             for target in targets:
-                session = aagent_session(
-                    target.harness,
-                    sandbox=box,
-                    model=target.model,
-                    api_key=settings.api_key,
-                    api_base=settings.api_base,
-                    tools=target.tools,
-                    options=target.options,
-                    max_turns=settings.max_turns,
-                    timeout=settings.timeout,
-                    metadata=settings.metadata,
-                )
-                await session.aclose()
+                await aagent_session(target.agent, sandbox=box).aclose()
         finally:
             await box.close()
 
@@ -149,20 +172,12 @@ async def _agent_result(
     target: EvalTarget,
     box: Sandbox,
     metadata: Mapping[str, object],
-    settings: _Settings,
 ) -> Result:
     pending: Final = aagent(
-        target.harness,
+        target.agent,
         task.prompt,
         sandbox=box,
-        model=target.model,
-        options=target.options,
-        tools=target.tools,
-        max_turns=settings.max_turns,
-        timeout=settings.timeout,
         metadata=metadata,
-        api_key=settings.api_key,
-        api_base=settings.api_base,
     )
     if not isinstance(pending, Coroutine):
         raise TypeError("agent evaluation requires a non-streaming agent result")
@@ -187,7 +202,7 @@ async def _execute(
     if setup_error is not None:
         return _Outcome(EvalStatus.ERROR, setup_error)
     try:
-        result: Final = await _agent_result(task, target, box, metadata, settings)
+        result: Final = await _agent_result(task, target, box, metadata)
     except OutputInvalid as error:
         return _failure("agent", error, error.result)
     except Exception as error:  # noqa: BLE001  # Harness failures must not abort sibling runs.
@@ -202,8 +217,8 @@ async def _execute(
             box,
             metadata,
             prompt=task.prompt,
-            api_base=settings.api_base,
-            api_key=settings.api_key,
+            api_base=target.agent.api_base,
+            api_key=target.agent.api_key,
         )
     except Exception as error:  # noqa: BLE001  # User-defined graders can raise arbitrary exceptions.
         failure: Final = _failure("check", error, result)
@@ -258,7 +273,7 @@ async def _run(
         run_id: Final = uuid.uuid4().hex
         metadata: Final = MappingProxyType(
             {
-                **settings.metadata,
+                **target.agent.metadata,
                 "agent_eval_suite": suite_id,
                 "agent_eval_run": run_id,
                 "agent_eval_task": task.id,
@@ -296,14 +311,15 @@ async def _run(
 
 async def aagent_eval(
     tasks: Sequence[EvalTask],
-    targets: Sequence[EvalTarget],
+    targets: Sequence[EvalTarget] | None = None,
     *,
+    agent: Agent | None = None,
+    sandbox: SandboxFactory,
     trials: int = 1,
     max_concurrency: int = 1,
-    max_turns: int | None = None,
-    timeout: float = 300,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | Unset = UNSET,
     setup_timeout: float = 120,
-    sandbox: SandboxFactory = local,
     metadata: Mapping[str, object] | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
@@ -311,12 +327,12 @@ async def aagent_eval(
     """Compare harness/model targets on independent, graded task attempts."""
     _positive_integer("trials", trials)
     _positive_integer("max_concurrency", max_concurrency)
-    if max_turns is not None:
-        _positive_integer("max_turns", max_turns)
-    _positive_timeout("timeout", timeout)
     _positive_timeout("setup_timeout", setup_timeout)
     task_items: Final = tuple(tasks)
-    target_items: Final = tuple(targets)
+    selected_targets: Final = _selected_targets(agent, targets)
+    target_items: Final = tuple(
+        _configured_target(target, max_turns, timeout, metadata or {}, api_base, api_key) for target in selected_targets
+    )
     if not task_items or not target_items:
         raise ValueError("agent_eval requires at least one task and target")
     if len(frozenset(task.id for task in task_items)) != len(task_items):
@@ -325,10 +341,8 @@ async def aagent_eval(
         raise ValueError("target labels must be unique")
     for task in task_items:
         _validate_task(task)
-    copied_metadata: Final = MappingProxyType(dict(metadata or {}))
-    json.dumps(dict(copied_metadata), allow_nan=False)
-    settings: Final = _Settings(max_turns, timeout, setup_timeout, sandbox, copied_metadata, api_base, api_key)
-    await _validate_targets(target_items, settings)
+    settings: Final = _Settings(setup_timeout, sandbox)
+    await _validate_targets(target_items)
     suite_id: Final = uuid.uuid4().hex
     semaphore: Final = asyncio.Semaphore(max_concurrency)
     pending: Final = tuple(
@@ -347,14 +361,15 @@ async def aagent_eval(
 
 def agent_eval(
     tasks: Sequence[EvalTask],
-    targets: Sequence[EvalTarget],
+    targets: Sequence[EvalTarget] | None = None,
     *,
+    agent: Agent | None = None,
+    sandbox: SandboxFactory,
     trials: int = 1,
     max_concurrency: int = 1,
-    max_turns: int | None = None,
-    timeout: float = 300,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | Unset = UNSET,
     setup_timeout: float = 120,
-    sandbox: SandboxFactory = local,
     metadata: Mapping[str, object] | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
@@ -364,6 +379,7 @@ def agent_eval(
         aagent_eval(
             tasks,
             targets,
+            agent=agent,
             trials=trials,
             max_concurrency=max_concurrency,
             max_turns=max_turns,

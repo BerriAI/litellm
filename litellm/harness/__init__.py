@@ -15,6 +15,7 @@ The entrypoints live on the top-level package:
 This module holds the types you get back: events, Result, State, errors.
 """
 
+from litellm.harness.config import Agent
 from litellm.harness.errors import (
     CapabilityUnsupported,
     HarnessError,
@@ -75,6 +76,7 @@ from litellm.harness.types import (
 )
 
 __all__ = (
+    "Agent",
     "Approval",
     "AsyncEventStream",
     "AsyncSession",

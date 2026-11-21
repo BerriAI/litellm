@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import Final
 
 import pytest
 from pydantic import TypeAdapter
 
-from litellm import CommandCheck, EvalScorecard, EvalStatus, EvalTarget, EvalTask, JudgeCheck, PredicateCheck
+from litellm import Agent, CommandCheck, EvalScorecard, EvalStatus, EvalTarget, EvalTask, JudgeCheck, PredicateCheck
+from litellm.harness.options import ToolLoopOptions
 from litellm.harness.evaluation.types import CheckResult, EvalRun
 from litellm.harness.types import Harness, Result, ToolCall, Usage
 
@@ -123,3 +125,36 @@ def test_should_snapshot_caller_owned_inputs_before_later_trials_can_observe_mut
     assert dict(task.files) == {"input.txt": "before"}
     assert task.setup == (("prepare",),)
     assert target.tools == (tool,)
+
+
+def test_should_name_agent_comparisons_without_redefining_their_configuration() -> None:
+    definition: Final = Agent(
+        Harness.TOOL_LOOP,
+        model="openai/eval-agent",
+        instructions="Reply with the category.",
+        options=ToolLoopOptions(completion_kwargs={"mock_response": "billing"}),
+    )
+    production: Final = EvalTarget(agent=definition, label="production")
+    candidate: Final = EvalTarget(agent=replace(definition, model="openai/eval-candidate"), label="candidate")
+
+    assert production.agent is definition
+    assert production.harness is Harness.TOOL_LOOP
+    assert production.model == definition.model
+    assert production.options is definition.options
+    assert candidate.agent.instructions == definition.instructions
+    assert candidate.agent.model != production.model
+    assert production.name == "production" and candidate.name == "candidate"
+
+
+def test_should_reject_conflicting_target_definitions() -> None:
+    definition: Final = Agent(Harness.TOOL_LOOP, model="openai/eval-agent")
+
+    with pytest.raises(ValueError, match="either agent or harness/model"):
+        EvalTarget(
+            Harness.TOOL_LOOP,
+            "openai/other-agent",
+            agent=definition,  # pyright: ignore[reportCallIssue]  # Verify conflicting public inputs fail at runtime.
+        )
+
+    with pytest.raises(ValueError, match="target model"):
+        EvalTarget(agent=Agent(Harness.TOOL_LOOP))

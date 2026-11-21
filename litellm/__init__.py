@@ -511,6 +511,7 @@ public_model_groups_links: dict[str, str | dict[str, object]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 if TYPE_CHECKING:
+    from .harness.config import Agent as Agent
     from .harness.evaluation import (
         CheckResult as CheckResult,
         CommandCheck as CommandCheck,

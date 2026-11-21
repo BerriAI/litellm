@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
 import pytest
 
 from litellm import (
+    Agent,
     CommandCheck,
     EvalStatus,
     EvalTarget,
@@ -16,7 +18,7 @@ from litellm import (
     aagent_eval,
     agent_eval,
 )
-from litellm.harness.errors import SandboxError
+from litellm.harness.errors import CapabilityUnsupported, SandboxError
 from litellm.harness.options import ToolLoopOptions
 from litellm.harness.sandbox.base import CompletedRun, Process
 from litellm.harness.sandbox.local import LocalSandbox
@@ -107,6 +109,7 @@ async def test_should_evaluate_a_text_task_with_default_execution_settings() -> 
     report: Final = await aagent_eval(
         (EvalTask("answer", "Answer", check=PredicateCheck(_passes)),),
         (_target(),),
+        sandbox=RecordingFactory(),
     )
 
     assert len(report.runs) == 1
@@ -116,6 +119,106 @@ async def test_should_evaluate_a_text_task_with_default_execution_settings() -> 
     assert report.runs[0].result is not None
     assert report.runs[0].result.text == "done"
     assert report.summaries[0].total == 1
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_should_evaluate_the_same_agent_definition_in_independent_attempts(asynchronous: bool) -> None:
+    definition: Final = Agent(
+        Harness.TOOL_LOOP,
+        model="openai/eval-agent",
+        instructions="Reply done.",
+        options=ToolLoopOptions(completion_kwargs={"mock_response": "done"}),
+    )
+    factory: Final = RecordingFactory()
+    tasks: Final = (EvalTask("answer", "Complete the task", check=PredicateCheck(_passes)),)
+    report: Final = (
+        await aagent_eval(tasks, agent=definition, trials=2, sandbox=factory)
+        if asynchronous
+        else await asyncio.to_thread(agent_eval, tasks, agent=definition, trials=2, sandbox=factory)
+    )
+
+    assert tuple(run.status for run in report.runs) == (EvalStatus.PASS, EvalStatus.PASS)
+    assert report.summaries[0].target == EvalTarget(agent=definition).name
+    assert tuple(run.result.text for run in report.runs if run.result is not None) == ("done", "done")
+    assert len({run.result.session_id for run in report.runs if run.result is not None}) == 2
+    assert len({box.workdir for box in factory.boxes}) == 2
+    assert all(box.close_count == 1 and not Path(box.workdir).exists() for box in factory.boxes)
+
+
+@pytest.mark.parametrize("conflict", (False, True))
+async def test_should_reject_ambiguous_agent_inputs_before_creating_a_sandbox(conflict: bool) -> None:
+    factory: Final = RecordingFactory()
+    target: Final = _target()
+
+    with pytest.raises(ValueError, match="agent or targets"):
+        await aagent_eval(
+            (EvalTask("answer", "Answer", check=PredicateCheck(_passes)),),
+            (target,) if conflict else None,
+            agent=target.agent if conflict else None,
+            sandbox=factory,
+        )
+
+    assert factory.boxes == ()
+
+
+async def test_should_retain_agent_capability_and_install_policies_during_preflight(tmp_path: Path) -> None:
+    skill: Final = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("Support classification rules")
+    definition: Final = _target().agent
+    factory: Final = RecordingFactory()
+
+    for restricted in (
+        replace(definition, permissions="read-only"),
+        replace(definition, disable_tools=("write",)),
+        replace(definition, skills=(skill,)),
+        replace(definition, install=True),
+    ):
+        with pytest.raises(CapabilityUnsupported):
+            await aagent_eval(
+                (EvalTask("answer", "Answer", check=PredicateCheck(_passes)),),
+                agent=restricted,
+                sandbox=factory,
+            )
+
+    assert factory.boxes == ()
+
+
+async def test_should_preserve_agent_timeout_unless_the_suite_overrides_it() -> None:
+    definition: Final = replace(_target().agent, timeout=0)
+    tasks: Final = (EvalTask("answer", "Answer", check=PredicateCheck(_passes)),)
+    factory: Final = RecordingFactory()
+
+    with pytest.raises(ValueError, match="timeout"):
+        await aagent_eval(tasks, agent=definition, sandbox=factory)
+    assert factory.boxes == ()
+
+    report: Final = await aagent_eval(tasks, agent=definition, sandbox=factory, timeout=600)
+
+    assert report.runs[0].status is EvalStatus.PASS
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_should_require_a_sandbox_before_running_the_evaluation(tmp_path: Path, asynchronous: bool) -> None:
+    workspace: Final = tmp_path / "project"
+    workspace.mkdir()
+    host_output: Final = tmp_path / "host-result.txt"
+
+    def check(result: Result) -> bool:
+        host_output.write_text(result.text)
+        return True
+
+    tasks: Final = (EvalTask("answer", "Answer", check=PredicateCheck(check), workspace=workspace),)
+    targets: Final = (_target(),)
+
+    if asynchronous:
+        with pytest.raises(TypeError, match="sandbox"):
+            await aagent_eval(tasks, targets)  # pyright: ignore[reportCallIssue]  # Verify missing sandbox rejects execution.
+    else:
+        with pytest.raises(TypeError, match="sandbox"):
+            await asyncio.to_thread(agent_eval, tasks, targets)  # pyright: ignore[reportCallIssue]  # Verify missing sandbox rejects execution.
+
+    assert not host_output.exists()
 
 
 async def test_should_copy_each_workspace_and_run_setup_and_checks_in_the_same_sandbox(tmp_path: Path) -> None:

@@ -10,15 +10,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, overload
 
+from litellm.harness.config import Agent
 from litellm.harness.options import HarnessOptions
-from litellm.harness.types import Harness, Result, StopReason, ToolCall, Usage, require_harness
+from litellm.harness.types import Harness, Result, StopReason, ToolCall, Usage
 
 
-def _require_text(value: object, name: str) -> None:
+def _require_text(value: object, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
+    return value
 
 
 def _require_argument(value: object) -> None:
@@ -89,25 +91,83 @@ class EvalTask:
         _require_text(self.prompt, "prompt")
         _require_check(self.check)
         object.__setattr__(self, "files", MappingProxyType(dict(self.files)))
-        object.__setattr__(self, "setup", tuple(tuple(CommandCheck(command).command) for command in self.setup))
+        object.__setattr__(
+            self,
+            "setup",
+            tuple(tuple(CommandCheck(command).command) for command in self.setup),
+        )
         if self.workspace is not None:
             object.__setattr__(self, "workspace", Path(self.workspace))
 
 
-@dataclass(frozen=True, slots=True)
-class EvalTarget:
-    harness: Harness
-    model: str
-    label: str | None = None
-    options: HarnessOptions | None = None
-    tools: Sequence[Callable[..., object]] = ()
+def _target_agent(
+    agent: Agent | None,
+    harness: Harness | None,
+    model: str | None,
+    options: HarnessOptions | None,
+    tools: Sequence[Callable[..., object]],
+) -> Agent:
+    if agent is not None:
+        if harness is not None or model is not None:
+            raise ValueError("pass either agent or harness/model settings to EvalTarget")
+        if options is not None or tools:
+            raise ValueError("put options and tools on the supplied agent")
+        return agent
+    if harness is None or model is None:
+        raise ValueError("EvalTarget requires an agent or a harness and model")
+    return Agent(harness, model=model, options=options, tools=tools)
 
-    def __post_init__(self) -> None:
-        require_harness(self.harness)
-        _require_text(self.model, "target model")
-        if self.label is not None:
-            _require_text(self.label, "target label")
-        object.__setattr__(self, "tools", tuple(self.tools))
+
+@dataclass(frozen=True, slots=True, init=False)
+class EvalTarget:
+    agent: Agent
+    label: str | None = None
+
+    @overload
+    def __init__(
+        self,
+        harness: Harness,
+        model: str,
+        label: str | None = None,
+        options: HarnessOptions | None = None,
+        tools: Sequence[Callable[..., object]] = (),
+    ) -> None: ...
+
+    @overload
+    def __init__(self, *, agent: Agent, label: str | None = None) -> None: ...
+
+    def __init__(
+        self,
+        harness: Harness | None = None,
+        model: str | None = None,
+        label: str | None = None,
+        options: HarnessOptions | None = None,
+        tools: Sequence[Callable[..., object]] = (),
+        *,
+        agent: Agent | None = None,
+    ) -> None:
+        definition: Final = _target_agent(agent, harness, model, options, tools)
+        _require_text(definition.model, "target model")
+        if label is not None:
+            _require_text(label, "target label")
+        object.__setattr__(self, "agent", definition)
+        object.__setattr__(self, "label", label)
+
+    @property
+    def harness(self) -> Harness:
+        return self.agent.harness
+
+    @property
+    def model(self) -> str:
+        return _require_text(self.agent.model, "target model")
+
+    @property
+    def options(self) -> HarnessOptions | None:
+        return self.agent.options
+
+    @property
+    def tools(self) -> Sequence[Callable[..., object]]:
+        return self.agent.tools
 
     @property
     def name(self) -> str:
