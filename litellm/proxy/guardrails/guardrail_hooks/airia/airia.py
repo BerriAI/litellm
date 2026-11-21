@@ -1,7 +1,9 @@
 import os
 import uuid
 from collections.abc import Mapping
+from contextvars import ContextVar
 from typing import (
+    ClassVar,
     Final,
     Literal,
 )
@@ -23,9 +25,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # the factory's params are untyped upstream
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.airia import AiriaGuardrailConfigModel
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 GUARDRAIL_PATH: Final = "/v1/guardrails/litellm"
 
@@ -35,7 +39,21 @@ ACTION_INTERVENED: Final = "GUARDRAIL_INTERVENED"
 
 DEFAULT_BLOCKED_MESSAGE: Final = "Blocked by your organization's content policy."
 
-SUPPORTED_EVENT_HOOKS: Final = (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call)
+SUPPORTED_EVENT_HOOKS: Final = (
+    GuardrailEventHooks.pre_call,
+    GuardrailEventHooks.during_call,
+    GuardrailEventHooks.post_call,
+    GuardrailEventHooks.pre_mcp_call,
+    GuardrailEventHooks.post_mcp_call,
+)
+
+MCP_EVENT_HOOKS: Final = frozenset((GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call))
+UNKNOWN_MCP_TOOL_NAME: Final = "unknown"
+
+_EVALUATING_DURING_CALL: Final[ContextVar[bool]] = ContextVar("airia_evaluating_during_call", default=False)
+# Request bodies on several routes are merged into the hook data, so MCP keys in it prove nothing; the event the
+# framework gates on is the only signal a client cannot set
+_PENDING_EVENT: Final[ContextVar[GuardrailEventHooks | None]] = ContextVar("airia_pending_event", default=None)
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -88,6 +106,15 @@ def _request_route(request_data: Mapping[str, object]) -> str | None:
     return None
 
 
+def _mcp_tool_name(request_data: Mapping[str, object]) -> str:
+    pre_call_name: Final = request_data.get("mcp_tool_name")
+    if isinstance(pre_call_name, str) and pre_call_name:
+        return pre_call_name
+    call_metadata: Final = _as_object(request_data.get("mcp_tool_call_metadata"))
+    post_call_name: Final = call_metadata.get("name") if call_metadata is not None else None
+    return post_call_name if isinstance(post_call_name, str) and post_call_name else UNKNOWN_MCP_TOOL_NAME
+
+
 def _as_object(value: object) -> Mapping[str, object] | None:
     """`value` as a JSON object, or None. States the key type once so the checker does not see
     `dict[Unknown, Unknown]` at every read."""
@@ -95,7 +122,9 @@ def _as_object(value: object) -> Mapping[str, object] | None:
 
 
 class AiriaGuardrail(CustomGuardrail):
-    """Evaluates prompts and responses against your Airia guardrail policy."""
+    """Evaluates prompts, responses and MCP tool calls against your Airia guardrail policy."""
+
+    use_native_during_call_hook: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -135,6 +164,15 @@ class AiriaGuardrail(CustomGuardrail):
         )
         verbose_proxy_logger.info("AiriaGuardrail initialized with gateway: %s", self.api_base)
 
+    def should_run_guardrail(
+        self,
+        data: object,
+        event_type: GuardrailEventHooks,
+    ) -> bool:
+        runs: Final = super().should_run_guardrail(data, event_type)  # pyright: ignore[reportUnknownMemberType]  # the parent annotates data as untyped
+        _ = _PENDING_EVENT.set(event_type if runs else None)
+        return runs
+
     def supports_structured_messages(self) -> bool:
         return False
 
@@ -146,6 +184,8 @@ class AiriaGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
+        is_mcp_tool_evaluation: Final = _PENDING_EVENT.get() in MCP_EVENT_HOOKS
+        _ = _PENDING_EVENT.set(None)
         call_id: Final = (
             logging_obj.litellm_call_id
             if logging_obj
@@ -164,6 +204,7 @@ class AiriaGuardrail(CustomGuardrail):
                     "tool_calls": inputs.get("tool_calls") or (),
                     "model": inputs.get("model"),
                     "litellm_call_id": call_id,
+                    "mcp_tool_name": _mcp_tool_name(request_data or {}) if is_mcp_tool_evaluation else None,
                 },
                 headers={"Authorization": f"Bearer {self.api_key}"},
             )
@@ -196,6 +237,9 @@ class AiriaGuardrail(CustomGuardrail):
             )
 
         if action == ACTION_INTERVENED:
+            # during_call races the model call, so a rewrite of the prompt cannot be relied on to reach it
+            if _EVALUATING_DURING_CALL.get():
+                raise self._blocked()
             if input_type == "response" and _stream_cannot_carry_a_rewrite(request_data):
                 raise self._blocked()
             return self._rewritten(body, inputs)
@@ -204,6 +248,21 @@ class AiriaGuardrail(CustomGuardrail):
             raise self._blocked()
 
         return inputs
+
+    async def async_moderation_hook(
+        self,
+        data: dict[str, object],  # mutable-ok: the unified hook reads guardrail_to_apply out of the request
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        token: Final = _EVALUATING_DURING_CALL.set(True)
+        try:
+            data["guardrail_to_apply"] = self  # rebind-ok: the unified hook's only way to receive the guardrail
+            await UnifiedLLMGuardrails().async_moderation_hook(  # pyright: ignore[reportUnknownMemberType]  # annotates data as a bare dict
+                data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
+            )
+        finally:
+            _EVALUATING_DURING_CALL.reset(token)
 
     def _rewritten(
         self,
