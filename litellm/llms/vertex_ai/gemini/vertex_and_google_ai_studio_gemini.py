@@ -1255,9 +1255,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["include_server_side_tool_invocations"] = True
                 return
 
-    def _drops_logprobs(self, model: str, drop_params: bool, allowed_openai_params: Sequence[str]) -> bool:
+    def _drops_logprobs(
+        self, model: str, drop_params: bool, allowed_openai_params: Sequence[str], *, stream: bool
+    ) -> bool:
         if not drops_unsupported_params(drop_params) or {"logprobs", "top_logprobs"} & set(allowed_openai_params):
             return False
+        if stream:
+            return True
         rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
         return rows.get(f"{self._route}/{model.split('/')[-1]}", {}).get("supports_logprobs") is False
 
@@ -1274,7 +1278,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             non_default_params, model=model, route=self._route, drop_params=drop_params
         )
         self._apply_include_server_side_tool_invocations(request_params, optional_params)
-        drops_logprobs: Final = self._drops_logprobs(model, drop_params, allowed_openai_params)
+        drops_logprobs: Final = self._drops_logprobs(
+            model,
+            drop_params,
+            allowed_openai_params,
+            stream="stream" in request_params and request_params["stream"] is True,
+        )
         gemini_sampling_params_warned: bool = False
         for param, value in request_params.items():
             if param in ("logprobs", "top_logprobs") and drops_logprobs:

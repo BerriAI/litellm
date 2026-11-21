@@ -10030,9 +10030,14 @@ _LOGPROBS_PARAMS: Final = {"logprobs": True, "top_logprobs": 3}
 _GEMINI_LOGPROBS_FIELDS: Final = {"responseLogprobs": True, "logprobs": 3}
 
 
-def _mapped_logprobs(config_cls: Literal["vertex", "studio"], model: str, drop_params: bool) -> Mapping[str, object]:
+def _mapped_logprobs(
+    config_cls: Literal["vertex", "studio"], model: str, drop_params: bool, stream: bool = False
+) -> Mapping[str, object]:
     return _gemini_config(config_cls).map_openai_params(
-        non_default_params=dict(_LOGPROBS_PARAMS), optional_params={}, model=model, drop_params=drop_params
+        non_default_params={**_LOGPROBS_PARAMS, "stream": stream},
+        optional_params={},
+        model=model,
+        drop_params=drop_params,
     )
 
 
@@ -10128,8 +10133,9 @@ def test_logprobs_flag_applies_only_to_the_route_whose_row_carries_it(
     assert _mapped_logprobs(other_config, "gemini-zeta-9", drop_params=True) == _GEMINI_LOGPROBS_FIELDS
 
 
-# Google answered these with a 400 about logprobs, and the same call without logprobs with a 200, on 2026-11-18.
-# The live proof is in the PR that added this list.
+# Google answered these with a 400 about logprobs, and the same call without logprobs with a 200, on 2026-11-18,
+# except the gemini/gemini-4, gemma-4 and lyria rows, which AI Studio started refusing by 2026-11-20.
+# The live proof is in the PRs that added these rows.
 _ROWS_GOOGLE_REFUSES_LOGPROBS_ON: Final = (
     "gemini/gemini-2.5-flash-image",
     "gemini/gemini-3-flash-preview",
@@ -10147,11 +10153,17 @@ _ROWS_GOOGLE_REFUSES_LOGPROBS_ON: Final = (
     "gemini/gemini-3.6-flash",
     "gemini/gemini-3.7-flash",
     "gemini/gemini-3.8-flash",
+    "gemini/gemini-4-argon",
+    "gemini/gemini-4-hydrogen",
     "gemini/gemini-flash-latest",
     "gemini/gemini-flash-lite-latest",
     "gemini/gemini-nano-banana-2.1",
     "gemini/gemini-pro-latest",
     "gemini/gemini-robotics-er-2-preview",
+    "gemini/gemma-4-26b-a4b-it",
+    "gemini/gemma-4-31b-it",
+    "gemini/lyria-3-pro-preview",
+    "gemini/lyria-3.5",
     "gemini/nano-banana-pro-preview",
     "vertex_ai/gemini-2.5-flash-image",
     "vertex_ai/gemini-3-flash-preview",
@@ -10171,10 +10183,9 @@ _ROWS_GOOGLE_REFUSES_LOGPROBS_ON: Final = (
     "vertex_ai/gemini-nano-banana-2.1",
     "vertex_ai/gemini-robotics-er-2-preview",
 )
-# The same live run got a 200 with logprobs on these. The gemini-4 family is refused on Vertex and accepted on AI Studio.
+# Vertex answered these with a 200 when logprobs were sent unstreamed, and with a 400 about logprobs when the same
+# call was streamed, on 2026-11-20.
 _ROWS_GOOGLE_ACCEPTS_LOGPROBS_ON: Final = (
-    "gemini/gemini-4-argon",
-    "gemini/gemini-4-hydrogen",
     "vertex_ai/gemini-2.5-flash",
     "vertex_ai/gemini-2.5-flash-lite",
     "vertex_ai/gemini-2.5-pro",
@@ -10183,9 +10194,9 @@ _REPO_ROOT: Final = Path(__file__).parents[5]
 _MODEL_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 
 
-def _mapped_logprob_fields(row: str, drop_params: bool) -> Mapping[str, object]:
+def _mapped_logprob_fields(row: str, drop_params: bool, stream: bool = False) -> Mapping[str, object]:
     route, _, model = row.partition("/")
-    mapped: Final = _mapped_logprobs("vertex" if route == "vertex_ai" else "studio", model, drop_params)
+    mapped: Final = _mapped_logprobs("vertex" if route == "vertex_ai" else "studio", model, drop_params, stream)
     return {field: mapped[field] for field in _GEMINI_LOGPROBS_FIELDS if field in mapped}
 
 
@@ -10211,6 +10222,63 @@ def test_drop_params_keeps_logprobs_on_rows_google_accepts_them_on(row: str, mon
     monkeypatch.setattr(litellm, "drop_params", False)
 
     assert _mapped_logprob_fields(row, drop_params=True) == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("row", _ROWS_GOOGLE_ACCEPTS_LOGPROBS_ON)
+def test_drop_params_removes_streamed_logprobs_from_rows_google_accepts_them_on_unstreamed(
+    row: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _mapped_logprob_fields(row, drop_params=True, stream=True) == {}
+    assert _mapped_logprob_fields(row, drop_params=False, stream=True) == _GEMINI_LOGPROBS_FIELDS
+
+
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_streamed_logprobs_are_dropped_on_unflagged_models_only_under_drop_params(
+    config_cls: Literal["vertex", "studio"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _mapped_logprobs(config_cls, "gemini-zeta-10", drop_params=True, stream=True).keys().isdisjoint(
+        _GEMINI_LOGPROBS_FIELDS
+    )
+    assert _mapped_logprobs(config_cls, "gemini-zeta-10", drop_params=True, stream=False).items() >= (
+        _GEMINI_LOGPROBS_FIELDS.items()
+    )
+    assert _mapped_logprobs(config_cls, "gemini-zeta-10", drop_params=False, stream=True).items() >= (
+        _GEMINI_LOGPROBS_FIELDS.items()
+    )
+
+
+@pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",)])
+@pytest.mark.parametrize("provider", ["vertex_ai", "gemini"])
+def test_allowed_openai_params_keep_streamed_logprobs_under_drop_params(
+    provider: Literal["vertex_ai", "gemini"], allowed: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    def logprob_fields(stream: bool, allowed_openai_params: Sequence[str]) -> Mapping[str, object]:
+        optional_params: Final = get_optional_params(
+            model="gemini-zeta-10",
+            custom_llm_provider=provider,
+            drop_params=True,
+            stream=stream,
+            allowed_openai_params=list(allowed_openai_params),
+            **_LOGPROBS_PARAMS,
+        )
+        body: Final = _gemini_request_body(provider, dict(optional_params), {"drop_params": True})
+        generation_config: Final[Mapping[str, object]] = body.get("generationConfig", {})
+        return {field: generation_config[field] for field in _GEMINI_LOGPROBS_FIELDS if field in generation_config}
+
+    streamed: Final = logprob_fields(stream=True, allowed_openai_params=allowed)
+
+    assert streamed != {}
+    assert streamed == logprob_fields(stream=False, allowed_openai_params=allowed)
+    assert logprob_fields(stream=True, allowed_openai_params=()) == {}
 
 
 def test_model_map_and_its_bundled_backup_flag_the_same_logprobs_rows() -> None:
