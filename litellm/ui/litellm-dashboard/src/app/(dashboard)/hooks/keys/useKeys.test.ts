@@ -432,13 +432,14 @@ describe("useKeys", () => {
 
     const [requestUrl]: [string] = mockFetch.mock.calls[0] as [string];
     const { searchParams } = new URL(requestUrl, "http://localhost");
-    expect(Object.fromEntries(searchParams)).toMatchObject({
+    const expectedParams = {
       team_id: "team-1",
       user_id: "user-1",
       substring_matching: "false",
       include_team_keys: "false",
       include_created_by_keys: "false",
-    });
+    };
+    expect(Object.fromEntries(searchParams)).toMatchObject(expectedParams);
   });
 
   it("should pass both projectID and teamID filters to the API", async () => {
