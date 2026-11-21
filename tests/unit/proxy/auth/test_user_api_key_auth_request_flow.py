@@ -3434,6 +3434,61 @@ async def test_deferred_body_check_uses_only_the_authenticated_teams_deployments
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,dispatched_to_pass_through,is_allowed",
+    [("/MS_Office/upstream/authorize", True, True), ("/v1/chat/completions", False, False)],
+)
+async def test_deferred_body_check_admits_query_credentials_only_on_a_user_defined_pass_through(
+    monkeypatch: pytest.MonkeyPatch, path: str, dispatched_to_pass_through: bool, is_allowed: bool
+) -> None:
+    from litellm.proxy.utils import ProxyLogging
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key=api_key, user_role=LitellmUserRoles.INTERNAL_USER)
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "private-chat",
+                "model_info": {"team_id": "pinned-team", "team_public_model_name": "chat"},
+                "litellm_params": {"model": "vertex_ai/test-model"},
+            },
+        ]
+    )
+    key_cache: Final = UserApiKeyCache()
+    attributes: Final = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=authenticate),
+        "general_settings": {"allow_client_side_credentials": False},
+        "llm_router": router,
+        "llm_model_list": None,
+        "user_api_key_cache": key_cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+    for name, value in attributes.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    scope: Final = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [],
+        "query_string": b"response_type=code&client_id=test-client",
+        "route": SimpleNamespace(path=path),
+    }
+    request: Final = Request(
+        {**scope, "endpoint": _user_defined_pass_through_endpoint()} if dispatched_to_pass_through else scope,
+        receive=AsyncMock(return_value={"type": "http.request", "more_body": False, "body": b""}),
+    )
+    if is_allowed:
+        identity: Final = await user_api_key_auth(request=request, api_key="Bearer external-token")
+        assert identity.user_role == LitellmUserRoles.INTERNAL_USER
+        return
+    with pytest.raises(ProxyException) as rejection:
+        await user_api_key_auth(request=request, api_key="Bearer external-token")
+    assert int(rejection.value.code) == 401
+    assert "client_id is not allowed" in str(rejection.value)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_runs_for_standard_auth():
     """Regardless of which user_api_key_auth_builder path returned, the
     wrapper must run common_checks. This is the structural fix: no

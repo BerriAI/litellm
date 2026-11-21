@@ -469,6 +469,9 @@ def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
     return None
 
 
+safe_get_request_parsed_body: Final = _safe_get_request_parsed_body
+
+
 def get_client_requested_model(request: Request | None) -> str | None:
     if request is None or not hasattr(request, "scope"):
         return None

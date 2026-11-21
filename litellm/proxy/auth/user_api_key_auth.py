@@ -125,6 +125,7 @@ from litellm.proxy.auth.auth_utils import (
     pre_db_read_auth_checks,
     request_dispatched_to_pass_through_endpoint,
     request_dispatched_to_provider_pass_through,
+    request_fields_for_body_check,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
@@ -2553,7 +2554,7 @@ async def run_centralized_common_checks(
     if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
         body_model: Final = request_data.get("model")
         is_request_body_safe(
-            request_body=request_data,
+            request_body=request_fields_for_body_check(request, request_data),
             general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
             llm_router=llm_router,
             model=body_model if isinstance(body_model, str) else "",
