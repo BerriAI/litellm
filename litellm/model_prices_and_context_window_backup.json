@@ -29387,6 +29387,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -29453,6 +29454,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -29526,6 +29528,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -30012,6 +30015,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query",
         "input_cost_per_token_above_200k_tokens_flex": 2e-06,
         "output_cost_per_token_above_200k_tokens_flex": 9e-06
@@ -30059,6 +30063,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_url_context": true,
         "supports_native_streaming": true,
         "search_context_cost_per_query": {
@@ -30115,6 +30120,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "input_cost_per_token_priority": 3.6e-06,
         "input_cost_per_token_above_200k_tokens_priority": 7.2e-06,
@@ -30192,6 +30198,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query",
         "input_cost_per_audio_token_above_200k_tokens_priority": 1.8e-06,
         "input_cost_per_audio_token_above_200k_tokens_flex": 5e-07,
@@ -30243,6 +30250,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "input_cost_per_token_priority": 2.7e-06,
         "input_cost_per_audio_token_priority": 2.7e-06,
@@ -30313,6 +30321,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
@@ -30379,6 +30388,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
@@ -30460,6 +30470,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3.8-flash-cyber": {
@@ -30613,6 +30624,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query",
         "input_cost_per_token_above_200k_tokens_flex": 2e-06,
         "output_cost_per_token_above_200k_tokens_flex": 9e-06
@@ -30660,6 +30672,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_url_context": true,
         "supports_native_streaming": true,
         "input_cost_per_token_priority": 3.6e-06,
@@ -30799,6 +30812,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query"
     },
     "gemini-2.5-computer-use-preview-10-2025": {
@@ -31113,6 +31127,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "tpm": 250000,
         "search_context_cost_per_query": {
@@ -31686,6 +31701,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "tpm": 250000,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -31745,6 +31761,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "tpm": 250000,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -31940,6 +31957,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "tpm": 250000,
         "search_context_cost_per_query": {
@@ -32007,6 +32025,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "tpm": 250000,
         "search_context_cost_per_query": {
@@ -32068,6 +32087,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "tpm": 800000,
         "input_cost_per_token_priority": 9e-07,
@@ -32136,6 +32156,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "tpm": 800000,
         "input_cost_per_token_priority": 2.7e-06,
@@ -32208,6 +32229,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "tpm": 800000,
         "input_cost_per_token_priority": 1.35e-06,
@@ -32275,6 +32297,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "tpm": 800000,
         "input_cost_per_token_priority": 1.35e-06,
@@ -32342,6 +32365,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "tpm": 800000,
         "input_cost_per_token_priority": 1.35e-06,
@@ -32436,6 +32460,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_url_context": true,
         "supports_native_streaming": true,
         "tpm": 800000,
@@ -32504,6 +32529,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_url_context": true,
         "supports_native_streaming": true,
         "tpm": 800000,
@@ -32590,6 +32616,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query",
         "input_cost_per_audio_token_above_200k_tokens_priority": 1.8e-06,
         "input_cost_per_audio_token_above_200k_tokens_flex": 5e-07,
@@ -32672,6 +32699,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "input_cost_per_token_priority": 2.7e-06,
         "input_cost_per_audio_token_priority": 2.7e-06,
@@ -32742,6 +32770,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
@@ -32808,6 +32837,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
@@ -32889,6 +32919,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.8-flash-cyber": {
@@ -52887,6 +52918,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -52954,6 +52986,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -53028,6 +53061,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_native_streaming": true,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -59968,6 +60002,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "tpm": 8000000,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -60027,6 +60062,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "tpm": 250000,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -60086,6 +60122,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "tpm": 800000,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -60148,6 +60185,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "tpm": 800000,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
@@ -63884,6 +63922,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query"
     },
     "mistral/mistral-small-2603": {
@@ -76775,6 +76814,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query"
     },
     "gemini-robotics-er-2-preview": {
@@ -76825,6 +76865,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-4-argon": {
@@ -76884,6 +76925,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "tpm": 800000.0,
         "web_search_billing_unit": "per_query"
     },
@@ -76947,6 +76989,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-4-argon-cyber-permissive": {
@@ -77009,6 +77052,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "web_search_billing_unit": "per_query"
     },
     "github_copilot/gemini-4-argon": {
@@ -78237,6 +78281,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_xhigh_reasoning_effort": true,
         "tpm": 800000.0,
         "web_search_billing_unit": "per_query"
@@ -78304,6 +78349,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_search_tools_with_functions": true,
         "supports_xhigh_reasoning_effort": true,
         "web_search_billing_unit": "per_query"
     }

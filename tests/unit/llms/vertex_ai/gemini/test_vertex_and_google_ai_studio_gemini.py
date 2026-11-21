@@ -4809,26 +4809,33 @@ def test_search_tools_next_to_function_tools_still_drop_below_gemini_3(
     assert "toolConfig" not in body
 
 
-_GEMINI_3_IMAGE_MODEL: Final = "gemini-3.9-zeta-image"
+_SEARCH_WITH_FUNCTIONS_MODEL: Final = "gemini-3.9-zeta"
+_SEARCH_WITH_FUNCTIONS: Final = "supports_search_tools_with_functions"
 
 
 @pytest.mark.parametrize(
     ("rows", "keeps_search"),
     [
-        ({"{bare}": {"supports_function_calling": False}}, False),
-        ({"{provider}/{bare}": {"supports_function_calling": False}}, False),
-        ({"{provider}/{bare}": {"mode": "image_generation"}, "{bare}": {"supports_function_calling": False}}, False),
-        (
-            {"{provider}/{bare}": {"supports_function_calling": True}, "{bare}": {"supports_function_calling": False}},
-            True,
-        ),
-        ({"{bare}": {"supports_function_calling": True}}, True),
-        ({}, True),
+        ({"{bare}": {_SEARCH_WITH_FUNCTIONS: False}}, False),
+        ({"{provider}/{bare}": {_SEARCH_WITH_FUNCTIONS: False}}, False),
+        ({"{provider}/{bare}": {"mode": "chat"}, "{bare}": {_SEARCH_WITH_FUNCTIONS: True}}, True),
+        ({"{provider}/{bare}": {_SEARCH_WITH_FUNCTIONS: True}, "{bare}": {_SEARCH_WITH_FUNCTIONS: False}}, True),
+        ({"{provider}/{bare}": {_SEARCH_WITH_FUNCTIONS: False}, "{bare}": {_SEARCH_WITH_FUNCTIONS: True}}, False),
+        ({"{bare}": {"supports_function_calling": True}}, False),
+        ({}, False),
     ],
-    ids=["bare_row_false", "route_row_false", "route_row_silent", "route_row_wins", "bare_row_true", "no_rows"],
+    ids=[
+        "bare_row_false",
+        "route_row_false",
+        "route_row_silent",
+        "route_row_true_wins",
+        "route_row_false_wins",
+        "function_calling_alone",
+        "no_rows",
+    ],
 )
 @pytest.mark.parametrize("route", ["vertex", "studio"])
-def test_gemini_3_keeps_search_next_to_functions_only_when_the_cost_map_allows_function_calling(
+def test_search_stays_next_to_functions_only_when_the_cost_map_flags_the_model(
     route: Literal["vertex", "studio"],
     rows: Mapping[str, Mapping[str, object]],
     keeps_search: bool,
@@ -4836,10 +4843,14 @@ def test_gemini_3_keeps_search_next_to_functions_only_when_the_cost_map_allows_f
 ) -> None:
     for key, row in rows.items():
         monkeypatch.setitem(
-            litellm.model_cost, key.format(provider=_PROVIDER_FOR_ROUTE[route], bare=_GEMINI_3_IMAGE_MODEL), dict(row)
+            litellm.model_cost,
+            key.format(provider=_PROVIDER_FOR_ROUTE[route], bare=_SEARCH_WITH_FUNCTIONS_MODEL),
+            dict(row),
         )
 
-    body: Final = _mapped_request_body(route, _GEMINI_3_IMAGE_MODEL, {"tools": [{"type": "web_search"}, _EXEC_TOOL]})
+    body: Final = _mapped_request_body(
+        route, _SEARCH_WITH_FUNCTIONS_MODEL, {"tools": [{"type": "web_search"}, _EXEC_TOOL]}
+    )
 
     assert _tool_keys(body) == (
         {"function_declarations", "googleSearch"} if keeps_search else {"function_declarations"}
@@ -4847,26 +4858,25 @@ def test_gemini_3_keeps_search_next_to_functions_only_when_the_cost_map_allows_f
     assert ("toolConfig" in body) is keeps_search
 
 
-_GEMINI_3_FUNCTION_MODEL: Final = "gemini-3.9-zeta"
 _SERVER_SIDE_TOOLS_OFF: Final = MappingProxyType({"include_server_side_tool_invocations": False})
 
 
 @pytest.fixture
-def function_calling_gemini_3(monkeypatch: pytest.MonkeyPatch) -> str:
-    monkeypatch.setitem(litellm.model_cost, _GEMINI_3_FUNCTION_MODEL, {"supports_function_calling": True})
-    return _GEMINI_3_FUNCTION_MODEL
+def search_with_functions_model(monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setitem(litellm.model_cost, _SEARCH_WITH_FUNCTIONS_MODEL, {_SEARCH_WITH_FUNCTIONS: True})
+    return _SEARCH_WITH_FUNCTIONS_MODEL
 
 
 @pytest.mark.parametrize("opt_out_in", ["request", "optional_params"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
 def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_side_tools_off(
-    route: Literal["vertex", "studio"], opt_out_in: str, function_calling_gemini_3: str
+    route: Literal["vertex", "studio"], opt_out_in: str, search_with_functions_model: str
 ) -> None:
     tools: Final = {"tools": [{"type": "web_search"}, _EXEC_TOOL]}
     body: Final = (
-        _mapped_request_body(route, function_calling_gemini_3, {**tools, **_SERVER_SIDE_TOOLS_OFF})
+        _mapped_request_body(route, search_with_functions_model, {**tools, **_SERVER_SIDE_TOOLS_OFF})
         if opt_out_in == "request"
-        else _mapped_request_body(route, function_calling_gemini_3, tools, preset=_SERVER_SIDE_TOOLS_OFF)
+        else _mapped_request_body(route, search_with_functions_model, tools, preset=_SERVER_SIDE_TOOLS_OFF)
     )
 
     assert _tool_keys(body) == {"function_declarations"}
@@ -4895,15 +4905,15 @@ def test_gemini_3_drops_search_retrieval_next_to_functions_only_under_drop_param
     flagged: bool,
     caller_flag: bool,
     drop_params_set: str,
-    function_calling_gemini_3: str,
+    search_with_functions_model: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     params: Final = {"tools": list(tools), **({"include_server_side_tool_invocations": True} if caller_flag else {})}
-    sent_as_is: Final = _mapped_request_body(route, function_calling_gemini_3, params)
+    sent_as_is: Final = _mapped_request_body(route, search_with_functions_model, params)
     if drop_params_set == "globally":
         monkeypatch.setattr(litellm, "drop_params", True)
     dropped: Final = _mapped_request_body(
-        route, function_calling_gemini_3, params, drop_params=drop_params_set == "per_call"
+        route, search_with_functions_model, params, drop_params=drop_params_set == "per_call"
     )
 
     assert _tool_keys(dropped) == kept_keys
