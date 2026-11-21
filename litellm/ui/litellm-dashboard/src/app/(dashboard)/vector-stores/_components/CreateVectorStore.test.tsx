@@ -257,7 +257,7 @@ describe("CreateVectorStore", () => {
     expect(screen.getByText("Vector Store Created Successfully")).toBeInTheDocument();
   });
 
-  it("should exclude search-only valkey and opensearch from the provider dropdown since they have no RAG ingestion", async () => {
+  it("should exclude providers without RAG ingestion (azure, valkey, opensearch) from the provider dropdown", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
 
     const providerSelect = screen.getByRole("combobox");
@@ -270,6 +270,7 @@ describe("CreateVectorStore", () => {
       expect(screen.getByText("AWS S3 Vectors")).toBeInTheDocument();
     });
     expect(screen.queryByText("Valkey")).not.toBeInTheDocument();
+    expect(screen.queryByText("Azure OpenAI")).not.toBeInTheDocument();
     expect(screen.queryByText("Amazon OpenSearch")).not.toBeInTheDocument();
   });
 
