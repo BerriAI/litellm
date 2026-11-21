@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 use crate::{
     Error,
     error::ErrorFormat,
+    hooks::CallType,
     model_restamp::ReportedModel,
     request::{InferenceBody, Upload},
     routing::{self, Host, RouteAttempt},
@@ -80,6 +81,7 @@ impl<'a> OcrAttempt<'a> {
 }
 
 impl Endpoint for OcrAttempt<'_> {
+    const CALL_TYPE: CallType = CallType::Aocr;
     const OP: Op = Op::OCR;
     const PATH: &'static str = "/ocr";
     const ERRORS: ErrorFormat = ErrorFormat::OpenAi;

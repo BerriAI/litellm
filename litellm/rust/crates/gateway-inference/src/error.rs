@@ -9,7 +9,10 @@ use litellm_llms_types::formats::messages::MessagesErrorType;
 use litellm_python_compat::{Value as PyValue, repr::repr};
 use serde_json::{Map, Value, json};
 
-use crate::headers::Routing;
+use crate::{
+    headers::Routing,
+    hooks::{HookError, Refusal},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -29,6 +32,10 @@ pub enum Error {
     NoDeployments(#[from] NoDeployments),
     #[error(transparent)]
     Routing(litellm_router_core::Error),
+    #[error("{}", .0.message)]
+    Refused(Refusal),
+    #[error(transparent)]
+    Callback(litellm_error::Source),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
     #[error("unexpected HTTP host operation")]
@@ -147,6 +154,15 @@ impl Ended {
     }
 }
 
+impl From<HookError> for Error {
+    fn from(ended: HookError) -> Self {
+        match ended {
+            HookError::Refused(refusal) => Self::Refused(refusal),
+            HookError::Failed(failure) => Self::Callback(failure),
+        }
+    }
+}
+
 impl From<litellm_host_http::Error<InferenceError>> for Error {
     fn from(error: litellm_host_http::Error<InferenceError>) -> Self {
         match error {
@@ -163,10 +179,11 @@ impl Error {
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Internal | Self::Callback(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
             Self::Routing(error) => routing_status(error),
+            Self::Refused(refusal) => refusal.status,
         }
     }
 
@@ -212,12 +229,14 @@ impl Error {
     fn message(&self) -> String {
         match self {
             Self::Auth(error) => error.to_string(),
+            Self::Refused(refusal) => refusal.message.clone(),
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)
             | Self::Ocr(_)
             | Self::NoDeployments(_)
             | Self::Routing(_)
+            | Self::Callback(_)
             | Self::BodyTooLarge
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
