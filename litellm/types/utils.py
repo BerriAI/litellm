@@ -4903,6 +4903,7 @@ class LlmProviders(str, Enum):
     RESETDATA = "resetdata"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    MIXROUTE = "mixroute"
     CORALBRICKS = "coralbricks"
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
