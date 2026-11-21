@@ -39,6 +39,11 @@ def _estimated_input_tokens(response: Mapping[str, object]) -> int:
     return _estimated_item_tokens({"embedding": response.get("embedding")})
 
 
+def _is_image_request(request_data: Mapping[str, object]) -> bool:
+    params: Final = request_data.get("singleEmbeddingParams") or request_data.get("segmentedEmbeddingParams")
+    return isinstance(params, Mapping) and "image" in params
+
+
 def _is_audio_or_video_request(request_data: Mapping[str, object]) -> bool:
     params: Final = request_data.get("singleEmbeddingParams") or request_data.get("segmentedEmbeddingParams")
     return isinstance(params, Mapping) and ("audio" in params or "video" in params)
@@ -313,31 +318,29 @@ class AmazonNovaEmbeddingConfig:
                 )
                 embeddings.append(embedding)
 
-        # Count images from original requests for cost calculation
-        image_count = 0
-        if batch_data:
-            for request_data in batch_data:
-                # Nova wraps params in singleEmbeddingParams or segmentedEmbeddingParams
-                params = request_data.get(
-                    "singleEmbeddingParams",
-                    request_data.get("segmentedEmbeddingParams", {}),
-                )
-                if isinstance(params, Mapping) and "image" in params:
-                    image_count += 1
-
-        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
-        if image_count > 0:
-            prompt_tokens_details = PromptTokensDetailsWrapper(
-                image_count=image_count,
-            )
-
+        requests: Final[Sequence[Mapping[str, object]]] = batch_data or ()
         text_and_image_metered: Final = tuple(
             None if _is_audio_or_video_request(request_data) else metered
-            for request_data, metered in zip(batch_data or (), metered_input_tokens)
+            for request_data, metered in zip(requests, metered_input_tokens)
         )
-        prompt_tokens: Final = sum(
+        input_tokens: Final = tuple(
             _estimated_input_tokens(response) if metered is None else metered
             for response, metered in zip_longest(response_list, text_and_image_metered)
+        )
+        is_media: Final = tuple(
+            _is_image_request(request_data) or _is_audio_or_video_request(request_data) for request_data in requests
+        )
+        image_count: Final = sum(_is_image_request(request_data) for request_data in requests)
+        prompt_tokens: Final = sum(input_tokens)
+        prompt_tokens_details: Final = (
+            PromptTokensDetailsWrapper(
+                image_count=image_count,
+                text_tokens=sum(
+                    tokens for tokens, media in zip_longest(input_tokens, is_media, fillvalue=False) if not media
+                ),
+            )
+            if image_count > 0
+            else None
         )
         usage: Final = Usage(
             prompt_tokens=prompt_tokens,
