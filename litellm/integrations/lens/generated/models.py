@@ -8,6 +8,39 @@ from pydantic import ConfigDict, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
+Runs: TypeAlias = Annotated[
+    int,
+    Field(
+        ...,
+        ge=0,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        le=18446744073709551615,
+    ),
+]
+
+
+Runs1: TypeAlias = Annotated[
+    str,
+    Field(
+        ...,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
+    ),
+]
+
+
 FailedRuns: TypeAlias = Annotated[
     int,
     Field(
@@ -15,9 +48,9 @@ FailedRuns: TypeAlias = Annotated[
         ge=0,
         json_schema_extra={
             "x-python-normalized": {
-                "maximum": 18446744073709551615,
-                "minimum": 0,
                 "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
             }
         },
         le=18446744073709551615,
@@ -31,9 +64,9 @@ FailedRuns1: TypeAlias = Annotated[
         ...,
         json_schema_extra={
             "x-python-normalized": {
-                "maximum": 18446744073709551615,
-                "minimum": 0,
                 "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
             }
         },
         pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
@@ -48,9 +81,9 @@ LastSeenMs: TypeAlias = Annotated[
         ge=0,
         json_schema_extra={
             "x-python-normalized": {
-                "maximum": 18446744073709551615,
-                "minimum": 0,
                 "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
             }
         },
         le=18446744073709551615,
@@ -64,42 +97,9 @@ LastSeenMs1: TypeAlias = Annotated[
         ...,
         json_schema_extra={
             "x-python-normalized": {
-                "maximum": 18446744073709551615,
-                "minimum": 0,
                 "type": "int",
-            }
-        },
-        pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
-    ),
-]
-
-
-Runs: TypeAlias = Annotated[
-    int,
-    Field(
-        ...,
-        ge=0,
-        json_schema_extra={
-            "x-python-normalized": {
-                "maximum": 18446744073709551615,
                 "minimum": 0,
-                "type": "int",
-            }
-        },
-        le=18446744073709551615,
-    ),
-]
-
-
-Runs1: TypeAlias = Annotated[
-    str,
-    Field(
-        ...,
-        json_schema_extra={
-            "x-python-normalized": {
                 "maximum": 18446744073709551615,
-                "minimum": 0,
-                "type": "int",
             }
         },
         pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
@@ -113,10 +113,10 @@ class TraceAgentRow(LiteLLMBaseModel):
     )
 
     agent_name: str
-    failed_runs: int = Field(..., ge=0, le=18446744073709551615)
-    frameworks: tuple[str, ...] = ()
-    last_seen_ms: int = Field(..., ge=0, le=18446744073709551615)
     runs: int = Field(..., ge=0, le=18446744073709551615)
+    failed_runs: int = Field(..., ge=0, le=18446744073709551615)
+    last_seen_ms: int = Field(..., ge=0, le=18446744073709551615)
+    frameworks: tuple[str, ...] = ()
 
 
 class TraceAgentsParams(LiteLLMBaseModel):
@@ -126,34 +126,22 @@ class TraceAgentsParams(LiteLLMBaseModel):
     )
 
     all_teams: Literal[0, 1]
+    user_id: str
+    team_ids: tuple[str, ...]
+    filter_team_id: str = ""
+    filter_api_key_hash: str = ""
+    start_ms: int = Field(..., ge=-9223372036854775808, le=9223372036854775807)
     end_ms: int = Field(..., ge=-9223372036854775808, le=9223372036854775807)
     limit: int = Field(..., ge=0, le=4294967295)
-    start_ms: int = Field(..., ge=-9223372036854775808, le=9223372036854775807)
-    team_ids: tuple[str, ...]
-    user_id: str
 
 
-MapValueType: TypeAlias = Literal["String"]
-
-
-MetadataValueType: TypeAlias = Literal["array", "boolean", "integer", "null", "number", "object", "string"]
-
-
-PathPart1: TypeAlias = Annotated[int, Field(..., ge=0, le=18446744073709551615)]
-
-
-PathPart: TypeAlias = str | PathPart1
-
-
-class TraceQueryAttributeField(LiteLLMBaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
-
-    expression: str
-    key: str
-    type: MapValueType
+TraceTableName: TypeAlias = Literal[
+    "otel_traces",
+    "otel_logs",
+    "agent_traces_by_key",
+    "spend_logs",
+    "lens_task_profiles",
+]
 
 
 class TraceQueryColumn(LiteLLMBaseModel):
@@ -166,6 +154,43 @@ class TraceQueryColumn(LiteLLMBaseModel):
     type: str
 
 
+class TraceQueryNormalizedField(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    table: TraceTableName
+    name: str
+    column: str
+    type: str
+    meaning: str
+
+
+PathPart1: TypeAlias = Annotated[int, Field(..., ge=0, le=18446744073709551615)]
+
+
+PathPart: TypeAlias = str | PathPart1
+
+
+MetadataValueType: TypeAlias = Literal["array", "boolean", "integer", "null", "number", "object", "string"]
+
+
+MapValueType: TypeAlias = Literal["String"]
+
+
+class TraceQueryRelationship(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    left: str
+    right: str
+    additional_predicates: str
+    meaning: str
+
+
 class TraceQueryExample(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
@@ -175,45 +200,36 @@ class TraceQueryExample(LiteLLMBaseModel):
     sql: str
 
 
+class TraceQueryTable(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    name: TraceTableName
+    columns: tuple[TraceQueryColumn, ...]
+
+
 class TraceQueryMetadataField(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
     )
 
-    expression: str
     path: tuple[PathPart, ...]
     types: tuple[MetadataValueType, ...]
+    expression: str
 
 
-class TraceQueryRelationship(LiteLLMBaseModel):
+class TraceQueryAttributeField(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
     )
 
-    additional_predicates: str
-    left: str
-    meaning: str
-    right: str
-
-
-TraceTableName: TypeAlias = Literal["otel_traces", "agent_traces_by_key", "spend_logs"]
-
-
-class TraceQueryAttributes(LiteLLMBaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
-
-    column: str
-    discovery_sql: str
-    error: str | None = None
-    fields: tuple[TraceQueryAttributeField, ...]
-    scope: str
-    table: TraceTableName
-    truncated: bool
+    key: str
+    type: MapValueType
+    expression: str
 
 
 class TraceQueryMetadata(LiteLLMBaseModel):
@@ -222,38 +238,30 @@ class TraceQueryMetadata(LiteLLMBaseModel):
         frozen=True,
     )
 
+    table: TraceTableName
     column: str
-    error: str | None = None
     fields: tuple[TraceQueryMetadataField, ...]
-    invalid_json_rows: int = Field(..., ge=0, le=18446744073709551615)
-    sample_sql: str
     sampled_rows: int = Field(..., ge=0, le=18446744073709551615)
-    scope: str
-    table: TraceTableName
+    invalid_json_rows: int = Field(..., ge=0, le=18446744073709551615)
     truncated: bool
+    error: str | None = None
+    sample_sql: str
+    scope: str
 
 
-class TraceQueryNormalizedField(LiteLLMBaseModel):
+class TraceQueryAttributes(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
     )
 
-    column: str
-    meaning: str
-    name: str
     table: TraceTableName
-    type: str
-
-
-class TraceQueryTable(LiteLLMBaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
-
-    columns: tuple[TraceQueryColumn, ...]
-    name: TraceTableName
+    column: str
+    fields: tuple[TraceQueryAttributeField, ...]
+    truncated: bool
+    error: str | None = None
+    discovery_sql: str
+    scope: str
 
 
 class TraceQueryHelp(LiteLLMBaseModel):
@@ -262,17 +270,17 @@ class TraceQueryHelp(LiteLLMBaseModel):
         frozen=True,
     )
 
-    access: str
-    attributes: tuple[TraceQueryAttributes, ...]
     dialect: str
+    access: str
+    response: str
+    tables: tuple[TraceQueryTable, ...]
+    normalized_fields: tuple[TraceQueryNormalizedField, ...]
+    metadata: TraceQueryMetadata
+    attributes: tuple[TraceQueryAttributes, ...]
+    relationships: tuple[TraceQueryRelationship, ...]
     examples: tuple[TraceQueryExample, ...]
     gotchas: tuple[str, ...]
     guide: str
-    metadata: TraceQueryMetadata
-    normalized_fields: tuple[TraceQueryNormalizedField, ...]
-    relationships: tuple[TraceQueryRelationship, ...]
-    response: str
-    tables: tuple[TraceQueryTable, ...]
 
 
 TraceWireModels: TypeAlias = Annotated[

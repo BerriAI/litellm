@@ -7,6 +7,7 @@ tests
 .git
 .devcontainer
 *.tgz
+!litellm/ui/litellm-dashboard/vendor/*.tgz
 log.txt
 
 # Claude Flow generated files (must be excluded from Docker build)

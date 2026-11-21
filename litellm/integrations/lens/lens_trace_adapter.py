@@ -29,6 +29,7 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from typing_extensions import override
 
 import litellm
+from litellm.integrations.lens.policy import lens_logging_enabled_for_call
 from litellm.integrations.lens.remote import LensConnection
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
@@ -392,6 +393,37 @@ class _LensTraceLogger(OpenTelemetryV2):
         return None
 
     @override
+    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+        if lens_logging_enabled_for_call(kwargs):
+            super().log_pre_api_call(model, messages, kwargs)
+
+    @override
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        if not lens_logging_enabled_for_call(kwargs):
+            self._close_llm_call(kwargs, start_time, end_time)
+            return
+        await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+
+    @override
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        if not lens_logging_enabled_for_call(kwargs):
+            self._close_llm_call(kwargs, start_time, end_time)
+            return
+        await super().async_log_failure_event(kwargs, response_obj, start_time, end_time)
+
+    @override
     def _close_llm_call(
         self,
         kwargs: Mapping[str, object],
@@ -399,6 +431,9 @@ class _LensTraceLogger(OpenTelemetryV2):
         end_time: datetime | float | None,
     ) -> Span | None:
         call: Final = LLMCallEvent.from_dict(kwargs)
+        if not lens_logging_enabled_for_call(kwargs):
+            self._release_carrier(self._open_llm_calls.pop(call.call_id, None) if call.call_id else None)
+            return None
         made_by: Final = agent_call(call.payload)
         carrier: Final = self._open_llm_calls.get(call.call_id) if call.call_id else None
         facts: Final = made_by.attributes(call.session_id)
@@ -460,6 +495,9 @@ async def export_traces(connection: LensConnection) -> AsyncGenerator[None, None
     trace_logger.tracer_provider.add_span_processor(_CallFactsProcessor())
     manager: Final = litellm.logging_callback_manager
     manager.add_litellm_callback(trace_logger)
+    manager.add_litellm_input_callback(trace_logger)
+    manager.add_litellm_async_success_callback(trace_logger)
+    manager.add_litellm_async_failure_callback(trace_logger)
     try:
         yield None
     finally:
