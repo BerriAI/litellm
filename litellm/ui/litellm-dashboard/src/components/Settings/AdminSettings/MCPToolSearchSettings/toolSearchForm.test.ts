@@ -3,6 +3,7 @@ import { DEFAULT_FORM_VALUES, formToPayload, parseCoreTools, storedValuesToForm 
 
 const STORED_SEMANTIC = {
   embedding_model: "text-embedding-3-small",
+  rerank_model: "rerank-2.5",
   top_k: 3,
   similarity_threshold: 0.25,
   core_tools: ["treasury-get_rates", "treasury-list_accounts"],
@@ -10,15 +11,17 @@ const STORED_SEMANTIC = {
 
 const SEMANTIC_FORM = {
   embedding_model: "text-embedding-3-small",
+  rerank_model: "rerank-2.5",
   top_k: 3,
   similarity_threshold: 0.25,
   core_tools_text: "treasury-get_rates\ntreasury-list_accounts",
 };
 
-const KEYWORD_PAYLOAD = { embedding_model: null, top_k: 5, similarity_threshold: 0, core_tools: [] };
+const KEYWORD_PAYLOAD = { embedding_model: null, rerank_model: null, top_k: 5, similarity_threshold: 0, core_tools: [] };
 
 const OVERSIZED_FORM = {
   embedding_model: "emb",
+  rerank_model: "rr",
   top_k: 400,
   similarity_threshold: 0.5,
   core_tools_text: "treasury-get_rates",
@@ -26,6 +29,7 @@ const OVERSIZED_FORM = {
 
 const CLAMPED_PAYLOAD = {
   embedding_model: "emb",
+  rerank_model: "rr",
   top_k: 100,
   similarity_threshold: 0.5,
   core_tools: ["treasury-get_rates"],

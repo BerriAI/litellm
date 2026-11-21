@@ -19,8 +19,16 @@ from pydantic import JsonValue, SecretStr, ValidationError
 from typing_extensions import Buffer, ReadOnly, Required, assert_never
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
 from litellm.proxy.agent_endpoints.agent_search import DEFAULT_AGENT_SEARCH_TOP_K
+from litellm.proxy.common_utils.rerank_shortlist import (
+    RERANK_SHORTLIST_SIZE,
+    Reranker,
+    RerankFailed,
+    rerank_order,
+    router_reranker,
+)
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
     EmbeddingFailed,
@@ -35,6 +43,8 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
 
 MCP_TOOL_SEARCH_SETTINGS_KEY: Final[str] = "mcp_tool_search"
 MCP_TOOL_SEARCH_TOOL_NAME: Final[str] = "mcp_tool_search"
@@ -288,36 +298,54 @@ def search_tools(query: str, tools: Sequence[Tool], top_k: int = 5) -> tuple[Too
     return tuple(_tool_result(tool) for _, tool in _top_hits(tools, scores, minimum=1.0, limit=top_k))
 
 
+async def _base_hits(
+    query: str, tools: Sequence[Tool], settings: MCPToolSearchSettings, ranker: SemanticToolRanker | None, size: int
+) -> tuple[MCPToolSearchHit, ...] | EmbeddingFailed:
+    if ranker is None:
+        scores: Final = tuple(_keyword_score(query, tool) for tool in tools)
+        return tuple(MCPToolSearchHit(tool) for _, tool in _top_hits(tools, scores, minimum=1.0, limit=size))
+    semantic_scores: Final = await ranker.index.scores(
+        query, tuple(_tool_text(tool) for tool in tools), ranker.embed, ranker.embedding_model
+    )
+    if isinstance(semantic_scores, EmbeddingFailed):
+        return semantic_scores
+    return tuple(
+        MCPToolSearchHit(tool, score)
+        for score, tool in _top_hits(tools, semantic_scores, settings.similarity_threshold, size)
+    )
+
+
+async def _reranked(
+    query: str, hits: tuple[MCPToolSearchHit, ...], limit: int, reranker: Reranker | None
+) -> tuple[MCPToolSearchHit, ...]:
+    if reranker is None or len(hits) < 2:
+        return hits[:limit]
+    order: Final = await rerank_order(query, tuple(_tool_text(hit.tool) for hit in hits), reranker)
+    if isinstance(order, RerankFailed):
+        verbose_proxy_logger.warning("mcp_tool_search kept the base order: %s", order.reason)
+        return hits[:limit]
+    return tuple(MCPToolSearchHit(hits[scored.index].tool, scored.score) for scored in order[:limit])
+
+
 async def rank_mcp_tools(
     query: str,
     tools: Sequence[Tool],
     top_k: int,
     settings: MCPToolSearchSettings,
     ranker: SemanticToolRanker | None,
+    reranker: Reranker | None = None,
 ) -> tuple[MCPToolSearchHit, ...] | EmbeddingFailed:
     core, rest = _split_core_tools(tools, settings.core_tools)
     core_hits: Final = tuple(MCPToolSearchHit(tool) for tool in core)
     if not query:
         return core_hits
     limit: Final = min(top_k, settings.top_k)
-    if ranker is None:
-        scores: Final = tuple(_keyword_score(query, tool) for tool in rest)
-        return (
-            *core_hits,
-            *(MCPToolSearchHit(tool) for _, tool in _top_hits(rest, scores, minimum=1.0, limit=limit)),
-        )
-    semantic_scores: Final = await ranker.index.scores(
-        query, tuple(_tool_text(tool) for tool in rest), ranker.embed, ranker.embedding_model
+    shortlist: Final = await _base_hits(
+        query, rest, settings, ranker, limit if reranker is None else max(limit, RERANK_SHORTLIST_SIZE)
     )
-    if isinstance(semantic_scores, EmbeddingFailed):
-        return semantic_scores
-    return (
-        *core_hits,
-        *(
-            MCPToolSearchHit(tool, score)
-            for score, tool in _top_hits(rest, semantic_scores, settings.similarity_threshold, limit)
-        ),
-    )
+    if isinstance(shortlist, EmbeddingFailed):
+        return shortlist
+    return (*core_hits, *await _reranked(query, shortlist, limit, reranker))
 
 
 async def search_mcp_tools(
@@ -326,13 +354,43 @@ async def search_mcp_tools(
     top_k: int,
     settings: MCPToolSearchSettings,
     ranker: SemanticToolRanker | None,
+    reranker: Reranker | None = None,
 ) -> tuple[ToolSearchResult, ...] | EmbeddingFailed:
-    hits: Final = await rank_mcp_tools(query, tools, top_k, settings, ranker)
+    hits: Final = await rank_mcp_tools(query, tools, top_k, settings, ranker, reranker)
     if isinstance(hits, EmbeddingFailed):
         return hits
     return tuple(
         _scored_result(hit.tool, hit.score) if hit.score is not None else _tool_result(hit.tool) for hit in hits
     )
+
+
+def _setting_missing_router(settings: MCPToolSearchSettings, llm_router: Router | None) -> str | None:
+    if llm_router is not None:
+        return None
+    configured: Final = (
+        name
+        for name, model in (("embedding_model", settings.embedding_model), ("rerank_model", settings.rerank_model))
+        if model is not None
+    )
+    return next(configured, None)
+
+
+def _missing_router_result(setting: str) -> CallToolResult:
+    return _text_tool_result(
+        f"litellm_settings.{MCP_TOOL_SEARCH_SETTINGS_KEY}.{setting} needs a model_list so it can be called",
+        is_error=True,
+    )
+
+
+def _reranker_for(
+    settings: MCPToolSearchSettings,
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+) -> Reranker | None:
+    if settings.rerank_model is None or llm_router is None:
+        return None
+    return router_reranker(llm_router, settings.rerank_model, user_api_key_dict, proxy_logging_obj)
 
 
 class _ToolParamSchema(TypedDict, total=False):
@@ -566,11 +624,9 @@ async def handle_mcp_tool_search(
         return _text_tool_result(
             f"litellm_settings.{MCP_TOOL_SEARCH_SETTINGS_KEY} is invalid: {settings}", is_error=True
         )
-    if settings.embedding_model is not None and llm_router is None:
-        return _text_tool_result(
-            f"litellm_settings.{MCP_TOOL_SEARCH_SETTINGS_KEY}.embedding_model needs a model_list so it can be called",
-            is_error=True,
-        )
+    missing_router: Final = _setting_missing_router(settings, llm_router)
+    if missing_router is not None:
+        return _missing_router_result(missing_router)
     ranker: Final = (
         SemanticToolRanker(
             embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict, proxy_logging_obj),
@@ -590,7 +646,14 @@ async def handle_mcp_tool_search(
         raw_headers=raw_headers,
         use_tool_list_cache=False,
     )
-    results: Final = await search_mcp_tools(query, mcp_listing.tools, top_k, settings, ranker)
+    results: Final = await search_mcp_tools(
+        query,
+        mcp_listing.tools,
+        top_k,
+        settings,
+        ranker,
+        _reranker_for(settings, llm_router, user_api_key_dict, proxy_logging_obj),
+    )
     if isinstance(results, EmbeddingFailed):
         return _text_tool_result(results.reason, is_error=True)
     return _text_tool_result(json.dumps(results), is_error=False)
@@ -636,11 +699,9 @@ async def handle_mcp_proxy_tool(
         settings: Final = mcp_tool_search_settings()
         if isinstance(settings, ValidationError):
             return _text_tool_result(str(settings), is_error=True)
-        if settings.embedding_model is not None and llm_router is None:
-            return _text_tool_result(
-                f"litellm_settings.{MCP_TOOL_SEARCH_SETTINGS_KEY}.embedding_model needs a model_list so it can be called",
-                is_error=True,
-            )
+        missing_router: Final = _setting_missing_router(settings, llm_router)
+        if missing_router is not None:
+            return _missing_router_result(missing_router)
         ranker: Final = (
             SemanticToolRanker(
                 embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict, proxy_logging_obj),
@@ -650,7 +711,14 @@ async def handle_mcp_proxy_tool(
             if settings.embedding_model is not None and llm_router is not None
             else None
         )
-        results: Final = await rank_mcp_tools(str(arguments.get("query", "")), listing.tools, 5, settings, ranker)
+        results: Final = await rank_mcp_tools(
+            str(arguments.get("query", "")),
+            listing.tools,
+            5,
+            settings,
+            ranker,
+            _reranker_for(settings, llm_router, user_api_key_dict, proxy_logging_obj),
+        )
         if isinstance(results, EmbeddingFailed):
             return _text_tool_result(results.reason, is_error=True)
         return _text_tool_result(json.dumps(tuple(_proxy_search_result(hit) for hit in results)), is_error=False)

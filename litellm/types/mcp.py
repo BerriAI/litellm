@@ -141,6 +141,11 @@ class MCPToolSearchSettings(LiteLLMBaseModel):
         default=None,
         description="Embedding model from model_list used to rank tools by meaning. Unset keeps keyword matching.",
     )
+    rerank_model: str | None = Field(
+        default=None,
+        description="Rerank model from model_list that re-orders the best matches before top_k is applied. "
+        "Unset keeps the keyword or embedding order, which is also kept if the rerank call fails.",
+    )
     top_k: int = Field(
         default=5,
         ge=1,

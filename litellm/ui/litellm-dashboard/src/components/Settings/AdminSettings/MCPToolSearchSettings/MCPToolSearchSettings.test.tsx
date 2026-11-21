@@ -22,6 +22,7 @@ const mockMutate = vi.fn();
 
 const EDITED_PAYLOAD = {
   embedding_model: "text-embedding-3-small",
+  rerank_model: "rerank-2.5",
   top_k: 8,
   similarity_threshold: 0.25,
   core_tools: ["treasury-get_rates", "weather-forecast"],
@@ -31,6 +32,7 @@ const STORED = {
   field_schema: {},
   values: {
     embedding_model: "text-embedding-3-small",
+    rerank_model: "rerank-2.5",
     top_k: 3,
     similarity_threshold: 0.25,
     core_tools: ["treasury-get_rates"],
