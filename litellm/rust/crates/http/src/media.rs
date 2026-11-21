@@ -207,10 +207,31 @@ impl MediaFetcher {
         }
     }
 
+    /// Sends one request other than a download to a public address: http or https without
+    /// credentials, on an address that is not private. Unlike `fetch`, neither the allowlist nor
+    /// a disabled validation lets a private address through, since the allowlist is for reading
+    /// documents, not for sending them. The URL that is checked is the URL that is sent, and the
+    /// checked client is never handed out. A transport error leaves the URL out, since the URL
+    /// can carry a signature.
+    pub async fn execute_checked(
+        &self,
+        request: reqwest::Request,
+    ) -> Result<reqwest::Response, Error> {
+        let client = self.checked_client(request.url(), false).await?;
+        Ok(client
+            .execute(request)
+            .await
+            .map_err(reqwest::Error::without_url)?)
+    }
+
     async fn client_for(&self, url: &Url) -> Result<&Client, Error> {
         if !self.url_policy.validate {
             return Ok(&self.unpinned);
         }
+        self.checked_client(url, true).await
+    }
+
+    async fn checked_client(&self, url: &Url, use_allowlist: bool) -> Result<&Client, Error> {
         if !matches!(url.scheme(), "http" | "https")
             || !url.username().is_empty()
             || url.password().is_some()
@@ -222,7 +243,7 @@ impl MediaFetcher {
             return Ok(&self.pinned);
         }
         let port = url.port_or_known_default().ok_or(Repr::BlockedUrl)?;
-        if self.url_policy.allows(host, port) {
+        if use_allowlist && self.url_policy.allows(host, port) {
             return Ok(&self.unpinned);
         }
         self.validate_host(host, port).await?;
@@ -655,6 +676,92 @@ mod tests {
                 .err()
                 .as_ref()
                 .map(Error::repr),
+            Some(Repr::BlockedUrl)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_post_to_a_checked_url_goes_through_the_pinned_resolver() {
+        let (url, server, address) = serve_named("uploads.test", vec![OK_RESPONSE]).await;
+        let fetcher = policy_checked_fetcher(address, HashSet::new());
+        let request = Client::for_test().post(url).body("file").build().unwrap();
+        let response = fetcher
+            .execute_checked(request)
+            .await
+            .expect("a public host passes the policy and the pinned client reaches it");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let requests = server.await.expect("server completes");
+        assert!(requests[0].starts_with("POST /document"), "{}", requests[0]);
+    }
+
+    #[rstest::rstest]
+    #[case::private_name("http://internal.test/upload")]
+    #[case::private_address("https://10.1.2.3/upload")]
+    #[case::metadata_address("https://169.254.169.254/upload")]
+    #[case::credentials("https://user:secret@uploads.test/upload")]
+    #[case::other_scheme("ftp://uploads.test/upload")]
+    #[tokio::test]
+    async fn a_checked_request_to_a_private_address_is_refused(#[case] url: &str) {
+        let fetcher = policy_checked_fetcher(UNROUTABLE, HashSet::from(["internal.test"]));
+        let request = reqwest::Request::new(
+            reqwest::Method::POST,
+            Url::parse(url).expect("test URL parses"),
+        );
+        let result = fetcher.execute_checked(request).await;
+        assert!(matches!(
+            result.err().as_ref().map(Error::repr),
+            Some(Repr::BlockedUrl)
+        ));
+    }
+
+    #[rstest::rstest]
+    #[case::allowlisted(UrlPolicy {
+        validate: true,
+        allowed_hosts: vec!["internal.test".into(), "10.1.2.3".into()],
+    })]
+    #[case::validation_off(UrlPolicy {
+        validate: false,
+        allowed_hosts: Vec::new(),
+    })]
+    #[tokio::test]
+    async fn a_checked_request_ignores_the_download_policy(
+        #[case] url_policy: UrlPolicy,
+        #[values("https://internal.test/upload", "https://10.1.2.3/upload")] url: &str,
+    ) {
+        let fetcher = fetcher(
+            UNROUTABLE,
+            HashSet::from(["internal.test"]),
+            url_policy,
+            false,
+        );
+        let request = reqwest::Request::new(
+            reqwest::Method::POST,
+            Url::parse(url).expect("test URL parses"),
+        );
+        let result = fetcher.execute_checked(request).await;
+        assert!(matches!(
+            result.err().as_ref().map(Error::repr),
+            Some(Repr::BlockedUrl)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_checked_public_url_does_not_open_a_second_private_one() {
+        let (url, server, address) = serve_named("uploads.test", vec![OK_RESPONSE]).await;
+        let fetcher = policy_checked_fetcher(address, HashSet::new());
+        let first = Client::for_test().post(url).build().unwrap();
+        fetcher
+            .execute_checked(first)
+            .await
+            .expect("the public host is sent");
+        server.await.expect("server completes");
+        let second = Client::for_test()
+            .post("http://10.1.2.3/upload")
+            .build()
+            .unwrap();
+        let result = fetcher.execute_checked(second).await;
+        assert!(matches!(
+            result.err().as_ref().map(Error::repr),
             Some(Repr::BlockedUrl)
         ));
     }
