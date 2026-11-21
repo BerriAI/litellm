@@ -3338,8 +3338,12 @@ class ReturnedToolsRewritingGuardrail(CustomGuardrail):
 class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
     _WEB_SEARCH: Final = {"type": "web_search_20250305", "name": "web_search", "max_uses": 1}
     _MCP_TOOLSET: Final = {"type": "mcp_toolset", "mcp_server_name": "github"}
-    _READ: Final = {"name": "Read", "description": "Reads a file", "input_schema": {"type": "object", "properties": {}}}
-    _DEFERRED: Final = {
+    _READ: Final[dict[str, object]] = {
+        "name": "Read",
+        "description": "Reads a file",
+        "input_schema": {"type": "object", "properties": {}},
+    }
+    _DEFERRED: Final[dict[str, object]] = {
         "name": "mcp__atlassian__create_confluence_footer_comment_with_a_very_long_name_x",
         "description": "Adds a footer comment",
         "defer_loading": True,
@@ -3350,7 +3354,7 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
         "input_schema": {"type": "object", "properties": {"page": {"type": "string"}}},
     }
     _BASH: Final = {"type": "bash_20250124", "name": "bash"}
-    _WRITE: Final = {
+    _WRITE: Final[dict[str, object]] = {
         "name": "Write",
         "description": "Writes a file",
         "input_schema": {"type": "object", "properties": {}},
@@ -3424,7 +3428,7 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
         assert tools[:-1] == self._sent_tools()
 
     async def test_an_openai_format_tool_still_reaches_the_provider_in_anthropic_format(self):
-        openai_format = {
+        openai_format: Final[dict[str, object]] = {
             "type": "function",
             "function": {"name": "Grep", "description": "Searches files", "parameters": self._READ["input_schema"]},
         }
@@ -3443,11 +3447,15 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
         ]
 
     async def test_one_returned_tool_keeps_only_the_last_of_two_tools_the_guardrail_cannot_tell_apart(self):
-        first, last = (
-            {**self._READ, "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_7aeb"},
-            {**self._READ, "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_c034"},
-        )
-        assert truncate_tool_name(first["name"]) == truncate_tool_name(last["name"])
+        first: Final[dict[str, object]] = {
+            **self._READ,
+            "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_7aeb",
+        }
+        last: Final[dict[str, object]] = {
+            **self._READ,
+            "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_c034",
+        }
+        assert truncate_tool_name(str(first["name"])) == truncate_tool_name(str(last["name"]))
 
         tools: Final = await self._tools_after(
             ReturnedToolsRewritingGuardrail(lambda returned: returned[-1:]),

@@ -421,6 +421,11 @@ def _is_hidden_from_guardrail(tool: object) -> bool:
     return fields is not None and (is_anthropic_web_search_tool(fields) or is_provider_native_tool_dict(fields))
 
 
+def _is_web_search(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and is_anthropic_web_search_tool(fields)
+
+
 def _is_openai_format_tool(tool: object) -> bool:
     fields: Final = as_str_mapping(tool)
     return fields is not None and fields.get("type") == "function" and "function" in fields
@@ -519,14 +524,10 @@ def _tools_after_guardrail(
     )
     as_sent_positions: Final = frozenset(position for position, _ in as_sent)
     as_sent_counts: Final = Counter(fingerprint for _, fingerprint in as_sent)
-    web_search_removed: Final = (
-        frozenset(
-            position
-            for position, tool in enumerate(request_tools)
-            if (fields := as_str_mapping(tool)) is not None and is_anthropic_web_search_tool(fields)
-        )
-        if not returned_tools or len(returned_tools) < len(shown)
-        else frozenset()
+    web_search_removed: Final[frozenset[int]] = frozenset(
+        position
+        for position, tool in enumerate(request_tools)
+        if (not returned_tools or len(returned_tools) < len(shown)) and _is_web_search(tool)
     )
     removed_or_rewritten: Final = (frozenset(shown_positions) - as_sent_positions) | web_search_removed
     converted: Final = _converted_tools(
