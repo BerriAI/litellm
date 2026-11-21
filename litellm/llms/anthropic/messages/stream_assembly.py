@@ -858,6 +858,14 @@ def _opens_with_an_empty_message(events: Sequence[Mapping[str, object]]) -> bool
     return message is not None and not message.get("content")
 
 
+def _the_widest_reader_dispatches_no_other_json(sse_stream: str, client_frames: tuple[tuple[str, str], ...]) -> bool:
+    dispatched: Final = frozenset(client_frames)
+    other_frames: Final = (
+        frame for frame in _client_frames(_frames_of_the_widest_reader(sse_stream)) if frame not in dispatched
+    )
+    return all(_json_mapping(data) is None for _, data in other_frames)
+
+
 def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     """Whether every client reads the stream's content as assembly does, so the stream can be forwarded as sent.
 
@@ -868,11 +876,14 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     may carry any data, since the SDKs raise on it and other clients read its type. A leading byte order
     mark stays part of the first field name, as the Python SDK reads it, so these rules refuse it wherever
     it changes what that SDK reads. No client dispatches a frame the stream never ended, so a stream with
-    one reads differently too.
+    one reads differently too. A client reading lines with httpx also breaks them at a form feed or U+2028,
+    so a stream reads differently when that reveals a JSON frame the others skip, as data behind a comment.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     client_frames: Final = _client_frames(_frames_a_client_dispatches(sse_stream))
     if client_frames != _client_frames(_sse_frames(sse_stream)):
+        return False
+    if not _the_widest_reader_dispatches_no_other_json(sse_stream, client_frames):
         return False
     named_data: Final = _named_data(client_frames)
     if not all(_names_its_own_type(name, data) for name, data in named_data):

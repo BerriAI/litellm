@@ -2740,7 +2740,14 @@ _STREAMS_WITH_A_READABLE_PHONE: Final = {
         *_MESSAGE_END_SSE,
     ),
     "tool-input": _PHONE_IN_A_TOOL_INPUT,
-    "error-after-text": (_message_start_sse(), *_text_block_sse(0, "Sure, one moment."), _phone_error_sse()),
+    "raw-line-separator-in-the-text": (
+        _message_start_sse(),
+        _text_block_sse(0)[0],
+        _text_block_sse(0, f"Sure. Call me at {_PHONE}.")[1].replace(b"\\u2028", " ".encode()),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
+    "error-after-text":(_message_start_sse(), *_text_block_sse(0, "Sure, one moment."), _phone_error_sse()),
     "error-alone": (_phone_error_sse(),),
 }
 _STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
@@ -2765,6 +2772,13 @@ _STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
         _message_start_sse(),
         *_text_block_sse(0, "Sure, one moment."),
         _phone_error_sse(terminated=False),
+    ),
+    "data-behind-a-form-feed-in-a-comment": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure. "),
+        b": keepalive\x0c" + _text_block_sse(0, f"Call me at {_PHONE}.")[1].split(b"\n", 1)[1],
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
     ),
 }
 
