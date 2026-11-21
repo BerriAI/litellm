@@ -426,10 +426,10 @@ mod tests {
     #[test]
     fn a_raw_key_is_hashed_before_it_names_a_counter() {
         let scopes = plan(&CounterStep {
-            token: Some("sk-1234".into()),
+            token: Some("sk-raw-key".into()),
             ..CounterStep::default()
         });
-        let hashed = format!("{:x}", Sha256::digest(b"sk-1234"));
+        let hashed = format!("{:x}", Sha256::digest(b"sk-raw-key"));
         assert_eq!(
             scopes[0].tasks[0],
             Task::Counter {

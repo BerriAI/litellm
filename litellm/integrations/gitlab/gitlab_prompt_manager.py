@@ -35,9 +35,9 @@ class GitLabCachedPrompt(TypedDict):
     path: ReadOnly[str]
     content: ReadOnly[str]
     metadata: ReadOnly[Mapping[str, object]]
-    model: ReadOnly[str | None]
-    temperature: ReadOnly[float | None]
-    max_tokens: ReadOnly[int | None]
+    model: ReadOnly[object]
+    temperature: ReadOnly[object]
+    max_tokens: ReadOnly[object]
     optional_params: ReadOnly[Mapping[str, object]]
 
 
@@ -72,7 +72,7 @@ class GitLabPromptTemplate:
         self,
         template_id: str,
         content: str,
-        metadata: dict[str, Any],
+        metadata: Mapping[str, object],
         model: str | None = None,
     ):
         self.template_id = template_id
@@ -200,7 +200,7 @@ class GitLabTemplateManager:
             frontmatter_str = ""
             template_content = content
 
-        metadata: dict[str, Any] = {}
+        metadata: Mapping[str, object] = {}
         if frontmatter_str:
             try:
                 import yaml

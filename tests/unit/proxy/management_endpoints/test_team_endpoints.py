@@ -104,6 +104,7 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     JWTMappingRow,
 )
 from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.proxy.rust_auth_stores import (
@@ -10315,11 +10316,7 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     """
     from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        UserApiKeyCache,
-        app_cache_key,
-        app_key_resource_cache_key,
-    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     team = LiteLLM_TeamTable(
         team_id="team-doomed",
@@ -10356,12 +10353,12 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     peer_cache: Final = UserApiKeyCache()
     expected_keys: Final = (
         "hashed-doomed-key",
-        app_key_resource_cache_key("hashed-doomed-key"),
+        AuthObject.customer_app_key_resource("hashed-doomed-key").key,
         "team_id:team-doomed",
         "team_alias:doomed-team",
-        app_cache_key("team", "team-doomed"),
+        AuthObject.customer_app("team", "team-doomed").key,
     )
-    unrelated_key: Final = app_cache_key("team", "team-other")
+    unrelated_key: Final = AuthObject.customer_app("team", "team-other").key
     for worker_cache in (cache, peer_cache):
         for key in (*expected_keys, unrelated_key):
             worker_cache.set_cache(key=key, value="cached")
