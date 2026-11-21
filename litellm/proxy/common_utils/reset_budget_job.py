@@ -4,7 +4,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
 from operator import attrgetter
@@ -35,9 +35,9 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
-    get_annual_budget_window_start,
-    is_annual_budget_duration,
+    get_budget_window_start,
     normalize_budget_window_start,
+    rolled_budget_window_start,
 )
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
@@ -634,13 +634,12 @@ def _window_spend_start(
     budget_duration: str, next_reset_at: datetime, reset_settings: BudgetResetSettings
 ) -> datetime | None:
     try:
-        start: Final = (
-            get_annual_budget_window_start(next_reset_at, reset_settings.timezone)
-            if is_annual_budget_duration(budget_duration)
-            else next_reset_at - timedelta(seconds=duration_in_seconds(budget_duration))
+        duration_in_seconds(budget_duration)
+        start: Final = get_budget_window_start(
+            budget_duration, next_reset_at, reset_settings.timezone, reset_settings.reset_time_of_day
         )
         return normalize_budget_window_start(start)
-    except Exception as error:  # noqa: BLE001  # duration_in_seconds raises bare exceptions on bad input
+    except (ValueError, OverflowError) as error:
         verbose_proxy_logger.warning("Unparseable budget_duration %s: %s", budget_duration, error)
         return None
 
@@ -649,6 +648,7 @@ def _window_spend_start(
 class _WindowReset:
     next_reset_at: datetime
     budget_duration: str
+    window_start: datetime | None
     counter: tuple[str, float] | None = None
 
 
@@ -1111,7 +1111,12 @@ class ResetBudgetJob:
             budget_resets=tuple(
                 (
                     b.budget_id,
-                    compute_budget_reset_at(budget_duration=b.budget_duration, settings=self.reset_settings),
+                    compute_budget_reset_at(
+                        budget_duration=b.budget_duration,
+                        settings=self.reset_settings,
+                        now=now,
+                        previous_reset=b.budget_reset_at,
+                    ),
                 )
                 for b in budgets_to_reset
                 if b.budget_id is not None and b.budget_id in windows and b.budget_duration is not None
@@ -1890,8 +1895,17 @@ class ResetBudgetJob:
         next_reset_at: Final = ResetBudgetJob._next_window_reset(window, now, reset_settings)
         if next_reset_at is None:
             return None
+        duration: Final = str(window["budget_duration"])
+        scheduled_start: Final = _window_spend_start(duration, next_reset_at, reset_settings)
+        window_start: Final = (
+            rolled_budget_window_start(
+                scheduled_start, _as_utc(datetime.fromisoformat(str(window["reset_at"]).replace("Z", "+00:00")))
+            )
+            if scheduled_start is not None
+            else None
+        )
         if counter_key is None:
-            return _WindowReset(next_reset_at, str(window["budget_duration"]))
+            return _WindowReset(next_reset_at, duration, window_start)
         new_value: Final = await ResetBudgetJob._window_carried_spend(
             window,
             counter_key,
@@ -1900,7 +1914,7 @@ class ResetBudgetJob:
         )
         if planned_counters is not None:
             planned_counters[counter_key] = new_value  # rebind-ok: stage each duplicate's carry for the next window
-        return _WindowReset(next_reset_at, str(window["budget_duration"]), (counter_key, new_value))
+        return _WindowReset(next_reset_at, duration, window_start, (counter_key, new_value))
 
     @staticmethod
     def _next_window_reset(
@@ -1910,12 +1924,11 @@ class ResetBudgetJob:
         budget_duration: Final = window.get("budget_duration")
         if not isinstance(reset_at_str, str) or not reset_at_str or not isinstance(budget_duration, str):
             return None
-        annual: Final = is_annual_budget_duration(budget_duration)
         saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
         if _as_utc(saved_reset_at) > _as_utc(now):
             return None
         return compute_budget_reset_at(
-            budget_duration=budget_duration, settings=reset_settings, now=now if annual else None
+            budget_duration=budget_duration, settings=reset_settings, now=now, previous_reset=saved_reset_at
         )
 
     @staticmethod
@@ -2075,16 +2088,19 @@ class ResetBudgetJob:
         resets: Sequence[_WindowReset | None],
     ) -> bool:
         updated: Final = tuple(
-            window if reset is None else {**window, "reset_at": reset.next_reset_at.isoformat()}
+            window
+            if reset is None
+            else {
+                **window,
+                "reset_at": reset.next_reset_at.isoformat(),
+                **({"window_start": reset.window_start.isoformat()} if reset.window_start is not None else {}),
+            }
             for window, reset in zip(windows, resets, strict=True)
         )
         spend_windows: Final = tuple(
-            (reset.budget_duration, window_start)
+            (reset.budget_duration, reset.window_start)
             for reset in resets
-            if source.counters is not None
-            and reset is not None
-            and (window_start := _window_spend_start(reset.budget_duration, reset.next_reset_at, self.reset_settings))
-            is not None
+            if source.counters is not None and reset is not None and reset.window_start is not None
         )
         async with self.prisma_client.tx() as tx_ctx:
             transaction: Final = cast("BudgetLimitsTransaction", tx_ctx)  # cast-ok: Prisma raw transaction queries
@@ -2174,7 +2190,8 @@ class ResetBudgetJob:
                 item.budget_reset_at = compute_budget_reset_at(
                     budget_duration=item.budget_duration,
                     settings=reset_settings,
-                    now=current_time if is_annual_budget_duration(item.budget_duration) else None,
+                    now=current_time,
+                    previous_reset=item.budget_reset_at,
                 )
             return item
         except Exception as e:
