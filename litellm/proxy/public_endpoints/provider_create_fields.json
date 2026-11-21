@@ -46,6 +46,34 @@
     "default_model_placeholder": "scaledown/summarize"
   },
   {
+    "provider": "ABLITERATEDLLM",
+    "provider_display_name": "AbliteratedLLM",
+    "litellm_provider": "abliteratedllm",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.abliteratedllm.dev/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "abliteratedllm/glm-5.3-flash-abliterated"
+  },
+  {
     "provider": "ABLITERATION",
     "provider_display_name": "Abliteration",
     "litellm_provider": "abliteration",
