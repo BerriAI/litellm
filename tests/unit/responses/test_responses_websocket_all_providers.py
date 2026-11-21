@@ -451,7 +451,8 @@ class TestManagedWebSocketHandlerIntegration:
             {
                 "type": "mcp_call",
                 "id": "mcp_1",
-                "server_label": "deepwiki",
+                "approval_request_id": "mcpr_nobody_approved",
+                "server_label": "litellm",
                 "name": "read_wiki_structure",
                 "arguments": "{}",
                 "output": "1 Overview",
@@ -475,8 +476,11 @@ class TestManagedWebSocketHandlerIntegration:
 
     @pytest.mark.parametrize(
         "malformed",
-        [{"type": ["function_call"], "id": "fc_1"}],
-        ids=["list_type"],
+        [
+            {"type": ["function_call"], "id": "fc_1"},
+            {"type": "mcp_call", "id": "mcp_1", "approval_request_id": ["mcpr_1"]},
+        ],
+        ids=["list_type", "list_approval_request_id"],
     )
     @pytest.mark.asyncio
     async def test_next_turn_reaches_the_provider_after_a_malformed_output_item(
