@@ -10053,7 +10053,11 @@ async def test_gemini_image_edits_replay_every_image_with_its_own_signature(resp
     )
     second: Final = await litellm.acompletion(
         model="gemini/gemini-3.1-flash-image",
-        messages=[{"role": "user", "content": prompts[0]}, first.choices[0].message, {"role": "user", "content": prompts[1]}],
+        messages=[
+            {"role": "user", "content": prompts[0]},
+            first.choices[0].message,
+            {"role": "user", "content": prompts[1]},
+        ],
         api_key="test-api-key",
     )
     await litellm.acompletion(
@@ -10098,9 +10102,9 @@ async def test_gemini_streamed_image_keeps_its_signature_through_the_rebuilt_mes
         api_key="test-api-key",
     )
     chunks: Final = [chunk async for chunk in stream]
-    streamed_images: Final = [
-        image for chunk in chunks if chunk.choices for image in getattr(chunk.choices[0].delta, "images", None) or ()
-    ]
+    streamed_images: Final = tuple(
+        chain.from_iterable(getattr(chunk.choices[0].delta, "images", None) or () for chunk in chunks if chunk.choices)
+    )
     rebuilt: Final = litellm.stream_chunk_builder(chunks)
     await litellm.acompletion(
         model="gemini/gemini-3.1-flash-image",
