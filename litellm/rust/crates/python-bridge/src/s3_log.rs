@@ -214,6 +214,21 @@ impl NativeS3Log {
         })
     }
 
+    fn download_bounded<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+        max_bytes: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let sink = Arc::clone(&self.sink);
+        crate::execution::run_async_value(py, async move {
+            Ok(sink
+                .download_bounded(&key, max_bytes)
+                .await
+                .map(|body| String::from_utf8_lossy(&body).into_owned()))
+        })
+    }
+
     fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let sink = Arc::clone(&self.sink);
         let event_loop = payload::running_loop(py);

@@ -31,5 +31,5 @@ uuid.workspace = true
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "test-util"] }
 wiremock.workspace = true

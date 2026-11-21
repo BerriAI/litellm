@@ -35,6 +35,8 @@ pub enum SendError {
     Request(String),
     #[error("{kind}: {message}")]
     Transport { kind: &'static str, message: String },
+    #[error("the response body exceeds {0} bytes")]
+    TooLarge(usize),
 }
 
 impl SendError {
@@ -72,6 +74,14 @@ pub async fn send(
     client: &litellm_http::Client,
     request: SignedRequest<'_>,
 ) -> Result<Reply, SendError> {
+    send_bounded(client, request, None).await
+}
+
+pub async fn send_bounded(
+    client: &litellm_http::Client,
+    request: SignedRequest<'_>,
+    max_body: Option<usize>,
+) -> Result<Reply, SendError> {
     let signature = signature_headers(&request)?;
     let mut builder = client.request(request.method.clone(), request.url);
     for (name, value) in request.headers.iter().chain(&signature) {
@@ -82,8 +92,19 @@ pub async fn send(
     }
     let mut response = timed(request.read_timeout, builder.send()).await?;
     let status = response.status().as_u16();
+    let exceeds = |length: usize| max_body.is_some_and(|max| length > max);
+    if let (Some(max), Some(length)) = (max_body, response.content_length())
+        && exceeds(usize::try_from(length).unwrap_or(usize::MAX))
+    {
+        return Err(SendError::TooLarge(max));
+    }
     let mut body = Vec::new();
     while let Some(chunk) = timed(request.read_timeout, response.chunk()).await? {
+        if let Some(max) = max_body
+            && exceeds(body.len() + chunk.len())
+        {
+            return Err(SendError::TooLarge(max));
+        }
         body.extend_from_slice(&chunk);
     }
     Ok(Reply {

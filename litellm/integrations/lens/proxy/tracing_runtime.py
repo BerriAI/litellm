@@ -9,6 +9,12 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.lens import TraceReceiver
+from litellm.integrations.lens.content import (
+    ContentReader,
+    content_limits_from_settings,
+    content_signing_key,
+    content_store_from_settings,
+)
 from litellm.integrations.lens.exporter import LensExporter
 from litellm.integrations.lens.lens_trace_adapter import export_traces
 from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
@@ -51,13 +57,23 @@ async def manage_tracing(
         verbose_proxy_logger.error("Agent tracing store lens failed to start, tracing is disabled: %s", error)
         yield None
         return
+    store: Final = content_store_from_settings(settings)
     async with client_factory(connection) as client:
         tracing: Final = (
             receiver_factory()
             if receiver_factory
-            else TraceReceiver(storage=LensTraceStorage(RemoteTraceStore(client)))
+            else TraceReceiver(
+                storage=LensTraceStorage(RemoteTraceStore(client)),
+                content=None if store is None else ContentReader(store, connection.token),
+            )
         )
-        async with _export_requests(LensExporter(client)), export_traces(connection):
+        exporter: Final = LensExporter(
+            client,
+            content_store=store,
+            signing_key=content_signing_key(connection.token),
+            limits=content_limits_from_settings(settings),
+        )
+        async with _export_requests(exporter), export_traces(connection):
             yield tracing
 
 
