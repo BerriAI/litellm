@@ -25,6 +25,13 @@ from litellm.secret_managers.main import get_secret_str
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
 BEDROCK_REGIONS: Final = frozenset(AmazonBedrockGlobalConfig().get_all_regions())
 
+MANTLE_AUTH_FAILED: Final = (
+    "Bedrock Mantle auth failed: no Bearer token and no usable AWS "
+    "credentials. Set BEDROCK_MANTLE_API_KEY (or AWS_BEARER_TOKEN_BEDROCK) "
+    "or pass api_key for Bearer auth, or provide AWS credentials "
+    "(IAM role / access key / profile / web identity) for SigV4."
+)
+
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
 
@@ -121,12 +128,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
             ProfileNotFound,
             CredentialRetrievalError,
         ) as e:
-            raise ValueError(
-                "Bedrock Mantle auth failed: no Bearer token and no usable AWS "
-                "credentials. Set BEDROCK_MANTLE_API_KEY (or AWS_BEARER_TOKEN_BEDROCK) "
-                "or pass api_key for Bearer auth, or provide AWS credentials "
-                "(IAM role / access key / profile / web identity) for SigV4."
-            ) from e
+            raise ValueError(MANTLE_AUTH_FAILED) from e
 
 
 def is_mantle_claude_model(model: str) -> bool:

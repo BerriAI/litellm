@@ -375,6 +375,22 @@ def test_an_audit_log_stores_a_list_of_changes_as_json_text_with_keys_masked(fie
 
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_a_double_encoded_value_as_an_object_with_keys_masked(field: str) -> None:
+    sent: Final = {"team_id": "team-1", "key": SECRET, "key_alias": None}
+
+    log: Final = _audit_log(**{field: json.dumps(json.dumps(sent))})
+
+    assert json.loads(getattr(log, field)) == {**sent, "key": SECRET_MASKED}
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_keeps_a_plain_string_value(field: str) -> None:
+    log: Final = _audit_log(**{field: json.dumps("rotated by admin")})
+
+    assert json.loads(getattr(log, field)) == "rotated by admin"
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
 def test_an_audit_log_leaves_a_change_it_has_no_record_of_alone(field):
     assert getattr(_audit_log(**{field: None}), field) is None
 
@@ -552,6 +568,39 @@ def test_mcp_metadata_accepts_a_boolean_skip_tool_output_validation(
     )
 
     assert parsed.mcp_info == {"skip_tool_output_validation": value}
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [-1, 1.5, "60", True, None, 31536001, 10**400])
+def test_mcp_metadata_rejects_a_tools_list_cache_ttl_that_is_not_whole_seconds_within_a_year(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: object
+) -> None:
+    payload: Final = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"tools_list_cache_ttl_seconds": value},
+    }
+
+    with pytest.raises(ValidationError):
+        request_model.model_validate(payload)
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [0, 60, 31536000])
+def test_mcp_metadata_accepts_a_tools_list_cache_ttl_in_whole_seconds(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: int
+) -> None:
+    parsed: Final = request_model.model_validate(
+        {
+            "server_id": "test",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"tools_list_cache_ttl_seconds": value},
+        }
+    )
+
+    assert parsed.mcp_info == {"tools_list_cache_ttl_seconds": value}
 
 
 MCP_SERVER_REQUESTS = (NewMCPServerRequest, UpdateMCPServerRequest)

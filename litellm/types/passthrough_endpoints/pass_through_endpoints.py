@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -19,6 +19,15 @@ LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY: Final = "litellm_pass_through_raw_body"
 
 # `model_info` of the router deployment a provider route (e.g. Vertex) resolved for this request.
 LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: Final = "litellm_pass_through_deployment_model_info"
+
+# Resolves that `model_info` from the body actually forwarded, after the `custom_body` envelope and pre-call hooks.
+LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY: Final = "litellm_pass_through_deployment_pricing"
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentPricingResolver:
+    resolve: Callable[[Mapping[str, object]], Mapping[str, object] | None]
+
 
 # Attribute set on the FastAPI endpoint function of every user-defined pass-through
 # route. Auth reads it off the dispatched endpoint (``request.scope["endpoint"]``) to

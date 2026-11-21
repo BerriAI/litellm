@@ -6,11 +6,12 @@ request carries them exactly once over both plaintext and TLS.
 """
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Any, Final, TypeAlias
+from typing import Final, Protocol, SupportsIndex, SupportsInt, TypeAlias, runtime_checkable
 
 import grpc
 from google.protobuf.message import Message
 from pydantic import TypeAdapter
+from typing_extensions import Buffer
 
 from litellm.llms.nvidia_riva.audio_transcription import riva_asr_schema as schema
 from litellm.llms.nvidia_riva.common_utils import NvidiaRivaException
@@ -38,16 +39,29 @@ def open_channel(api_base: str, use_ssl: bool) -> grpc.Channel:
     return grpc.insecure_channel(api_base)
 
 
-def recognition_config(config: Mapping[str, Any]) -> Message:
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _native_int(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
+
+
+def recognition_config(config: Mapping[str, object]) -> Message:
     endpointing: Final = _endpointing_config(config.get("endpointing_config"))
     return schema.RecognitionConfig(
         encoding=schema.LINEAR_PCM,
-        sample_rate_hertz=int(config["sample_rate_hertz"]),
+        sample_rate_hertz=_native_int(config["sample_rate_hertz"]),
         language_code=config["language_code"],
-        audio_channel_count=int(config["audio_channel_count"]),
+        audio_channel_count=_native_int(config["audio_channel_count"]),
         enable_automatic_punctuation=bool(config.get("enable_automatic_punctuation", True)),
         enable_word_time_offsets=bool(config.get("enable_word_time_offsets", False)),
-        max_alternatives=int(config.get("max_alternatives", 1)),
+        max_alternatives=_native_int(config.get("max_alternatives", 1)),
         model=config.get("model", "") or "",
         verbatim_transcripts=bool(config.get("verbatim_transcripts", False)),
         profanity_filter=bool(config.get("profanity_filter", False)),

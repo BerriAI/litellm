@@ -39,10 +39,17 @@ LANGFUSE_TRACE_NAME: Final = "langfuse.trace.name"
 LANGFUSE_TRACE_USER_ID: Final = "user.id"
 LANGFUSE_TRACE_SESSION_ID: Final = "session.id"
 LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
+LANGFUSE_RELEASE: Final = "langfuse.release"
+LANGFUSE_VERSION: Final = "langfuse.version"
 LANGFUSE_OBSERVATION_METADATA: Final = "langfuse.observation.metadata"
 LANGFUSE_TRACE_METADATA_PREFIX: Final = "langfuse.trace.metadata."
 LANGFUSE_REQUEST_METADATA_ATTRIBUTES: Final[frozenset[str]] = frozenset(
-    {LANGFUSE_OBSERVATION_METADATA, *(f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}" for name in IDENTITY_METADATA_FIELDS)}
+    {
+        LANGFUSE_OBSERVATION_METADATA,
+        LANGFUSE_RELEASE,
+        LANGFUSE_VERSION,
+        *(f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}" for name in IDENTITY_METADATA_FIELDS),
+    }
 )
 
 
@@ -112,6 +119,8 @@ class LangfuseMapper:
             LANGFUSE_TRACE_USER_ID,
             LANGFUSE_TRACE_SESSION_ID,
             LANGFUSE_TRACE_TAGS,
+            LANGFUSE_RELEASE,
+            LANGFUSE_VERSION,
         }
     )
 
@@ -130,13 +139,17 @@ class LangfuseMapper:
                 (LANGFUSE_TRACE_USER_ID, trace.user_id or None),
                 (LANGFUSE_TRACE_SESSION_ID, trace.session_id or None),
                 (LANGFUSE_TRACE_TAGS, trace.tags or None),
+                (LANGFUSE_RELEASE, trace.release or None),
+                (LANGFUSE_VERSION, trace.version or None),
             )
         )
 
     @classmethod
     def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
+        trace: Final = cls.trace_attributes(data.trace)
         return {
+            **{key: trace[key] for key in (LANGFUSE_RELEASE, LANGFUSE_VERSION) if key in trace},
             **collect(cls._LLM_CALL_ATTRS, data),
-            **cls.trace_attributes(data.trace),
+            **trace,
             **collect(cls._BLOB_ATTRS, data),
         }

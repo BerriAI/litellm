@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from cli_harness.lockdown import isolated_home, locked_down_env
@@ -15,6 +16,7 @@ from cli_harness.rate_limiter import RateBucket, RateLimiter
 from codex.rollout import Compaction, Subagent, rollout_compactions, rollout_parent_thread, rollout_subagent
 from codex.run import CodexRun, codex_run
 from e2e_metadata import step
+from pydantic import BaseModel, ConfigDict
 
 CODEX_CLI: Final = "codex"
 EXEC_TIMEOUT_SECONDS: Final = 600.0
@@ -36,6 +38,25 @@ env_key = "{api_key_env}"
 wire_api = "responses"
 model_catalog_url = "{gateway}/v1/models"
 """
+
+
+class _CatalogTier(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class _CatalogModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    slug: str
+    service_tiers: tuple[_CatalogTier, ...] = ()
+
+
+class _Catalog(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    models: tuple[_CatalogModel, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,12 +101,14 @@ class CodexHarness:
         compact_after_tokens: int | None = None,
         enable: tuple[str, ...] = (),
         disable: tuple[str, ...] = (),
+        fast: bool = False,
     ) -> CodexRun:
         return self._run(
             ("exec",),
             (
                 *_compaction_flags(compact_after_tokens),
                 *_feature_flags(enable=enable, disable=disable),
+                *_fast_mode_flags(fast),
                 "--model",
                 model,
                 "--",
@@ -114,14 +137,34 @@ class CodexHarness:
         )
         return tuple(rollout_subagent(rollout) for rollout in rollouts if rollout_parent_thread(rollout) == thread_id)
 
+    @step("Read the service tiers Codex's catalog from the gateway offers each model")
+    def service_tiers(self) -> Mapping[str, frozenset[str]]:
+        completed: Final = subprocess.run(
+            (self.cli, "debug", "models"),
+            cwd=self.home,
+            env=self._env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            check=True,
+        )
+        catalog: Final = _Catalog.model_validate_json(completed.stdout)
+        return MappingProxyType(
+            {model.slug: frozenset(tier.id for tier in model.service_tiers) for model in catalog.models}
+        )
+
+    def _env(self) -> Mapping[str, str]:
+        return locked_down_env(
+            home=self.home, overrides={"CODEX_HOME": str(self.codex_home), _API_KEY_ENV: self.api_key}
+        )
+
     def _run(self, subcommand: tuple[str, ...], args: tuple[str, ...], cwd: Path) -> CodexRun:
         _ = self.limiter.acquire(self.rate_bucket)
         completed: Final = subprocess.run(
             (self.cli, *subcommand, "--json", "--skip-git-repo-check", *args),
             cwd=cwd,
-            env=locked_down_env(
-                home=self.home, overrides={"CODEX_HOME": str(self.codex_home), _API_KEY_ENV: self.api_key}
-            ),
+            env=self._env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -147,6 +190,10 @@ def _feature_flags(*, enable: tuple[str, ...], disable: tuple[str, ...]) -> tupl
         *chain.from_iterable(("--enable", feature) for feature in enable),
         *chain.from_iterable(("--disable", feature) for feature in disable),
     )
+
+
+def _fast_mode_flags(fast: bool) -> tuple[str, ...]:
+    return ("--config", 'service_tier="priority"') if fast else ()
 
 
 def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:

@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
@@ -226,6 +226,8 @@ def _search_rows(keys: Sequence[str], response: SpendAnalyticsPaginatedResponse)
 
 
 def _csv_cell(value: object) -> object:
+    if isinstance(value, Mapping):
+        return json.dumps(value, separators=(",", ":"))
     if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
         return f"'{value}"
     return value
@@ -237,26 +239,47 @@ def _csv_row(values: Sequence[object]) -> bytes:
     return output.getvalue().encode()
 
 
+_EXPORT_METADATA_COLUMNS: Final = frozenset({"key_metadata", "user_metadata"})
+
+
+def _export_columns(include_metadata: bool) -> tuple[str, ...]:
+    return tuple(
+        field.name for field in fields(ExportRow) if include_metadata or field.name not in _EXPORT_METADATA_COLUMNS
+    )
+
+
+def _export_values(row: ExportRow, columns: Sequence[str]) -> Mapping[str, object]:
+    values: Final = asdict(row)
+    return {column: values[column] for column in columns}
+
+
+def _json_export_row(row: ExportRow, columns: Sequence[str]) -> bytes:
+    return json.dumps(jsonable_encoder(_export_values(row, columns)), separators=(",", ":")).encode()
+
+
 def _stream_export_rows(
     first_row: ExportRow | None,
     rows: AsyncIterator[ExportRow],
     file_format: Literal["csv", "json"],
+    include_metadata: bool,
 ) -> AsyncIterator[bytes]:
+    columns: Final = _export_columns(include_metadata)
+
     async def stream() -> AsyncIterator[bytes]:
         if file_format == "csv":
-            yield _csv_row(tuple(field.name for field in fields(ExportRow)))
+            yield _csv_row(columns)
             if first_row is not None:
-                yield _csv_row(tuple(asdict(first_row).values()))
+                yield _csv_row(tuple(_export_values(first_row, columns).values()))
             async for row in rows:
-                yield _csv_row(tuple(asdict(row).values()))
+                yield _csv_row(tuple(_export_values(row, columns).values()))
             return
 
         if first_row is None:
             yield b"[]"
             return
-        yield b"[" + json.dumps(jsonable_encoder(first_row), separators=(",", ":")).encode()
+        yield b"[" + _json_export_row(first_row, columns)
         async for row in rows:
-            yield b"," + json.dumps(jsonable_encoder(row), separators=(",", ":")).encode()
+            yield b"," + _json_export_row(row, columns)
         yield b"]"
 
     return stream()
@@ -273,6 +296,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
         api_key_limit: Annotated[
             int, Query(ge=1, le=constants.USAGE_TOP_API_KEYS_MAX)
         ] = constants.USAGE_TOP_API_KEYS_DEFAULT,
+        include_entity_breakdown: Annotated[bool, Query(description="Include per-entity usage and key counts.")] = True,
     ) -> SpendAnalyticsPaginatedResponse:
         try:
             resolved: ResolvedScope = await _resolved_scope(
@@ -286,7 +310,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 repository,
                 resolved.scope,
                 entity_metadata_field=resolved.entity_metadata,
-                include_entity_breakdown=resolver.include_entity_breakdown,
+                include_entity_breakdown=resolver.include_entity_breakdown and include_entity_breakdown,
                 include_guardrail_breakdown=resolver.include_guardrail_breakdown,
                 api_key_limit=api_key_limit,
             )
@@ -491,6 +515,10 @@ def _register_export_route(router: APIRouter, resolver: EntityScopeResolver, pre
         prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
         export_type: Annotated[ExportType, Query()] = ExportType.DAILY,
         file_format: Annotated[Literal["csv", "json"], Query(alias="format")] = "csv",
+        include_metadata: Annotated[
+            bool,
+            Query(description="Add key_metadata and user_metadata for admin callers. Ignored for everyone else."),
+        ] = False,
     ) -> StreamingResponse:
         try:
             resolved: ResolvedScope = await _resolved_scope(
@@ -500,10 +528,13 @@ def _register_export_route(router: APIRouter, resolver: EntityScopeResolver, pre
                 prisma_client,
                 user_aggregated=False,
             )
-            rows: Final = repository.export_rows(resolved.scope, export_type=export_type)
+            with_metadata: Final = include_metadata and user_api_key_has_admin_view(user_api_key_dict)
+            rows: Final = repository.export_rows(
+                resolved.scope, export_type=export_type, include_metadata=with_metadata
+            )
             first_row: Final = await anext(rows, None)
             return StreamingResponse(
-                _stream_export_rows(first_row, rows, file_format),
+                _stream_export_rows(first_row, rows, file_format, with_metadata),
                 media_type="text/csv" if file_format == "csv" else "application/json",
                 headers={
                     "Cache-Control": "no-store",

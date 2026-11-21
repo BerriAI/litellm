@@ -3,9 +3,9 @@ name: Check Schema Sync
 on:
   pull_request:
     paths:
-      - 'schema.prisma'
+      - 'litellm/schema.prisma'
       - 'litellm/proxy/schema.prisma'
-      - 'litellm-proxy-extras/litellm_proxy_extras/schema.prisma'
+      - 'litellm/proxy-extras/litellm_proxy_extras/schema.prisma'
 
 permissions:
   contents: read
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   check-sync:
-    name: Verify schema.prisma copies match root
+    name: Verify litellm/schema.prisma copies match the canonical schema
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -27,7 +27,7 @@ jobs:
 
       - name: Reject symlinked schema files
         run: |
-          for f in schema.prisma litellm/proxy/schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma; do
+          for f in litellm/schema.prisma litellm/proxy/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma; do
             if [ -L "$f" ]; then
               echo "::error file=$f::$f is a symlink, which is not allowed"
               exit 1
@@ -38,24 +38,24 @@ jobs:
         run: |
           EXIT=0
 
-          diff schema.prisma litellm/proxy/schema.prisma || {
-            echo "::error file=litellm/proxy/schema.prisma::litellm/proxy/schema.prisma differs from root schema.prisma"
+          diff litellm/schema.prisma litellm/proxy/schema.prisma || {
+            echo "::error file=litellm/proxy/schema.prisma::litellm/proxy/schema.prisma differs from root litellm/schema.prisma"
             EXIT=1
           }
 
-          diff schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma || {
-            echo "::error file=litellm-proxy-extras/litellm_proxy_extras/schema.prisma::litellm-proxy-extras/litellm_proxy_extras/schema.prisma differs from root schema.prisma"
+          diff litellm/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma || {
+            echo "::error file=litellm/proxy-extras/litellm_proxy_extras/schema.prisma::litellm/proxy-extras/litellm_proxy_extras/schema.prisma differs from root litellm/schema.prisma"
             EXIT=1
           }
 
           if [ "$EXIT" -ne 0 ]; then
             echo ""
             echo "Schema files are out of sync."
-            echo "The root schema.prisma is the source of truth."
+            echo "The root litellm/schema.prisma is the source of truth."
             echo ""
             echo "To fix, run from the repo root:"
-            echo "  cp schema.prisma litellm/proxy/schema.prisma"
-            echo "  cp schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma"
+            echo "  cp litellm/schema.prisma litellm/proxy/schema.prisma"
+            echo "  cp litellm/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma"
             exit 1
           fi
 
