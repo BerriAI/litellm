@@ -2635,6 +2635,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             thinking_param_needs_replayed_thinking_blocks(
                 optional_params.get("thinking")  # pyright: ignore[reportUnknownArgumentType]  # optional_params is a bare dict
             )
+            and optional_params.get("thinking") != {"type": "disabled"}
             and last_assistant_with_tool_calls_has_no_thinking_blocks(capped_messages)
             and not any_assistant_message_has_thinking_blocks(capped_messages)
         ):
