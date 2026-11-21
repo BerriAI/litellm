@@ -3,13 +3,13 @@ import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { canModifyKey as canModifyVirtualKey } from "@/utils/keyPermissions";
 import { ArrowLeft, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -130,11 +130,9 @@ export default function KeyInfoView({
   const { teams: teamsData } = useTeams();
   const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
-  const { data: uiSettingsData } = useUISettings();
   const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
   const { data: allMcpServers } = useMCPServers();
   const { data: allMcpToolsets } = useMCPToolsets();
-  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -145,14 +143,14 @@ export default function KeyInfoView({
   const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
-  const memberBudgetTeamIds = useMemo(
-    () =>
+  const memberBudgetUserIds = useMemo(
+    (): Record<string, string[]> =>
       currentKeyData?.max_budget === null && currentKeyData.team_id && currentKeyData.user_id
-        ? [currentKeyData.team_id]
-        : [],
+        ? { [currentKeyData.team_id]: [currentKeyData.user_id] }
+        : {},
     [currentKeyData],
   );
-  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetTeamIds);
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
   const [keyDataUpdateHeldUntilModalClose, setKeyDataUpdateHeldUntilModalClose] = useState<Partial<KeyResponse> | null>(
     null,
@@ -519,14 +517,7 @@ export default function KeyInfoView({
     return t("keyDetail.keyInfoView.timestamp", { date: dateStr, time: timeStr });
   };
 
-  const canModifyKey =
-    isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      )) ||
-    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
+  const canModifyKey = canModifyVirtualKey(currentKeyData, teamsData, userID, userRole);
 
   const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||
@@ -1060,21 +1051,19 @@ export default function KeyInfoView({
                     </p>
                   </div>
 
-                  {enableProjectsUI && (
-                    <div>
-                      <p className="text-sm font-medium">{t("keyDetail.keyInfoView.settings.project")}</p>
-                      <p className="text-sm">
-                        {currentKeyData.project_id
-                          ? (() => {
-                              const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
-                              return project?.project_alias
-                                ? `${project.project_alias} (${currentKeyData.project_id})`
-                                : currentKeyData.project_id;
-                            })()
-                          : t("keyDetail.keyInfoView.settings.notSet")}
-                      </p>
-                    </div>
-                  )}
+                  <div>
+                    <p className="text-sm font-medium">{t("keyDetail.keyInfoView.settings.project")}</p>
+                    <p className="text-sm">
+                      {currentKeyData.project_id
+                        ? (() => {
+                            const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
+                            return project?.project_alias
+                              ? `${project.project_alias} (${currentKeyData.project_id})`
+                              : currentKeyData.project_id;
+                          })()
+                        : t("keyDetail.keyInfoView.settings.notSet")}
+                    </p>
+                  </div>
 
                   <div>
                     <p className="text-sm font-medium">{t("keyDetail.keyInfoView.settings.organization")}</p>

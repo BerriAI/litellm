@@ -1,6 +1,9 @@
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use http::{HeaderValue, header::CONTENT_TYPE};
+use http::{
+    HeaderName, HeaderValue,
+    header::{CACHE_CONTROL, CONTENT_TYPE},
+};
 use litellm_host::protocol::Protocol;
 
 use crate::{Error, ResponseEncoder, StreamEncoder, Unary};
@@ -42,9 +45,13 @@ where
 {
     fn encode_stream_head(&self, _: P::StreamHead) -> Result<http::Response<()>, P::Error> {
         let mut response = http::Response::new(());
-        response
-            .headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+        let headers = response.headers_mut();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        headers.insert(
+            HeaderName::from_static("x-accel-buffering"),
+            HeaderValue::from_static("no"),
+        );
         Ok(response)
     }
 

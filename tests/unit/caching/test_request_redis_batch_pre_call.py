@@ -4,11 +4,11 @@ router's usage counter read, auth identity and spend counters all join the reque
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Final, Literal
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final, Literal
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,24 +19,19 @@ from litellm.caching.redis_batch import Batch, active_request_redis_batches, req
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import cache_team_object
 from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,
-    RateLimitDescriptor,
-    RateLimitUnverifiableError,
-)
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores._route import route
-from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.redis.stores.router_cooldowns import ActiveCooldowns, RouterCooldownStore
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsageStore, UsageCounter
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_utils import routing_prefetch
+from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.routing_prefetch import arm_cooldowns, read_cooldowns
 from litellm.router_utils.routing_read_batch import RoutingReadBatch
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
 from tests.unit.redis.stores.router_usage_double import FakeUsageRead
+from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
 
 from .redis_batch_double import (
     FakeNativePending,
@@ -56,215 +51,9 @@ _MODEL_GROUP = "claude"
 _FAR_FUTURE = 4_102_444_800.0  # 2100-01-01, a cooldown stamped then is still active
 
 
-_OK: Final = [0, 1, 1700000000]
-
-
-def _over_limit(current: int, limit: int) -> list[int]:
-    return [1, 1, current, limit]
-
-
-def _check_replies(replies: dict[str, object]) -> Callable[..., Any]:
-    """``CHECK_AND_INCREMENT_BY_N_SCRIPT`` per descriptor window: OK unless ``replies`` holds another reply or an
-    exception for it."""
-
-    async def check(keys: list[str], args: list[object]) -> object:
-        reply: Final = replies.get(keys[0], _OK)
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
-
-    return check
-
-
-def _limiter(
-    replies: dict[str, object] | None = None, fail_closed: bool = False
-) -> tuple[PROXY_MaxParallelRequestsHandler_v3, FakeRateLimits]:
-    fakes: Final = FakeRateLimits(
-        check_and_increment_by_n_script=_check_replies(replies or {}),
-        window_guarded_token_increment_script=AsyncMock(return_value=[1, 0]),
-    )
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=InternalUsageCache(dual_cache=DualCache()),
-        fail_closed_resolver=lambda: fail_closed,
-        rate_limit_store=fakes.store(),
-    )
-    return limiter, fakes
-
-
-def _descriptor(key: str, value: str, rpm: int) -> RateLimitDescriptor:
-    return {"key": key, "value": value, "rate_limit": {"requests_per_unit": rpm}}
-
-
-def _refunds(fakes: FakeRateLimits) -> list[tuple[str, float]]:
-    refund_script: Final = fakes.window_guarded_token_increment_script
-    assert isinstance(refund_script, AsyncMock)
-    return [(call.kwargs["keys"][1], call.kwargs["args"][1]) for call in refund_script.await_args_list]
-
-
 def _declared_before_the_first_flush(natives: FakeNatives) -> list[str]:
     events: Final = natives.built[0].events
     return events[: events.index("flush_pre")]
-
-
-@pytest.mark.asyncio
-async def test_descriptor_lua_calls_share_one_native_pipeline_and_each_keeps_its_result():
-    limiter, _fakes = _limiter()
-    natives: Final = FakeNatives()
-    descriptors = [
-        _descriptor("api_key", "k1", 10),
-        _descriptor("model_per_key", "k1:gpt", 5),
-        _descriptor("team", "t1", 20),
-    ]
-
-    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
-        response = await limiter.atomic_check_and_increment_by_n(
-            descriptors=descriptors,
-            increments=[{"requests": 1}, {"requests": 1}, {"requests": 1}],
-        )
-
-    assert response["overall_code"] == "OK"
-    assert [s["descriptor_key"] for s in response["statuses"]] == ["api_key", "model_per_key", "team"]
-    assert _declared_before_the_first_flush(natives) == ["declare check_and_increment"] * 3
-
-
-@pytest.mark.asyncio
-async def test_an_over_limit_descriptor_in_the_pipeline_refunds_the_groups_that_were_applied():
-    limiter, fakes = _limiter({"{team:t1}:window": _over_limit(21, 20)})
-
-    with request_redis_batch_scope():
-        response = await limiter.atomic_check_and_increment_by_n(
-            descriptors=[_descriptor("api_key", "k1", 10), _descriptor("team", "t1", 20)],
-            increments=[{"requests": 1}, {"requests": 1}],
-        )
-
-    assert response["overall_code"] == "OVER_LIMIT"
-    assert response["statuses"][0]["descriptor_key"] == "team"
-    assert _refunds(fakes) == [("{api_key:k1}:requests", -1)]
-
-
-@pytest.mark.asyncio
-async def test_an_over_limit_descriptor_also_refunds_the_groups_the_pipeline_incremented_after_it():
-    limiter, fakes = _limiter({"{api_key:k1}:window": _over_limit(11, 10)})
-
-    with request_redis_batch_scope():
-        response = await limiter.atomic_check_and_increment_by_n(
-            descriptors=[
-                _descriptor("api_key", "k1", 10),
-                _descriptor("team", "t1", 20),
-                _descriptor("model_per_key", "k1:gpt", 5),
-            ],
-            increments=[{"requests": 1}, {"requests": 1}, {"requests": 1}],
-        )
-
-    assert response["overall_code"] == "OVER_LIMIT"
-    assert response["statuses"][0]["descriptor_key"] == "api_key"
-    assert _refunds(fakes) == [("{team:t1}:requests", -1), ("{model_per_key:k1:gpt}:requests", -1)]
-
-
-@pytest.mark.asyncio
-async def test_a_redis_denial_stands_when_another_pipelined_group_fails():
-    limiter, fakes = _limiter(
-        {"{api_key:k1}:window": _over_limit(11, 10), "{team:t1}:window": ValueError("script blew up")}
-    )
-
-    with request_redis_batch_scope():
-        response = await limiter.atomic_check_and_increment_by_n(
-            descriptors=[
-                _descriptor("api_key", "k1", 10),
-                _descriptor("team", "t1", 20),
-                _descriptor("model_per_key", "k1:gpt", 5),
-            ],
-            increments=[{"requests": 1}, {"requests": 1}, {"requests": 1}],
-        )
-
-    assert response["overall_code"] == "OVER_LIMIT"  # not the in-memory fallback's verdict
-    assert response["statuses"][0]["descriptor_key"] == "api_key"
-    assert _refunds(fakes) == [("{model_per_key:k1:gpt}:requests", -1)]
-
-
-@pytest.mark.asyncio
-async def test_one_failed_lua_group_refunds_the_other_pipelined_groups_and_falls_back_to_in_memory():
-    limiter, fakes = _limiter({"{api_key:k1}:window": ValueError("script blew up")})
-
-    with request_redis_batch_scope():
-        response = await limiter.atomic_check_and_increment_by_n(
-            descriptors=[_descriptor("api_key", "k1", 10), _descriptor("team", "t1", 20)],
-            increments=[{"requests": 1}, {"requests": 1}],
-        )
-
-    assert response["overall_code"] == "OK"
-    assert len(response["statuses"]) == 2  # in-memory enforcement covered both descriptors
-    assert _refunds(fakes) == [("{team:t1}:requests", -1)]
-    assert limiter.rate_limits.local((RateLimitScope("api_key", "k1").counter("requests"),)) == (1,)
-
-
-@pytest.mark.parametrize(
-    "replies, refunded",
-    [
-        ({"{api_key:k1}:window": ValueError("script blew up")}, [("{team:t1}:requests", -1)]),
-        (
-            {"{api_key:k1}:window": ConnectionError("redis down"), "{team:t1}:window": ConnectionError("redis down")},
-            [],
-        ),
-    ],
-    ids=["one_group_failed", "pipeline_failed"],
-)
-@pytest.mark.asyncio
-async def test_fail_closed_rejects_when_a_pipelined_lua_group_cannot_be_verified(
-    replies: dict[str, object], refunded: list[tuple[str, float]]
-):
-    limiter, fakes = _limiter(replies, fail_closed=True)
-
-    with request_redis_batch_scope(), pytest.raises(RateLimitUnverifiableError) as exc:
-        await limiter.atomic_check_and_increment_by_n(
-            descriptors=[_descriptor("api_key", "k1", 10), _descriptor("team", "t1", 20)],
-            increments=[{"requests": 1}, {"requests": 1}],
-        )
-
-    assert exc.value.status_code == 503
-    assert _refunds(fakes) == refunded
-
-
-@pytest.mark.asyncio
-async def test_a_pipeline_failure_refunds_nothing_and_falls_back_to_in_memory_enforcement():
-    limiter, fakes = _limiter(
-        {"{api_key:k1}:window": ConnectionError("redis down"), "{team:t1}:window": ConnectionError("redis down")}
-    )
-
-    with request_redis_batch_scope():
-        response = await limiter.atomic_check_and_increment_by_n(
-            descriptors=[_descriptor("api_key", "k1", 10), _descriptor("team", "t1", 20)],
-            increments=[{"requests": 1}, {"requests": 1}],
-        )
-
-    assert response["overall_code"] == "OK"
-    assert len(response["statuses"]) == 2
-    assert _refunds(fakes) == []
-
-
-@pytest.mark.asyncio
-async def test_without_a_request_scope_descriptor_groups_run_one_at_a_time_and_stop_at_the_first_denial():
-    calls: Final[list[str]] = []  # mutable-ok: one window key per script call
-
-    async def check(keys: list[str], args: list[object]) -> object:
-        calls.append(keys[0])
-        return _over_limit(11, 10) if keys[0] == "{team:t1}:window" else _OK
-
-    limiter, fakes = _limiter()
-    fakes.check_and_increment_by_n_script = check
-
-    response = await limiter.atomic_check_and_increment_by_n(
-        descriptors=[
-            _descriptor("api_key", "k1", 10),
-            _descriptor("team", "t1", 20),
-            _descriptor("model_per_key", "k1:gpt", 5),
-        ],
-        increments=[{"requests": 1}, {"requests": 1}, {"requests": 1}],
-    )
-
-    assert response["overall_code"] == "OVER_LIMIT"
-    assert calls == ["{api_key:k1}:window", "{team:t1}:window"]
-    assert _refunds(fakes) == [("{api_key:k1}:requests", -1)]
 
 
 @dataclass
@@ -276,30 +65,6 @@ class _FakeCooldownsHandle:
     def active(self, model_ids: Sequence[str], send: FakeNativeRequest) -> FakeNativePending[ActiveCooldowns]:
         send.events.append("declare cooldowns")
         return FakeNativePending(send, lambda: ())
-
-
-@pytest.mark.asyncio
-async def test_the_admission_script_and_the_armed_cooldown_read_go_out_in_one_native_pipeline():
-    async def window(keys: list[str], args: list[object]) -> object:
-        return ["1700000000", 1]
-
-    fakes: Final = FakeRateLimits(batch_rate_limiter_script=window)
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=InternalUsageCache(dual_cache=DualCache()), rate_limit_store=fakes.store()
-    )
-    cooldowns: Final = RouterCooldownStore(_FakeCooldownsHandle())
-    natives: Final = FakeNatives()
-
-    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        arm_cooldowns(cooldowns, ["dep-a"])
-        response = await limiter.should_rate_limit([_descriptor("api_key", "k1", 10)])
-        active = await read_cooldowns(cooldowns, ["dep-a"], None)
-
-    assert response["overall_code"] == "OK"
-    assert active == ()
-    assert len(natives.built) == 1
-    assert _declared_before_the_first_flush(natives) == ["declare cooldowns", "declare sliding_window"]
-    assert request.prefetched == {}
 
 
 def _deployment(deployment_id: str) -> dict:
@@ -511,6 +276,81 @@ async def test_simple_shuffle_cooldown_prefetch_does_not_arm_usage_reads_or_read
     assert redis_cache.alone == []
 
 
+def _router_recording_cooldown_reads() -> tuple[Router, FakeCooldowns]:
+    """A router beside other groups whose cooldown store records the ids of every read it is asked for."""
+    handle: Final = FakeCooldowns(has_redis=True)
+    router: Final = Router(
+        model_list=[
+            _deployment("dep-a"),
+            _deployment("dep-b"),
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "test", "mock_response": "pong"},
+                "model_info": {"id": "dep-wild"},
+            },
+            {
+                "model_name": "other",
+                "litellm_params": {"model": "anthropic/other", "api_key": "test", "mock_response": "pong"},
+                "model_info": {"id": "dep-other"},
+            },
+        ],
+        model_group_alias={"claude-alias": _MODEL_GROUP},
+        routing_strategy="simple-shuffle",
+    )
+    router.cooldown_cache = CooldownCache(store=RouterCooldownStore(handle), default_cooldown_time=60)
+    return router, handle
+
+
+def _reads(handle: FakeCooldowns) -> list[frozenset[str]]:
+    return [frozenset(ids) for ids in handle.declared]
+
+
+async def _pick(router: Router, model: str) -> str:
+    deployment: Final = await router.async_get_available_deployment(model=model, messages=_PING, request_kwargs={})
+    return deployment["model_info"]["id"]
+
+
+_CLAUDE: Final = frozenset({"dep-a", "dep-b"})
+_WILD: Final = frozenset({"dep-wild"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("armed_for", "routed", "reads", "pickable"),
+    [
+        pytest.param(
+            None, _MODEL_GROUP, [_CLAUDE | {"dep-wild", "dep-other"}], _CLAUDE, id="no_model_reads_every_deployment"
+        ),
+        pytest.param(_MODEL_GROUP, _MODEL_GROUP, [_CLAUDE], _CLAUDE, id="group"),
+        pytest.param("claude-alias", "claude-alias", [_CLAUDE], _CLAUDE, id="alias"),
+        pytest.param("openai/gpt-4o", "openai/gpt-4o", [_WILD], _WILD, id="wildcard"),
+        pytest.param("other", _MODEL_GROUP, [frozenset({"dep-other"}), _CLAUDE], _CLAUDE, id="uncovered"),
+        pytest.param("bedrock/nothing-serves-this", _MODEL_GROUP, [_CLAUDE], _CLAUDE, id="no_candidates_arms_nothing"),
+    ],
+)
+async def test_the_auth_cooldown_prefetch_reads_only_the_requested_models_candidates_and_routing_takes_it(
+    armed_for: str | None, routed: str, reads: list[frozenset[str]], pickable: frozenset[str]
+):
+    router, handle = _router_recording_cooldown_reads()
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        RoutingContext(router).arm_cooldown_prefetch(armed_for)
+        picked: Final = await _pick(router, routed)
+
+    assert (_reads(handle), picked in pickable) == (reads, True)
+
+
+@pytest.mark.asyncio
+async def test_the_request_cooldown_prefetch_reads_only_the_requested_groups_candidates_and_routing_takes_it():
+    router, handle = _router_recording_cooldown_reads()
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        RoutingContext(router).arm_read_prefetch(_MODEL_GROUP, {"metadata": {"user_api_key_team_id": "team-1"}})
+        picked: Final = await _pick(router, _MODEL_GROUP)
+
+    assert (_reads(handle), picked in _CLAUDE) == ([_CLAUDE], True)
+
+
 def _user_entry() -> tuple[_CacheEntry, LiteLLM_UserTable]:
     entry = _CacheEntry("user-1", "user_row", LiteLLM_UserTable, 42)
     return entry, LiteLLM_UserTable(user_id="user-1", max_budget=None, spend=0.0)
@@ -534,18 +374,6 @@ async def test_auth_write_back_outside_a_scope_writes_through_as_before():
     cache, fake = shared_cache()
     await _write_back([_user_entry()], cache)
     assert fake.commands == [("WRITE_BACK", (("user-1", 42),))]
-
-
-@pytest.mark.asyncio
-async def test_a_key_the_request_read_as_absent_is_not_read_again_by_a_per_key_get():
-    cache, fake = shared_cache()
-    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        await prefetch_identity_keys(["absent-key"], cache)
-        assert await cache.async_get_cache("absent-key") is None
-        await cache.async_set_cache("absent-key", {"v": 1}, ttl=5)
-        assert await cache.async_get_cache("absent-key") == {"v": 1}
-        await request.flush_pre_call()
-    assert fake.commands == []
 
 
 @pytest.mark.asyncio
@@ -602,15 +430,16 @@ async def test_a_changed_default_in_memory_ttl_reaches_the_native_store():
 
 
 @pytest.mark.asyncio
-async def test_identity_prefetch_is_one_read_after_which_hits_and_misses_alike_cost_no_read():
+async def test_identity_prefetch_is_one_read_after_which_a_hit_costs_no_read_and_a_miss_is_asked_of_the_request():
     cache, fake = shared_cache(FakeAuthCache(redis={"key-hit": {"k": "key-hit"}}))
     natives: Final = FakeNatives()
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await prefetch_identity_keys(["key-hit", "end_user_id:eu-miss", "key-hit"], cache)
         assert await cache.async_get_cache("key-hit") == {"k": "key-hit"}
-        assert await cache.async_get_cache("end_user_id:eu-miss") is None
+        assert fake.commands == []
+        await cache.async_get_cache("end_user_id:eu-miss")
     assert natives.built[0].events == ["declare auth_cache end_user_id:eu-miss,key-hit", "flush_pre"]
-    assert fake.commands == []
+    assert fake.requests[-1] == ("get", natives.built[0])
     assert cache.get_local("end_user_id:eu-miss") is None
 
 

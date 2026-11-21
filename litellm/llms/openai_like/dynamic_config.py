@@ -2,15 +2,21 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, overload
 
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
+    handle_messages_with_text_only_content_lists_as_str,
 )
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts
+from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -43,6 +49,34 @@ def web_search_requests_from_tool_usage(payload: object) -> int | None:
     return calls if calls > 0 else None
 
 
+def _flattened_messages(
+    messages: Sequence[AllMessageValues], handling: Mapping[str, bool]
+) -> Sequence[AllMessageValues]:
+    if handling.get("convert_content_list_to_string"):
+        return handle_messages_with_content_list_to_str_conversion(list(messages))
+    if handling.get("convert_text_content_list_to_string"):
+        return handle_messages_with_text_only_content_lists_as_str(messages)
+    return messages
+
+
+def _catalog_reasoning_efforts(model: str, provider_slug: str) -> tuple[str, ...] | None:
+    entry: Final = GetModelCostMap.loaded_model_cost_map().get(f"{provider_slug}/{model}")
+    return declared_reasoning_efforts(entry) if entry is not None else None
+
+
+def _with_declared_reasoning_effort(
+    params: Mapping[str, object], *, model: str, provider_slug: str, drop_params: bool
+) -> Mapping[str, object]:
+    requested: Final = params.get("reasoning_effort")
+    declared: Final = _catalog_reasoning_efforts(model, provider_slug)
+    if declared is None or not isinstance(requested, str):
+        return params
+    accepted: Final = nearest_declared_reasoning_effort(requested, declared)
+    if drop_params and accepted not in declared:
+        return MappingProxyType({key: value for key, value in params.items() if key != "reasoning_effort"})
+    return MappingProxyType({**params, "reasoning_effort": accepted})
+
+
 def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
@@ -50,6 +84,9 @@ def create_config_class(provider: SimpleProviderConfig):
     base_class: Final[type] = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
     class JSONProviderConfig(base_class):
+        def get_attribution_headers(self) -> Mapping[str, str]:
+            return provider.get_attribution_headers()
+
         def _flattens_content_lists(self) -> bool:
             return bool(provider.special_handling.get("convert_content_list_to_string"))
 
@@ -70,15 +107,11 @@ def create_config_class(provider: SimpleProviderConfig):
             self, messages: list[AllMessageValues], model: str, is_async: bool = False
         ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
             """Transform messages based on special_handling config"""
-
-            # Handle content list to string conversion if configured
-            if self._flattens_content_lists():
-                messages = handle_messages_with_content_list_to_str_conversion(messages)
-
+            flattened: Final = _flattened_messages(messages, provider.special_handling_for(model))
             if is_async:
-                return super()._transform_messages(messages=messages, model=model, is_async=True)
+                return super()._transform_messages(messages=list(flattened), model=model, is_async=True)
             else:
-                return super()._transform_messages(messages=messages, model=model, is_async=False)
+                return super()._transform_messages(messages=list(flattened), model=model, is_async=False)
 
         def _should_preserve_cache_control_for_endpoint(
             self,
@@ -92,19 +125,7 @@ def create_config_class(provider: SimpleProviderConfig):
         def _get_openai_compatible_provider_info(
             self, api_base: str | None, api_key: str | None
         ) -> tuple[str | None, str | None]:
-            """Get API base and key from JSON config"""
-
-            # Resolve base URL
-            resolved_base = api_base
-            if not resolved_base and provider.api_base_env:
-                resolved_base = get_secret_str(provider.api_base_env)
-            if not resolved_base:
-                resolved_base = provider.base_url
-
-            # Resolve API key
-            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
-
-            return resolved_base, resolved_key
+            return self.get_model_provider_info(None, api_base, api_key)
 
         def get_openai_compatible_provider_info(
             self,
@@ -112,6 +133,17 @@ def create_config_class(provider: SimpleProviderConfig):
             api_key: str | None,
         ) -> tuple[str | None, str | None]:
             return self._get_openai_compatible_provider_info(api_base, api_key)
+
+        def get_model_provider_info(
+            self, model: str | None, api_base: str | None, api_key: str | None
+        ) -> tuple[str | None, str | None]:
+            resolved_base: Final = (
+                api_base
+                or (get_secret_str(provider.api_base_env) if provider.api_base_env else None)
+                or provider.default_base_url(model)
+            )
+            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
+            return resolved_base, resolved_key
 
         def get_complete_url(
             self,
@@ -123,12 +155,7 @@ def create_config_class(provider: SimpleProviderConfig):
             stream: bool | None = None,
         ) -> str:
             """Build complete URL for the API endpoint"""
-            if not api_base:
-                api_base = provider.base_url
-
-            if isinstance(api_base, str):
-                return ensure_api_route(api_base, "chat/completions")
-            raise ValueError(f"api_base is required for provider {provider.slug}")
+            return ensure_api_route(api_base or provider.default_base_url(model), "chat/completions")
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
@@ -172,9 +199,20 @@ def create_config_class(provider: SimpleProviderConfig):
             """Apply parameter mappings and constraints"""
 
             supported_params: Final = self.get_supported_openai_params(model)
+            caller_params: Final = _PAYLOAD_ADAPTER.validate_python(non_default_params)
+            requested_params: Final = (
+                _with_declared_reasoning_effort(
+                    caller_params,
+                    model=model,
+                    provider_slug=provider.slug,
+                    drop_params=drop_params or litellm.drop_params is True,
+                )
+                if provider.special_handling_for(model).get("round_reasoning_effort_to_declared_levels")
+                else caller_params
+            )
 
             # Apply supported params
-            for param, value in non_default_params.items():
+            for param, value in requested_params.items():
                 # Check parameter mappings first
                 if param in provider.param_mappings:
                     optional_params[provider.param_mappings[param]] = value
@@ -270,15 +308,12 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             api_base: str | None,
             litellm_params: dict,
         ) -> str:
-            if not api_base:
-                if provider.api_base_env:
-                    api_base = get_secret_str(provider.api_base_env)
-                if not api_base:
-                    api_base = provider.base_url
-
-            if isinstance(api_base, str):
-                return join_api_base(api_base, "responses")
-            raise ValueError(f"api_base is required for provider {provider.slug}")
+            resolved_base: Final = (
+                api_base
+                or (get_secret_str(provider.api_base_env) if provider.api_base_env else None)
+                or provider.base_url
+            )
+            return join_api_base(resolved_base, "responses")
 
         def transform_responses_api_request(
             self,

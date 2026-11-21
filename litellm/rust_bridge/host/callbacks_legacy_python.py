@@ -707,26 +707,38 @@ def _log_superseded_stream_failure(
         verbose_proxy_logger.error("Error scheduling stream failure logging: %s", e)
 
 
-def stream_failure(
+def _relayed(head: object) -> bool:
+    from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
+
+    return isinstance(head, MessagesStreamHead) and head.relayed
+
+
+async def stream_failure(
     logger: Logging,
     endpoint_type: str,
     request_body: dict[str, object],
     chunks: list[bytes],
     error: Exception,
-) -> Coroutine[object, object, None]:
+    head: object,
+    detached: bool,
+) -> None:
     from litellm._logging import verbose_proxy_logger
+    from litellm.llms.anthropic.messages.native.streaming_iterator import closing_superseded_attempt
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
-    verbose_proxy_logger.error("Error in chunk_processor: %s", error)
+    if not _relayed(head):
+        verbose_proxy_logger.error("Error in chunk_processor: %s", error)
     # Python's stream fails before its success handler records `cache_hit`; only a cache hit
     # stamps it earlier.
     if logger.model_call_details.get("cache_hit") is not True:
         logger.model_call_details.pop("cache_hit", None)
-    return PassThroughStreamingHandler.schedule_stream_failure_logging(
+    await PassThroughStreamingHandler.schedule_stream_failure_logging(
         litellm_logging_obj=logger,
         endpoint_type=EndpointType(endpoint_type),
         request_body=request_body,
         raw_bytes=chunks,
         exception=error,
     )
+    if detached and not closing_superseded_attempt():
+        await logger.report_detached_stream_failure(error)

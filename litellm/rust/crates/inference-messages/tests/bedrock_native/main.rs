@@ -116,10 +116,11 @@ async fn prefixes_select_native_messages_and_strip_connection_fields(
         api_key: Some("key".into()),
         api_base: Some(upstream.uri()),
         custom_llm_provider: None,
-        ..with_fields(
-            call,
+        litellm_params: serde_json::from_value(
             json!({"model": model, "workspace_id": "request-workspace"}),
         )
+        .unwrap(),
+        ..with_model(call, model)
     })
     .await;
     assert_eq!(message.model, MODEL);
@@ -229,6 +230,91 @@ async fn managed_aws_credentials_sign_the_exact_native_request(
 
 #[rstest]
 #[tokio::test]
+async fn bedrock_invoke_routes_by_the_region_path_and_signs_caller_headers_as_python_does(
+    call: MessagesCall,
+) {
+    let upstream = upstream([message_response()]).await;
+    let secrets = Arc::new(RecordingSecrets::new([("AWS_REGION_NAME", "us-east-1")]));
+    run_with(
+        secrets,
+        MessagesCall {
+            api_base: Some(upstream.uri()),
+            litellm_params: litellm_router_types::LitellmParams {
+                aws: litellm_auth::AwsParams {
+                    aws_access_key_id: Some("test-access".into()),
+                    aws_secret_access_key: Some("test-secret".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            extra_headers: Some(serde_json::Map::from_iter([
+                ("x-amz-date".to_string(), json!("20200101T000000Z")),
+                ("x-amz-security-token".to_string(), json!("caller-token")),
+                ("date".to_string(), json!("Wed, 01 Jan 2020 00:00:00 GMT")),
+            ])),
+            ..with_model(
+                call,
+                "bedrock/invoke/us-west-2/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            )
+        },
+    )
+    .await
+    .unwrap();
+    let request = only_request(&upstream).await;
+    let auth = request.header("authorization").unwrap();
+    assert_eq!(
+        request.url.path(),
+        "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
+    );
+    assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=test-access/"));
+    assert!(auth.contains(
+        "/us-west-2/bedrock/aws4_request, SignedHeaders=content-type;date;host;x-amz-security-token, "
+    ));
+    assert_eq!(request.header("x-amz-security-token"), Some("caller-token"));
+    assert_eq!(request.header("x-amz-date"), None);
+    assert!(
+        request
+            .header("date")
+            .is_some_and(|date| date.ends_with(" -0000") && !date.contains("2020"))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn bedrock_invoke_signs_an_empty_api_key_without_reading_the_env_bearer(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let secrets = Arc::new(RecordingSecrets::new([
+        ("AWS_REGION_NAME", "us-east-1"),
+        ("AWS_BEARER_TOKEN_BEDROCK", "env-token"),
+    ]));
+    run_with(
+        secrets,
+        MessagesCall {
+            api_key: Some(String::new()),
+            api_base: Some(upstream.uri()),
+            litellm_params: litellm_router_types::LitellmParams {
+                aws: litellm_auth::AwsParams {
+                    aws_access_key_id: Some("test-access".into()),
+                    aws_secret_access_key: Some("test-secret".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..with_model(call, "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+        },
+    )
+    .await
+    .unwrap();
+    let request = only_request(&upstream).await;
+    assert!(
+        request
+            .header("authorization")
+            .is_some_and(|auth| auth.starts_with("AWS4-HMAC-SHA256 Credential=test-access/"))
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn private_mantle_endpoint_is_used_and_signed(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
     let params = litellm_router_types::LitellmParams {
@@ -272,10 +358,11 @@ async fn native_streams_relay_every_sse_byte(call: MessagesCall, #[case] model: 
                 api_key: Some("key".into()),
                 api_base: Some(upstream.uri()),
                 custom_llm_provider: None,
-                ..with_fields(
-                    call,
-                    json!({"model": model, "stream": true, "workspace_id": "workspace"}),
+                litellm_params: serde_json::from_value(
+                    json!({"model": model, "workspace_id": "workspace"}),
                 )
+                .unwrap(),
+                ..with_fields(call, json!({"model": model, "stream": true}))
             },
             &(),
             None,

@@ -631,7 +631,9 @@ class BedrockRealtime(BaseAWSLLM):
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
         )
-        credentials: Final = await run_aws_signing(self.resolve_credentials, auth_params, aws_region_name)
+        credentials: Final = await run_aws_signing(
+            self.resolve_credentials, auth_params, aws_region_name, {"litellm_metadata": litellm_metadata}
+        )
         if credentials is None:  # pyright: ignore[reportUnnecessaryComparison]  # boto3.Session() env fallback yields None
             raise BedrockError(
                 status_code=401,
