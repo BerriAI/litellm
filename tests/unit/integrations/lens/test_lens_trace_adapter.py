@@ -1,13 +1,17 @@
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
+from opentelemetry.trace import get_current_span
 
 from litellm.integrations.lens.lens_trace_adapter import (
     AgentCall,
     ToolExchange,
+    agent_trace_of,
     agent_call,
     agent_name,
+    as_user_saw_it,
     tool_exchanges,
     user_task,
 )
@@ -217,6 +221,62 @@ def test_a_recorded_agent_request_gives_its_identity_and_the_task_the_user_typed
     assert len(made_by.tool_exchanges) == 1
 
 
+def test_a_recorded_claude_code_request_reaches_lens_as_the_user_typed_it() -> None:
+    recorded = _recorded_payload("claude_code")
+    assert "<system-reminder>" in json.dumps(recorded["messages"][1:])
+
+    shown = as_user_saw_it(recorded)
+
+    assert "<system-reminder>" not in json.dumps(shown["messages"][1:])
+    assert shown["messages"][1]["content"] == [
+        {"type": "text", "text": "Count the words in notes.txt and report the number"}
+    ]
+    assert shown["messages"][:1] == recorded["messages"][:1]
+    assert shown["messages"][2] == recorded["messages"][2]
+    assert agent_call(shown).tool_exchanges[0].result == "1\thello\n2\tgoodbye"
+    assert agent_call(shown).task == agent_call(recorded).task
+
+
+def test_a_recorded_codex_request_loses_its_environment_and_agents_md_messages_but_keeps_its_instructions() -> None:
+    recorded = _recorded_payload("codex")
+    agents_md = {
+        "type": "message",
+        "role": "user",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "# AGENTS.md instructions for /home/ubuntu/gwtest/work\n\n<INSTRUCTIONS>\nUse tabs.\n</INSTRUCTIONS>",
+            }
+        ],
+    }
+    with_agents_md = {**recorded, "messages": [*recorded["messages"][:2], agents_md, *recorded["messages"][2:]]}
+
+    shown = as_user_saw_it(with_agents_md)["messages"]
+
+    assert [message for message in recorded["messages"] if "<environment_context>" in json.dumps(message)]
+    assert shown == [message for message in recorded["messages"] if "<environment_context>" not in json.dumps(message)]
+    assert agent_call({**recorded, "messages": shown}).task == "Count the words in notes.txt and report the number"
+
+
+@pytest.mark.parametrize("recording", ["opencode", "opencode_title", "pi"])
+def test_a_recorded_request_with_no_harness_blocks_reaches_lens_unchanged(recording: str) -> None:
+    recorded = _recorded_payload(recording)
+
+    assert as_user_saw_it(recorded) == recorded
+
+
+def test_codex_envelopes_are_only_removed_for_codex_so_other_agents_keep_that_text() -> None:
+    message = {"role": "user", "content": "<environment_context>my notes</environment_context> summarize them"}
+    payload = {"metadata": {"user_agent": "claude-cli/2.1.329"}, "messages": [message]}
+
+    assert as_user_saw_it(payload) == payload
+
+
+@pytest.mark.parametrize("payload", [None, "text", {"id": "no-messages"}])
+def test_a_payload_without_messages_is_passed_through(payload: object) -> None:
+    assert as_user_saw_it(payload) == payload
+
+
 def test_pi_is_recognised_by_its_system_prompt_because_it_sends_its_sdk_user_agent() -> None:
     payload = _recorded_payload("pi")
 
@@ -322,3 +382,33 @@ def test_the_title_call_opencode_makes_is_named_but_its_task_is_its_own_prompt()
     made_by = agent_call(_recorded_payload("opencode_title"))
 
     assert (made_by.agent, made_by.task) == ("opencode", "Generate a title for this conversation:")
+
+
+AGENT_TRACE_ID: Final = "0af7651916cd43dd8448eb211c80319c"
+AGENT_SPAN_ID: Final = "b7ad6b7169203331"
+
+
+def _call_with_headers(headers: dict[str, str]) -> dict[str, object]:
+    return {"litellm_params": {"proxy_server_request": {"headers": headers}}}
+
+
+def test_a_call_whose_request_names_the_agents_span_is_placed_under_it() -> None:
+    placed: Final = agent_trace_of(_call_with_headers({"traceparent": f"00-{AGENT_TRACE_ID}-{AGENT_SPAN_ID}-01"}))
+
+    assert placed is not None
+    parent: Final = get_current_span(placed).get_span_context()
+    assert (format(parent.trace_id, "032x"), format(parent.span_id, "016x")) == (AGENT_TRACE_ID, AGENT_SPAN_ID)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        pytest.param(_call_with_headers({}), id="no-traceparent"),
+        pytest.param(_call_with_headers({"traceparent": "not-a-trace"}), id="unreadable-traceparent"),
+        pytest.param(_call_with_headers({"traceparent": f"00-{'0' * 32}-{AGENT_SPAN_ID}-01"}), id="all-zero-trace-id"),
+        pytest.param({}, id="sdk-call-with-no-proxy-request"),
+        pytest.param({"litellm_params": {"proxy_server_request": None}}, id="proxy-request-not-recorded"),
+    ),
+)
+def test_a_call_that_names_no_agent_span_keeps_the_gateways_own_trace(kwargs: dict[str, object]) -> None:
+    assert agent_trace_of(kwargs) is None

@@ -38,6 +38,7 @@ from litellm.harness.evaluation import (
     JudgeCheck,
     PredicateCheck,
     aagent_eval,
+    aagent_eval_attempt,
     agent_eval,
 )
 from litellm.harness.options import (
@@ -120,6 +121,7 @@ __all__ = (
     "Usage",
     "aagent",
     "aagent_eval",
+    "aagent_eval_attempt",
     "aagent_resume",
     "aagent_session",
     "agent",

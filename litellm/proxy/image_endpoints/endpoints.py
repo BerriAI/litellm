@@ -1,10 +1,10 @@
 import asyncio
 import io
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, get_type_hints
+from typing import Final, Protocol, get_type_hints
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -49,6 +49,15 @@ IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "i
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
 BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD})
+
+
+class _PostCallSuccessHook(Protocol):
+    @property
+    def post_call_success_hook(self) -> Callable[..., Awaitable[object]]: ...
+
+
+def _post_call_success_hook_of(proxy_logging: _PostCallSuccessHook) -> Callable[..., Awaitable[object]]:
+    return proxy_logging.post_call_success_hook
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -187,14 +196,14 @@ async def image_generation(
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        response = await llm_call
+        generated: Final = await llm_call
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
         ### CALL HOOKS ### - modify outgoing data (guardrails, otel, etc.)
-        response = await proxy_logging_obj.post_call_success_hook(
-            data=data, user_api_key_dict=user_api_key_dict, response=response
+        response: Final = await _post_call_success_hook_of(proxy_logging_obj)(
+            data=data, user_api_key_dict=user_api_key_dict, response=generated
         )
 
         ### RESPONSE HEADERS ###
