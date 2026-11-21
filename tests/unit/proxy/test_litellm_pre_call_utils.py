@@ -12089,3 +12089,40 @@ def test_key_disabled_callbacks_resolve_to_the_same_names_for_dispatch_and_otel_
     )
     assert dispatch is not None
     assert fan_out == frozenset(dispatch) == {"none", "langfuse", "langsmith"}
+
+
+@pytest.mark.parametrize("allow_disabling, expect_suppressed", [(True, True), (False, False)])
+def test_allow_dynamic_callback_disabling_false_ignores_the_key_disabled_callbacks(
+    allow_disabling: bool, expect_suppressed: bool
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.litellm_pre_call_utils import (
+        _dynamically_disabled_backends,  # pyright: ignore[reportPrivateUsage]  # fan-out has no public seam
+        key_and_team_logging_fields,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    key: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"litellm_disabled_callbacks": ["langfuse"]})
+    request_params: Final[dict[str, object]] = {"proxy_server_request": {"headers": {}}}
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(litellm, "allow_dynamic_callback_disabling", allow_disabling),
+    ):
+        logging_obj: Final = Logging(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="key-disabled-callbacks",
+            function_id="key-disabled-callbacks",
+            kwargs=dict(key_and_team_logging_fields(key, ProxyConfig())),
+        )
+        outcome: Final = (
+            not logging_obj.should_run_callback("langfuse", request_params, "success"),
+            logging_obj._v2_caller_opt_outs(request_params),  # pyright: ignore[reportPrivateUsage]  # v2 dispatch has no public seam
+            _dynamically_disabled_backends(key, {}),
+        )
+
+    expected_names: Final = frozenset({"langfuse"}) if expect_suppressed else frozenset[str]()
+    assert outcome == (expect_suppressed, expected_names, expected_names)
