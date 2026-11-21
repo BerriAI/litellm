@@ -1678,14 +1678,6 @@ def _get_deployment_default_limit(model_name: str, field: str) -> int | None:
     return min(limits) if limits else None
 
 
-def _get_deployment_default_rpm_limit(model_name: str) -> int | None:
-    return _get_deployment_default_limit(model_name, "default_api_key_rpm_limit")
-
-
-def _get_deployment_default_tpm_limit(model_name: str) -> int | None:
-    return _get_deployment_default_limit(model_name, "default_api_key_tpm_limit")
-
-
 def get_key_own_model_rate_limit(
     user_api_key_dict: UserAPIKeyAuth,
     rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
@@ -1706,6 +1698,21 @@ def get_key_own_model_rate_limit(
     return model_limit or None
 
 
+def _deployment_default_for_model_without_own_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+    model_name: str,
+) -> int | None:
+    key_own_limit: Final = get_key_own_model_rate_limit(user_api_key_dict, rate_limit_key)
+    team_limit: Final = (user_api_key_dict.team_metadata or {}).get(rate_limit_key)
+    if any(limits and limits.get(model_name) is not None for limits in (key_own_limit, team_limit)):
+        return None
+    return _get_deployment_default_limit(
+        model_name,
+        "default_api_key_rpm_limit" if rate_limit_key == "model_rpm_limit" else "default_api_key_tpm_limit",
+    )
+
+
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
     model_name: str | None = None,
@@ -1714,27 +1721,25 @@ def get_key_model_rpm_limit(
     Get the model rpm limit for a given api key.
 
     Priority order (returns first found):
-    1. Key metadata (model_rpm_limit)
-    2. Key model_max_budget (rpm_limit per model)
-    3. Team metadata (model_rpm_limit)
-    4. Deployment default_api_key_rpm_limit (when model_name is provided)
+    1. Deployment default_api_key_rpm_limit, when neither the key nor the team limits `model_name`
+    2. Key metadata (model_rpm_limit)
+    3. Key model_max_budget (rpm_limit per model)
+    4. Team metadata (model_rpm_limit)
     """
+    if (
+        model_name is not None
+        and (
+            default_limit := _deployment_default_for_model_without_own_limit(
+                user_api_key_dict, "model_rpm_limit", model_name
+            )
+        )
+        is not None
+    ):
+        return {model_name: default_limit}
     key_own_limit: Final = get_key_own_model_rate_limit(user_api_key_dict, "model_rpm_limit")
     if key_own_limit is not None:
         return key_own_limit
-
-    # 3. Fallback to team metadata
-    team_limit: Final = get_team_model_rpm_limit(user_api_key_dict)
-    if team_limit is not None:
-        return team_limit
-
-    # 4. Fallback to deployment default_api_key_rpm_limit
-    if model_name is not None:
-        default_limit: Final = _get_deployment_default_rpm_limit(model_name)
-        if default_limit is not None:
-            return {model_name: default_limit}
-
-    return None
+    return get_team_model_rpm_limit(user_api_key_dict)
 
 
 def get_key_model_tpm_limit(
@@ -1745,27 +1750,25 @@ def get_key_model_tpm_limit(
     Get the model tpm limit for a given api key.
 
     Priority order (returns first found):
-    1. Key metadata (model_tpm_limit)
-    2. Key model_max_budget (tpm_limit per model)
-    3. Team metadata (model_tpm_limit)
-    4. Deployment default_api_key_tpm_limit (when model_name is provided)
+    1. Deployment default_api_key_tpm_limit, when neither the key nor the team limits `model_name`
+    2. Key metadata (model_tpm_limit)
+    3. Key model_max_budget (tpm_limit per model)
+    4. Team metadata (model_tpm_limit)
     """
+    if (
+        model_name is not None
+        and (
+            default_limit := _deployment_default_for_model_without_own_limit(
+                user_api_key_dict, "model_tpm_limit", model_name
+            )
+        )
+        is not None
+    ):
+        return {model_name: default_limit}
     key_own_limit: Final = get_key_own_model_rate_limit(user_api_key_dict, "model_tpm_limit")
     if key_own_limit is not None:
         return key_own_limit
-
-    # 3. Fallback to team metadata
-    team_limit: Final = get_team_model_tpm_limit(user_api_key_dict)
-    if team_limit is not None:
-        return team_limit
-
-    # 4. Fallback to deployment default_api_key_tpm_limit
-    if model_name is not None:
-        default_limit: Final = _get_deployment_default_tpm_limit(model_name)
-        if default_limit is not None:
-            return {model_name: default_limit}
-
-    return None
+    return get_team_model_tpm_limit(user_api_key_dict)
 
 
 ESTIMATED_OUTPUT_TOKENS_FIELD: Final = "default_estimated_output_tokens"
