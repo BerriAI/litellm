@@ -4562,6 +4562,62 @@ async def test_tag_registry_load_is_single_flighted_across_concurrent_requests(
     assert len(rust_auth_stores.tag.name_listings) == 1
 
 
+@dataclass
+class _HoldsItsFirstRegistryRead(FakeAuthCache):
+    """Answers the first read of ``held_key`` only once ``release`` is set, with what it read before waiting, so that
+    reader resumes holding a miss that went stale while it waited."""
+
+    held_key: str = ""
+    reading: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def get(self, key: str, *rest: object) -> object:
+        value: Final = await super().get(key, *rest)
+        if key == self.held_key and not self.reading.is_set():
+            self.reading.set()
+            await self.release.wait()
+        return value
+
+
+@pytest.mark.asyncio
+async def test_a_registry_reader_whose_miss_went_stale_during_another_load_does_not_scan_again(
+    rust_auth_stores: RustAuthStores,
+):
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    rust_auth_stores.tag.seed("registered-tag", _tag_db_row("registered-tag"))
+    mock_prisma = MagicMock()
+    fake = _HoldsItsFirstRegistryRead(held_key=tag_registry_cache_key())
+    cache, _ = shared_cache(fake)
+
+    def lookup() -> Awaitable[Mapping[str, object]]:
+        return get_tag_objects_batch(tag_names=["registered-tag"], prisma_client=mock_prisma, user_api_key_cache=cache)
+
+    stale_reader = asyncio.create_task(lookup())
+    await fake.reading.wait()
+    loaded = await lookup()
+    fake.release.set()
+    late = await stale_reader
+
+    assert list(loaded) == list(late) == ["registered-tag"]
+    assert len(rust_auth_stores.tag.name_listings) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_registry_load_reads_redis_once_like_a_load_without_the_lock(rust_auth_stores: RustAuthStores):
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    rust_auth_stores.tag.seed("registered-tag", _tag_db_row("registered-tag"))
+    cache, fake = shared_cache()
+
+    loaded: Final = await get_tag_objects_batch(
+        tag_names=["registered-tag"], prisma_client=MagicMock(), user_api_key_cache=cache
+    )
+
+    registry_gets: Final = [command for command in fake.commands if command == ("GET", tag_registry_cache_key())]
+    assert (list(loaded), len(registry_gets), len(rust_auth_stores.tag.name_listings)) == (["registered-tag"], 1, 1)
+
+
 @pytest.mark.asyncio
 async def test_get_tag_objects_batch_oversized_registry_falls_back_and_stops_refetching(
     rust_auth_stores: RustAuthStores,
