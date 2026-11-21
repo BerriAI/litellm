@@ -140,7 +140,9 @@ jobs:
           done
 
       - name: Test the FIPS build's OpenSSL paths
-        run: cargo test -p litellm-db --locked --features native-tls
+        run: |
+          cargo test -p litellm-db --locked --features native-tls
+          cargo test -p litellm-gateway-auth-core --locked --features fips
 
       - name: Test secret manager feature combinations
         run: |

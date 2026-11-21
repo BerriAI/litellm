@@ -21,7 +21,7 @@ pub async fn oidc_userinfo(
     else {
         return Err(VerifyDenial::UserinfoNotConfigured.into());
     };
-    let cache_key = format!("oidc_userinfo_{}", token.hash());
+    let cache_key = format!("oidc_userinfo_{}", token.hash()?);
     if let Some(cached) = host.cached_document(&cache_key).await? {
         return Ok(cached);
     }
