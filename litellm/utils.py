@@ -10511,6 +10511,10 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig()
+        if LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
+
+            return elevenlabs_realtime_config(litellm_params, drop_params=drop_params)
         return None
 
     @staticmethod
