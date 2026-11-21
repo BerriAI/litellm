@@ -226,6 +226,46 @@ def test_mistral_chat_sends_replayed_tool_call_ids_as_nine_alphanumeric_characte
     assert messages == callers_messages
 
 
+def _sent_body_without_model(model: str, monkeypatch: pytest.MonkeyPatch) -> Mapping[str, object]:
+    messages: Final = [
+        {
+            "role": "user",
+            "name": "alice",
+            "content": [{"type": "text", "text": "Weather "}, {"type": "text", "text": "in Paris?"}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": "Look it up first.",
+            "tool_calls": [_tool_call("call_abc123", "get_weather")],
+        },
+        {"role": "tool", "tool_call_id": "call_abc123", "content": [{"type": "text", "text": "18C"}]},
+    ]
+
+    def send(transport: httpx.MockTransport, _: pytest.MonkeyPatch) -> None:
+        litellm.completion(
+            model=model,
+            messages=messages,
+            tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            tool_choice="required",
+            seed=7,
+            vertex_location="us-central1",
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+
+    sent: Final = SENT_BODY.validate_json(_sent_mistral_request(send, monkeypatch).content)
+    return {key: value for key, value in sent.items() if key != "model"}
+
+
+@pytest.mark.parametrize("model", ["vertex_ai/mistral-large@2407", "vertex_ai/mistral-large-3"])
+def test_mistral_chat_sends_every_vertex_mistral_name_the_body_a_listed_mistral_model_gets(
+    model: str, local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    assert _sent_body_without_model(model, monkeypatch) == _sent_body_without_model(
+        "vertex_ai/mistral-medium-3", monkeypatch
+    )
+
+
 async def test_mistral_chat_maps_a_tool_call_id_the_same_way_on_sync_and_async_requests(local_model_cost_map):
     config: Final = ProviderConfigManager.get_provider_chat_config(
         model="mistral-medium-3", provider=LlmProviders.VERTEX_AI
