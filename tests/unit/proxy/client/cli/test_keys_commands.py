@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -447,41 +448,28 @@ def test_keys_import_source_api_error(mock_keys_client, cli_runner):
     assert "Source API Error" in result.output
 
 
-def test_keys_import_partial_failure(mock_keys_client, cli_runner):
-    """Test handling when some keys fail to import"""
-    with patch(
-        "litellm.proxy.client.cli.commands.keys.KeysManagementClient"
-    ) as MockClient:
-        mock_source_instance = MockClient.return_value
-        mock_dest_instance = MockClient.return_value
+@pytest.mark.parametrize(
+    ("statuses", "imported", "failed", "exit_code"),
+    [((400, 200), 1, 1, 1), ((400, 400), 0, 2, 1), ((200, 200), 2, 0, 0)],
+)
+@responses.activate
+def test_keys_import_exit_status_reflects_failures_after_processing_all_keys(
+    cli_runner: CliRunner, statuses: tuple[int, int], imported: int, failed: int, exit_code: int
+) -> None:
+    responses.get(f"{SOURCE}/key/list", json={"keys": [{"key_alias": "first"}, {"key_alias": "second"}]})
+    for status in statuses:
+        responses.post(f"{DESTINATION}/key/generate", status=status, json={"message": "import result"})
 
-        # Source returns 2 keys
-        mock_source_instance.list.side_effect = [
-            {
-                "keys": [
-                    {"key_alias": "success-key", "user_id": "user1@example.com"},
-                    {"key_alias": "fail-key", "user_id": "user2@example.com"},
-                ]
-            },
-            {"keys": []},
-        ]
+    result: Final = cli_runner.invoke(cli, ["--base-url", DESTINATION, "keys", "import", "--source-base-url", SOURCE])
 
-        # Destination: first succeeds, second fails
-        mock_dest_instance.generate.side_effect = [
-            {"key": "sk-new-key", "status": "success"},
-            Exception("Import failed for this key"),
-        ]
-
-        result = cli_runner.invoke(
-            cli, ["keys", "import", "--source-base-url", "https://source.example.com"]
-        )
-
-        assert result.exit_code == 0  # Command completes even with partial failures
-        assert "Imported key: success-key" in result.output
-        assert "Failed to import key fail-key" in result.output
-        assert "Successfully imported: 1" in result.output
-        assert "Failed to import: 1" in result.output
-        assert "Total keys processed: 2" in result.output
+    assert [json.loads(call.request.body) for call in responses.calls[1:]] == [
+        {"key_alias": "first"},
+        {"key_alias": "second"},
+    ]
+    assert f"Successfully imported: {imported}" in result.stdout
+    assert f"Failed to import: {failed}" in result.stdout
+    assert "Total keys processed: 2" in result.stdout
+    assert result.exit_code == exit_code, result.output
 
 
 def test_keys_import_missing_required_source_url(cli_runner):

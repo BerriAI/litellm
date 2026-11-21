@@ -423,3 +423,6 @@ def import_keys(
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         raise click.Abort()
+
+    if failed_count:
+        ctx.exit(1)
