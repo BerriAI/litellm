@@ -82,7 +82,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 from litellm.proxy.utils import handle_exception_on_proxy, hash_token_if_needed, query_raw_within_statement_timeout
 from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import OrganizationMembershipRepository, SpendLogsRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
+from litellm.repositories.table_repositories import OrganizationMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
@@ -2954,7 +2955,7 @@ async def ui_view_spend_logs(
         # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
         sql_conditions: Final[list[str]] = ["organization_id = ANY($1::text[])"] if organization_ids is not None else []
         sql_params: Final[list[object]] = [organization_ids] if organization_ids is not None else []
-        p = len(sql_params) + 1  # parameter index counter
+        p = len(sql_params) + 1
 
         # Date range. Wrap the param side with `AT TIME ZONE 'UTC'` so comparison
         # against the plain `timestamp` column does not depend on the DB session

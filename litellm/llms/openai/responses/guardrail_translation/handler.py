@@ -62,6 +62,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
     effective_scan_only_tool_results_for_guardrail,
+    effective_scan_tool_calls_as_text_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     list_field,
@@ -1341,7 +1342,19 @@ class OpenAIResponsesHandler(BaseTranslation):
             skip_tool=skip_tool,
             scan_only=scan_only,
         )
-        if not extracted.inputs.get("texts"):
+        if (
+            effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
+            and not scan_only
+            and not isinstance(input_data, str)
+        ):
+            history_tool_calls: Final = [
+                _scanned_tool_call(item, item_idx)
+                for item_idx, item in enumerate(input_data)
+                if item.get("type") in _TOOL_CALL_ITEM_TYPES
+            ]
+            if history_tool_calls:
+                extracted.inputs["tool_calls"] = history_tool_calls
+        if not extracted.inputs.get("texts") and not extracted.inputs.get("tool_calls"):
             return data
         if scoped_structured_messages:
             extracted.inputs["structured_messages"] = scoped_structured_messages

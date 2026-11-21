@@ -91,6 +91,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.password_policy import MIN_ALLOWED_LENGTH
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.fips import fips_mode_active
+from litellm.proxy.common_utils.hook_cache import HookCache
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -198,11 +199,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
-from litellm.litellm_core_utils.duration_parser import (
-    get_annual_budget_window_start,
-    get_budget_window_start,
-    is_annual_budget_duration,
-)
+from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
@@ -271,6 +268,13 @@ from litellm.proxy.db.prisma_client import (
     parse_iam_endpoint_from_url,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+from litellm.proxy.db.rust_spend_log_writer import (
+    dequeue_from_rust,
+    enqueue_in_rust,
+    flush_in_rust,
+    rust_spend_log_queue_size,
+    rust_spend_log_writer,
+)
 from litellm.proxy.db.spend_log_batching import (
     spend_log_queue_within_budget,
     spend_log_row_bytes,
@@ -338,9 +342,9 @@ from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.repositories.table_repositories import (
     HealthCheckRepository,
-    SpendLogsRepository,
     UserNotificationsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
@@ -1533,8 +1537,18 @@ def _billed_earlier_attempts(
     ``base_model`` or model, which a fallback hop can make a different model than the final one).
     Only the exception class survives on the record, so an earlier connect timeout is billed too;
     any other failure class is not."""
-    final_attempt: Final = _retry_metadata_bucket(litellm_params).get("attempted_retries")
-    final_identity: Final = (deployment_id, final_attempt if isinstance(final_attempt, int) else None)
+    retry_metadata: Final = _retry_metadata_bucket(litellm_params)
+    final_attempt: Final = retry_metadata.get("attempted_retries")
+    routed_model_info: Final = retry_metadata.get("model_info")
+    routed_id: Final = (
+        cast("Mapping[str, object]", routed_model_info).get("id")  # cast-ok: untyped router dict, read with .get
+        if isinstance(routed_model_info, dict)
+        else None
+    )
+    final_identity: Final = (
+        routed_id if isinstance(routed_id, str) else deployment_id,
+        final_attempt if isinstance(final_attempt, int) else None,
+    )
     return tuple(
         _billed_earlier_attempt(model_call_details, record, index, estimated_usage, base_model)
         for index, record in enumerate(_timed_out_earlier_records(litellm_params, final_identity))
@@ -2273,10 +2287,14 @@ class ProxyLogging:
         self,
         user_api_key_cache: UserApiKeyCache,
         premium_user: bool = False,
+        hook_cache: DualCache | None = None,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
+        self.hook_cache: Final = (
+            hook_cache if hook_cache is not None else HookCache(auth_cache=lambda: user_api_key_cache)
+        )
         self.internal_usage_cache: InternalUsageCache = InternalUsageCache(
             dual_cache=DualCache(default_in_memory_ttl=1)  # ping redis cache every 1s
         )
@@ -2972,7 +2990,7 @@ class ProxyLogging:
         if hook_type == "pre_call":
             return await target.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
-                cache=self.call_details["user_api_key_cache"],
+                cache=self.hook_cache,
                 data=data,
                 call_type=call_type,
             )
@@ -3727,7 +3745,7 @@ class ProxyLogging:
                     return None
                 response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(
                     user_api_key_dict=run.user_api_key_dict,
-                    cache=self.call_details["user_api_key_cache"],
+                    cache=self.hook_cache,
                     data=data,
                     call_type=run.call_type,
                 )
@@ -4462,7 +4480,12 @@ class ProxyLogging:
             with_sources(
                 hook_fields(request_data, run, Field.error),
                 DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
-                HookArgs(auth=user_api_key_dict, request=request_data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+                HookArgs(
+                    auth=user_api_key_dict,
+                    request=request_data,  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+                    result=original_exception,
+                    traceback_str=redacted_traceback_str,
+                ),
             ),
             partial(self._post_call_failure_one, run, request_data, user_api_key_dict, redacted_traceback_str),
             on_abort=partial(_keep_v2_abort, run),
@@ -8790,6 +8813,9 @@ async def enqueue_spend_logs(
     dropped, which keeps a long outage from growing the queue until the pod
     dies.
     """
+    if (rust_writer := rust_spend_log_writer(prisma_client)) is not None:
+        enqueue_in_rust(rust_writer, logs, at_head=at_head, max_bytes=max_bytes)
+        return
     added: Final = sum(spend_log_row_bytes(row) for row in logs)
     async with prisma_client._spend_log_transactions_lock:
         queued: Final[tuple[Mapping[str, object], ...]] = (
@@ -8841,6 +8867,8 @@ async def dequeue_spend_logs(prisma_client: PrismaClient, limit: int) -> list[di
     Every enqueue and dequeue goes through this pair so the byte total the
     queue is bounded by stays in step with what the queue actually holds.
     """
+    if (rust_writer := rust_spend_log_writer(prisma_client)) is not None:
+        return dequeue_from_rust(rust_writer, limit)
     async with prisma_client._spend_log_transactions_lock:
         popped: Final = prisma_client.spend_log_transactions[:limit]
         prisma_client.spend_log_transactions[:] = prisma_client.spend_log_transactions[limit:]
@@ -9162,6 +9190,7 @@ async def _total_queued_spend_transactions(prisma_client: PrismaClient) -> int:
         baseline_queue_size: Final = len(prisma_client.baseline_accounting_transactions)
     return (
         spend_queue_size
+        + rust_spend_log_queue_size(prisma_client)
         + tool_queue_size
         + model_usage_queue_size
         + autorouter_queue_size
@@ -9253,17 +9282,15 @@ async def update_spend_logs_job(
         await _run_spend_logs_job(prisma_client, db_writer_client, proxy_logging_obj)
 
 
-async def _run_spend_logs_job(
+async def _write_spend_logs_in_python(
     prisma_client: PrismaClient,
     db_writer_client: AsyncHTTPHandler | None,
     proxy_logging_obj: ProxyLogging,
+    max_logs: int,
 ) -> None:
-    from litellm.proxy.db.baseline_accounting import flush_baseline_accounting
-
     n_retry_times: Final = 3
-    MAX_LOGS_PER_INTERVAL: Final = 10000
 
-    logs_to_process: Final = await dequeue_spend_logs(prisma_client, MAX_LOGS_PER_INTERVAL)
+    logs_to_process: Final = await dequeue_spend_logs(prisma_client, max_logs)
 
     try:
         await ProxyUpdateSpend.update_spend_logs(
@@ -9296,6 +9323,21 @@ async def _run_spend_logs_job(
             "Spend tracking - guardrail usage tracking failed (non-fatal): %s",
             guardrail_tracking_err,
         )
+
+
+async def _run_spend_logs_job(
+    prisma_client: PrismaClient,
+    db_writer_client: AsyncHTTPHandler | None,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    from litellm.proxy.db.baseline_accounting import flush_baseline_accounting
+
+    MAX_LOGS_PER_INTERVAL: Final = 10000
+
+    if (rust_writer := rust_spend_log_writer(prisma_client)) is not None:
+        await flush_in_rust(rust_writer, prisma_client, proxy_logging_obj, MAX_LOGS_PER_INTERVAL)
+    else:
+        await _write_spend_logs_in_python(prisma_client, db_writer_client, proxy_logging_obj, MAX_LOGS_PER_INTERVAL)
 
     # Tool usage tracking: drain the request-time queue into the tool index and the
     # LiteLLM_DailyToolSpend rollup. A batch Postgres had no connection for, or whose
@@ -9429,6 +9471,8 @@ async def drain_spend_logs_queue(
         with contextlib.suppress(asyncio.CancelledError):
             await monitor_task
         prisma_client.spend_logs_queue_monitor_task = None  # rebind-ok: the client owns its monitor handle
+    if (rust_writer := rust_spend_log_writer(prisma_client)) is not None:
+        await rust_writer.wait_idle()
 
     async with prisma_client.spend_log_write_lock:
         try:
@@ -9707,11 +9751,10 @@ def _as_aware(moment: datetime) -> datetime:
 
 def _reset_window(budget_duration: str, budget_reset_at: datetime) -> tuple[datetime, datetime] | None:
     window_end: Final = _as_aware(budget_reset_at)
-    window_start: Final = (
-        get_annual_budget_window_start(window_end, get_budget_reset_settings().timezone)
-        if is_annual_budget_duration(budget_duration)
-        else get_budget_window_start(budget_duration, window_end)
-    )
+    settings: Final = get_budget_reset_settings()
+    window_start: Final = get_budget_window_start(
+        budget_duration, window_end, settings.timezone, settings.reset_time_of_day
+    ).astimezone(timezone.utc)
     return (window_start, window_end) if window_start < window_end else None
 
 

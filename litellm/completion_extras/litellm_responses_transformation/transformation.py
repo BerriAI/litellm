@@ -67,6 +67,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.responses.additional_tools import additional_tools_in_input
+from litellm.responses.instructions_length import with_long_instructions_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
@@ -1502,7 +1503,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if headers:
             request_data["extra_headers"] = headers
 
-        return request_data
+        return dict(with_long_instructions_in_input(request_data))
 
     @staticmethod
     def _convert_response_output_to_choices(
@@ -2097,7 +2098,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         supported_responses_api_params: Final = set(ResponsesAPIOptionalRequestParams.__annotations__.keys())
         # Also include params we handle specially
-        supported_responses_api_params.add("reasoning_effort")  # We map this to "reasoning"
+        supported_responses_api_params.add("reasoning_effort")
 
         # Extract supported params from extra_body and merge into optional_params
         extra_body_copy: Final = extra_body.copy()

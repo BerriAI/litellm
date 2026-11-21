@@ -6,4 +6,4 @@ To update the pin, check out the intended Lens commit and run its `export-traces
 
 The generator pins datamodel-code-generator through its inline dependency metadata. Neither it nor the schema exporter is a runtime dependency. The templates preserve frozen models, tuple conversion and bounded scalars. Request models retain each canonical schema's extra-field policy, including ignored unknown GET parameters and forbidden extra SQL body fields
 
-The generated contracts live in `litellm/tracing/generated`. `requests.py` supplies gateway endpoint parameter models, `responses.py` supplies the SQL response, and `queries.py` validates the remote SQL envelope. Public request behavior changes need their own compatibility review
+The generated contracts live in `litellm/integrations/lens/generated`. `requests.py` supplies gateway endpoint parameter models, `responses.py` supplies the SQL response, and `queries.py` validates the remote SQL envelope. Public request behavior changes need their own compatibility review

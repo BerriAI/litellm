@@ -27,7 +27,6 @@ from collections.abc import (
     Collection,
     Container,
     Iterable,
-    Iterator,
     Mapping,
     MutableMapping,
     Sequence,
@@ -348,7 +347,8 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.redis_batch import active_request_redis_batches, drain_post_call_redis_batches
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_batch import drain_post_call_redis_batches
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
@@ -360,6 +360,7 @@ from litellm.constants import (
     CLI_SSO_SESSION_TTL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MODEL_CREATED_AT_TIME,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
@@ -387,6 +388,7 @@ from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+from litellm.integrations.lens.proxy.adapter import router as lens_router
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -575,8 +577,8 @@ from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
 )
+from litellm.proxy.common_utils.hook_cache import HookCache
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
-from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401, RUF100  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -641,6 +643,7 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     parse_stagger_settings,
 )
 from litellm.proxy.common_utils.slow_gc_logger import log_slow_gc_passes
+from litellm.proxy.common_utils.state_cache import StateCache
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
@@ -654,11 +657,8 @@ from litellm.proxy.common_utils.token_count_log import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    budget_windows_absent_cache_key,
     end_user_cache_key,
     get_management_object_ttl,
-    model_access_group_cache_key,
-    project_cache_key,
     tag_cache_key,
 )
 from litellm.proxy.common_utils.validation_error_body import public_validation_errors
@@ -701,9 +701,6 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_RETENTION_JOB,
     SPEND_LOG_SIZE_CHECK_JOB,
 )
-from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
-    build_window_spend_transaction,
-)
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
@@ -740,10 +737,13 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
+    deployment_ids,
     filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
     perform_health_check,
+    public_wildcard_children,
+    split_by_model_ids,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
@@ -762,8 +762,6 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF10
     run_spend_event,
 )
 from litellm.proxy.image_endpoints.endpoints import router as image_router
-from litellm.proxy.lens.adapter import router as lens_router
-from litellm.proxy.lens.internal import LensInternalMiddleware
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,
@@ -939,19 +937,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
-    end_user_counter,
     is_unavailable,
-    key_counter,
-    key_window_counter,
-    model_access_group_counter,
-    org_counter,
-    project_counter,
-    tag_counter,
-    team_counter,
-    team_member_counter,
-    team_window_counter,
-    user_counter,
-    user_window_counter,
 )
 from litellm.router import router_arguments
 from litellm.router_config import build_router_config
@@ -974,8 +960,10 @@ from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
+from litellm.integrations.lens.config import is_lens_tracing_enabled
+from litellm.integrations.lens.proxy import tracing_endpoints
+from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream
-from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -1029,42 +1017,34 @@ from litellm.proxy.shutdown.scheduled_jobs import (
     pause_scheduled_jobs,
     stop_in_flight_scheduler_jobs,
 )
+from litellm.proxy.spend_tracking import legacy_spend_counters
 from litellm.proxy.spend_tracking.background_interaction_settlement import (
     install_background_interaction_settlement,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     BudgetCounter,
     customer_window_counters,
-    get_budget_window_start,
     release_cancelled_budget_reservation,
     release_unbound_budget_reservation,
-    stamp_budget_reservation_actual_cost,
 )
-from litellm.proxy.spend_tracking.committed_spend import (
-    committed_spend_key,
-    committed_spend_keys,
-    has_committed_twin,
-    is_committed_spend_key,
-    seed_committed_spend,
-)
+from litellm.proxy.spend_tracking.rust_spend_counters import charge_spend_counters
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
     active_spend_counter_batch,
-    bind_spend_counter_keys,
     forget_spend_counter,
     post_call_counter_keys,
     read_batched_spend_counter,
     record_spend_counter_value,
     spend_counter_batch_scope,
 )
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import capture_spend_logs_ledger_setting
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.tracing_runtime import manage_tracing
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     router as latest_release_endpoints_router,
@@ -1139,7 +1119,6 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
-from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
@@ -1448,9 +1427,30 @@ async def _flush_spend_on_shutdown() -> None:
     await _flush_spend_logs_queue_on_shutdown()
 
 
+async def flush_rust_callbacks_on_shutdown() -> None:
+    from litellm.integrations.custom_logger_v2.rust import flush_rust_loggers
+    from litellm.litellm_core_utils.litellm_logging import (
+        _in_memory_loggers,  # pyright: ignore[reportPrivateUsage]  # dynamic per-key loggers are held only here
+    )
+
+    await flush_rust_loggers(
+        (*litellm.logging_callback_manager.get_all_callbacks(), *litellm.input_callback, *_in_memory_loggers)
+    )
+
+
+async def _bounded_rust_flush(flush_rust: Callable[[], Awaitable[None]], timeout: float) -> None:
+    try:
+        await asyncio.wait_for(flush_rust(), timeout=timeout)
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "Rust callback shutdown flush did not finish within %.3fs; their queued rows may be lost", timeout
+        )
+
+
 async def _flush_spend_around_logging_drain_on_shutdown(
     flush_spend: Callable[[], Awaitable[None]] = _flush_spend_on_shutdown,
     *,
+    flush_rust: Callable[[], Awaitable[None]] = flush_rust_callbacks_on_shutdown,
     worker: LoggingWorker = GLOBAL_LOGGING_WORKER,
     clock: Callable[[], float] = time.monotonic,
     drain_tasks: Callable[[float], Awaitable[None]] = drain_logging_tasks,
@@ -1478,7 +1478,9 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
-    await flush_spend()
+    _ = await asyncio.gather(
+        flush_spend(), _bounded_rust_flush(flush_rust, GracefulShutdownManager.remaining(clock=clock))
+    )
 
 
 async def _drain_audit_tasks_on_shutdown() -> None:
@@ -1641,7 +1643,12 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
-    connections: Final = rust_connections(os.environ)
+    from litellm.proxy.db.rust_spend_log_writer import spend_log_writer_runs_in_rust
+
+    connections: Final = rust_connections(
+        os.environ,
+        rust_spend_log_writer=spend_log_writer_runs_in_rust(general_settings_view()),
+    )
     database: Final = await database_runtime.Database.open(
         client,
         os.environ["DATABASE_URL"],
@@ -1651,6 +1658,18 @@ async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) 
     )
     resources.push_async_callback(database.aclose)
     return database
+
+
+async def _install_rust_spend_log_writer(resources: AsyncExitStack, database: database_runtime.Database | None) -> None:
+    if database is None or database.native is None:
+        return
+    from litellm.proxy.db.rust_spend_log_writer import (
+        install_rust_spend_log_writer,
+        uninstall_rust_spend_log_writer,
+    )
+
+    if await install_rust_spend_log_writer(database.prisma, database.native, general_settings_view()) is not None:
+        resources.push_async_callback(uninstall_rust_spend_log_writer, database.prisma)
 
 
 def _forget_prisma_client() -> None:
@@ -1794,7 +1813,15 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     settings: Final = general_settings_view()
     enforce_fips_mode(settings)
     if configure_pool_budget_from_settings.get() and prisma_client is None:
-        resources.enter_context(with_configured_connection_budget(settings.get("database_connection_pool_limit")))
+        from litellm.proxy.db.rust_spend_log_writer import spend_log_writer_runs_in_rust
+
+        resources.enter_context(
+            with_configured_connection_budget(
+                settings.get("database_connection_pool_limit"),
+                rust_spend_log_writer=spend_log_writer_runs_in_rust(settings),
+            )
+        )
+    resources.callback(capture_spend_logs_ledger_setting(settings))
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -1828,6 +1855,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         )
 
     database: Final = existing_database or await _own_database(resources, prisma_client)
+    await _install_rust_spend_log_writer(resources, database)
 
     await migrate_if_requested(
         environ=os.environ,
@@ -3160,7 +3188,6 @@ app.add_middleware(
 )
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(RedisRequestBatchMiddleware)
-app.add_middleware(LensInternalMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
@@ -3308,6 +3335,38 @@ shared_aiohttp_session: Optional["ClientSession"] = None  # Global shared sessio
 user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
+hook_cache: Final = HookCache(
+    auth_cache=lambda: user_api_key_cache, default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
+)
+mcp_state_cache: Final = StateCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+jwks_cache: Final = StateCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+ui_settings_cache: Final = StateCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+sso_flow_cache: Final = StateCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+budget_windows_absent_cache: Final = DualCache(
+    in_memory_cache=InMemoryCache(default_ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL),
+    default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
+)
+
+
+def _caches_split_from_the_auth_cache() -> tuple[DualCache, ...]:
+    """Writers that kept their entries in the auth cache until they got caches of their own. They still follow
+    ``user_api_key_cache_ttl`` and ``user_api_key_cache_max_size``, as their entries did there."""
+    return (
+        hook_cache,
+        mcp_state_cache,
+        jwks_cache,
+        ui_settings_cache,
+        sso_flow_cache,
+        budget_windows_absent_cache,
+    )
+
+
+def _resize_the_auth_cache(max_size: int | None) -> None:
+    user_api_key_cache.update_in_memory_max_size(max_size)
+    for split_cache in _caches_split_from_the_auth_cache():
+        split_cache.update_in_memory_max_size(max_size)
+
+
 spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
 spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters())
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
@@ -3391,7 +3450,9 @@ open_telemetry_logger: OpenTelemetry | None = None
 # LiteLLM_DailyGatewayRequests by the update_gateway_requests scheduler job.
 gateway_request_accumulator: Final = GatewayRequestAccumulator()
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
-proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
+proxy_logging_obj: ProxyLogging = ProxyLogging(
+    user_api_key_cache=user_api_key_cache, hook_cache=hook_cache, premium_user=premium_user
+)
 
 
 def _gateway_request_redis_buffer() -> GatewayRequestRedisBuffer | None:
@@ -3489,11 +3550,29 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 spend_event_producer: SpendEventProducer | None = None
 
 
+def _register_rust_spend_loggers() -> bool:
+    from litellm.proxy.spend_tracking.rust_spend_log_rows import uses_spend_logs_ledger
+
+    if not uses_spend_logs_ledger():
+        return False
+    from litellm.proxy.hooks.rust_spend_logger import rust_spend_loggers
+
+    logger: Final = rust_spend_loggers(prisma_client)
+    if logger is None:
+        return False
+    litellm.logging_callback_manager.add_litellm_callback(logger)  # pyright: ignore[reportArgumentType]  # the callback list also holds V2 callbacks
+    litellm.logging_callback_manager.add_litellm_async_success_callback(logger)
+    return True
+
+
 def cost_tracking():
     global prisma_client, spend_event_producer
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
+        if _register_rust_spend_loggers():
+            litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
+            return
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
         db_logger: Final = ProxyDBLogger(spend_event_producer)
         litellm.logging_callback_manager.add_litellm_callback(db_logger)
@@ -3551,6 +3630,7 @@ async def get_current_spend(
     fallback_authoritative: bool = False,
     *,
     require_authoritative_window: bool = False,
+    recheck_recorded_spend: bool = False,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3603,8 +3683,8 @@ async def get_current_spend(
     # (fail_closed_budget_enforcement) always re-checks against the authoritative
     # source too, so a counter that is stale-low at the same time as the caller's
     # cached spend cannot slip through; the 5s cache keeps that bounded.
-    is_window: Final = window_start is not None
-    if fallback_spend > current or is_window or _fail_closed_budget_enforcement():
+    needs_recorded_floor: Final = window_start is not None or recheck_recorded_spend
+    if fallback_spend > current or needs_recorded_floor or _fail_closed_budget_enforcement():
         authoritative: Final = await _authoritative_floor_spend(
             counter_key=counter_key,
             window_entity_type=window_entity_type,
@@ -3819,6 +3899,7 @@ async def increment_spend_counters(
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
     customer_counters: Sequence[BudgetCounter] = (),
+    customer_hierarchy: object = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3829,7 +3910,30 @@ async def increment_spend_counters(
 
     Awaited (not create_task) in the cost callback, so the counter is
     updated before the next request's auth check runs.
+
+    With the ledger the whole step runs in Rust, the customer hierarchy in
+    ``customer_hierarchy`` charged in the same batch read and pipeline.
+
+    Deprecated: the ledger-off branch below is frozen and lives in
+    ``legacy_spend_counters``. Delete it together with the ledger-off setting.
     """
+    if windows_from_ledger:
+        await charge_spend_counters(
+            token=token,
+            team_id=team_id,
+            user_id=user_id,
+            response_cost=response_cost,
+            org_id=org_id,
+            budget_reservation=budget_reservation,
+            end_user_id=end_user_id,
+            tags=tags,
+            model_access_groups=model_access_groups,
+            project_id=project_id,
+            committed_spend_scope=committed_spend_scope,
+            customer_counters=customer_counters,
+            customer_hierarchy=customer_hierarchy,
+        )
+        return
     with spend_counter_batch_scope(
         spend_counter_store,
         counter_keys=post_call_counter_keys(
@@ -3844,7 +3948,7 @@ async def increment_spend_counters(
         )
         | frozenset(counter.counter_key for counter in customer_counters),
     ):
-        await _increment_spend_counters_batched(
+        await legacy_spend_counters.increment_spend_counters_batched(  # pyright: ignore[reportUnknownMemberType]  # the frozen ledger-off step, moved out unchanged
             token=token,
             team_id=team_id,
             user_id=user_id,
@@ -3875,17 +3979,21 @@ def _has_budget_windows(budget_limits: object) -> bool:
     return isinstance(budget_limits, (list, tuple)) and budget_limits not in ([], ())
 
 
+def budget_windows_absent_cache_key(entity_type: str, entity_id: str) -> str:
+    return f"budget_windows_absent:{entity_type}:{entity_id}"
+
+
 def _budget_windows_absent_marker(absent_key: str) -> object:
-    return _UNTYPED_VALUE.validate_python(user_api_key_cache.budget_windows_absent_cache.get_cache(key=absent_key))
+    return _UNTYPED_VALUE.validate_python(budget_windows_absent_cache.get_cache(key=absent_key))
 
 
 def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bool) -> None:
     if _budget_windows_absent_marker(absent_key) != pending_read:
         return
     if remember_absent:
-        user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=True)
+        budget_windows_absent_cache.set_cache(key=absent_key, value=True)
         return
-    user_api_key_cache.budget_windows_absent_cache.delete_cache(absent_key)
+    budget_windows_absent_cache.delete_cache(absent_key)
 
 
 async def customer_accounting_counters(
@@ -3901,7 +4009,6 @@ async def customer_accounting_counters(
     from litellm.proxy.auth.customer_hierarchy_auth import (
         get_customer_scopes_for_accounting,
     )
-    from litellm.proxy.management_helpers.customer_hierarchy import utc_datetime
 
     try:
         scopes: Final = (
@@ -3918,7 +4025,7 @@ async def customer_accounting_counters(
             "Unable to load customer budget windows for spend accounting"
         )
         return ()
-    now: Final = utc_datetime(started_at) if started_at is not None else datetime.now(timezone.utc)
+    now: Final = started_at.astimezone(timezone.utc) if started_at is not None else datetime.now(timezone.utc)
     return tuple(
         chain.from_iterable(
             customer_window_counters(scope.key, scope.entity_id, scope.accounting_limits(), now=now) for scope in scopes
@@ -3994,7 +4101,7 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
     if _budget_windows_absent_marker(absent_key) is True:
         return None
     pending_read: Final = f"reading:{secrets.token_hex(8)}"
-    user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=pending_read)
+    budget_windows_absent_cache.set_cache(key=absent_key, value=pending_read)
     try:
         row: Final[SupportsModelDump | None] = (
             await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": entity_id})
@@ -4015,609 +4122,6 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
     budget_limits: Final[object] = None if row is None else _cached_budget_limits(row)
     _finish_pending_read(absent_key, pending_read, remember_absent=not _has_budget_windows(budget_limits))
     return budget_limits
-
-
-async def _increment_spend_counters_batched(
-    token: str | None,
-    team_id: str | None,
-    user_id: str | None,
-    response_cost: float | None,
-    org_id: str | None,
-    budget_reservation: dict | None,
-    end_user_id: str | None,
-    tags: list[str] | None,
-    request_started_at: datetime | None,
-    model_access_groups: Sequence[str] | None,
-    project_id: str | None = None,
-    committed_spend_scope: EntitySpendCounterKeys | None = None,
-    windows_from_ledger: bool = False,
-    customer_counters: Sequence[BudgetCounter] = (),
-):
-    """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
-    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments.
-    """
-    committed_counter_keys: Final = (
-        tuple(counter_key for counter_key in committed_spend_scope.tracked() if has_committed_twin(counter_key))
-        if committed_spend_scope is not None and response_cost is not None and response_cost > 0
-        else ()
-    )
-    bind_spend_counter_keys(frozenset(committed_spend_keys(committed_counter_keys)))
-    reservation_update: Final = await _reconcile_budget_reservation_for_counter_update(
-        budget_reservation=budget_reservation,
-        response_cost=response_cost,
-    )
-    reserved_counter_keys: Final = reservation_update.reserved_counter_keys
-
-    if response_cost is None or response_cost == 0:
-        await _apply_spend_counter_increments(pending=reservation_update.pending)
-        stamp_budget_reservation_actual_cost(budget_reservation=budget_reservation, actual_cost=response_cost)
-        if budget_reservation is not None:
-            budget_reservation["finalized"] = True
-        return
-
-    cost: Final[float] = response_cost
-
-    async def _resolved_window_increment(
-        entity_type: Litellm_EntityType,
-        entity_id: str,
-        window_counter: str,
-        duration: str,
-        window_start: datetime | None,
-        window_reset_at: datetime | str | None,
-    ) -> PendingSpendIncrement | None:
-        pending_window: Final = (
-            await _prepare_window_spend_counter_increment(
-                counter_key=window_counter,
-                entity_type=(
-                    entity_type.value.capitalize()
-                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM, Litellm_EntityType.USER)
-                    else entity_type.value
-                ),
-                entity_id=entity_id,
-                window_duration=duration,
-                window_start=window_start,
-                increment=cost,
-            )
-            if window_counter not in reserved_counter_keys
-            else None
-        )
-        if not windows_from_ledger:
-            await _enqueue_window_spend_row_update(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                reset_at=window_reset_at,
-                window_duration=duration,
-                window_start=window_start,
-                increment=cost,
-                request_started_at=request_started_at,
-            )
-        return pending_window
-
-    async def _window_increment(
-        entity_type: Litellm_EntityType, entity_id: str, window: object
-    ) -> PendingSpendIncrement | None:
-        duration: Final = (
-            window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
-        )
-        duration_text: Final = TypeAdapter(str).validate_python(duration)
-        window_reset_at: Final = (
-            window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
-        )
-        window_counter: Final = (
-            key_window_counter(entity_id, duration_text)
-            if entity_type is Litellm_EntityType.KEY
-            else user_window_counter(entity_id, duration_text)
-            if entity_type is Litellm_EntityType.USER
-            else team_window_counter(entity_id, duration_text)
-        )
-        return await _resolved_window_increment(
-            entity_type, entity_id, window_counter, duration, get_budget_window_start(window), window_reset_at
-        )
-
-    async def _customer_windows() -> tuple[PendingSpendIncrement | BaseException, ...]:
-        pending: Final = await asyncio.gather(
-            *(
-                _resolved_window_increment(
-                    Litellm_EntityType(counter.entity_type),
-                    counter.entity_id,
-                    counter.counter_key,
-                    counter.window_duration,
-                    counter.window_start,
-                    counter.reset_at,
-                )
-                for counter in customer_counters
-                if counter.window_duration is not None
-            ),
-            return_exceptions=True,
-        )
-        return tuple(item for item in pending if item is not None)
-
-    async def _window_increments(
-        entity_type: Litellm_EntityType, entity_id: str, budget_limits: object
-    ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        if not isinstance(budget_limits, (list, tuple)):
-            return ()
-        window_pending: Final = await asyncio.gather(
-            *(_window_increment(entity_type, entity_id, window) for window in budget_limits), return_exceptions=True
-        )
-        return tuple(item for item in window_pending if item is not None)
-
-    async def _cached_window_increments(
-        entity_type: Litellm_EntityType, entity_id: str, cache_key: str
-    ) -> tuple[_SpendScopeItem, ...]:
-        cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
-        if cached is None:
-            return (_UncachedBudgetWindows(entity_type=entity_type, entity_id=entity_id),)
-        return await _window_increments(entity_type, entity_id, _cached_budget_limits(cached))
-
-    async def _stored_window_increments(
-        uncached: _UncachedBudgetWindows,
-    ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        return await _window_increments(
-            uncached.entity_type,
-            uncached.entity_id,
-            await _stored_budget_limits(uncached.entity_type, uncached.entity_id),
-        )
-
-    async def _key_scope(key_token: str) -> tuple[_SpendScopeItem, ...]:
-        # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
-        # hashes raw "sk-..." keys before they reach the callback). The
-        # startswith("sk-") check is a safety net matching update_cache —
-        # if a raw key somehow arrives, hash it; otherwise use as-is to
-        # avoid double-hashing (budget checks read valid_token.token which
-        # is single-hashed).
-        hashed_token: Final = (
-            hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
-        )
-        key_counter_key: Final = key_counter(hashed_token)
-        key_pending: Final[tuple[PendingSpendIncrement, ...]] = (
-            ()
-            if key_counter_key in reserved_counter_keys
-            else (
-                await _prepare_spend_counter_increment(
-                    counter_key=key_counter_key,
-                    source_cache_key=hashed_token,
-                    increment=cost,
-                ),
-            )
-        )
-
-        return key_pending + await _cached_window_increments(Litellm_EntityType.KEY, hashed_token, hashed_token)
-
-    async def _team_scope(scope_team_id: str) -> tuple[_SpendScopeItem, ...]:
-        team_counter_key: Final = team_counter(scope_team_id)
-        team_pending: Final[tuple[PendingSpendIncrement, ...]] = (
-            ()
-            if team_counter_key in reserved_counter_keys
-            else (
-                await _prepare_spend_counter_increment(
-                    counter_key=team_counter_key,
-                    source_cache_key=f"team_id:{scope_team_id}",
-                    increment=cost,
-                ),
-            )
-        )
-
-        return team_pending + await _cached_window_increments(
-            Litellm_EntityType.TEAM, scope_team_id, f"team_id:{scope_team_id}"
-        )
-
-    async def _team_member_scope(
-        scope_user_id: str, scope_team_id: str
-    ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        team_member_counter_key: Final = team_member_counter(scope_user_id, scope_team_id)
-        if team_member_counter_key in reserved_counter_keys:
-            return ()
-        return (
-            await _prepare_spend_counter_increment(
-                counter_key=team_member_counter_key,
-                source_cache_key=f"team_membership:{scope_user_id}:{scope_team_id}",
-                increment=cost,
-            ),
-        )
-
-    async def _user_scope(scope_user_id: str) -> tuple[_SpendScopeItem, ...]:
-        user_counter_key: Final = user_counter(scope_user_id)
-        pending: Final = (
-            ()
-            if user_counter_key in reserved_counter_keys
-            else (
-                await _prepare_spend_counter_increment(
-                    counter_key=user_counter_key,
-                    source_cache_key=scope_user_id,
-                    increment=cost,
-                ),
-            )
-        )
-        return pending + await _cached_window_increments(Litellm_EntityType.USER, scope_user_id, scope_user_id)
-
-    scope_coros: Final = tuple(
-        coro
-        for coro in (
-            _customer_windows() if customer_counters else None,
-            _key_scope(token) if token is not None else None,
-            _team_scope(team_id) if team_id is not None else None,
-            _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
-            _user_scope(user_id) if user_id is not None else None,
-            _prepare_end_user_and_tag_spend_increments(
-                end_user_id=end_user_id,
-                tags=tags,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            if end_user_id is not None or tags is not None
-            else None,
-            _prepare_model_access_group_spend_increments(
-                model_access_groups=model_access_groups,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            if model_access_groups
-            else None,
-            _prepare_org_spend_increment(
-                org_id=org_id,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            if org_id is not None
-            else None,
-            _prepare_project_spend_increment(
-                project_id=project_id,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            if project_id is not None
-            else None,
-            _prepare_committed_spend_increments(counter_keys=committed_counter_keys, increment=cost)
-            if committed_counter_keys
-            else None,
-        )
-        if coro is not None
-    )
-
-    # return_exceptions so a failing scope does not leave its siblings running
-    # as orphaned tasks that race the caller's reservation-counter invalidation;
-    # all scopes settle, then the first error propagates as before.
-    scope_items: Final = tuple(_flatten_spend_scopes(await asyncio.gather(*scope_coros, return_exceptions=True)))
-    uncached_windows: Final = tuple(item for item in scope_items if isinstance(item, _UncachedBudgetWindows))
-    await _apply_spend_counter_increments(
-        pending=reservation_update.pending
-        + tuple(item for item in scope_items if isinstance(item, PendingSpendIncrement))
-    )
-    stored_window_items: Final = (
-        tuple(
-            _flatten_spend_scopes(
-                await asyncio.gather(
-                    *(_stored_window_increments(uncached) for uncached in uncached_windows), return_exceptions=True
-                )
-            )
-        )
-        if uncached_windows
-        else ()
-    )
-    stored_window_pending: Final = tuple(
-        item for item in stored_window_items if isinstance(item, PendingSpendIncrement)
-    )
-    if stored_window_pending:
-        await _apply_spend_counter_increments(pending=stored_window_pending)
-    stamp_budget_reservation_actual_cost(budget_reservation=budget_reservation, actual_cost=response_cost)
-    scope_errors: Final = tuple(item for item in scope_items + stored_window_items if isinstance(item, BaseException))
-    if scope_errors:
-        raise scope_errors[0]
-
-    if budget_reservation is not None:
-        budget_reservation["finalized"] = True
-
-
-@dataclass(frozen=True, slots=True)
-class _UncachedBudgetWindows:
-    entity_type: Litellm_EntityType
-    entity_id: str
-
-
-_SpendScopeItem: TypeAlias = PendingSpendIncrement | BaseException | _UncachedBudgetWindows
-
-
-def _flatten_spend_scopes(
-    scope_results: Sequence[tuple[_SpendScopeItem, ...] | BaseException],
-) -> Iterator[_SpendScopeItem]:
-    for scope in scope_results:
-        if isinstance(scope, BaseException):
-            yield scope
-            continue
-        yield from scope
-
-
-@dataclass(frozen=True, slots=True)
-class _ReservationCounterUpdate:
-    """The reserved counters the direct increment must skip, and the adjustments that settle them on the actual
-    cost, still to be written; both empty when the reservation could not be reconciled and was dropped.
-    """
-
-    reserved_counter_keys: frozenset[str] = frozenset()
-    pending: tuple[PendingSpendIncrement, ...] = ()
-
-
-async def _reconcile_budget_reservation_for_counter_update(
-    budget_reservation: dict | None,
-    response_cost: float | None,
-) -> _ReservationCounterUpdate:
-    if budget_reservation is None or budget_reservation.get("finalized") is True:
-        return _ReservationCounterUpdate()
-
-    from litellm.proxy.spend_tracking.budget_reservation import (
-        get_reserved_counter_keys,
-        invalidate_budget_reservation_counters,
-        reconcile_budget_reservation,
-    )
-
-    reserved_counter_keys: Final = get_reserved_counter_keys(budget_reservation=budget_reservation)
-    try:
-        pending: Final = await reconcile_budget_reservation(
-            budget_reservation=budget_reservation,
-            actual_cost=response_cost or 0.0,
-            finalize=False,
-            apply_consistent=False,
-        )
-    except Exception:
-        verbose_proxy_logger.warning(
-            "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and falling back to direct increment",
-            exc_info=True,
-        )
-        try:
-            await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
-        except Exception:
-            verbose_proxy_logger.exception(
-                "Failed to invalidate reserved counters after reservation reconciliation failed"
-            )
-        return _ReservationCounterUpdate()
-    return _ReservationCounterUpdate(reserved_counter_keys=frozenset(reserved_counter_keys), pending=pending)
-
-
-async def _committed_spend_seeded(counter_key: str) -> bool:
-    return await _is_spend_counter_cache_warm(committed_spend_key(counter_key)) or await seed_committed_spend(
-        spend_counter_store=spend_counter_store, prisma_client=prisma_client, counter_key=counter_key
-    )
-
-
-async def _prepare_committed_spend_increments(
-    counter_keys: tuple[str, ...], increment: float
-) -> tuple[PendingSpendIncrement, ...]:
-    seeded: Final = await asyncio.gather(*(_committed_spend_seeded(counter_key) for counter_key in counter_keys))
-    return tuple(
-        PendingSpendIncrement(counter_key=committed_spend_key(counter_key), increment=increment)
-        for counter_key, is_seeded in zip(counter_keys, seeded)
-        if is_seeded
-    )
-
-
-async def _prepare_end_user_and_tag_spend_increments(
-    end_user_id: str | None,
-    tags: list[str] | None,
-    response_cost: float,
-    reserved_counter_keys: set[str],
-) -> tuple[PendingSpendIncrement | BaseException, ...]:
-    unique_tags: Final = (
-        tuple(dict.fromkeys(tag for tag in tags if tag and isinstance(tag, str))) if tags is not None else ()
-    )
-    results: Final = await asyncio.gather(
-        *(
-            coro
-            for coro in (
-                _prepare_unreserved_spend_counter_increment(
-                    counter_key=end_user_counter(end_user_id),
-                    source_cache_key=end_user_cache_key(end_user_id),
-                    increment=response_cost,
-                    reserved_counter_keys=reserved_counter_keys,
-                )
-                if end_user_id is not None
-                else None,
-                *(
-                    _prepare_unreserved_spend_counter_increment(
-                        counter_key=tag_counter(tag_name),
-                        source_cache_key=tag_cache_key(tag_name),
-                        increment=response_cost,
-                        reserved_counter_keys=reserved_counter_keys,
-                    )
-                    for tag_name in unique_tags
-                ),
-            )
-            if coro is not None
-        ),
-        return_exceptions=True,
-    )
-    return tuple(item for item in results if item is not None)
-
-
-async def _prepare_model_access_group_spend_increments(
-    model_access_groups: Sequence[object],
-    response_cost: float,
-    reserved_counter_keys: set[str],
-) -> tuple[PendingSpendIncrement | BaseException, ...]:
-    """Charge the model access groups that authorized this request.
-
-    Without this the counter auth reads is written only by the reservation path, so
-    ``disable_budget_reservation`` would leave ``_model_access_group_max_budget_check`` enforcing
-    against the DB row's spend, which lags by up to the cache TTL.
-
-    Typed ``object`` rather than ``str`` because the names reach the cost callback out of request
-    metadata, which the coercion upstream filters to a list but not to strings. A non-string that
-    slipped through would build a counter key nothing else ever reads.
-    """
-    unique_groups: Final = tuple(
-        dict.fromkeys(group for group in model_access_groups if group and isinstance(group, str))
-    )
-    results: Final = await asyncio.gather(
-        *(
-            _prepare_unreserved_spend_counter_increment(
-                counter_key=model_access_group_counter(group),
-                source_cache_key=model_access_group_cache_key(group),
-                increment=response_cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            for group in unique_groups
-        ),
-        return_exceptions=True,
-    )
-    return tuple(item for item in results if item is not None)
-
-
-async def _prepare_org_spend_increment(
-    org_id: str | None,
-    response_cost: float,
-    reserved_counter_keys: set[str],
-) -> tuple[PendingSpendIncrement, ...]:
-    if org_id is None:
-        return ()
-
-    pending: Final = await _prepare_unreserved_spend_counter_increment(
-        counter_key=org_counter(org_id),
-        source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
-        increment=response_cost,
-        reserved_counter_keys=reserved_counter_keys,
-    )
-    return (pending,) if pending is not None else ()
-
-
-async def _prepare_project_spend_increment(
-    project_id: str | None,
-    response_cost: float,
-    reserved_counter_keys: set[str],
-) -> tuple[PendingSpendIncrement, ...]:
-    if project_id is None:
-        return ()
-
-    pending: Final = await _prepare_unreserved_spend_counter_increment(
-        counter_key=project_counter(project_id),
-        source_cache_key=project_cache_key(project_id),
-        increment=response_cost,
-        reserved_counter_keys=reserved_counter_keys,
-    )
-    return (pending,) if pending is not None else ()
-
-
-async def _prepare_unreserved_spend_counter_increment(
-    counter_key: str,
-    source_cache_key: str | list[str],
-    increment: float,
-    reserved_counter_keys: set[str],
-) -> PendingSpendIncrement | None:
-    if counter_key in reserved_counter_keys:
-        return None
-
-    return await _prepare_spend_counter_increment(
-        counter_key=counter_key,
-        source_cache_key=source_cache_key,
-        increment=increment,
-    )
-
-
-async def _prepare_spend_counter_increment(
-    counter_key: str,
-    source_cache_key: str | list[str],
-    increment: float,
-) -> PendingSpendIncrement:
-    """
-    Initialize counter from the authoritative DB spend value if not yet
-    set, then return the pending increment for the caller to apply in one
-    pipelined Redis call.
-
-    On first access per pod:
-    1. Check spend_counter_store (Redis, then this worker's memory)
-    2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
-       Falls back to the cached object's `.spend` via user_api_key_cache
-       only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
-       check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment means the worst case
-       is over-counting (conservative, blocks slightly early) rather than
-       under-counting (would allow overspend).
-    4. Increment is returned for the caller to apply via pipeline
-    """
-    with service_target(SPEND_COUNTERS_TARGET):
-        await ensure_spend_counter_initialized(
-            counter_key=counter_key,
-            source_cache_key=source_cache_key,
-        )
-    return PendingSpendIncrement(counter_key=counter_key, increment=increment)
-
-
-async def _enqueue_window_spend_row_update(
-    entity_type: Litellm_EntityType,
-    entity_id: str,
-    reset_at: datetime | str | None,
-    window_duration: str,
-    window_start: datetime | None,
-    increment: float,
-    request_started_at: datetime | None,
-) -> None:
-    """Queue this request's cost against the LiteLLM_BudgetWindowSpend row for
-    the window, so enforcement can read a maintained total instead of
-    aggregating LiteLLM_SpendLogs.
-
-    request_started_at is this request's LiteLLM_SpendLogs startTime; the flush
-    stops the one-time seed there so a request its increment already covers is
-    not counted twice.
-
-    Enqueued even when the cache increment was skipped for a reserved counter:
-    the reservation only pre-charged the counter, and the row still owes the
-    actual cost.
-
-    Windows with no reset_at slide with wall clock, so their window_start moves
-    on every request and no single row can represent them. Those are left to
-    the read path's LiteLLM_SpendLogs fallback rather than rewritten per
-    request.
-    """
-    if window_start is None or not reset_at:
-        return
-    try:
-        await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(
-            build_window_spend_transaction(
-                entity_type=entity_type.value,
-                entity_id=entity_id,
-                window_duration=window_duration,
-                window_start=window_start,
-                spend=increment,
-                started_at=request_started_at,
-                reset_at=reset_at,
-            )
-        )
-    except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
-        verbose_proxy_logger.debug(
-            "Unable to enqueue budget window spend update for %s=%s window=%s: %s",
-            entity_type.value,
-            entity_id,
-            window_duration,
-            e,
-        )
-
-
-async def _prepare_window_spend_counter_increment(
-    counter_key: str,
-    entity_type: str,
-    entity_id: str,
-    window_duration: str | None,
-    window_start: datetime | None,
-    increment: float,
-) -> PendingSpendIncrement | None:
-    if window_start is None:
-        verbose_proxy_logger.warning(
-            "Skipping spend counter increment for invalid budget window %s",
-            counter_key,
-        )
-        return None
-
-    with service_target(SPEND_COUNTERS_TARGET):
-        initialized: Final = await ensure_window_spend_counter_initialized(
-            counter_key=counter_key,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            window_duration=window_duration,
-            window_start=window_start,
-        )
-    if initialized is False:
-        return None
-    return PendingSpendIncrement(counter_key=counter_key, increment=increment)
 
 
 async def ensure_spend_counter_initialized(
@@ -4782,7 +4286,9 @@ async def set_spend_counter_with_floor_and_broadcast(counter_key: str, value: fl
     await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
 
 
-async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:
+async def _apply_spend_counter_increments(  # pyright: ignore[reportUnusedFunction]  # called by legacy_spend_counters
+    pending: Sequence[PendingSpendIncrement],
+) -> None:
     if _defer_spend_counter_increments(pending):
         return
     try:
@@ -4796,17 +4302,8 @@ async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncremen
 def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> bool:
     """Post-call increments ride the request's native post-call pipeline with the other counters. Each counter's
     new value lands in memory when the pipeline settles; a failed one is dropped everywhere so no reader trusts a
-    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does.
-    """
-    settlement: Final = spend_counter_store.increment_many_post_call(
-        tuple((item.counter_key, item.increment) for item in pending)
-    )
-    if settlement is None:
-        return False
-    batches: Final = active_request_redis_batches()
-    if batches is not None and any(is_committed_spend_key(item.counter_key) for item in pending):
-        batches.track_post_call_settlement(settlement)
-    return True
+    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
+    return spend_counter_store.increment_many_post_call(tuple((item.counter_key, item.increment) for item in pending))
 
 
 async def increment_spend_counters_pipeline(
@@ -5271,6 +4768,19 @@ async def _adaptive_router_flusher_loop():
             verbose_proxy_logger.exception("adaptive_router flusher iteration failed")
 
 
+def _public_wildcard_children(
+    public_names: Iterable[str] | None,
+    router: Router | None,
+    has_db: bool,
+    model_groups: AbstractSet[str] | None,
+) -> tuple[tuple[Mapping[str, object], ...], frozenset[str]]:
+    """Background-check entries for public models only a wildcard serves, and their ids; none without a DB to save to."""
+    if router is None or not has_db or not public_names:
+        return (), frozenset()
+    children: Final = public_wildcard_children(public_names, router, model_groups)
+    return children, deployment_ids(children)
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -5334,7 +4844,13 @@ async def _run_background_health_check():
         scoped_model_groups = (
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
-        _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
+        wildcard_children, wildcard_child_ids = _public_wildcard_children(
+            litellm.public_model_groups, llm_router, prisma_client is not None, scoped_model_groups
+        )
+        _llm_model_list = [
+            *filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups),
+            *wildcard_children,
+        ]
         if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
                 "background_health_check_model_groups matched no deployments; groups=%s",
@@ -5409,18 +4925,22 @@ async def _run_background_health_check():
                 instrumentation_context,
             )
 
+        routing_healthy, child_healthy = split_by_model_ids(healthy_endpoints, wildcard_child_ids)
+        routing_unhealthy, child_unhealthy = split_by_model_ids(unhealthy_endpoints, wildcard_child_ids)
+
         # Update the global variable with the health check results
-        health_check_results["healthy_endpoints"] = healthy_endpoints
-        health_check_results["unhealthy_endpoints"] = unhealthy_endpoints
-        health_check_results["healthy_count"] = len(healthy_endpoints)
-        health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
+        health_check_results["healthy_endpoints"] = list(routing_healthy)
+        health_check_results["unhealthy_endpoints"] = list(routing_unhealthy)
+        health_check_results["healthy_count"] = len(routing_healthy)
+        health_check_results["unhealthy_count"] = len(routing_unhealthy)
         cycle_duration_ms = (time.monotonic() - cycle_start_time) * 1000
         verbose_proxy_logger.debug(
-            "background_health_check_cycle_complete cycle_id=%s model_count_enabled=%d healthy_count=%d unhealthy_count=%d duration_ms=%.2f interval_seconds=%s thread_count=%d rss_mb=%s",
+            "background_health_check_cycle_complete cycle_id=%s model_count_enabled=%d healthy_count=%d unhealthy_count=%d child_count=%d duration_ms=%.2f interval_seconds=%s thread_count=%d rss_mb=%s",
             cycle_id,
             model_count_enabled,
-            len(healthy_endpoints),
-            len(unhealthy_endpoints),
+            len(routing_healthy),
+            len(routing_unhealthy),
+            len(child_healthy) + len(child_unhealthy),
             cycle_duration_ms,
             health_check_interval,
             threading.active_count(),
@@ -5446,7 +4966,7 @@ async def _run_background_health_check():
         )
 
         # Write health state to router cache for health-check-driven routing
-        _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id)
+        _write_health_state_to_router_cache(list(routing_healthy), list(routing_unhealthy), _exceptions_by_model_id)
 
         await asyncio.sleep(health_check_interval)
 
@@ -5745,6 +5265,8 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
             redis_cache,
             default_redis_ttl=litellm.default_redis_ttl,
         )
+        for shared_cache in (hook_cache, mcp_state_cache, jwks_cache, ui_settings_cache):
+            shared_cache.attach_redis_cache(redis_cache, default_redis_ttl=litellm.default_redis_ttl)
         verbose_proxy_logger.info(
             "enable_redis_auth_cache=True: attached Redis to "
             "user_api_key_cache — virtual-key lookups are now "
@@ -7688,10 +7210,12 @@ class ProxyConfig:
                     default_in_memory_ttl=ttl,
                     default_redis_ttl=ttl,
                 )
+                for split_cache in _caches_split_from_the_auth_cache():
+                    split_cache.update_cache_ttl(default_in_memory_ttl=ttl, default_redis_ttl=ttl)
 
             ### USER API KEY CACHE MAX SIZE (in-memory tier shared by keys, teams, users, end users, ...) ###
             if "user_api_key_cache_max_size" in general_settings:
-                user_api_key_cache.update_in_memory_max_size(
+                _resize_the_auth_cache(
                     ConfigGeneralSettings.model_validate(
                         MappingProxyType(
                             {"user_api_key_cache_max_size": general_settings["user_api_key_cache_max_size"]}
@@ -8945,7 +8469,7 @@ class ProxyConfig:
                 self.settings.pop("user_api_key_cache_max_size", None)
             else:
                 self.settings["user_api_key_cache_max_size"] = cache_max_size
-        user_api_key_cache.update_in_memory_max_size(cache_max_size)
+        _resize_the_auth_cache(cache_max_size)
 
     async def _apply_store_model_in_db_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         global store_model_in_db
@@ -9359,6 +8883,13 @@ class ProxyConfig:
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
             additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
+            evicted_caches=(
+                budget_windows_absent_cache.in_memory_cache,
+                hook_cache.in_memory_cache,
+                mcp_state_cache.in_memory_cache,
+                jwks_cache.in_memory_cache,
+                ui_settings_cache.in_memory_cache,
+            ),
             spend_counters=spend_counter_store,
         )
         self.auth_cache_invalidation_subscriber = subscriber
@@ -13162,6 +12693,27 @@ async def _key_model_listing(
         entries=entries,
         labels=label_entries(listed_entries, entries),
     )
+
+
+async def accessible_model_names(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+
+    listing: Final = await _key_model_listing(
+        auth,
+        await request_caller_aliases(auth),
+        await _listing_hidden_names(None),
+        include_wildcard_routes=True,
+        offered_model_names=llm_router.registry().names(team_id=auth.team_id) if llm_router else (),
+    )
+
+    async def allowed(model: str) -> bool:
+        try:
+            await can_key_call_resolved_model(model, None, auth, llm_router)
+        except ModelAccessDeniedProxyException:
+            return False
+        return True
+
+    return tuple([row["id"] for row in listing.rows if await allowed(row["id"])])
 
 
 async def codex_catalog_rows_for_key(user_api_key_dict: UserAPIKeyAuth) -> tuple[CodexCatalogRow, ...]:
@@ -20267,23 +19819,21 @@ async def fallback_login(request: Request):
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
-    from litellm.proxy.proxy_server import ui_link
+    from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+    from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import SSO_FALLBACK_COOKIE
 
-    # get url from request
-    redirect_url = get_custom_url(str(request.base_url))
-    if redirect_url.endswith("/"):
-        redirect_url += "sso/callback"
-    else:
-        redirect_url += "/sso/callback"
-
-    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
-    return HTMLResponse(
-        content=build_ui_login_form(
-            show_deprecation_banner=False,
-            hide_default_credentials_hint=hide_default_credentials_hint,
-        ),
-        status_code=200,
+    login_page: Final = RedirectResponse(
+        url=get_custom_url(str(request.base_url)).rstrip("/") + "/ui/login", status_code=303
     )
+    login_page.set_cookie(
+        key=SSO_FALLBACK_COOKIE,
+        value="1",
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=IPAddressUtils.is_request_https(request),
+    )
+    return login_page
 
 
 @router.post("/login", include_in_schema=False)  # hidden since this is a helper for UI sso login
@@ -20358,7 +19908,7 @@ async def login(request: Request):
                 return_to=cp_return_to,
                 jwt_token=jwt_token,
                 redis_usage_cache=redis_usage_cache,
-                user_api_key_cache=user_api_key_cache,
+                sso_flow_cache=sso_flow_cache,
                 request=request,
             )
         except Exception:  # noqa: BLE001  # resuming must NEVER block a completed sign-in
@@ -20378,6 +19928,33 @@ async def login(request: Request):
     if "litellm_cp_return_to" in request.cookies:
         redirect_response.delete_cookie(key="litellm_cp_return_to")
     return redirect_response
+
+
+@router.get("/login/resume", include_in_schema=False)
+async def login_resume(request: Request) -> RedirectResponse:
+    """Send a browser that is signed in to the dashboard back to the return_to it asked for before sign-in"""
+    from litellm.proxy.management_endpoints.ui_sso import read_return_to_cookie, sso_return_to_redirect
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import session_identity_from_cookie
+    from litellm.proxy.utils import get_custom_url
+
+    dashboard: Final = RedirectResponse(
+        url=get_custom_url(str(request.base_url)).rstrip("/") + "/ui?login=success", status_code=303
+    )
+    dashboard.delete_cookie(key="litellm_cp_return_to")
+    session_token: Final = request.cookies.get("token")
+    if session_token is None or session_identity_from_cookie(request)[0] is None:
+        return dashboard
+    try:
+        resumed: Final = await sso_return_to_redirect(
+            return_to=read_return_to_cookie(request),
+            jwt_token=session_token,
+            redis_usage_cache=redis_usage_cache,
+            sso_flow_cache=sso_flow_cache,
+            request=request,
+        )
+    except Exception:  # noqa: BLE001  # a stale return_to must never strand a signed-in browser
+        return dashboard
+    return resumed or dashboard
 
 
 @router.post("/v2/login", include_in_schema=False)  # hidden helper for UI logins via API
@@ -20411,7 +19988,9 @@ async def login_v2(request: Request):
 
         litellm_dashboard_ui = get_custom_url(str(request.base_url))
         litellm_dashboard_ui = litellm_dashboard_ui.rstrip("/")
-        litellm_dashboard_ui += "/ui?login=success"
+        from litellm.proxy.management_endpoints.ui_sso import read_return_to_cookie
+
+        litellm_dashboard_ui += "/login/resume" if read_return_to_cookie(request) else "/ui?login=success"
 
         # Token is included in the response body so the UI can set a JS-accessible
         # cookie even when a reverse proxy (e.g. nginx-ingress) adds HttpOnly to the
@@ -20492,7 +20071,7 @@ async def login_v3(request: Request):
         if redis_usage_cache is not None:
             await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
         else:
-            await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+            await sso_flow_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
 
         return JSONResponse(
             content={"code": code, "expires_in": 60},
@@ -20546,7 +20125,7 @@ async def login_v3_exchange(request: Request):
         cached_data: Final[object] = _UNTYPED_VALUE.validate_python(
             await redis_usage_cache.async_get_cache(key=cache_key)
             if redis_usage_cache is not None
-            else await user_api_key_cache.async_get_cache(key=cache_key)
+            else await sso_flow_cache.async_get_cache(key=cache_key)
         )
 
         if not cached_data or not isinstance(cached_data, dict):
@@ -20561,7 +20140,7 @@ async def login_v3_exchange(request: Request):
         if redis_usage_cache is not None:
             await redis_usage_cache.async_delete_cache(key=cache_key)
         else:
-            await user_api_key_cache.async_delete_cache(key=cache_key)
+            await sso_flow_cache.async_delete_cache(key=cache_key)
 
         json_response: Final = JSONResponse(
             content={
@@ -23742,11 +23321,11 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
     )
 
     cache_key: Final = f"mcp_access_group_exists:{name}"
-    cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    cached: Final[object] = _UNTYPED_VALUE.validate_python(await mcp_state_cache.async_get_cache(key=cache_key))
     if cached is not None:
         return bool(cached)
     result: Final = bool(await MCPRequestHandler.get_mcp_servers_from_access_groups([name]))
-    await user_api_key_cache.async_set_cache(
+    await mcp_state_cache.async_set_cache(
         key=cache_key,
         value=result,
         ttl=(get_management_object_ttl(user_api_key_cache) if result else DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL),
