@@ -912,40 +912,46 @@ class DBSpendUpdateWriter:
                 payload["team_id"] = team_id
 
             if use_ledger:
-                from litellm.accounting.snapshot import build_accounting_payload
+                from litellm.proxy.spend_tracking.rust_spend_log_rows import LedgerRowInput, ledger_columns
 
-                if not _is_settle_once_cost_row(payload):
-                    payload["accounting_delivery_id"] = uuid.uuid4().hex
-                payload["accounting_payload"] = build_accounting_payload(
+                columns: Final = ledger_columns(
                     payload,
-                    entities={
-                        "api_key": _persistable_api_key(hashed_token, payload.get("api_key") or ""),
-                        "user": user_id,
-                        "end_user": end_user_id,
-                        "team_id": team_id,
-                        "organization_id": org_id,
-                        "project_id": project_id,
-                        **(customer_hierarchy.entities() if customer_hierarchy is not None else {}),
-                        "agent_id": payload["agent_id"],
-                        "proxy_budget_name": litellm_proxy_budget_name if litellm.max_budget > 0 else None,
-                    },
-                    model_access_groups=debitable_model_access_groups(
-                        get_request_model_access_groups(request_fields), payload["model_id"], llm_router
-                    ),
-                    windows=await accounting_window_keys(
-                        hashed_token,
-                        team_id,
-                        customer_counters
-                        if customer_counters is not None
-                        else await customer_accounting_counters(
-                            customer_hierarchy, customer_budget_scopes_from_request(request_fields)
+                    LedgerRowInput(
+                        billable_cost=billable_cost,
+                        delivery_id=uuid.uuid4().hex,
+                        entities={
+                            "api_key": _persistable_api_key(hashed_token, payload.get("api_key") or ""),
+                            "user": user_id,
+                            "end_user": end_user_id,
+                            "team_id": team_id,
+                            "organization_id": org_id,
+                            "project_id": project_id,
+                            **(customer_hierarchy.entities() if customer_hierarchy is not None else {}),
+                            "agent_id": payload["agent_id"],
+                            "proxy_budget_name": litellm_proxy_budget_name if litellm.max_budget > 0 else None,
+                        },
+                        model_access_groups=debitable_model_access_groups(
+                            get_request_model_access_groups(request_fields), payload["model_id"], llm_router
                         ),
-                        user_id=user_id,
-                    )
-                    if billable_cost
-                    else (),
-                    router=get_llm_router,
+                        windows=await accounting_window_keys(
+                            hashed_token,
+                            team_id,
+                            customer_counters
+                            if customer_counters is not None
+                            else await customer_accounting_counters(
+                                customer_hierarchy, customer_budget_scopes_from_request(request_fields)
+                            ),
+                            user_id=user_id,
+                        )
+                        if billable_cost
+                        else (),
+                        router=get_llm_router,
+                    ),
                 )
+                payload["spend"] = columns["spend"]
+                if columns["accounting_delivery_id"] is not None:
+                    payload["accounting_delivery_id"] = columns["accounting_delivery_id"]
+                payload["accounting_payload"] = columns["accounting_payload"]
             keep_spend_logs: Final = disable_spend_logs is False and not (
                 "status" in payload
                 and payload["status"] == "failure"
