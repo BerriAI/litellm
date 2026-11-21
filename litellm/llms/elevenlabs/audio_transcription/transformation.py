@@ -26,6 +26,19 @@ from ..common_utils import ElevenLabsException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_FORM_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _form_scalar(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _form_value(value: object) -> str | tuple[str, ...]:
+    if isinstance(value, (list, tuple)):
+        return tuple(_form_scalar(item) for item in _FORM_ITEMS.validate_python(value))
+    return _form_scalar(value)
 
 
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -75,30 +88,20 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # Use common utility to process the audio file
         processed_audio: Final = process_audio_file(audio_file)
 
-        # Prepare form data
-        form_data: Final = {"model_id": model}
-
-        #########################################################
-        # Add OpenAI Compatible Parameters
-        #########################################################
-        for key, value in optional_params.items():
-            if key in self.get_supported_openai_params(model) and value is not None:
-                # Convert values to strings for form data, but skip None values
-                form_data[key] = str(value)
-
-        #########################################################
-        # Add Provider Specific Parameters
-        #########################################################
-        provider_specific_params: Final = self.get_provider_specific_params(
-            model=model,
-            optional_params=optional_params,
-            openai_params=self.get_supported_openai_params(model),
+        openai_params: Final = self.get_supported_openai_params(model)
+        params: Final = _JSON_OBJECT.validate_python(optional_params)
+        provider_specific_params: Final = _JSON_OBJECT.validate_python(
+            self.get_provider_specific_params(
+                model=model,
+                optional_params=optional_params,
+                openai_params=openai_params,
+            )
         )
-
-        for key, value in provider_specific_params.items():
-            form_data[key] = str(value)
-        #########################################################
-        #########################################################
+        form_data: Final = {
+            "model_id": model,
+            **{key: _form_value(value) for key, value in params.items() if key in openai_params and value is not None},
+            **{key: _form_value(value) for key, value in provider_specific_params.items()},
+        }
 
         # Prepare files
         files: Final = {
