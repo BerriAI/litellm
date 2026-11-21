@@ -217,7 +217,7 @@ def _prompt_text(row: Mapping[str, object]) -> str:
 
 
 def _changed_text(previous: str, current: str) -> str | None:
-    if not previous.strip("[]\" ,") or not current.strip("[]\" ,"):
+    if not previous.strip('[]" ,') or not current.strip('[]" ,'):
         return None
     offset: Final = next((i for i, (a, b) in enumerate(zip(previous, current)) if a != b), None)
     if offset is None:
@@ -252,9 +252,15 @@ def _explain(previous: Mapping[str, object], row: Mapping[str, object]) -> Cache
     prices: Final = litellm.model_cost.get(model) or litellm.model_cost.get(model.split("/", 1)[-1]) or {}
     input_price: Final = float(prices.get("input_cost_per_token") or 0)
     wasted: Final = missed * (input_price - float(prices.get("cache_read_input_token_cost") or input_price))
-    start: Final = row["startTime"] if isinstance(row["startTime"], datetime) else datetime.fromisoformat(str(row["startTime"]))
+    start: Final = (
+        row["startTime"] if isinstance(row["startTime"], datetime) else datetime.fromisoformat(str(row["startTime"]))
+    )
     previous_start: Final = (
-        (previous["startTime"] if isinstance(previous["startTime"], datetime) else datetime.fromisoformat(str(previous["startTime"])))
+        (
+            previous["startTime"]
+            if isinstance(previous["startTime"], datetime)
+            else datetime.fromisoformat(str(previous["startTime"]))
+        )
         if previous
         else start
     )
@@ -277,7 +283,10 @@ def _explain(previous: Mapping[str, object], row: Mapping[str, object]) -> Cache
         verdict = "provider"
         reason = f"Prefix was identical, but {int((start - previous_start).total_seconds() // 60)} min passed and the provider cache expired"
     else:
-        verdict, reason = "provider", "Prefix was identical and routing was sticky, the provider still reported no cache read"
+        verdict, reason = (
+            "provider",
+            "Prefix was identical and routing was sticky, the provider still reported no cache read",
+        )
     return CacheTurn(
         request_id=str(row["request_id"]),
         start_time=start,
