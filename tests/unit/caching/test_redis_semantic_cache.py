@@ -1475,3 +1475,74 @@ def test_redis_semantic_cache_prompt_extraction_keeps_tool_result_text():
     )
 
     assert prompt == "list the filescalc.py test_calc.py"
+
+
+def test_redis_semantic_cache_bypasses_tool_and_function_calls(monkeypatch):
+    """
+    Issue #51900: Semantic caching maps similar prompts to identical buckets.
+    Requests with dynamic entity IDs can trigger cross-tenant tool call argument leaks.
+    Semantic cache MUST bypass tool/function call requests unless explicitly enabled.
+    """
+    semantic_cache_mock = MagicMock()
+    with _fake_redisvl_modules(semantic_cache_mock, MagicMock()):
+        from litellm.caching.caching import Cache, LiteLLMCacheType
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        cache = Cache(type=LiteLLMCacheType.REDIS_SEMANTIC, similarity_threshold=0.8)
+
+        tool_def = [{"type": "function", "function": {"name": "refund_charge"}}]
+        func_def = [{"name": "refund_charge"}]
+
+        assert cache.should_use_cache(messages=[{"role": "user", "content": "hello"}]) is True
+        assert (
+            cache.should_use_cache(
+                messages=[{"role": "user", "content": "refund charge"}],
+                tools=tool_def,
+            )
+            is False
+        )
+        assert (
+            cache.should_use_cache(
+                messages=[{"role": "user", "content": "refund charge"}],
+                functions=func_def,
+            )
+            is False
+        )
+        assert (
+            cache.should_use_cache(
+                messages=[{"role": "user", "content": "refund charge"}],
+                extra_body={"tools": tool_def},
+            )
+            is False
+        )
+
+
+def test_redis_semantic_cache_allows_tools_when_explicitly_opted_in(monkeypatch):
+    """
+    When semantic_cache_allow_tools=True, semantic cache allows caching with tools.
+    """
+    semantic_cache_mock = MagicMock()
+    with _fake_redisvl_modules(semantic_cache_mock, MagicMock()):
+        from litellm.caching.caching import Cache, LiteLLMCacheType
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        cache = Cache(
+            type=LiteLLMCacheType.REDIS_SEMANTIC,
+            similarity_threshold=0.8,
+            semantic_cache_allow_tools=True,
+        )
+
+        tool_def = [{"type": "function", "function": {"name": "refund_charge"}}]
+        assert (
+            cache.should_use_cache(
+                messages=[{"role": "user", "content": "refund charge"}],
+                tools=tool_def,
+            )
+            is True
+        )
