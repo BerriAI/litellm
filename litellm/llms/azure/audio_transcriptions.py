@@ -41,7 +41,9 @@ class AzureAudioTranscription(AzureChatCompletion):
     ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
         deployment_api_version: Final = (
-            None if self._is_azure_v1_api_version(self.opt_out_client_api_version(api_version)) else api_version
+            None
+            if self.is_api_version_opt_out(api_version) or self._is_azure_v1_api_version((api_version or "").lower())
+            else api_version
         )
 
         if atranscription is True:
