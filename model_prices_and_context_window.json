@@ -124335,5 +124335,30 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "fireworks_ai/accounts/fireworks/routers/kimi-k3p1-pro-us": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "cache_read_input_token_cost_priority": 3.75e-07,
+        "input_cost_per_token": 2.5e-06,
+        "input_cost_per_token_priority": 3.75e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.25e-05,
+        "output_cost_per_token_priority": 1.875e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://docs.fireworks.ai/serverless/pricing",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
