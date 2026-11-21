@@ -10,16 +10,17 @@ Tests that:
 import asyncio
 import itertools
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime, timezone
 from functools import partial
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 import respx
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.custom_llm import CustomLLM
@@ -5281,3 +5282,169 @@ class TestNativeWebSocketEncryptedContentAffinity:
         )
 
         assert await handler.bidirectional_forward() is None
+
+
+_TURN_END_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete", "response.failed", "error"})
+_TimedEvent: TypeAlias = tuple[float, Mapping[str, object]]
+
+
+class _ProviderStreamingOnAClock:
+    """A provider's native Responses socket that answers each ``response.create`` with that turn's events, moving
+    the clock forward by each event's delay before it arrives."""
+
+    def __init__(self, advance_clock: Callable[[float], object], *turns: tuple[_TimedEvent, ...]) -> None:
+        self._advance_clock: Final = advance_clock
+        self._turns: Final = iter(turns)
+        self._events: Final[asyncio.Queue[_TimedEvent]] = asyncio.Queue()
+
+    async def send(self, message: str) -> None:
+        for timed_event in next(self._turns):
+            self._events.put_nowait(timed_event)
+
+    async def recv(self, decode: bool = False) -> str:
+        delay, event = await self._events.get()
+        self._advance_clock(delay)
+        return json.dumps(event)
+
+    async def close(self) -> None:
+        return None
+
+
+class _ClientSendingEachTurnAfterTheLastIsLogged(_ClientSocket):
+    def __init__(self, *frames: str) -> None:
+        super().__init__(*frames)
+        self._turn_ended: Final = asyncio.Event()
+        self._turn_ended.set()
+
+    async def send_text(self, data: str) -> None:
+        await super().send_text(data)
+        if self.sent[-1].get("type") in _TURN_END_EVENT_TYPES:
+            self._turn_ended.set()
+
+    async def receive_text(self) -> str:
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+
+        await self._turn_ended.wait()
+        self._turn_ended.clear()
+        await drain_logging_tasks()
+        return await super().receive_text()
+
+
+class _TurnTimings(CustomLogger):
+    """Each logged turn's status, time to first output and duration in milliseconds, read from the payload spend
+    logs store."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final[list[tuple[str, int, int]]] = []
+
+    def _record(self, kwargs: Mapping[str, object]) -> None:
+        payload: Final = kwargs["standard_logging_object"]
+        assert isinstance(payload, dict)
+        self.logged.append(
+            (
+                payload["status"],
+                round((payload["completionStartTime"] - payload["startTime"]) * 1000),
+                round((payload["endTime"] - payload["startTime"]) * 1000),
+            )
+        )
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+
+def _response_event(event_type: str, response_id: str) -> Mapping[str, object]:
+    return {"type": event_type, "response": {"id": response_id, "status": "in_progress", "output": []}}
+
+
+@pytest.mark.asyncio
+async def test_native_relay_logs_each_turn_s_first_output_time_and_its_own_duration() -> None:
+    import time
+
+    import time_machine
+    import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.types.utils import CallTypes
+
+    timings: Final = _TurnTimings()
+    with time_machine.travel(datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc), tick=False) as clock:
+        connection: Final = Logging(
+            model="gpt-5.6",
+            messages=[],
+            stream=False,
+            call_type=CallTypes.aresponses_websocket.value,
+            start_time=time.time(),
+            litellm_call_id="connection-call",
+            function_id="connection-call",
+            dynamic_async_success_callbacks=[timings],
+            dynamic_async_failure_callbacks=[timings],
+        )
+        connection.update_environment_variables(
+            litellm_params={"metadata": {}, CallTypes.aresponses_websocket.value: True}, optional_params={}
+        )
+        handler: Final = _make_streaming(
+            websocket=_ClientSendingEachTurnAfterTheLastIsLogged(
+                json.dumps({"type": "response.create", "generate": False, "input": "warm up"}),
+                json.dumps({"type": "response.create", "input": "say hello"}),
+                json.dumps({"type": "response.create", "input": "what is the weather in Paris"}),
+                json.dumps({"type": "response.create", "input": "write a long story"}),
+                json.dumps({"type": "response.create", "input": "and another"}),
+            ),
+            backend_ws=_ProviderStreamingOnAClock(
+                clock.shift,
+                (
+                    (0.05, _response_event("response.created", "resp_warmup")),
+                    (0.05, _response_event("response.completed", "resp_warmup")),
+                ),
+                (
+                    (0.1, _response_event("response.created", "resp_text")),
+                    (0.3, {"type": "response.output_text.delta", "delta": "Hel"}),
+                    (0.2, {"type": "response.output_text.delta", "delta": "lo"}),
+                    (0.4, _response_event("response.completed", "resp_text")),
+                ),
+                (
+                    (0.1, _response_event("response.created", "resp_tool")),
+                    (0.2, {"type": "response.reasoning_summary_text.delta", "delta": "Look it up"}),
+                    (0.3, {"type": "response.function_call_arguments.delta", "delta": '{"city": "Paris"}'}),
+                    (0.1, _response_event("response.completed", "resp_tool")),
+                ),
+                (
+                    (0.1, _response_event("response.created", "resp_cut_short")),
+                    (0.5, {"type": "response.output_text.delta", "delta": "Once"}),
+                    (0.2, _response_event("response.incomplete", "resp_cut_short")),
+                ),
+                (
+                    (0.1, _response_event("response.created", "resp_failed")),
+                    (0.2, {"type": "response.output_text.delta", "delta": "And"}),
+                    (
+                        0.3,
+                        {
+                            "type": "response.failed",
+                            "response": {"id": "resp_failed", "error": {"code": "server_error", "message": "boom"}},
+                        },
+                    ),
+                ),
+            ),
+            logging_obj=connection,
+            request_data={},
+        )
+
+        await handler.bidirectional_forward()
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert timings.logged == [
+        ("success", 100, 100),
+        ("success", 400, 1000),
+        ("success", 300, 700),
+        ("success", 600, 800),
+        ("failure", 300, 600),
+    ]
