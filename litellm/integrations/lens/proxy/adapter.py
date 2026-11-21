@@ -261,11 +261,15 @@ def ui_mount(root_path: str) -> str:
     return root_path.rstrip("/") + "/lens/ui"
 
 
+def _leaves_workspace(path: str) -> bool:
+    return "\\" in path or any(part in (".", "..") for part in path.split("/"))
+
+
 async def lens_ui_asset(
     path: str, remote: LensConnection | None, client: httpx.AsyncClient | None, mount: str
 ) -> Response:
     """The Lens workspace is served by the connected Lens, so it follows that Lens's version and not the gateway's."""
-    if remote is None or client is None or any(part in (".", "..") for part in path.split("/")) or "\\" in path:
+    if remote is None or client is None or _leaves_workspace(path):
         raise HTTPException(404, _UI_UNAVAILABLE)
     try:
         async with client.stream(
