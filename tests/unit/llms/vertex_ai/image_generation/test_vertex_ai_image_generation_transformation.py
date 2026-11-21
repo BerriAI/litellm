@@ -1217,6 +1217,7 @@ def test_gemini_image_generation_validation_uses_supplied_vertex_token() -> None
     assert headers == {
         "Content-Type": "application/json",
         "X-Test": "preserved",
+        "Accept-Encoding": "identity",
         "Authorization": "Bearer test-access-token",
     }
 
@@ -1295,3 +1296,27 @@ def test_vertex_image_generation_drops_a_caller_labels_header_only_while_the_set
     assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
     assert "x-vertex-ai-labels" not in setting_on
     assert setting_on["x-trace-id"] == "t-1"
+
+
+@pytest.mark.parametrize(
+    ("caller_headers", "accept_encoding"),
+    [({}, "identity"), ({"Accept-Encoding": "gzip"}, "gzip"), ({"accept-encoding": "br"}, "br")],
+)
+def test_vertex_gemini_image_generation_asks_for_an_uncompressed_reply_unless_the_caller_picks_an_encoding(
+    caller_headers: Mapping[str, str], accept_encoding: str
+) -> None:
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: MockTransport hands each request to a callback
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=_GEMINI_IMAGE_REPLY)
+
+    litellm.image_generation(
+        model="vertex_ai/gemini-3.1-flash-image",
+        prompt="a lighthouse",
+        api_base="https://vertex.invalid/generate",
+        extra_headers=dict(caller_headers),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
+    )
+
+    assert sent[0].headers.get_list("accept-encoding") == [accept_encoding]

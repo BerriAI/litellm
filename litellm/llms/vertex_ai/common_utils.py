@@ -83,6 +83,13 @@ def map_vertex_image_size(size: object, model: str, *, imagen: bool = False) -> 
     return MappingProxyType({"aspectRatio": aspect_ratio} if imagen else image_config)
 
 
+def with_identity_accept_encoding(headers: Mapping[str, str]) -> Mapping[str, str]:
+    """Image replies are tens of MB of base64 that barely compresses, and httpx gunzips it on the event loop."""
+    if any(name.lower() == "accept-encoding" for name in headers):
+        return headers
+    return {**headers, "Accept-Encoding": "identity"}
+
+
 def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:
     return {
         gemini_key: video_metadata[openai_key]

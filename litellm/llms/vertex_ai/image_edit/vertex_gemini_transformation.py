@@ -18,6 +18,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_base_url,
     map_vertex_image_size,
     vertex_top_level_request_fields,
+    with_identity_accept_encoding,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
@@ -120,7 +121,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict[str, str]:
-        headers = headers or {}
+        headers = dict(with_identity_accept_encoding(headers or {}))
         litellm_params = litellm_params or {}
 
         # If a custom api_base is provided, skip credential validation

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from google.oauth2.credentials import Credentials
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
@@ -843,3 +844,38 @@ def test_vertex_gemini_edit_drops_a_caller_labels_header_only_while_the_setting_
     assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
     assert "x-vertex-ai-labels" not in setting_on
     assert setting_on["x-trace-id"] == "t-1"
+
+
+@pytest.mark.parametrize(
+    ("caller_headers", "accept_encoding"), [({}, "identity"), ({"Accept-Encoding": "gzip"}, "gzip")]
+)
+def test_vertex_gemini_edit_asks_for_an_uncompressed_reply_unless_the_caller_picks_an_encoding(
+    caller_headers: Mapping[str, str], accept_encoding: str
+) -> None:
+    assert _sent_gemini_edit(caller_headers).headers.get_list("accept-encoding") == [accept_encoding]
+
+
+def test_gemini_image_edit_validation_uses_supplied_vertex_token() -> None:
+    config: Final = VertexAIGeminiImageEditConfig()
+    credentials_json: Final = json.dumps({"type": "authorized_user", "client_id": "test-client"})
+    cache_key: Final = (credentials_json, "test-project")
+    config._credentials_project_mapping[cache_key] = (Credentials(token="test-access-token"), "test-project")
+    try:
+        headers: Final = config.validate_environment(
+            headers={"X-Test": "preserved"},
+            model="gemini-3.1-flash-image",
+            litellm_params={
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+                "vertex_credentials": credentials_json,
+            },
+        )
+    finally:
+        config._credentials_project_mapping.pop(cache_key, None)
+
+    assert headers == {
+        "Content-Type": "application/json",
+        "X-Test": "preserved",
+        "Accept-Encoding": "identity",
+        "Authorization": "Bearer test-access-token",
+    }

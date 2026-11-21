@@ -16,7 +16,12 @@ from litellm.llms.gemini.common_utils import (
     map_gemini_image_tools_params,
 )
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size, pop_vertex_request_labels
+from litellm.llms.vertex_ai.common_utils import (
+    get_vertex_base_url,
+    map_vertex_image_size,
+    pop_vertex_request_labels,
+    with_identity_accept_encoding,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
@@ -186,7 +191,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
@@ -194,7 +199,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        headers = headers or {}
+        headers = dict(with_identity_accept_encoding(headers or {}))
 
         # If a custom api_base is provided, skip credential validation
         # This allows users to use proxies or mock endpoints without needing Vertex AI credentials
