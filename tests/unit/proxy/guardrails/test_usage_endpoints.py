@@ -114,6 +114,9 @@ def _prisma(
     db.litellm_guardrailstable.find_many = AsyncMock(return_value=find_many or [])
     db.litellm_guardrailstable.find_unique = AsyncMock(return_value=find_unique)
     db.litellm_dailyguardrailmetrics.find_many = AsyncMock(return_value=metrics or [])
+    db.litellm_dailyguardrailmetrics.find_first = AsyncMock(
+        side_effect=lambda where: next((m for m in metrics or [] if m.guardrail_id == where["guardrail_id"]), None)
+    )
     db.litellm_dailyguardrailusageunits.find_many = AsyncMock(return_value=units or [])
     db.litellm_spendlogguardrailindex.find_many = AsyncMock(return_value=index_find_many or [])
     db.litellm_spendlogguardrailindex.count = AsyncMock(return_value=0)
@@ -155,6 +158,46 @@ async def test_detail_404_when_neither_db_nor_config():
     with p1, p2, pytest.raises(HTTPException) as exc:
         await guardrails_usage_detail(guardrail_id="ghost", start_date=START, end_date=END, user_api_key_dict=ADMIN)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_detail_404_for_an_unknown_id_while_other_guardrails_have_stored_metrics():
+    prisma = _prisma(find_unique=None, metrics=[_metric("other-guardrail")])
+    p1, p2 = _patches(prisma, _config_handler())
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_detail(guardrail_id="ghost", start_date=START, end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_detail_serves_stored_metrics_of_a_guardrail_whose_definition_is_gone():
+    prisma = _prisma(
+        find_unique=None,
+        metrics=[
+            _metric("removed-1", date="2026-04-24", requests=4, passed=4, blocked=0),
+            _metric("removed-1", date="2026-04-25", requests=6, passed=4, blocked=2),
+        ],
+    )
+    p1, p2 = _patches(prisma, _config_handler())
+    with p1, p2:
+        resp = await guardrails_usage_detail(
+            guardrail_id="removed-1", start_date=START, end_date=END, user_api_key_dict=ADMIN
+        )
+    assert (resp.guardrail_id, resp.guardrail_name, resp.provider, resp.type, resp.description) == (
+        "removed-1",
+        "removed-1",
+        "Unknown",
+        "Guardrail",
+        None,
+    )
+    assert (resp.requestsEvaluated, resp.failRate) == (10, 20.0)
+    assert resp.time_series == [
+        {"date": "2026-04-24", "passed": 4, "blocked": 0, "score": None},
+        {"date": "2026-04-25", "passed": 4, "blocked": 2, "score": None},
+    ]
+    assert prisma.db.litellm_dailyguardrailmetrics.find_many.await_args.kwargs["where"]["guardrail_id"] == {
+        "in": ["removed-1"]
+    }
 
 
 @pytest.mark.asyncio

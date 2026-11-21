@@ -408,15 +408,15 @@ _GuardrailObjectField = Literal["litellm_params", "guardrail_info"]
 
 
 @overload
-def _get_guardrail_field(g: "_DbOrConfigGuardrail", field: _GuardrailStrField) -> str | None: ...
+def _get_guardrail_field(g: "_DbOrConfigGuardrail | None", field: _GuardrailStrField) -> str | None: ...
 
 
 @overload
-def _get_guardrail_field(g: "_DbOrConfigGuardrail", field: _GuardrailObjectField) -> object: ...
+def _get_guardrail_field(g: "_DbOrConfigGuardrail | None", field: _GuardrailObjectField) -> object: ...
 
 
-def _get_guardrail_field(g: "_DbOrConfigGuardrail", field: _GuardrailStrField | _GuardrailObjectField) -> object:
-    """Read `field` off a guardrail whether it's a Prisma row (attr) or a dict/TypedDict (key)."""
+def _get_guardrail_field(g: "_DbOrConfigGuardrail | None", field: _GuardrailStrField | _GuardrailObjectField) -> object:
+    """Read `field` off a guardrail whether it's a Prisma row (attr) or a dict/TypedDict (key); None has no fields."""
     if isinstance(g, dict):
         return g.get(field)
     return getattr(g, field, None)
@@ -649,10 +649,12 @@ async def guardrails_usage_detail(
 
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
-    guardrail = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
-    if guardrail is None:
-        guardrail = IN_MEMORY_GUARDRAIL_HANDLER.get_config_guardrail_by_id(guardrail_id=guardrail_id)
-    if guardrail is None:
+    db_guardrail: Final = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
+    guardrail: Final = db_guardrail or IN_MEMORY_GUARDRAIL_HANDLER.get_config_guardrail_by_id(guardrail_id=guardrail_id)
+    if (
+        guardrail is None
+        and await _daily_guardrail_metrics_table(prisma_client).find_first(where={"guardrail_id": guardrail_id}) is None
+    ):
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="Guardrail not found")
