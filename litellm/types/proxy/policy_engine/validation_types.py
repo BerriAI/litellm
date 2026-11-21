@@ -6,7 +6,6 @@ validation results.
 """
 
 from enum import Enum
-from typing import Any
 
 from pydantic import ConfigDict, Field
 
@@ -73,7 +72,7 @@ class PolicyValidateRequest(LiteLLMBaseModel):
     Request body for the /policy/validate endpoint.
     """
 
-    policies: dict[str, Any] = Field(
+    policies: dict[str, object] = Field(
         description="Policy configuration to validate. Map of policy names to policy definitions."
     )
 
