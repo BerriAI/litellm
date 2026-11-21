@@ -198,6 +198,7 @@ class TestFireworksAIRerankTransform:
         assert result.meta["tokens"]["input_tokens"] == 50
         assert result.meta["tokens"]["output_tokens"] == 50
         assert result.meta["billed_units"]["search_units"] == 100
+        assert result.meta["billed_units"]["input_tokens"] == 50
 
     def test_transform_rerank_response_without_documents(self):
         """Test response transformation when return_documents is False."""
@@ -370,7 +371,10 @@ def test_transform_rerank_response_converts_index_and_score_with_int_and_float(
 def test_transform_rerank_response_without_usage_counters_reports_zero_tokens(usage_fields: dict[str, object]):
     response = _transform({"id": "rerank-1", "data": [{"index": 0, "relevance_score": 0.5}], **usage_fields})
 
-    assert response.meta == {"billed_units": {"search_units": 0}, "tokens": {"input_tokens": 0, "output_tokens": 0}}
+    assert response.meta == {
+        "billed_units": {"search_units": 0, "input_tokens": 0},
+        "tokens": {"input_tokens": 0, "output_tokens": 0},
+    }
 
 
 def test_transform_rerank_response_keeps_provider_id_and_falls_back_to_results_key():
