@@ -739,6 +739,223 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
     assert "anthropic-beta" not in upstream.calls.last.request.headers
 
 
+@pytest.fixture
+def vertex_proxy_pass_through_disabled(
+    monkeypatch: pytest.MonkeyPatch, httpx_transport: None, isolate_passthrough_endpoint_router_state: None
+) -> Iterator[TestClient]:
+    from litellm.proxy import proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4-5",
+                "litellm_params": {
+                    "model": "vertex_ai/claude-sonnet-4-5",
+                    "vertex_project": _VERTEX_DEPLOYMENT_PROJECT,
+                    "vertex_location": "global",
+                    "vertex_credentials": _vertex_service_account_json(),
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    yield TestClient(proxy_server.app)
+
+
+def test_vertex_pass_through_refuses_a_model_whose_only_deployment_disables_pass_through(
+    vertex_proxy_pass_through_disabled: TestClient, respx_mock: "respx.MockRouter"
+) -> None:
+    response: Final = vertex_proxy_pass_through_disabled.post(
+        f"/vertex_ai/{_VERTEX_DEPLOYMENT_PATH}",
+        json=_VERTEX_CLAUDE_BODY,
+        headers={"x-litellm-api-key": "sk-caller", "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "use_in_pass_through" in response.text
+    assert respx_mock.calls.call_count == 0
+
+
+def test_vertex_pass_through_still_forwards_a_model_no_deployment_serves(
+    vertex_proxy_pass_through_disabled: TestClient, respx_mock: "respx.MockRouter"
+) -> None:
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_CALLER_PATH}").mock(
+        return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
+    )
+
+    response: Final = vertex_proxy_pass_through_disabled.post(
+        f"/vertex_ai/{_VERTEX_CALLER_PATH}",
+        json=_VERTEX_CLAUDE_BODY,
+        headers={"x-litellm-api-key": "sk-caller", "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"},
+    )
+
+    assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
+    assert upstream.calls.last.request.headers["authorization"] == f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"
+
+
+def test_vertex_pass_through_refuses_an_encoded_model_name_whose_deployment_disables_pass_through(
+    vertex_proxy_pass_through_disabled: TestClient, respx_mock: "respx.MockRouter"
+) -> None:
+    encoded_path: Final = _VERTEX_DEPLOYMENT_PATH.replace("claude-sonnet-4-5", "%2563laude-sonnet-4-5")
+
+    response: Final = vertex_proxy_pass_through_disabled.post(
+        f"/vertex_ai/{encoded_path}",
+        json=_VERTEX_CLAUDE_BODY,
+        headers={"x-litellm-api-key": "sk-caller", "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "use_in_pass_through" in response.text
+    assert respx_mock.calls.call_count == 0
+
+
+@pytest.mark.parametrize("flag", [None, False], ids=["flag-absent", "flag-false"])
+async def test_allm_passthrough_route_refuses_a_model_whose_deployments_all_disable_pass_through(
+    flag: bool | None,
+) -> None:
+    litellm_params: dict = {"model": "openai/gpt-4o", "api_key": "deployment-key"}
+    if flag is not None:
+        litellm_params["use_in_pass_through"] = flag
+    router: Final = Router(model_list=[{"model_name": "gpt-4o", "litellm_params": litellm_params}])
+
+    with pytest.raises(litellm.BadRequestError, match="no deployments configured with use_in_pass_through=True"):
+        await router.allm_passthrough_route(
+            model="gpt-4o",
+            method="POST",
+            endpoint="chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+
+def test_pass_through_disabled_for_vertex_model_matches_the_publisher_name() -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _pass_through_disabled_for_vertex_model,
+    )
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini-image",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-image-model",
+                    "vertex_project": _VERTEX_DEPLOYMENT_PROJECT,
+                    "vertex_location": "us-central1",
+                },
+            }
+        ]
+    )
+
+    assert _pass_through_disabled_for_vertex_model(router, "gemini-image-model") is True
+    assert _pass_through_disabled_for_vertex_model(router, "gemini-image") is True
+    assert _pass_through_disabled_for_vertex_model(router, "a-model-no-deployment-serves") is False
+
+
+def test_pass_through_disabled_for_vertex_model_lifts_when_any_deployment_enables_it() -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _pass_through_disabled_for_vertex_model,
+    )
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini-image-model",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-image-model",
+                    "vertex_project": "project-a",
+                    "vertex_location": "us-central1",
+                },
+            },
+            {
+                "model_name": "gemini-image-model",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-image-model",
+                    "vertex_project": "project-b",
+                    "vertex_location": "us-central1",
+                    "vertex_credentials": _vertex_service_account_json(),
+                    "use_in_pass_through": True,
+                },
+            },
+        ]
+    )
+
+    assert _pass_through_disabled_for_vertex_model(router, "gemini-image-model") is False
+
+
+def test_pass_through_disabled_for_vertex_model_matches_a_wildcard_group() -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _pass_through_disabled_for_vertex_model,
+    )
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini-*",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-*",
+                    "vertex_project": _VERTEX_DEPLOYMENT_PROJECT,
+                    "vertex_location": "us-central1",
+                },
+            }
+        ]
+    )
+
+    assert _pass_through_disabled_for_vertex_model(router, "gemini-2.5-flash") is True
+    assert _pass_through_disabled_for_vertex_model(router, "claude-sonnet-4-5") is False
+
+
+def test_pass_through_disabled_for_vertex_model_wildcard_group_lifts_when_any_deployment_enables_it() -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _pass_through_disabled_for_vertex_model,
+    )
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini-*",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-*",
+                    "vertex_project": "project-a",
+                    "vertex_location": "us-central1",
+                },
+            },
+            {
+                "model_name": "gemini-*",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-*",
+                    "vertex_project": "project-b",
+                    "vertex_location": "us-central1",
+                    "vertex_credentials": _vertex_service_account_json(),
+                    "use_in_pass_through": True,
+                },
+            },
+        ]
+    )
+
+    assert _pass_through_disabled_for_vertex_model(router, "gemini-2.5-flash") is False
+
+
+async def test_allm_passthrough_route_does_not_refuse_a_model_with_a_pass_through_deployment() -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "unflagged-key"}},
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "flagged-key", "use_in_pass_through": True},
+            },
+        ]
+    )
+
+    with pytest.raises(Exception) as raised:
+        await router.allm_passthrough_route(
+            model="gpt-4o",
+            method="POST",
+            endpoint="chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert "use_in_pass_through" not in str(raised.value)
+
+
 _VERTEX_GEMINI_MODEL_PATH: Final = "v1/projects/deployment-project/locations/global/publishers/google/models/gemini-2.5-flash"
 _VERTEX_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
 _VERTEX_IDENTITY_LABELS: Final = {"user_api_key_alias": "search-bot", "user_api_key_team_alias": "search-team"}
