@@ -1023,8 +1023,8 @@ async fn charge_from_cached_spend(
 
 /// `_seed_spend_counter_cache`: raise a cold counter to the auth cache's spend and never past it,
 /// so charges and pods that all found it cold leave that spend in it once. A Redis that refuses
-/// the script takes the increment; any other failure drops this process's copy, which the raise
-/// wrote before Redis answered.
+/// the script takes the increment; any other failure may or may not have landed, so the counter is
+/// dropped everywhere, as a failed increment drops it.
 async fn raise_to_cached_spend(
     store: &SpendCounters,
     counter: &SpendCounter,
@@ -1036,9 +1036,7 @@ async fn raise_to_cached_spend(
             increment_one(store, counter, spend).await
         }
         Err(error) => {
-            if let Err(error) = store.delete_local(counter) {
-                tracing::debug!(%error, "Unable to drop a spend counter whose seed failed");
-            }
+            store.invalidate(std::slice::from_ref(counter)).await;
             Err(store_failure(error))
         }
     }

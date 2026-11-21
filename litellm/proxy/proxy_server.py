@@ -4256,9 +4256,8 @@ async def _seed_spend_counter_cache(counter_key: str, spend: float) -> None:
             # set_max is a Lua script; a Redis that refuses scripts still takes the plain increment.
             await increment_spend_counter_cache(counter_key=counter_key, increment=spend)
             return
-        # set_max raised this worker's copy before Redis answered.
-        spend_counter_store.delete_local(counter_key)
-        forget_spend_counter(counter_key)
+        # The script may have applied, so the counter is dropped everywhere, as a failed increment drops it.
+        await invalidate_spend_counter(counter_key)
         raise
     if seeded is not None:
         record_spend_counter_value(counter_key, seeded)

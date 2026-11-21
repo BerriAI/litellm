@@ -1304,6 +1304,8 @@ async def test_ensure_spend_counter_initialized_overlapping_cold_seeds_hold_the_
 ) -> None:
     spend: Final = _spend_counters(monkeypatch, redis=redis)
     end_user_id: Final = f"overlapping-{'memory' if redis is None else 'redis'}"
+    # The ledger twin runs this test again on its own event loop, and a reseed lock belongs to the loop that made it.
+    monkeypatch.setattr(ps.SpendCounterReseed, "_locks", type(ps.SpendCounterReseed._locks)())
     _cache_end_user_spend(monkeypatch, end_user_id, 6.0)
     monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=5.5))
 
