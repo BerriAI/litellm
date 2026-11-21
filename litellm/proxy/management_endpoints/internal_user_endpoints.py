@@ -1670,6 +1670,12 @@ async def _write_user_update(
             "Mapping[str, object] | None",
             await prisma_client.update_data(user_id=user_id, data=data, table_name="user"),
         )
+    if data.keys() & ROLLOVER_BUDGET_FIELDS == {"max_budget"} and "budget_limits" not in data:
+        uncapped: Final = await _user_table(prisma_client).update(
+            where={"user_id": user_id, "rollover_max_budget": None}, data=prisma_client.jsonify_object(data)
+        )
+        if uncapped is not None:
+            return {"user_id": user_id, "data": uncapped}
     async with prisma_client.tx() as transaction:
         lock_tx: Final = cast("BudgetLimitsTransaction", transaction)  # cast-ok: Prisma implements raw queries
         if changes_rollover:

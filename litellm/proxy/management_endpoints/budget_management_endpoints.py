@@ -115,6 +115,12 @@ async def _write_budget_update(
     changes_rollover: Final = bool(data.keys() & ROLLOVER_BUDGET_FIELDS)
     if not changes_rollover and "budget_limits" not in data:
         return await BudgetRepository(prisma_client).table.update(where={"budget_id": budget_id}, data=data)
+    if data.keys() & ROLLOVER_BUDGET_FIELDS == {"max_budget"} and "budget_limits" not in data:
+        uncapped: Final = await BudgetRepository(prisma_client).table.update(
+            where={"budget_id": budget_id, "rollover_max_budget": None}, data=data
+        )
+        if uncapped is not None:
+            return uncapped
     async with prisma_client.tx() as tx_ctx:
         tx: Final = cast("_BudgetUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
         if "rollover_max_budget" in data and data["rollover_max_budget"] is None:

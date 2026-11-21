@@ -1,8 +1,10 @@
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final
 
+import psycopg
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import write_rows
@@ -67,6 +69,49 @@ def _member_close_period(proxy: Gateway, budget_id: str) -> None:
 def _member_budget(gateway: Gateway, team_id: str, user_id: str) -> dict[str, JsonValue]:
     rows: Final = _MEMBERS.validate_python(gateway.get("/team/info", {"team_id": team_id})["team_memberships"])
     return next(row for row in rows if row["user_id"] == user_id)
+
+
+@pytest.mark.parametrize("personal", (False, True), ids=("shared-budget", "personal-budget"))
+@pytest.mark.parametrize("enable_rollover", (False, True), ids=("uncapped", "concurrently-capped"))
+def test_budget_update_respects_a_competing_write(
+    rollover_proxy: Gateway, personal: bool, enable_rollover: bool
+) -> None:
+    proxy: Final = rollover_proxy
+    assert proxy.database_url is not None
+    with proxy.scenario() as scenario, ThreadPoolExecutor(max_workers=1) as executor:
+        budget_id: Final = (
+            scenario.user(max_budget=10, budget_duration="30d")
+            if personal
+            else string_value(proxy.post("/budget/new", {"max_budget": 10, "budget_duration": "30d"})["budget_id"])
+        )
+        if not personal:
+            scenario.cleanups.callback(scenario.delete_budget, budget_id)
+        endpoint: Final = "/user/update" if personal else "/budget/update"
+        id_key: Final = "user_id" if personal else "budget_id"
+        table: Final = "LiteLLM_UserTable" if personal else "LiteLLM_BudgetTable"
+
+        with psycopg.connect(proxy.database_url) as blocker:
+            writer_fields: Final = "max_budget = 11, rollover_max_budget = 20" if enable_rollover else "max_budget = 11"
+            blocker.execute(f'UPDATE "{table}" SET {writer_fields} WHERE {id_key} = %s', (budget_id,))
+            update: Final = executor.submit(proxy.request, "POST", endpoint, {id_key: budget_id, "max_budget": 25})
+            blocker_pid: Final = str(blocker.info.backend_pid)
+            eventually(
+                lambda: proxy.rows(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid)))"
+                    " AS blocked",
+                    (blocker_pid,),
+                ),
+                lambda rows: rows == [{"blocked": True}],
+            )
+            if not enable_rollover:
+                eventually(update.done, bool, seconds=6, return_last_on_timeout=True)
+        result: Final = update.result(timeout=15)
+        assert result.status_code == (400 if enable_rollover else 200), result.text
+        if enable_rollover:
+            assert "rollover" in result.text, result.text
+        assert proxy.rows(f'SELECT max_budget FROM "{table}" WHERE {id_key} = %s', (budget_id,)) == [
+            {"max_budget": 11.0 if enable_rollover else 25.0}
+        ]
 
 
 async def test_a_capped_member_reset_does_not_overwrite_a_newer_period_edit(
