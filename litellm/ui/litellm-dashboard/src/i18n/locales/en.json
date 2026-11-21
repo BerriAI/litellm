@@ -16276,16 +16276,26 @@
       "milliseconds": "{{value}}ms",
       "seconds": "{{value}}s"
     },
+    "entityLabels": {
+      "title": {
+        "user": "User",
+        "team": "Team",
+        "tag": "Tag",
+        "organization": "Organization",
+        "customer": "Customer",
+        "agent": "Agent"
+      },
+      "inline": {
+        "user": "user",
+        "team": "team",
+        "tag": "tag",
+        "organization": "organization",
+        "customer": "customer",
+        "agent": "agent"
+      }
+    },
     "export": {
       "modal": {
-        "entities": {
-          "user": "User",
-          "team": "Team",
-          "tag": "Tag",
-          "organization": "Organization",
-          "customer": "Customer",
-          "agent": "Agent"
-        },
         "title": "Export {{entity}} Usage",
         "success": "{{entity}} usage data exported successfully as {{format}}",
         "failed": "Failed to export data",
@@ -16305,14 +16315,6 @@
       },
       "type": {
         "label": "Export type",
-        "entities": {
-          "user": "user",
-          "team": "team",
-          "tag": "tag",
-          "organization": "organization",
-          "customer": "customer",
-          "agent": "agent"
-        },
         "daily": {
           "title": "Day-by-day breakdown by {{entityType}}",
           "description": "Daily metrics for each {{entityType}}"

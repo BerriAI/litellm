@@ -11,7 +11,7 @@ interface ExportTypeSelectorProps {
 
 const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange, entityType }) => {
   const { t } = useTranslation();
-  const entityLabel = t(`usage.export.type.entities.${entityType}`);
+  const entityLabel = t(`usage.entityLabels.inline.${entityType}`);
   const allScopes: { value: ExportType; title: string; description: string }[] = [
     {
       value: "daily",

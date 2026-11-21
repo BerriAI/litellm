@@ -16276,16 +16276,26 @@
       "milliseconds": "{{value}} 毫秒",
       "seconds": "{{value}} 秒"
     },
+    "entityLabels": {
+      "title": {
+        "user": "用户",
+        "team": "团队",
+        "tag": "标签",
+        "organization": "组织",
+        "customer": "客户",
+        "agent": "智能体"
+      },
+      "inline": {
+        "user": "用户",
+        "team": "团队",
+        "tag": "标签",
+        "organization": "组织",
+        "customer": "客户",
+        "agent": "智能体"
+      }
+    },
     "export": {
       "modal": {
-        "entities": {
-          "user": "用户",
-          "team": "团队",
-          "tag": "标签",
-          "organization": "组织",
-          "customer": "客户",
-          "agent": "智能体"
-        },
         "title": "导出{{entity}}用量",
         "success": "已将{{entity}}用量数据导出为 {{format}}",
         "failed": "无法导出数据",
@@ -16305,14 +16315,6 @@
       },
       "type": {
         "label": "导出类型",
-        "entities": {
-          "user": "用户",
-          "team": "团队",
-          "tag": "标签",
-          "organization": "组织",
-          "customer": "客户",
-          "agent": "智能体"
-        },
         "daily": {
           "title": "按{{entityType}}的逐日明细",
           "description": "每个{{entityType}}的每日指标"
