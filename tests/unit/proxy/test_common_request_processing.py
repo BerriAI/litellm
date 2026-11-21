@@ -12787,8 +12787,27 @@ async def test_openai_compatible_backend_400_relays_the_error_fields_beyond_open
     }
 
 
+def _chat_stream_error(frames: tuple[str, ...]) -> object:
+    return json.loads(frames[0].removeprefix("data: "))["error"]
+
+
+def _responses_stream_error(frames: tuple[str, ...]) -> object:
+    return json.loads(frames[0].split("data: ", 1)[1])["response"]["error"]
+
+
 @pytest.mark.usefixtures("httpx_transport")
-async def test_openai_compatible_backend_error_raised_mid_stream_relays_the_error_fields_beyond_openais_four() -> None:
+@pytest.mark.parametrize(
+    ("responses_stream_errors", "error_of"),
+    [
+        pytest.param(False, _chat_stream_error, id="chat"),
+        pytest.param(True, _responses_stream_error, id="responses"),
+    ],
+)
+async def test_openai_compatible_backend_error_raised_mid_stream_relays_the_error_fields_beyond_openais_four(
+    responses_stream_errors: bool, error_of: Callable[[tuple[str, ...]], object]
+) -> None:
+    from litellm.proxy.proxy_server import async_data_generator
+
     body: Final = {
         "error": {
             "message": "The response was filtered due to the prompt triggering the content management policy.",
@@ -12812,20 +12831,17 @@ async def test_openai_compatible_backend_error_raised_mid_stream_relays_the_erro
         async def __anext__(self) -> object:
             raise caught.value
 
-    framed: Final[list[ProxyException]] = []
-    stream: Final = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
-        response=FailingUpstream(),
-        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
-        request_data={"model": "qwen"},
-        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
-        serialize_chunk=lambda chunk: "data: x\n\n",
-        serialize_error=lambda error: framed.append(error) or "data: error\n\n",
+    stream: Final = async_data_generator(
+        FailingUpstream(),
+        ProxyUserAPIKeyAuth(api_key="sk-front"),
+        {"model": "qwen"},
+        responses_stream_errors=responses_stream_errors,
     )
-    _ = await stream.__anext__()
+    frames: Final = tuple([str(frame) async for frame in stream])
 
-    assert [json.loads(json.dumps(error.to_dict().get("provider_specific_fields"))) for error in framed] == [
-        {"code": "content_filter", "content_filters": list(_CONTENT_FILTERS)}
-    ]
+    error: Final = error_of(frames)
+    assert isinstance(error, dict)
+    assert error["provider_specific_fields"] == {"code": "content_filter", "content_filters": list(_CONTENT_FILTERS)}
 
 
 _DICT_MESSAGE_ROUTES: Final = (
@@ -12869,6 +12885,69 @@ async def test_openai_compatible_backend_error_with_a_structured_message_relays_
     message: Final = str(relayed.value.to_dict()["message"])
     relayed_body: Final = json.loads(message[message.index("{") : message.rindex("}") + 1])
     assert relayed_body["message"] == {"detail": [detail]}
+
+
+_SDK_BACKEND: Final = MappingProxyType({"api_base": "https://sdk-backend.example.com/v1", "api_key": "sk-sdk-key"})
+
+
+_SDK_OBJECT_MESSAGE_CALLS: Final = (
+    pytest.param(
+        lambda: litellm.completion(
+            model="openai/gpt-6.2-sol", messages=[{"role": "user", "content": "hi"}], max_retries=0, **_SDK_BACKEND
+        ),
+        id="openai",
+    ),
+    pytest.param(
+        lambda: litellm.completion(
+            model="azure/gpt-deployment",
+            messages=[{"role": "user", "content": "hi"}],
+            api_version="2025-04-01-preview",
+            max_retries=0,
+            **_SDK_BACKEND,
+        ),
+        id="azure",
+    ),
+    pytest.param(
+        lambda: litellm.completion(
+            model="custom_openai/qwen", messages=[{"role": "user", "content": "hi"}], max_retries=0, **_SDK_BACKEND
+        ),
+        id="custom_openai",
+    ),
+    pytest.param(
+        lambda: litellm.completion(
+            model="deepinfra/qwen", messages=[{"role": "user", "content": "hi"}], max_retries=0, **_SDK_BACKEND
+        ),
+        id="deepinfra",
+    ),
+    pytest.param(
+        lambda: litellm.text_completion(
+            model="text-completion-openai/gpt-6.2-instruct", prompt="hi", max_retries=0, **_SDK_BACKEND
+        ),
+        id="text-completion-openai",
+    ),
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("call", _SDK_OBJECT_MESSAGE_CALLS)
+async def test_sdk_backend_error_with_a_structured_message_relays_its_body_as_json(call: Callable[[], object]) -> None:
+    structured_message: Final = {"detail": [{"loc": ["body", "max_tokens"], "msg": "must be >= 0"}]}
+    body: Final = {"object": "error", "message": structured_message, "type": "invalid_request_error"}
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(url__startswith="https://sdk-backend.example.com/").mock(
+            return_value=httpx.Response(422, json=body)
+        )
+        with pytest.raises((litellm.BadRequestError, litellm.UnprocessableEntityError)) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "sdk-model"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    message: Final = str(relayed.value.to_dict()["message"])
+    assert "Error code: 422" not in message
+    assert json.loads(message[message.index("{") : message.rindex("}") + 1]) == body
 
 
 @pytest.mark.usefixtures("httpx_transport")

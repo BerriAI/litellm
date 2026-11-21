@@ -510,6 +510,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
+    relayed_provider_specific_fields,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
@@ -10270,6 +10271,7 @@ async def async_data_generator(
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=relayed_provider_specific_fields(e),
         )
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
