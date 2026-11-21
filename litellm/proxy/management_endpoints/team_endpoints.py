@@ -127,6 +127,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.customer_hierarchy_auth import validate_required_customer_headers_metadata
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     broadcast_evictions,
@@ -1846,6 +1847,10 @@ async def new_team(
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
+        validate_required_customer_headers_metadata(
+            _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
+        )
+
         # Validate budget values are not negative
         if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
             raise HTTPException(
@@ -2728,6 +2733,9 @@ async def update_team(
         )
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
+        validate_required_customer_headers_metadata(
+            _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
+        )
         enforce_output_token_estimates_are_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,

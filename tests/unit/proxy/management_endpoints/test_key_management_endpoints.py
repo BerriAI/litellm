@@ -25150,6 +25150,34 @@ def test_key_writes_reject_invalid_expiry_alert_days(spend_permission_client: Te
     assert "key_expiry_alert_days" in response.text
 
 
+@pytest.mark.parametrize("required", [[], ["X-Tenant-ID"], ["X-Tenant-ID", "X-User-ID"]])
+def test_key_generate_persists_required_customer_headers(
+    spend_permission_client: TestClient, required: list[str]
+) -> None:
+    response: Final = spend_permission_client.post(
+        "/key/generate", json={"metadata": {"required_customer_headers": required}}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["required_customer_headers"] == required
+
+
+@pytest.mark.parametrize("route", ["/key/generate", "/key/update"])
+@pytest.mark.parametrize("required", ["X-Tenant-ID", ["Bad Header"], [123]])
+def test_key_writes_reject_malformed_required_customer_headers(
+    spend_permission_client: TestClient, route: str, required: object
+) -> None:
+    from litellm.proxy import proxy_server
+
+    proxy_server.prisma_client.db.litellm_verificationtoken.find_unique.return_value = LiteLLM_VerificationToken(
+        token=hash_token("sk-test"), metadata={}
+    )
+    response: Final = spend_permission_client.post(
+        route, json={"key": "sk-test", "metadata": {"required_customer_headers": required}}
+    )
+    assert response.status_code == 400, response.text
+    assert "metadata.required_customer_headers must be a list of valid HTTP header names." in response.text
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ("customer_org_id", "customer_team_id", "customer_member_id"))
 async def test_customer_binding_requires_admin_on_key_creation(field: str) -> None:

@@ -21,6 +21,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     REQUIRED_CUSTOMER_HEADERS_ADAPTER,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
     JWTIssuerConfig,
     LiteLLM_JWTAuth,
     ProxyErrorTypes,
@@ -153,6 +154,19 @@ def check_required_customer_headers(headers: Mapping[str, object], specified: ob
     for header in REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(specified):
         if _header_value(headers, header) is None:
             raise _forbidden(f"Missing required customer header {header}", header)
+
+
+def validate_required_customer_headers_metadata(metadata: Mapping[str, object] | None) -> None:
+    specified: Final = metadata.get(REQUIRED_CUSTOMER_HEADERS_SETTING) if metadata else None
+    if specified is None:
+        return
+    try:
+        REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(specified)
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "metadata.required_customer_headers must be a list of valid HTTP header names."},
+        ) from error
 
 
 @dataclass(frozen=True, slots=True)

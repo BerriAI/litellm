@@ -68,6 +68,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.customer_hierarchy_auth import validate_required_customer_headers_metadata
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -984,9 +985,9 @@ def raise_on_invalid_key_expiry_alert_days(metadata: Mapping[str, object] | None
 
 
 def raise_on_invalid_key_metadata(metadata: Mapping[str, object] | None) -> None:
-    """Every key metadata check that rejects a write: logging config and expiry alert days."""
     raise_on_invalid_key_logging_config(metadata)
     raise_on_invalid_key_expiry_alert_days(metadata)
+    validate_required_customer_headers_metadata(metadata)
 
 
 def raise_on_logging_credential_change(

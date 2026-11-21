@@ -2008,6 +2008,123 @@ async def test_signed_jwt_does_not_replace_required_customer_headers(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("credential", ["key", "jwt"])
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize(
+    ("team_required", "key_required", "headers", "missing"),
+    [
+        (None, None, [], None),
+        (["X-Tenant-ID"], None, [], "X-Tenant-ID"),
+        (["X-Tenant-ID"], [], [], "X-Tenant-ID"),
+        (["X-Tenant-ID"], None, [(b"x-tenant-id", b"tenant")], None),
+        (None, ["X-User-ID"], [], "X-User-ID"),
+        (None, ["X-User-ID"], [(b"x-user-id", b"   ")], "X-User-ID"),
+        (None, ["X-User-ID"], [(b"x-user-id", b"member")], None),
+        (["X-Tenant-ID"], ["X-User-ID"], [(b"x-tenant-id", b"tenant")], "X-User-ID"),
+        (
+            ["X-Tenant-ID"],
+            ["X-User-ID"],
+            [(b"x-tenant-id", b"tenant"), (b"x-user-id", b"member")],
+            None,
+        ),
+    ],
+)
+async def test_customer_header_requirements_follow_authenticated_team_and_key(
+    monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
+    jwt_proxy: Callable[[LiteLLM_JWTAuth], None],
+    credential: str,
+    path: str,
+    team_required: list[str] | None,
+    key_required: list[str] | None,
+    headers: list[tuple[bytes, bytes]],
+    missing: str | None,
+) -> None:
+    from tests.unit.proxy.rust_auth_stores import JwtMapping
+    from litellm.proxy._types import hash_token
+
+    server: Final = litellm.proxy.proxy_server
+    key: Final = "sk-required-customer-headers"
+    key_hash: Final = hash_token(key)
+    rust_auth_stores.key.rows[key_hash] = {
+        "token": key_hash,
+        "team_id": "header-policy-team",
+        "metadata": {"required_customer_headers": key_required},
+    }
+    rust_auth_stores.team.rows["header-policy-team"] = {
+        "team_id": "header-policy-team",
+        "metadata": {"required_customer_headers": team_required},
+    }
+    rust_auth_stores.jwt_key_mapping.mappings.append(JwtMapping("sub", "header-policy-client", key_hash))
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.setattr(server, "prisma_client", prisma_with_empty_config())
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "premium_user", True)
+    monkeypatch.setattr(server, "master_key", "header-policy-master")
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "general_settings", {"enable_jwt_auth": True, "disable_budget_reservation": True})
+    jwt_proxy(LiteLLM_JWTAuth(virtual_key_claim_field="sub"))
+    bearer: Final = key if credential == "key" else _signed_jwt({"sub": "header-policy-client"})
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": path, "headers": headers, "query_string": b""}
+    )
+    request._body = b'{"model":"test-model","metadata":{"required_customer_headers":[]}}'
+
+    if missing is None:
+        auth: Final = await user_api_key_auth(request=request, api_key=f"Bearer {bearer}")
+        assert (auth.team_id, auth.customer_hierarchy) == ("header-policy-team", None)
+        return
+    with pytest.raises(ProxyException) as error:
+        await user_api_key_auth(request=request, api_key=f"Bearer {bearer}")
+    assert (error.value.code, error.value.param) == ("403", missing)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_header", [False, True])
+async def test_customer_header_requirement_follows_jwt_team_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
+    jwt_proxy: Callable[[LiteLLM_JWTAuth], None],
+    with_header: bool,
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    rust_auth_stores.team.rows["header-policy-team"] = {
+        "team_id": "header-policy-team",
+        "metadata": {"required_customer_headers": ["X-Tenant-ID"]},
+    }
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.setattr(server, "prisma_client", prisma_with_empty_config())
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "premium_user", True)
+    monkeypatch.setattr(server, "master_key", "header-policy-master")
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "general_settings", {"enable_jwt_auth": True, "disable_budget_reservation": True})
+    jwt_proxy(LiteLLM_JWTAuth(team_id_jwt_field="cid"))
+    bearer: Final = _signed_jwt({"cid": "header-policy-team"})
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [(b"x-tenant-id", b"tenant")] if with_header else [],
+            "query_string": b"",
+        }
+    )
+    request._body = b'{"model":"test-model"}'
+    if with_header:
+        auth: Final = await user_api_key_auth(request=request, api_key=f"Bearer {bearer}")
+        assert auth.team_id == "header-policy-team"
+        return
+    with pytest.raises(ProxyException) as error:
+        await user_api_key_auth(request=request, api_key=f"Bearer {bearer}")
+    assert (error.value.code, error.value.param) == ("403", "X-Tenant-ID")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method, path, expect_rejected",
     [

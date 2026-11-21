@@ -16636,6 +16636,58 @@ def _wire_new_team_prisma(mock_db_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("required", ["X-Tenant-ID", ["Bad Header"], [123]])
+async def test_team_creation_rejects_malformed_required_customer_headers(
+    mock_admin_auth: UserAPIKeyAuth, required: object
+) -> None:
+    with pytest.raises(ProxyException) as error:
+        await new_team(
+            data=NewTeamRequest(metadata={"required_customer_headers": required}),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+    assert error.value.code == "400"
+    assert "metadata.required_customer_headers must be a list of valid HTTP header names." in error.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required", ["X-Tenant-ID", ["Bad Header"], [123]])
+async def test_team_update_rejects_malformed_required_customer_headers(
+    mock_db_client: MagicMock, mock_admin_auth: UserAPIKeyAuth, required: object
+) -> None:
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="header-policy-team")
+    )
+    with pytest.raises(ProxyException) as error:
+        await update_team(
+            data=UpdateTeamRequest(team_id="header-policy-team", metadata={"required_customer_headers": required}),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+    assert error.value.code == "400"
+    assert "metadata.required_customer_headers must be a list of valid HTTP header names." in error.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required", [[], ["X-Tenant-ID"], ["X-Tenant-ID", "X-User-ID"]])
+async def test_new_team_persists_required_customer_headers(
+    mock_db_client: MagicMock,
+    mock_admin_auth: UserAPIKeyAuth,
+    monkeypatch: pytest.MonkeyPatch,
+    required: list[str],
+) -> None:
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", {})
+    stored: Final = _wire_new_team_prisma(mock_db_client)
+    await new_team(
+        data=NewTeamRequest(team_alias="customer-header-team", metadata={"required_customer_headers": required}),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+    assert stored.call_args.kwargs["data"]["metadata"]["required_customer_headers"] == required
+
+
+@pytest.mark.asyncio
 async def test_new_team_persists_require_trace_id_in_metadata(
     mock_db_client: MagicMock,
     mock_admin_auth: UserAPIKeyAuth,

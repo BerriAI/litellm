@@ -3179,13 +3179,19 @@ async def _authorize_authenticated_request(
 
 
 def _check_required_inference_customer_headers(
-    headers: Mapping[str, object], route: str, settings: Mapping[str, object]
+    headers: Mapping[str, object], route: str, settings: Mapping[str, object], auth: UserAPIKeyAuth
 ) -> None:
-    required_headers: Final = settings.get(REQUIRED_CUSTOMER_HEADERS_SETTING)
-    if required_headers is None or not RouteChecks.runs_inference_checks(route) or RouteChecks.is_info_route(route):
+    if not RouteChecks.runs_inference_checks(route) or RouteChecks.is_info_route(route):
         return
-    if not RustAuth.is_public_route(route, core.proxy_settings()):
-        check_required_customer_headers(headers, required_headers)
+    if RustAuth.is_public_route(route, core.proxy_settings()):
+        return
+    key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(getattr(auth, "metadata", None) or {})
+    team_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(auth.team_metadata or {})
+    for required_headers in (
+        scope.get(REQUIRED_CUSTOMER_HEADERS_SETTING) for scope in (settings, team_metadata, key_metadata)
+    ):
+        if required_headers is not None:
+            check_required_customer_headers(headers, required_headers)
 
 
 async def _authorize_authenticated_request_checks(
@@ -3225,7 +3231,7 @@ async def _authorize_authenticated_request_checks(
         settings: Final = cast(  # cast-ok: proxy settings are a string-keyed dict without type parameters
             "Mapping[str, object]", general_settings
         )
-        _check_required_inference_customer_headers(request_headers, route, settings)
+        _check_required_inference_customer_headers(request_headers, route, settings, user_api_key_auth_obj)
         customer_header_names: Final = CustomerIdentityHeaderNames.from_settings(settings)
         customer_identity: Final = customer_identity_from_request(
             request_headers,
