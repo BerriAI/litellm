@@ -683,9 +683,7 @@ if MCP_AVAILABLE:
         if ctx.request_id is None:
             return None
         entry: Final = (
-            None
-            if gated_events_method(ctx, _mcp_proxy_mode.get())
-            else server.get_request_handler(ctx.method)
+            None if gated_events_method(ctx, _mcp_proxy_mode.get()) else server.get_request_handler(ctx.method)
         )
         if entry is None:
             if ctx.method == "initialize":

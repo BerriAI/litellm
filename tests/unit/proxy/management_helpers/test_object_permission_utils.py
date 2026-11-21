@@ -135,7 +135,6 @@ async def test_set_object_permission_persists_skills():
     assert created_data["skills"] == ["private-skill"]
 
 
-
 @pytest.mark.asyncio
 async def test_set_object_permission_persists_mcp_event_permissions_as_json():
     mock_prisma_client = MagicMock()
@@ -153,6 +152,7 @@ async def test_set_object_permission_persists_mcp_event_permissions_as_json():
 
     created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
     assert json.loads(created_data["mcp_event_permissions"]) == {"3e64-server": ["incident.created"]}
+
 
 # ---- Tests for _extract_requested_mcp_server_ids ----
 

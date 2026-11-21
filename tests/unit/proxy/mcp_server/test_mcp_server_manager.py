@@ -97,7 +97,12 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
-from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, MCPServerEventsConfig, PinnedMCPTool
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPOAuthMetadata,
+    MCPServer,
+    MCPServerEventsConfig,
+    PinnedMCPTool,
+)
 
 _TSessionResult = TypeVar("_TSessionResult")
 
