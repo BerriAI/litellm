@@ -897,7 +897,6 @@ class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
 
 
-# OpenAI Responses rejects a longer call_id with "string too long" (observed 2026-11-21, gpt-6.2-sol and gpt-5.4)
 _MAX_CALL_ID_LENGTH: Final = 64
 
 
