@@ -29,19 +29,12 @@ const API_BASE_ENV: &str = "OPENROUTER_API_BASE";
 const DEFAULT_BASE: &str = "https://openrouter.ai/api/v1";
 const MESSAGES_PATH: &str = "/v1/messages";
 
-pub struct OpenRouterAnthropicMessagesConfig;
-pub const OPENROUTER_MESSAGES_CONFIG: OpenRouterAnthropicMessagesConfig =
-    OpenRouterAnthropicMessagesConfig;
+pub struct OpenRouterMessagesConfig;
+pub const OPENROUTER_MESSAGES_CONFIG: OpenRouterMessagesConfig = OpenRouterMessagesConfig;
 
-impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
-    fn retry_after_http_error(
-        &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+impl BaseMessagesConfig for OpenRouterMessagesConfig {
+    fn secret_names(&self) -> &'static [&'static str] {
+        &[API_KEY_ENV, API_BASE_ENV]
     }
 
     fn validate_environment(
@@ -73,6 +66,10 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
                 secret: SecretValue::new(key),
             },
         })
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        DEFAULT_HEADERS
     }
 
     fn get_complete_url(
@@ -115,16 +112,18 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
         })
     }
 
-    fn secret_names(&self) -> &'static [&'static str] {
-        &[API_KEY_ENV, API_BASE_ENV]
-    }
-
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
-    }
-
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 }
 

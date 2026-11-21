@@ -25,17 +25,17 @@ use crate::{
         transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
     },
     bedrock::messages::{
-        invoke_transformations::{
-            anthropic_claude_transformation::{
-                native_output_fallback_litellm_params,
-                should_retry_anthropic_messages_without_native_output,
-            },
+        invoke::{
             request::{
                 InvokeRequestSettings, clamp_adaptive_reasoning_effort_for_bedrock,
                 with_logged_tools,
             },
+            transformation::{
+                native_output_fallback_litellm_params,
+                should_retry_anthropic_messages_without_native_output,
+            },
         },
-        mantle_transformation::{
+        mantle::transformation::{
             AMAZON_MANTLE_REQUEST_SETTINGS, MANTLE_API_BASE_ENV, MANTLE_MESSAGES_PATH,
             amazon_mantle_model_id, bearer_environment, mantle_headers, mantle_secret_names,
             mantle_wire_body, parse_mantle_base, sigv4_environment,
@@ -107,9 +107,8 @@ const BEDROCK_MANTLE_REQUEST_SETTINGS: InvokeRequestSettings = InvokeRequestSett
 /// The `bedrock_mantle/` Messages config for Claude models. Its region comes from
 /// `aws_region_name`, a public Mantle host, a region prefix on the model or the env, in Python's
 /// order, and it sends the model without that prefix.
-pub struct BedrockMantleAnthropicMessagesConfig;
-pub const BEDROCK_MANTLE_MESSAGES_CONFIG: BedrockMantleAnthropicMessagesConfig =
-    BedrockMantleAnthropicMessagesConfig;
+pub struct BedrockMantleMessagesConfig;
+pub const BEDROCK_MANTLE_MESSAGES_CONFIG: BedrockMantleMessagesConfig = BedrockMantleMessagesConfig;
 
 fn env_value(env_lookup: &dyn Fn(&str) -> Option<String>, names: &[&str]) -> Option<String> {
     names
@@ -268,114 +267,13 @@ fn build_mantle_native_messages_url(
     Ok(url)
 }
 
-impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
-    fn retry_after_http_error(
-        &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
-    }
-
+impl BaseMessagesConfig for BedrockMantleMessagesConfig {
     fn clamp_requested_effort(
         &self,
         request: MessagesRequest,
         capabilities: &MessagesModelCapabilities,
     ) -> Result<MessagesRequest, Error> {
         clamp_adaptive_reasoning_effort_for_bedrock(request, capabilities)
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        litellm_params: &LitellmParams,
-        _stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        build_mantle_native_messages_url(
-            api_base.or(litellm_params.api_base.as_deref()),
-            model,
-            litellm_params,
-            env_lookup,
-        )
-        .map(String::from)
-    }
-
-    fn finalize_request(
-        &self,
-        request: MessagesRequest,
-        headers: Headers,
-        context: &MessagesTransformContext,
-    ) -> Result<(MessagesRequest, Headers), Error> {
-        let model_id = mantle_model_id(&request.model);
-        transform_mantle_messages_request(
-            request,
-            model_id,
-            headers,
-            context,
-            &BEDROCK_MANTLE_REQUEST_SETTINGS,
-        )
-    }
-
-    fn native_output_fallback(
-        &self,
-        request: &MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Option<MessagesTransformContext> {
-        native_output_fallback_litellm_params(request, context)
-    }
-
-    fn retries_without_native_output(
-        &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        model: &str,
-    ) -> bool {
-        should_retry_anthropic_messages_without_native_output(
-            status,
-            error_text,
-            request_body,
-            model,
-        )
-    }
-
-    fn transform_anthropic_messages_response(
-        &self,
-        _model: &str,
-        response: MessagesResponse,
-    ) -> Result<MessagesResponse, Error> {
-        with_zero_usage(response)
-    }
-
-    fn transform_unchecked_response(
-        &self,
-        body: Map<String, Value>,
-    ) -> Result<Map<String, Value>, Error> {
-        unchecked_with_zero_usage(body)
-    }
-
-    fn logged_params(
-        &self,
-        params: MessagesOptionalParams,
-        context: &MessagesTransformContext,
-    ) -> Result<MessagesOptionalParams, Error> {
-        with_logged_tools(params, context)
-    }
-
-    fn wire_body(&self, body: Value) -> Value {
-        mantle_wire_body(body, mantle_model_id)
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -427,8 +325,109 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         &[]
     }
 
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        model: &str,
+        litellm_params: &LitellmParams,
+        _stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        build_mantle_native_messages_url(
+            api_base.or(litellm_params.api_base.as_deref()),
+            model,
+            litellm_params,
+            env_lookup,
+        )
+        .map(String::from)
+    }
+
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, options)
+    }
+
+    fn finalize_request(
+        &self,
+        request: MessagesRequest,
+        headers: Headers,
+        context: &MessagesTransformContext,
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        let model_id = mantle_model_id(&request.model);
+        transform_mantle_messages_request(
+            request,
+            model_id,
+            headers,
+            context,
+            &BEDROCK_MANTLE_REQUEST_SETTINGS,
+        )
+    }
+
+    fn wire_body(&self, body: Value) -> Value {
+        mantle_wire_body(body, mantle_model_id)
+    }
+
+    fn transform_anthropic_messages_response(
+        &self,
+        _model: &str,
+        response: MessagesResponse,
+    ) -> Result<MessagesResponse, Error> {
+        with_zero_usage(response)
+    }
+
+    fn transform_unchecked_response(
+        &self,
+        body: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Error> {
+        unchecked_with_zero_usage(body)
+    }
+
+    fn logged_params(
+        &self,
+        params: MessagesOptionalParams,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesOptionalParams, Error> {
+        with_logged_tools(params, context)
+    }
+
     fn logged_model(&self, model: &str) -> String {
         split_mantle_region_prefix(model).1.to_string()
+    }
+
+    fn native_output_fallback(
+        &self,
+        request: &MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Option<MessagesTransformContext> {
+        native_output_fallback_litellm_params(request, context)
+    }
+
+    fn retries_without_native_output(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        model: &str,
+    ) -> bool {
+        should_retry_anthropic_messages_without_native_output(
+            status,
+            error_text,
+            request_body,
+            model,
+        )
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 }
 
@@ -443,7 +442,7 @@ mod tests {
     use crate::{
         ErrorDetail,
         base_llm::{auth::AuthScheme, messages::context::MessagesModelCapabilities},
-        bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
+        bedrock::messages::mantle::transformation::BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
     };
 
     #[rstest]
@@ -768,8 +767,8 @@ mod tests {
     #[case::url_injection(&BEDROCK_MANTLE_MESSAGES_CONFIG, Some("us-east-1.attacker.test/steal?"), &[], MantleRegionCheck::ProviderResolution)]
     #[case::uppercase(&BEDROCK_MANTLE_MESSAGES_CONFIG, Some("US-EAST-1"), &[], MantleRegionCheck::ProviderResolution)]
     #[case::environment(&BEDROCK_MANTLE_MESSAGES_CONFIG, None, &[("BEDROCK_MANTLE_REGION", "US-EAST-1")], MantleRegionCheck::ProviderResolution)]
-    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG, Some("US-EAST-1"), &[], MantleRegionCheck::Request)]
-    #[case::bedrock_mantle_route_environment(&AMAZON_MANTLE_MESSAGES_CONFIG, None, &[("AWS_REGION_NAME", "US-EAST-1")], MantleRegionCheck::Request)]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, Some("US-EAST-1"), &[], MantleRegionCheck::Request)]
+    #[case::bedrock_mantle_route_environment(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, None, &[("AWS_REGION_NAME", "US-EAST-1")], MantleRegionCheck::Request)]
     fn invalid_regions_name_where_python_refuses_them(
         #[case] config: &dyn BaseMessagesConfig,
         #[case] configured: Option<&str>,
@@ -849,7 +848,7 @@ mod tests {
 
     #[rstest]
     #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
     fn bearer_overwrites_only_the_exact_authorization_key(#[case] config: &dyn BaseMessagesConfig) {
         let validated = environment(
             config,
@@ -882,7 +881,7 @@ mod tests {
 
     #[rstest]
     #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, "us-west-2/anthropic.claude-test")]
-    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG, "mantle/anthropic.claude-test")]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, "mantle/anthropic.claude-test")]
     fn the_invoke_transform_sees_the_model_python_sends(
         #[case] config: &dyn BaseMessagesConfig,
         #[case] model: &str,
@@ -957,7 +956,7 @@ mod tests {
 
     #[rstest]
     #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, true)]
-    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG, false)]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, false)]
     fn clear_thinking_edit_is_kept_only_on_bedrock_mantle(
         #[case] config: &dyn BaseMessagesConfig,
         #[case] kept: bool,
@@ -984,7 +983,7 @@ mod tests {
 
     #[rstest]
     #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
     fn mantle_logs_the_tools_the_invoke_transform_shapes(#[case] config: &dyn BaseMessagesConfig) {
         let request: MessagesRequest = serde_json::from_value(request(
             "claude-test",
@@ -1015,7 +1014,7 @@ mod tests {
 
     #[rstest]
     #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
     fn mantle_shapes_the_body_like_invoke_with_its_overrides(
         #[case] config: &dyn BaseMessagesConfig,
     ) {
@@ -1048,7 +1047,7 @@ mod tests {
 
     #[rstest]
     #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
     fn null_safeguards_add_no_dangerous_tool_use_beta(#[case] config: &dyn BaseMessagesConfig) {
         let (_, headers) = sent(
             config,
@@ -1061,7 +1060,7 @@ mod tests {
 
     #[rstest]
     #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
     fn server_web_search_is_rejected(#[case] config: &dyn BaseMessagesConfig) {
         assert!(matches!(
             sent(
@@ -1078,8 +1077,8 @@ mod tests {
 
     #[rstest]
     #[case::bedrock_mantle_strips_region(&BEDROCK_MANTLE_MESSAGES_CONFIG, "us-west-2/claude-test", true, json!({"model": "claude-test", "stream": true}))]
-    #[case::bedrock_mantle_route_keeps_region(&AMAZON_MANTLE_MESSAGES_CONFIG, "mantle/eu-west-1/anthropic.claude-test", true, json!({"model": "eu-west-1/anthropic.claude-test", "stream": true}))]
-    #[case::stream_false_is_omitted(&AMAZON_MANTLE_MESSAGES_CONFIG, "mantle/anthropic.claude-test", false, json!({"model": "anthropic.claude-test"}))]
+    #[case::bedrock_mantle_route_keeps_region(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, "mantle/eu-west-1/anthropic.claude-test", true, json!({"model": "eu-west-1/anthropic.claude-test", "stream": true}))]
+    #[case::stream_false_is_omitted(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, "mantle/anthropic.claude-test", false, json!({"model": "anthropic.claude-test"}))]
     fn wire_body_sends_model_and_stream_last(
         #[case] config: &dyn BaseMessagesConfig,
         #[case] model: &str,
@@ -1107,7 +1106,10 @@ mod tests {
     #[case::string_stream_dropped(json!({"model": "mantle/m", "stream": "true", "max_tokens": 1}), json!({"max_tokens": 1, "model": "m"}))]
     #[case::not_an_object(json!(["mantle/m"]), json!(["mantle/m"]))]
     fn wire_body_keeps_only_a_boolean_true_stream(#[case] body: Value, #[case] expected: Value) {
-        assert_eq!(AMAZON_MANTLE_MESSAGES_CONFIG.wire_body(body), expected);
+        assert_eq!(
+            BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG.wire_body(body),
+            expected
+        );
     }
 
     #[rstest]
@@ -1135,7 +1137,7 @@ mod tests {
     #[rstest]
     #[case::bedrock_mantle_array(&BEDROCK_MANTLE_MESSAGES_CONFIG, json!([1]), "an array")]
     #[case::bedrock_mantle_empty_string(&BEDROCK_MANTLE_MESSAGES_CONFIG, json!(""), "a string")]
-    #[case::bedrock_mantle_route_number(&AMAZON_MANTLE_MESSAGES_CONFIG, json!(0), "a number")]
+    #[case::bedrock_mantle_route_number(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, json!(0), "a number")]
     fn a_non_object_usage_is_refused_instead_of_billed_as_zero(
         #[case] config: &dyn BaseMessagesConfig,
         #[case] usage: Value,
@@ -1177,8 +1179,8 @@ mod tests {
 
     #[rstest]
     #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, true)]
-    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG, true)]
-    #[case::bedrock_invoke(&crate::bedrock::messages::invoke_transformations::anthropic_claude_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG, false)]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, true)]
+    #[case::bedrock_invoke(&crate::bedrock::messages::invoke::transformation::BEDROCK_INVOKE_MESSAGES_CONFIG, false)]
     #[case::anthropic(&crate::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG, false)]
     fn dropping_disabled_thinking_warns_only_on_mantle(
         #[case] config: &dyn BaseMessagesConfig,

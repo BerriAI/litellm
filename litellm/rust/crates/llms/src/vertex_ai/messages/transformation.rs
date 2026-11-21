@@ -56,74 +56,15 @@ const VERSIONS_VERTEX_ACCEPTS_IN_BODY: [&str; 2] = [ANTHROPIC_VERSION, "2026-10-
 
 /// Claude on Vertex AI, Python's `VertexAIPartnerModelsAnthropicMessagesConfig`: the Anthropic
 /// payload addressed to a project and location, authenticated with a Google access token.
-pub struct VertexAiPartnerModelsAnthropicMessagesConfig;
+pub struct VertexAiMessagesConfig;
 
-pub const VERTEX_ANTHROPIC_MESSAGES_CONFIG: VertexAiPartnerModelsAnthropicMessagesConfig =
-    VertexAiPartnerModelsAnthropicMessagesConfig;
+pub const VERTEX_AI_MESSAGES_CONFIG: VertexAiMessagesConfig = VertexAiMessagesConfig;
 
-impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
+impl BaseMessagesConfig for VertexAiMessagesConfig {
     fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
         crate::base_llm::messages::tools::ToolCustomField::Rewrite {
             hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
         }
-    }
-
-    fn retry_after_http_error(
-        &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        litellm_params: &LitellmParams,
-        stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        let config = VertexConfig::from_params(&litellm_params.vertex);
-        let project = get_vertex_ai_project(&config, env_lookup)
-            .or_else(|| get_vertex_ai_project_from_credentials(&config, env_lookup))
-            .ok_or_else(|| Error::Auth(VertexParams::PROJECT.missing("Vertex AI")))?;
-        let location = vertex_region(vertex_location(&litellm_params.vertex, env_lookup), &[]);
-        complete_vertex_anthropic_url(api_base, &project, &location, model, stream)
-    }
-
-    fn transform_anthropic_messages_request(
-        &self,
-        request: MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(
-            request,
-            &context
-                .keeping_display_updates()
-                .warning_dropped_disabled_thinking(),
-        )?;
-        let accepts_effort = supports_effort_param(&context.thinking.capabilities);
-        Ok(MessagesRequest {
-            params: MessagesOptionalParams {
-                output_config: request
-                    .params
-                    .output_config
-                    .and_then(|config| sanitize_output_config(config, accepts_effort)),
-                ..request.params
-            },
-            ..request
-        })
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -156,13 +97,52 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         })
     }
 
-    /// Python's Vertex beta set merged into the caller's betas, then the handler's
-    /// `update_headers_with_filtered_beta` over the `vertex_ai` row.
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        BetaPolicy::Filter(BetaProvider::VertexAi).apply(merge_beta_headers(
-            without_headers(headers, &[VERSION_HEADER]),
-            vertex_feature_betas(request),
-        ))
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        model: &str,
+        litellm_params: &LitellmParams,
+        stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        let config = VertexConfig::from_params(&litellm_params.vertex);
+        let project = get_vertex_ai_project(&config, env_lookup)
+            .or_else(|| get_vertex_ai_project_from_credentials(&config, env_lookup))
+            .ok_or_else(|| Error::Auth(VertexParams::PROJECT.missing("Vertex AI")))?;
+        let location = vertex_region(vertex_location(&litellm_params.vertex, env_lookup), &[]);
+        complete_vertex_anthropic_url(api_base, &project, &location, model, stream)
+    }
+
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, options)
+    }
+
+    fn transform_anthropic_messages_request(
+        &self,
+        request: MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        let request = transform_messages_request(
+            request,
+            &context
+                .keeping_display_updates()
+                .warning_dropped_disabled_thinking(),
+        )?;
+        let accepts_effort = supports_effort_param(&context.thinking.capabilities);
+        Ok(MessagesRequest {
+            params: MessagesOptionalParams {
+                output_config: request
+                    .params
+                    .output_config
+                    .and_then(|config| sanitize_output_config(config, accepts_effort)),
+                ..request.params
+            },
+            ..request
+        })
     }
 
     fn request_body(
@@ -195,6 +175,15 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
             },
             ..request
         })
+    }
+
+    /// Python's Vertex beta set merged into the caller's betas, then the handler's
+    /// `update_headers_with_filtered_beta` over the `vertex_ai` row.
+    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+        BetaPolicy::Filter(BetaProvider::VertexAi).apply(merge_beta_headers(
+            without_headers(headers, &[VERSION_HEADER]),
+            vertex_feature_betas(request),
+        ))
     }
 
     /// Python's transform strips the thinking and system fields the final, filtered header does
@@ -230,6 +219,16 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
             fields.remove("model");
         }
         body
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 }
 
@@ -466,7 +465,7 @@ mod tests {
         stream: bool,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        VERTEX_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+        VERTEX_AI_MESSAGES_CONFIG.get_complete_url(
             api_base,
             "claude-sonnet-4-5@20250929",
             litellm_params,
@@ -695,7 +694,7 @@ mod tests {
     }
 
     fn validated(forwarded: &[(&str, &str)]) -> ValidatedEnvironment {
-        VERTEX_ANTHROPIC_MESSAGES_CONFIG
+        VERTEX_AI_MESSAGES_CONFIG
             .validate_environment(
                 forwarded
                     .iter()
@@ -732,7 +731,7 @@ mod tests {
             .collect(),
             ..params(Some("proj"), None)
         };
-        let headers = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+        let headers = VERTEX_AI_MESSAGES_CONFIG
             .validate_environment(
                 vec![("x-vertex-ai-labels".to_string(), "forged".to_string())],
                 None,
@@ -790,7 +789,7 @@ mod tests {
     #[rstest]
     fn default_headers_carry_no_anthropic_version() {
         assert_eq!(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG.default_headers(),
+            VERTEX_AI_MESSAGES_CONFIG.default_headers(),
             &[("content-type", "application/json")]
         );
     }
@@ -806,7 +805,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG.request_headers(
+            VERTEX_AI_MESSAGES_CONFIG.request_headers(
                 vec![
                     (name.to_string(), "2026-10-21".to_string()),
                     ("x-request-id".to_string(), "req-1".to_string()),
@@ -823,14 +822,14 @@ mod tests {
         context: &MessagesTransformContext,
     ) -> Value {
         let request: MessagesRequest = serde_json::from_value(value).unwrap();
-        let transformed = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+        let transformed = VERTEX_AI_MESSAGES_CONFIG
             .transform_anthropic_messages_request(request, context)
             .unwrap();
         let headers = headers
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
-        let (finalized, _) = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+        let (finalized, _) = VERTEX_AI_MESSAGES_CONFIG
             .finalize_request(transformed, headers, context)
             .unwrap();
         serde_json::to_value(finalized).unwrap()
@@ -865,7 +864,7 @@ mod tests {
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         let body = serde_json::to_value(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            VERTEX_AI_MESSAGES_CONFIG
                 .request_body(request, &headers, drop_params)
                 .unwrap(),
         )
@@ -884,7 +883,7 @@ mod tests {
         }))
         .unwrap();
         let headers: Headers = vec![("anthropic-version".to_string(), requested.to_string())];
-        let Error::InvalidRequest(detail) = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+        let Error::InvalidRequest(detail) = VERTEX_AI_MESSAGES_CONFIG
             .request_body(request, &headers, false)
             .unwrap_err()
         else {
@@ -913,7 +912,7 @@ mod tests {
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
-        VERTEX_ANTHROPIC_MESSAGES_CONFIG
+        VERTEX_AI_MESSAGES_CONFIG
             .request_body(serde_json::from_value(request).unwrap(), &headers, false)
             .map(|body| serde_json::to_value(body).unwrap())
     }
@@ -988,9 +987,9 @@ mod tests {
         }))
         .unwrap();
         let body = serde_json::to_value(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            VERTEX_AI_MESSAGES_CONFIG
                 .request_body(
-                    VERTEX_ANTHROPIC_MESSAGES_CONFIG
+                    VERTEX_AI_MESSAGES_CONFIG
                         .transform_anthropic_messages_request(
                             request,
                             &MessagesTransformContext::default(),
@@ -1003,7 +1002,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(body["model"], json!("claude-sonnet-4-5@20250929"));
-        let wire = VERTEX_ANTHROPIC_MESSAGES_CONFIG.wire_body(body);
+        let wire = VERTEX_AI_MESSAGES_CONFIG.wire_body(body);
         assert_eq!(wire.get("model"), None);
         assert_eq!(wire["anthropic_version"], json!("vertex-2023-10-16"));
     }
@@ -1292,7 +1291,7 @@ mod tests {
             base
         })
         .unwrap();
-        VERTEX_ANTHROPIC_MESSAGES_CONFIG
+        VERTEX_AI_MESSAGES_CONFIG
             .request_headers(
                 sent.iter()
                     .map(|(name, value)| (name.to_string(), value.to_string()))
@@ -1392,7 +1391,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG.request_headers(
+            VERTEX_AI_MESSAGES_CONFIG.request_headers(
                 vec![
                     (
                         "anthropic-beta".to_string(),
@@ -1449,8 +1448,9 @@ mod tests {
         let warnings = Warnings::default();
 
         let transformed = litellm_tracing::Logger::new(warnings.clone()).scope(|| match vertex {
-            true => VERTEX_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request, &context),
+            true => {
+                VERTEX_AI_MESSAGES_CONFIG.transform_anthropic_messages_request(request, &context)
+            }
             false => crate::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG
                 .transform_anthropic_messages_request(request, &context),
         });

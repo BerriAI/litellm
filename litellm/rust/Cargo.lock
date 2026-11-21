@@ -4383,6 +4383,7 @@ dependencies = [
 name = "litellm-inference-messages"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "flate2",
  "futures-util",
@@ -4409,12 +4410,14 @@ dependencies = [
  "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
+ "regex",
  "reqwest",
  "rstest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
  "wiremock",
 ]

@@ -6,6 +6,6 @@
 
 # references
 
-- Python counterpart `litellm/llms/tencent/messages/transformation.py`
+- Python counterpart `litellm/llms/tencent/messages/transformation.py` (`TencentAnthropicMessagesConfig`)
 - https://www.tencentcloud.com/document/product/1300/80632
 - https://cloud.tencent.com/document/product/1823/132246
