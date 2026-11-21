@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, eventually
+from tests.integration._support.client import Gateway, eventually, held
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
@@ -107,5 +107,8 @@ def test_jwt_upserted_user_fires_the_user_created_alert_and_audit_log_once(gatew
             ]
 
             complete()
-            assert _drain_alerts(alerts) == (), "a returning JWT user is not announced as created again"
-            assert len(_created_audit_rows(subject)) == 1
+            assert held(
+                lambda: (alerts.received.qsize(), len(_created_audit_rows(subject))),
+                lambda counts: counts == (0, 1),
+                holding=5,
+            ) == (0, 1), "a returning JWT user is not announced as created again"
