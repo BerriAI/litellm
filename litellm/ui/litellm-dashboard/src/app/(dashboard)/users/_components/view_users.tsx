@@ -379,7 +379,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 )}
               </div>
               {isProxyAdmin && (
-                <PageTabsList className="w-auto flex-1">
+                <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
                   <PageTabsTrigger value="users" className="data-active:text-primary after:bg-primary">
                     {t("users.page.tabs.users")}
                   </PageTabsTrigger>

@@ -462,7 +462,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
                   {t("policies.panel.addPolicy")}
                 </Button>
               )}
-              <PageTabsList className="w-auto flex-1">
+              <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
                 <PageTabsTrigger value="templates">{t("policies.panel.tabs.templates")}</PageTabsTrigger>
                 <PageTabsTrigger value="policies">{t("policies.panel.tabs.policies")}</PageTabsTrigger>
                 <PageTabsTrigger value="attachments">{t("policies.panel.tabs.attachments")}</PageTabsTrigger>

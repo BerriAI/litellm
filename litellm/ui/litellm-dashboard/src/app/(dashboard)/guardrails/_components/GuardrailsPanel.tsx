@@ -129,7 +129,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
-              <PageTabsList className="w-auto flex-1">
+              <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
                 {isAdmin && (
                   <>
                     <PageTabsTrigger value="garden">{t("guardrails.panel.tabs.garden")}</PageTabsTrigger>
