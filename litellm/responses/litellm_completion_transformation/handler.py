@@ -158,7 +158,7 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)):
+        with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), bridged_request):
             litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
                 **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
             )
@@ -261,7 +261,9 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=request_input,
             )
 
-        with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)):
+        with error_param_named_as_a_responses_field(
+            _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request
+        ):
             litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
                 **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
             )

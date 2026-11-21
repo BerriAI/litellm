@@ -118,6 +118,17 @@ def _relayable_text(carried: object) -> str:
 def relayed_provider_specific_fields(
     exc: object,
 ) -> dict[str, object] | None:  # mutable-ok: ProxyException.provider_specific_fields is a dict
+    carried: Final = attribute_of(exc, "provider_specific_fields")
+    relayed: Final = {
+        **(_error_body_provider_specific_fields(exc) or {}),
+        **(_ERROR_BODY.validate_python(carried) if isinstance(carried, dict) else {}),
+    }
+    return relayed or None
+
+
+def _error_body_provider_specific_fields(
+    exc: object,
+) -> dict[str, object] | None:  # mutable-ok: ProxyException.provider_specific_fields is a dict
     body: Final = attribute_of(exc, "body")
     if not isinstance(body, dict):
         return None
@@ -143,9 +154,10 @@ def _is_json_compliant(fields: Mapping[str, object]) -> bool:
 
 
 def _openai_error_object_extras(error_object: Mapping[str, object]) -> Mapping[str, object]:
-    if not isinstance(error_object.get("message"), str):
-        return MappingProxyType({})
-    return MappingProxyType({key: value for key, value in error_object.items() if _is_provider_specific(key, value)})
+    relayable: Final = error_object.keys() if isinstance(error_object.get("message"), str) else {"code"}
+    return MappingProxyType(
+        {key: value for key, value in error_object.items() if key in relayable and _is_provider_specific(key, value)}
+    )
 
 
 def _is_provider_specific(key: str, value: object) -> bool:

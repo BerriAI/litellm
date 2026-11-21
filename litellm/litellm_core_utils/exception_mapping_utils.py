@@ -2365,6 +2365,18 @@ def _map_azure_exception(
         )
 
 
+def _openai_style_error_message_and_body(
+    original_exception: _ProviderHTTPException, error_str: str
+) -> tuple[str, dict[str, object] | None]:  # mutable-ok: litellm exceptions take the error body as a dict
+    relayed_error: Final = _relayed_openai_error(original_exception)
+    if relayed_error is not None:
+        return str(relayed_error["message"]), dict(relayed_error)
+    carried_body: Final = as_str_mapping(getattr(original_exception, "body", None))
+    if carried_body is None:
+        return error_str, None
+    return get_error_message(error_obj=original_exception) or error_str, dict(carried_body)
+
+
 def _map_openrouter_exception(
     *,
     model: str,
@@ -2378,57 +2390,63 @@ def _map_openrouter_exception(
     received_status: Final = hasattr(original_exception, "status_code") and not getattr(
         original_exception, "status_code_is_synthesized", False
     )
+    message, body = _openai_style_error_message_and_body(original_exception, error_str)
     if received_status:
         if original_exception.status_code == 400:
             raise BadRequestError(
-                message=f"{exception_provider} - {error_str}",
+                message=f"{exception_provider} - {message}",
                 llm_provider=custom_llm_provider,
                 model=model,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 401:
             raise AuthenticationError(
-                message=f"AuthenticationError: {exception_provider} - {error_str}",
+                message=f"AuthenticationError: {exception_provider} - {message}",
                 llm_provider=custom_llm_provider,
                 model=model,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 404:
             raise NotFoundError(
-                message=f"NotFoundError: {exception_provider} - {error_str}",
+                message=f"NotFoundError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 408:
             raise Timeout(
-                message=f"Timeout Error: {exception_provider} - {error_str}",
+                message=f"Timeout Error: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
-                message=f"BadRequestError: {exception_provider} - {error_str}",
+                message=f"BadRequestError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 429:
             raise RateLimitError(
-                message=f"RateLimitError: {exception_provider} - {error_str}",
+                message=f"RateLimitError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 503:
             raise ServiceUnavailableError(
-                message=f"ServiceUnavailableError: {exception_provider} - {error_str}",
+                message=f"ServiceUnavailableError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
@@ -2436,7 +2454,7 @@ def _map_openrouter_exception(
             )
         elif original_exception.status_code == 504:  # gateway timeout error
             raise Timeout(
-                message=f"Timeout Error: {exception_provider} - {error_str}",
+                message=f"Timeout Error: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
@@ -2445,16 +2463,17 @@ def _map_openrouter_exception(
         else:
             raise APIError(
                 status_code=original_exception.status_code,
-                message=f"APIError: {exception_provider} - {error_str}",
+                message=f"APIError: {exception_provider} - {message}",
                 llm_provider=custom_llm_provider,
                 model=model,
                 request=getattr(original_exception, "request", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
         raise APIConnectionError(
-            message=f"APIConnectionError: {exception_provider} - {error_str}",
+            message=f"APIConnectionError: {exception_provider} - {message}",
             llm_provider=custom_llm_provider,
             model=model,
             litellm_debug_info=extra_information,

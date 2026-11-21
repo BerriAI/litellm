@@ -133,7 +133,6 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
     has_attributes,
-    http_error_status,
     is_expected_client_error,
     native_messages_reported_cost,
     provider_reported_usage_cost,
@@ -7956,34 +7955,6 @@ def request_model_access_groups_from_litellm_params(litellm_params: Mapping[str,
     return ()
 
 
-def _logged_error_code(original_exception: Exception | None) -> str:
-    carried_code: Final = str(getattr(original_exception, "code", None))
-    if http_error_status(carried_code) is not None:
-        return carried_code
-    status_code: Final[object] = getattr(original_exception, "status_code", None)
-    if status_code is not None:
-        return str(status_code)
-    response_status_code: Final[object] = getattr(getattr(original_exception, "response", None), "status_code", None)
-    if response_status_code is not None:
-        return str(response_status_code)
-    return "" if carried_code in ("", "None") else carried_code
-
-
-def _provider_error_code(code: object) -> str | None:
-    text: Final = str(code)
-    if text in ("", "None") or http_error_status(text) is not None:
-        return None
-    return redact_string(text)
-
-
-def _logged_provider_error_code(original_exception: Exception | None) -> str | None:
-    carried_code: Final = _provider_error_code(getattr(original_exception, "code", None))
-    if carried_code is not None:
-        return carried_code
-    error_body: Final = as_str_mapping(getattr(original_exception, "body", None))
-    return _provider_error_code(error_body.get("code")) if error_body is not None else None
-
-
 class StandardLoggingPayloadSetup:
     @staticmethod
     def cleanup_timestamps(
@@ -8474,7 +8445,18 @@ class StandardLoggingPayloadSetup:
     ) -> StandardLoggingPayloadErrorInformation:
         from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 
-        error_status: Final = _logged_error_code(original_exception)
+        # ProxyException uses .code, LiteLLM exceptions use .status_code,
+        # httpx.HTTPStatusError exposes status only as .response.status_code.
+        # Stringified for Prisma JSON compatibility.
+        error_code_attr: Final[object] = getattr(original_exception, "code", None)
+        if error_code_attr is not None and str(error_code_attr) not in ("", "None"):
+            error_status: str = str(error_code_attr)
+        else:
+            status_code_attr: object = getattr(original_exception, "status_code", None)
+            if status_code_attr is None:
+                response_attr: Final[object] = getattr(original_exception, "response", None)
+                status_code_attr = getattr(response_attr, "status_code", None)
+            error_status = str(status_code_attr) if status_code_attr is not None else ""
         error_class: Final[str] = logged_class_name(original_exception) if original_exception else ""
         _llm_provider_in_exception: Final = getattr(original_exception, "llm_provider", "")
 
@@ -8514,7 +8496,6 @@ class StandardLoggingPayloadSetup:
             traceback=redact_string(traceback_info),
             error_message=redact_string(error_message),
             error_provider_request_id=provider_request_id,
-            error_provider_code=_logged_provider_error_code(original_exception),
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
             error_budget_entity_type=budget_error.entity_type if budget_error else None,

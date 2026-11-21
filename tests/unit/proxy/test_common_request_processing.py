@@ -16260,6 +16260,92 @@ async def test_azure_responses_400_relays_param_and_unwrapped_message() -> None:
 
 
 @pytest.mark.usefixtures("httpx_transport")
+async def test_azure_chat_content_filter_400_relays_the_param_and_the_provider_code_next_to_azures_fields() -> None:
+    inner_error: Final = {"code": "ResponsibleAIPolicyViolation", "content_filter_result": {"jailbreak": {"filtered": True}}}
+    body: Final = {
+        "error": {
+            "message": "The response was filtered due to the prompt triggering Azure OpenAI's content management policy.",
+            "type": None,
+            "param": "prompt",
+            "code": "content_filter",
+            "status": 400,
+            "innererror": inner_error,
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(url__startswith="https://azure-backend.example.com/openai/").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = litellm.completion(
+                model="azure/gpt-deployment",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://azure-backend.example.com",
+                api_key="azure-key",
+                api_version="2025-04-01-preview",
+            )
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "azure-gpt"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    fields: Final = json.loads(json.dumps(payload["provider_specific_fields"]))
+    assert payload["param"] == "prompt"
+    assert (fields["code"], fields["innererror"]) == ("content_filter", inner_error)
+
+
+_OPENROUTER_BACKEND: Final = MappingProxyType(
+    {"api_base": "https://openrouter-backend.example.com/api/v1", "api_key": "sk-or-key"}
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("route", "call"),
+    [
+        (
+            "chat/completions",
+            lambda: litellm.completion(
+                model="openrouter/openai/gpt-6.2-sol",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=-5,
+                **_OPENROUTER_BACKEND,
+            ),
+        ),
+        (
+            "responses",
+            lambda: litellm.responses(
+                model="openrouter/openai/gpt-6.2-sol", input="hi", max_output_tokens=-5, **_OPENROUTER_BACKEND
+            ),
+        ),
+    ],
+)
+async def test_openrouter_400_relays_the_unwrapped_message_and_the_error_metadata(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {"message": "Expected max_tokens to be at least 1", "code": 400, "metadata": {"provider_name": None}}
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://openrouter-backend.example.com/api/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "openrouter-gpt"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert relayed.value.message.endswith(" - Expected max_tokens to be at least 1")
+    assert payload["provider_specific_fields"] == {"metadata": {"provider_name": None}}
+
+
+@pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
 async def test_openai_compatible_backend_400_redacts_secrets_and_internal_details_from_param_and_type(
     route: str, call: Callable[[], object]

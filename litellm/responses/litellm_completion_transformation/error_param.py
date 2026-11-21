@@ -16,7 +16,6 @@ _RESPONSES_FIELD_BY_BRIDGED_FIELD: Final[Mapping[str, str]] = MappingProxyType(
     {
         "max_tokens": "max_output_tokens",
         "max_completion_tokens": "max_output_tokens",
-        "messages": "input",
         "reasoning_effort": "reasoning.effort",
         "reasoning_summary": "reasoning.summary",
         "response_format": "text.format",
@@ -27,12 +26,17 @@ _RESPONSES_FIELD_BY_BRIDGED_FIELD: Final[Mapping[str, str]] = MappingProxyType(
 _FIELDS_THE_BRIDGE_RESHAPES: Final = frozenset({"tools", "tool_choice"})
 _FIELDS_ONLY_THE_BRIDGE_SENDS: Final = frozenset({"stream_options"})
 _PARAM_PATH_SEPARATOR: Final = re.compile(r"[.\[]")
+_FIRST_MESSAGE: Final = re.compile(r"messages\.?\[0\]")
 
 
-def responses_error_param(chat_completion_param: object, caller_fields: AbstractSet[str]) -> str | None:
+def responses_error_param(
+    chat_completion_param: object, caller_fields: AbstractSet[str], request: Mapping[str, object]
+) -> str | None:
     if not isinstance(chat_completion_param, str):
         return None
     root: Final = _PARAM_PATH_SEPARATOR.split(chat_completion_param, maxsplit=1)[0]
+    if root == "messages":
+        return _message_field(chat_completion_param, request)
     renamed: Final = _RESPONSES_FIELD_BY_BRIDGED_FIELD.get(root)
     if renamed is not None:
         return renamed
@@ -43,11 +47,21 @@ def responses_error_param(chat_completion_param: object, caller_fields: Abstract
     return chat_completion_param
 
 
+def _message_field(chat_completion_param: str, request: Mapping[str, object]) -> str | None:
+    if request.get("previous_response_id"):
+        return None
+    if request.get("instructions") and _FIRST_MESSAGE.match(chat_completion_param):
+        return "instructions"
+    return "input"
+
+
 @contextmanager
-def error_param_named_as_a_responses_field(caller_kwargs: Iterable[str]) -> Generator[None]:
+def error_param_named_as_a_responses_field(
+    caller_kwargs: Iterable[str], request: Mapping[str, object]
+) -> Generator[None]:
     caller_fields: Final = _RESPONSES_REQUEST_FIELDS.union(caller_kwargs)
     try:
         yield
     except openai.APIError as error:
-        error.param = responses_error_param(error.param, caller_fields)
+        error.param = responses_error_param(error.param, caller_fields, request)
         raise
