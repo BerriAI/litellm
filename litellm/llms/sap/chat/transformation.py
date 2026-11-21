@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
+from ..credentials import get_token_creator
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
