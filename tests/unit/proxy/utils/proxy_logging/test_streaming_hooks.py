@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -657,8 +657,19 @@ def _raising_at_end_of_stream(error: Exception) -> CustomLogger:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "block",
+    [
+        GuardrailRaisedException(guardrail_name="g", message="blocked"),
+        BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="g"),
+    ],
+    ids=["guardrail_raised", "presidio_blocked_entity"],
+)
+@pytest.mark.parametrize(
+    "route", ["/chat/completions", "/v1/messages"], ids=["chat_completions", "messages_bridged_to_chat"]
+)
 async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_success(
-    proxy_logging, make_user_api_key_auth, monkeypatch
+    proxy_logging, make_user_api_key_auth, monkeypatch, block, route
 ):
     """
     A guardrail that raises ``GuardrailRaisedException`` at end of a
@@ -669,16 +680,12 @@ async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_suc
     events: list[str] = []
     request_data: dict[str, object] = {"metadata": {}}
     logging_obj, upstream = _armed_chat_stream("test_chat_stream_guardrail_block", request_data, events)
-    monkeypatch.setattr(
-        litellm,
-        "callbacks",
-        [_raising_at_end_of_stream(GuardrailRaisedException(guardrail_name="g", message="blocked"))],
-    )
+    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(block)])
 
-    with pytest.raises(GuardrailRaisedException):
+    with pytest.raises(type(block)):
         async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
             response=upstream,
-            user_api_key_dict=make_user_api_key_auth(),
+            user_api_key_dict=make_user_api_key_auth(request_route=route),
             request_data=request_data,
         ):
             pass
@@ -707,7 +714,7 @@ async def test_chat_stream_generic_callback_error_after_stream_end_still_flushes
 ):
     """
     ``post_call_failure_hook`` only routes proxy-level errors (HTTPException,
-    ProxyException, GuardrailRaisedException) through failure logging. A
+    ProxyException, GuardrailRaisedException, BlockedPiiEntityError) through failure logging. A
     callback that dies with any other exception after the stream completed
     must keep flushing the parked success dispatch, or the request ends with
     no terminal log at all.

@@ -137,6 +137,7 @@ from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
+    BlockedPiiEntityError,
     GuardrailRaisedException,
     RejectedRequestError,
     SensitiveDataRouteException,
@@ -639,6 +640,23 @@ def _pipeline_step_streams_live(step: "PipelineStep") -> bool:
     if callback is None or callback.mask_response_content:
         return False
     return not unified_guardrail.resolve_streaming_flag(callback, "streaming_buffer_until_moderated", True)
+
+
+def _is_messages_route(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    route: Final = user_api_key_dict.request_route
+    call_types: Final = get_call_types_for_route(route) if route else None
+    return bool(call_types) and call_types[0] == CallTypes.anthropic_messages
+
+
+class _ReadBytesTap:
+    def __init__(self) -> None:
+        self.read: Final[list[bytes]] = []  # mutable-ok: appended while the stream is read
+
+    async def tap(self, stream: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+        async for chunk in stream:
+            if isinstance(chunk, bytes):
+                self.read.append(chunk)
+            yield chunk
 
 
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
@@ -1493,7 +1511,7 @@ def _call_type_for_route(route: str | None, *, method: str | None = None) -> str
     return call_types[0].value if len(operations) == 1 else None
 
 
-_PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+_PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException, BlockedPiiEntityError)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
@@ -4595,7 +4613,8 @@ class ProxyLogging:
         # Merge model-level guardrails before checking which guardrails to run
         request_data = check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
-        current_response = response
+        read_tap: Final = _ReadBytesTap() if _is_messages_route(user_api_key_dict) else None
+        current_response = response if read_tap is None else read_tap.tap(response)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # the hook's response parameter is untyped
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
@@ -4673,7 +4692,12 @@ class ProxyLogging:
             raise
         except Exception as e:
             await ProxyLogging._record_served_stream_output(request_data, served_chunks)
-            if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+            refused_messages: Final = read_tap is not None and await ProxyLogging._refuse_messages_stream(
+                request_data,  # pyright: ignore[reportUnknownArgumentType]  # the hook's request_data parameter is untyped on this line
+                e,
+                tuple(read_tap.read),
+            )
+            if not refused_messages and not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                 ProxyLogging.fire_deferred_stream_logging(request_data)
             raise
 
@@ -4983,6 +5007,41 @@ class ProxyLogging:
         logging_obj._on_deferred_stream_complete = None
         logging_obj._deferred_stream_complete_args = None
         logging_obj.record_assembled_response_for_failure(assembled)
+        return True
+
+    @staticmethod
+    async def _refuse_messages_stream(
+        request_data: Mapping[str, object], error: Exception, read: tuple[bytes, ...]
+    ) -> bool:
+        """Drop the success log of a /v1/messages byte stream that ends in an error ``post_call_failure_hook`` logs
+        as a failure, parked or still to come at teardown, and bill the bytes it read on the failure row instead.
+        Returns False when the error is not one, or when the stream parked an assembled chat response instead,
+        so the caller handles it as a chat stream."""
+        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+            AnthropicPassthroughLoggingHandler,
+        )
+
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if not isinstance(logging_obj, Logging) or not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
+            return False
+        parked_args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        match parked_args:
+            case (parked,) if asyncio.iscoroutine(parked):
+                parked.close()
+            case None:
+                pass
+            case _:
+                return False
+        logging_obj.refuse_stream_success()
+        logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        pricing_request: Final[Mapping[str, object]] = (
+            {"speed": request_data["speed"]} if "speed" in request_data else {}
+        )
+        await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
+            litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=read
+        )
         return True
 
     async def arelease_max_parallel_requests_on_disconnect(

@@ -329,6 +329,8 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
+        if litellm_logging_obj.stream_success_refused is True:
+            return
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
             is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
