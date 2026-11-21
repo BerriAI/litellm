@@ -12,10 +12,14 @@ Supports:
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
 """
 
+import base64
 from collections.abc import Mapping, Sequence
 from itertools import zip_longest
 from typing import Final
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -39,14 +43,89 @@ def _estimated_input_tokens(response: Mapping[str, object]) -> int:
     return _estimated_item_tokens({"embedding": response.get("embedding")})
 
 
-def _is_image_request(request_data: Mapping[str, object]) -> bool:
+_EMBEDDING_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+class _InlineSource(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    encoded: str = Field(alias="bytes")
+
+
+class _InlineMedia(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source: _InlineSource
+
+
+def _embedding_params(request_data: Mapping[str, object]) -> Mapping[str, object]:
     params: Final = request_data.get("singleEmbeddingParams") or request_data.get("segmentedEmbeddingParams")
-    return isinstance(params, Mapping) and "image" in params
+    try:
+        return _EMBEDDING_PARAMS.validate_python(params)
+    except ValidationError:
+        return {}
+
+
+def _is_image_request(request_data: Mapping[str, object]) -> bool:
+    return "image" in _embedding_params(request_data)
 
 
 def _is_audio_or_video_request(request_data: Mapping[str, object]) -> bool:
-    params: Final = request_data.get("singleEmbeddingParams") or request_data.get("segmentedEmbeddingParams")
-    return isinstance(params, Mapping) and ("audio" in params or "video" in params)
+    params: Final = _embedding_params(request_data)
+    return "audio" in params or "video" in params
+
+
+def _inline_media_bytes(media: object) -> bytes | None:
+    try:
+        return base64.b64decode(_InlineMedia.model_validate(media).source.encoded)
+    except ValueError:
+        return None
+
+
+def _mp4_box(content: bytes, box_type: bytes, start: int, end: int) -> tuple[int, int] | None:
+    offset = start
+    while offset + 8 <= end:
+        size = int.from_bytes(content[offset : offset + 4], "big")
+        header = 16 if size == 1 else 8
+        length = (
+            end - offset
+            if size == 0
+            else int.from_bytes(content[offset + 8 : offset + 16], "big")
+            if size == 1
+            else size
+        )
+        if length < header or offset + length > end:
+            return None
+        if content[offset + 4 : offset + 8] == box_type:
+            return offset + header, offset + length
+        offset += length
+    return None
+
+
+def _mp4_duration_seconds(content: bytes) -> float | None:
+    """Reads the movie duration from the `moov/mvhd` box of an MP4, MOV or 3GP file."""
+    moov: Final = _mp4_box(content, b"moov", 0, len(content))
+    mvhd: Final = _mp4_box(content, b"mvhd", *moov) if moov else None
+    if not mvhd or mvhd[0] == mvhd[1]:
+        return None
+    timescale_at: Final = mvhd[0] + (20 if content[mvhd[0]] == 1 else 12)
+    duration_end: Final = timescale_at + (12 if content[mvhd[0]] == 1 else 8)
+    if duration_end > mvhd[1]:
+        return None
+    timescale: Final = int.from_bytes(content[timescale_at : timescale_at + 4], "big")
+    duration: Final = int.from_bytes(content[timescale_at + 4 : duration_end], "big")
+    return duration / timescale if timescale > 0 and duration > 0 else None
+
+
+def _audio_seconds(request_data: Mapping[str, object]) -> float | None:
+    content: Final = _inline_media_bytes(_embedding_params(request_data).get("audio"))
+    seconds: Final = calculate_request_duration(content) if content else None
+    return seconds if seconds and seconds > 0 else None
+
+
+def _video_seconds(request_data: Mapping[str, object]) -> float | None:
+    content: Final = _inline_media_bytes(_embedding_params(request_data).get("video"))
+    return _mp4_duration_seconds(content) if content else None
 
 
 class AmazonNovaEmbeddingConfig:
@@ -319,27 +398,35 @@ class AmazonNovaEmbeddingConfig:
                 embeddings.append(embedding)
 
         requests: Final[Sequence[Mapping[str, object]]] = batch_data or ()
-        text_and_image_metered: Final = tuple(
-            None if _is_audio_or_video_request(request_data) else metered
-            for request_data, metered in zip(requests, metered_input_tokens)
+        audio_seconds: Final = tuple(_audio_seconds(request_data) for request_data in requests)
+        video_seconds: Final = tuple(_video_seconds(request_data) for request_data in requests)
+        billed_tokens: Final = tuple(
+            0
+            if audio is not None or video is not None
+            else None
+            if _is_audio_or_video_request(request_data)
+            else metered
+            for request_data, metered, audio, video in zip(requests, metered_input_tokens, audio_seconds, video_seconds)
         )
         input_tokens: Final = tuple(
-            _estimated_input_tokens(response) if metered is None else metered
-            for response, metered in zip_longest(response_list, text_and_image_metered)
+            _estimated_input_tokens(response) if tokens is None else tokens
+            for response, tokens in zip_longest(response_list, billed_tokens)
         )
-        is_media: Final = tuple(
-            _is_image_request(request_data) or _is_audio_or_video_request(request_data) for request_data in requests
-        )
-        image_count: Final = sum(_is_image_request(request_data) for request_data in requests)
+        is_image: Final = tuple(_is_image_request(request_data) for request_data in requests)
+        image_count: Final = sum(is_image)
+        audio_length_seconds: Final = sum(seconds for seconds in audio_seconds if seconds is not None)
+        video_length_seconds: Final = sum(seconds for seconds in video_seconds if seconds is not None)
         prompt_tokens: Final = sum(input_tokens)
         prompt_tokens_details: Final = (
             PromptTokensDetailsWrapper(
-                image_count=image_count,
+                image_count=image_count or None,
+                audio_length_seconds=audio_length_seconds or None,
+                video_length_seconds=video_length_seconds or None,
                 text_tokens=sum(
-                    tokens for tokens, media in zip_longest(input_tokens, is_media, fillvalue=False) if not media
+                    tokens for tokens, image in zip_longest(input_tokens, is_image, fillvalue=False) if not image
                 ),
             )
-            if image_count > 0
+            if image_count > 0 or audio_length_seconds > 0 or video_length_seconds > 0
             else None
         )
         usage: Final = Usage(
