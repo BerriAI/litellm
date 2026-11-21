@@ -1284,13 +1284,16 @@ class RealTimeStreaming:
         """Frames that arrive while these are being sent queue up behind them,
         so the gate only opens once nothing is left to send."""
         while self._held_client_content:
-            held = self._collapse_buffered_audio_messages(list(self._held_client_content))
-            self._held_client_content = ()
-            self._held_client_content_bytes = 0
-            self._held_client_content_deadline = None
-            for message in held:
+            for message in self._take_held_client_content():
                 await self._forward_to_backend(message)
         self._awaiting_setup_complete = False
+
+    def _take_held_client_content(self) -> Sequence[str]:
+        held: Final = self._collapse_buffered_audio_messages(list(self._held_client_content))
+        self._held_client_content = ()
+        self._held_client_content_bytes = 0
+        self._held_client_content_deadline = None
+        return held
 
     async def _send_held_client_content(self) -> None:
         held: Final = self._held_client_content
