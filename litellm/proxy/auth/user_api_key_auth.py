@@ -2526,30 +2526,16 @@ async def _resolve_common_check_context(
     route: str,
     *,
     force_virtual_key_checks: bool = False,
-    sub_call: bool = False,
 ) -> _CommonCheckContext:
     from litellm.proxy.proxy_server import (
         general_settings,
         litellm_proxy_admin_name,
-        llm_router,
         master_key,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
         user_custom_auth,
     )
-
-    if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
-        body_model: Final = request_data.get("model")
-        is_request_body_safe(
-            request_body=dict(request_data),
-            general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
-            llm_router=llm_router,
-            model=body_model if isinstance(body_model, str) else "",
-            route=route,
-            team_id=user_api_key_auth_obj.team_id,
-            defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
-        )
 
     # Public routes (e.g. /health/liveness) are exempt from
     # auth in the builder — the wrapper must not retroactively apply
@@ -2767,7 +2753,6 @@ async def _prepare_common_check_context(
     route: str,
     *,
     force_virtual_key_checks: bool = False,
-    sub_call: bool = False,
 ) -> _CommonCheckContext:
     from litellm.proxy import proxy_server
 
@@ -2777,7 +2762,6 @@ async def _prepare_common_check_context(
         request_data,
         route,
         force_virtual_key_checks=force_virtual_key_checks,
-        sub_call=sub_call,
     )
     _check_required_inference_customer_headers(
         _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request)),
@@ -2835,6 +2819,17 @@ async def run_centralized_common_checks(
     )
 
     general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings)
+    if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
+        body_model: Final = request_data.get("model")
+        is_request_body_safe(
+            request_body=request_data,
+            general_settings=general_settings,
+            llm_router=llm_router,
+            model=body_model if isinstance(body_model, str) else "",
+            route=route,
+            team_id=user_api_key_auth_obj.team_id,
+            defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
+        )
     resolved: Final = (
         context
         if context is not None
@@ -2844,7 +2839,6 @@ async def run_centralized_common_checks(
             request_data,
             route,
             force_virtual_key_checks=force_virtual_key_checks,
-            sub_call=sub_call,
         )
     )
     if not resolved.run_checks:
@@ -3271,6 +3265,14 @@ async def _authorize_authenticated_request(
     return (recovered or billing_auth) if billing_auth is not user_api_key_auth_obj else recovered
 
 
+def _is_customer_inference_route(route: str) -> bool:
+    return (
+        RouteChecks.runs_inference_checks(route)
+        and not RouteChecks.is_info_route(route)
+        and not RustAuth.is_public_route(route, core.proxy_settings())
+    )
+
+
 def _check_required_inference_customer_headers(
     headers: Mapping[str, object],
     route: str,
@@ -3279,9 +3281,7 @@ def _check_required_inference_customer_headers(
     *,
     team: LiteLLM_TeamTableCachedObj | None = None,
 ) -> None:
-    if not RouteChecks.runs_inference_checks(route) or RouteChecks.is_info_route(route):
-        return
-    if RustAuth.is_public_route(route, core.proxy_settings()):
+    if not _is_customer_inference_route(route):
         return
     key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(getattr(auth, "metadata", None) or {})
     team_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(
@@ -3338,22 +3338,19 @@ async def _authorize_authenticated_request_checks(
             route,
             force_virtual_key_checks=force_virtual_key_checks,
         )
-        customer_header_names: Final = CustomerIdentityHeaderNames.from_settings(settings)
-        customer_identity: Final = customer_identity_from_request(
-            request_headers,
-            user_api_key_auth_obj.jwt_claims,
-            litellm_jwtauth,
-            names=customer_header_names,
-        )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         received_at: Final = getattr(getattr(request, "state", None), "litellm_received_at", None)
         user_api_key_auth_obj.customer_hierarchy_started_at = (  # rebind-ok: server request clock, never a cached key or caller field
             received_at if isinstance(received_at, datetime) else datetime.now(timezone.utc)
         )
-        has_customer: Final = customer_identity is not None and not RustAuth.is_public_route(
-            route, core.proxy_settings()
-        )
-        if has_customer or RouteChecks.runs_inference_checks(route):
+        if _is_customer_inference_route(route):
+            customer_header_names: Final = CustomerIdentityHeaderNames.from_settings(settings)
+            customer_identity: Final = customer_identity_from_request(
+                request_headers,
+                user_api_key_auth_obj.jwt_claims,
+                litellm_jwtauth,
+                names=customer_header_names,
+            )
             key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(
                 getattr(user_api_key_auth_obj, "metadata", None) or {}
             )
@@ -3361,7 +3358,7 @@ async def _authorize_authenticated_request_checks(
                 request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
             )
             try:
-                if customer_identity is not None and has_customer:
+                if customer_identity is not None:
                     with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                         hierarchy: Final = await resolve_registered_customer(
                             customer_identity,
@@ -3381,18 +3378,17 @@ async def _authorize_authenticated_request_checks(
                             header_names=customer_header_names,
                         )
                     user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
-                if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):
-                    app_hierarchy: Final = await resolve_app_hierarchy(
-                        user_api_key_auth_obj.customer_hierarchy,
-                        request_headers,
-                        key_metadata,
-                        prisma_client,
-                        llm_router,
-                        request_model,
-                        route,
-                        user_api_key_auth_obj,
-                    )
-                    user_api_key_auth_obj.customer_hierarchy = app_hierarchy  # rebind-ok: request auth state
+                app_hierarchy: Final = await resolve_app_hierarchy(
+                    user_api_key_auth_obj.customer_hierarchy,
+                    request_headers,
+                    key_metadata,
+                    prisma_client,
+                    llm_router,
+                    request_model,
+                    route,
+                    user_api_key_auth_obj,
+                )
+                user_api_key_auth_obj.customer_hierarchy = app_hierarchy  # rebind-ok: request auth state
             except CustomerBudgetExceededError as error:
                 user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
                 raise

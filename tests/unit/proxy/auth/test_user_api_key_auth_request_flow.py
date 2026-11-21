@@ -3678,6 +3678,79 @@ async def test_deferred_body_check_uses_only_the_authenticated_teams_deployments
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("/v1/chat/completions", "/v1/responses", "/v1/messages"))
+@pytest.mark.parametrize("allows_api_base", (False, True))
+async def test_managed_agent_body_check_uses_the_configured_team_model(
+    monkeypatch: pytest.MonkeyPatch, route: str, allows_api_base: bool
+) -> None:
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding, ManagedAgentContext
+
+    policy: Final = AgentResponse(
+        agent_id="managed",
+        agent_name="Managed",
+        agent_card_params={},
+        identity_managed=True,
+        identity=AgentIdentityBinding(
+            agent_id="managed",
+            provider="microsoft_entra",
+            tenant_id="tenant",
+            client_id="application",
+            service_principal_id="principal",
+            issuer="issuer",
+            revision="revision",
+        ),
+        object_permission={"models": ["team-chat"]},
+    )
+    database: Final = prisma_with_empty_config()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(
+        AuthObject.team("agent-team"),
+        LiteLLM_TeamTable(team_id="agent-team", models=["team-chat"]),
+        model_type=LiteLLM_TeamTable,
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "private-chat",
+                "model_info": {"team_id": "agent-team", "team_public_model_name": "team-chat"},
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "unused",
+                    "configurable_clientside_auth_params": ["api_base"] if allows_api_base else [],
+                },
+            }
+        ]
+    )
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "user_api_key_cache": cache,
+        "llm_router": router,
+        "user_model": None,
+        "general_settings": {"completion_model": "team-chat", "disable_budget_reservation": True},
+        "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+    }.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    data: Final[dict[str, object]] = {"api_base": "https://provider.example/v1"}
+    request: Final = _alias_request(route, data)
+    request.state.deferred_model_body_check = True
+    auth: Final = UserAPIKeyAuth(agent_id="managed", team_id="agent-team")
+    auth.managed_agent_context = ManagedAgentContext(
+        agent_id="managed", binding_revision="revision", mode="autonomous"
+    )
+
+    if allows_api_base:
+        recovered: Final = await _authorize_authenticated_request(auth, request, data, route, "persisted-key")
+        assert recovered is None and auth.managed_agent_policy == policy
+        return
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(auth, request, data, route, "persisted-key")
+    assert denied.value.code == "401" and "api_base" in denied.value.message
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_runs_for_standard_auth():
     """Regardless of which user_api_key_auth_builder path returned, the
     wrapper must run common_checks. This is the structural fix: no
@@ -6032,6 +6105,59 @@ class _CustomerTablesOffLimits:
             return MagicMock()
 
     db = _Db()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "route", "registers"),
+    (
+        ("GET", "/key/info", False),
+        ("GET", "/v1/models", False),
+        ("GET", "/model/info", False),
+        ("GET", "/team/list", False),
+        ("POST", "/key/update", False),
+        ("POST", "/v1/chat/completions", True),
+        ("POST", "/v1/responses", True),
+        ("POST", "/v1/messages", True),
+    ),
+)
+async def test_customer_headers_register_organizations_only_on_inference_routes(
+    monkeypatch: pytest.MonkeyPatch, method: str, route: str, registers: bool
+) -> None:
+    from tests.unit.proxy.management_helpers.test_apps import AppDatabase
+
+    database: Final = AppDatabase()
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": MagicMock(db=database, writer_db=database, tx=database.tx),
+        "general_settings": {
+            "disable_budget_reservation": True,
+            "customer_org_alias_header": "X-Tenant-ID",
+        },
+        "llm_model_list": None,
+        "user_model": None,
+    }.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": route,
+            "headers": [(b"x-tenant-id", b"new-customer")],
+            "query_string": b"",
+        }
+    )
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    recovered: Final = await _authorize_authenticated_request(
+        auth, request, {"model": "test-model"}, route, "sk-test-master"
+    )
+
+    assert recovered is None
+    assert tuple(database.litellm_customerorganizationtable.rows) == (("new-customer",) if registers else ())
+    assert (auth.customer_hierarchy is not None) is registers
+    if not registers:
+        assert database.litellm_customerorganizationtable.read_count == 0
 
 
 @pytest.mark.asyncio
