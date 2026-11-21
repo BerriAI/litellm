@@ -3323,27 +3323,33 @@ def _cached_tool_call_choice(stored_finish_reason: Mapping[str, object]) -> dict
     } | dict(stored_finish_reason)
 
 
-@pytest.mark.parametrize(
-    ("original_function", "call_type"),
-    [(completion, CallTypes.completion.value), (responses, CallTypes.responses.value)],
-)
-@pytest.mark.parametrize(
+_STORED_AND_LEGACY_FINISH_REASONS: Final = pytest.mark.parametrize(
     ("stored_finish_reason", "replayed_finish_reason"),
     [
         ({"finish_reason": "stop"}, "stop"),
+        ({"finish_reason": "tool_calls"}, "tool_calls"),
+        ({"finish_reason": "length"}, "length"),
         ({"finish_reason": None}, "tool_calls"),
         ({}, "tool_calls"),
+        ({"finish_reason": None, "finish_details": "stop"}, "tool_calls"),
+        ({"finish_details": "stop"}, "tool_calls"),
+        ({"finish_reason": None, "finish_details": "length"}, "length"),
     ],
-    ids=["stored-stop", "stored-null", "missing"],
+    ids=[
+        "stored-stop",
+        "stored-tool-calls",
+        "stored-length",
+        "stored-null",
+        "missing",
+        "null-with-finish-details-stop",
+        "missing-with-finish-details-stop",
+        "null-with-finish-details-length",
+    ],
 )
-def test_cached_chat_completion_keeps_a_stored_finish_reason_and_derives_a_missing_one(
-    original_function: Callable[..., object],
-    call_type: str,
-    stored_finish_reason: Mapping[str, object],
-    replayed_finish_reason: str,
-) -> None:
-    handler: Final = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=_FIXED_START)
-    cached_result: Final = {
+
+
+def _cached_tool_call_completion(stored_finish_reason: Mapping[str, object]) -> dict[str, object]:
+    return {
         "id": "chatcmpl-stored-finish-reason",
         "object": "chat.completion",
         "created": 1,
@@ -3351,8 +3357,59 @@ def test_cached_chat_completion_keeps_a_stored_finish_reason_and_derives_a_missi
         "choices": [_cached_tool_call_choice(stored_finish_reason)],
     }
 
+
+@pytest.mark.parametrize(
+    ("original_function", "call_type"),
+    [
+        (completion, CallTypes.completion.value),
+        (litellm.acompletion, CallTypes.acompletion.value),
+        (responses, CallTypes.responses.value),
+        (aresponses, CallTypes.aresponses.value),
+    ],
+)
+@_STORED_AND_LEGACY_FINISH_REASONS
+@pytest.mark.asyncio
+async def test_cached_stream_replay_keeps_a_stored_finish_reason_and_derives_a_missing_one(
+    original_function: Callable[..., object],
+    call_type: str,
+    stored_finish_reason: Mapping[str, object],
+    replayed_finish_reason: str,
+) -> None:
+    handler: Final = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=_FIXED_START)
+
+    replay: Final = handler._convert_cached_result_to_model_response(
+        cached_result=_cached_tool_call_completion(stored_finish_reason),
+        call_type=call_type,
+        kwargs={"model": "claude-sonnet-4-5", "stream": True, "messages": _unique_messages()},
+        logging_obj=_completion_logging_obj(call_type),
+        model="claude-sonnet-4-5",
+        args=(),
+    )
+
+    assert isinstance(replay, CustomStreamWrapper)
+    chunks: Final = [chunk async for chunk in replay] if call_type.startswith("a") else list(replay)
+    finish_reasons: Final = [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason]
+    assert finish_reasons == [replayed_finish_reason]
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+    assert isinstance(rebuilt, ModelResponse)
+    assert rebuilt.choices[0].finish_reason == replayed_finish_reason
+
+
+@pytest.mark.parametrize(
+    ("original_function", "call_type"),
+    [(completion, CallTypes.completion.value), (responses, CallTypes.responses.value)],
+)
+@_STORED_AND_LEGACY_FINISH_REASONS
+def test_cached_chat_completion_keeps_a_stored_finish_reason_and_derives_a_missing_one(
+    original_function: Callable[..., object],
+    call_type: str,
+    stored_finish_reason: Mapping[str, object],
+    replayed_finish_reason: str,
+) -> None:
+    handler: Final = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=_FIXED_START)
+
     result: Final = handler._convert_cached_result_to_model_response(
-        cached_result=cached_result,
+        cached_result=_cached_tool_call_completion(stored_finish_reason),
         call_type=call_type,
         kwargs={"model": "claude-sonnet-4-5", "stream": False, "messages": _unique_messages()},
         logging_obj=_completion_logging_obj(call_type),

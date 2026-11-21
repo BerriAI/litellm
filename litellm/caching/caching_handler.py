@@ -157,6 +157,17 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
 _SSE_EVENT_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
+_CACHED_CHOICES: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _stored_finish_reason_indices(cached_result: Mapping[str, object]) -> frozenset[int]:
+    try:
+        choices: Final = _CACHED_CHOICES.validate_python(cached_result.get("choices"))
+    except ValidationError:
+        return frozenset()
+    return frozenset(index for index, choice in enumerate(choices) if choice.get("finish_reason") is not None)
+
+
 def _sse_event_data(line: str) -> Mapping[str, object] | None:
     if not line.startswith("data:"):
         return None
@@ -1294,6 +1305,7 @@ class LLMCachingHandler:
             model=model,
             custom_llm_provider="cached_response",
             logging_obj=logging_obj,
+            stored_finish_reason_indices=_stored_finish_reason_indices(cached_result),
         )
 
     async def async_set_cache(
