@@ -5172,13 +5172,11 @@ class _Driver:
             self._attempt_started,
         )
         model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
-        exits: Final = self._core.failure_exits(error, logged, model_info.get("id"))
-        # A call under credentials the request supplied ran as a request-scoped deployment
+        exits: Final = self._core.failure_exits(error, logged, model_info.get("id"), served)  # pyright: ignore[reportUnknownArgumentType]  # see above
+        # A call under an api_key or api_base the request supplied ran as a request-scoped deployment
         # (`_handle_clientside_credential`): its failure is never the shared deployment's.
         ran_as: Final = (as_str_mapping(as_str_mapping(served).get("model_info") if served else None) or {}).get("id")  # pyright: ignore[reportUnknownArgumentType]  # see above
-        request_scoped: Final = self._core.ran_as_request_deployment(
-            ran_as, model_info.get("id")
-        ) or self._caller_credential_failure(error, served, model_info.get("id"))  # pyright: ignore[reportUnknownArgumentType]  # see above
+        request_scoped: Final = self._core.ran_as_request_deployment(ran_as, model_info.get("id"))
         return {
             **attempt_failure(error),
             "detail": detail,
@@ -5211,27 +5209,6 @@ class _Driver:
             return False
         self._recorded_blocked.add(id(error))
         return True
-
-    def _caller_credential_failure(
-        self, error: BaseException, sent: Mapping[str, object], deployment_id: object
-    ) -> bool:
-        """The call ran under a credential the caller sent in place of the deployment's own
-        (``is_caller_credential_failure``, ``is_caller_entra_credential_failure``), so the failure is
-        the caller's."""
-        from litellm.router_utils.cooldown_handlers import (
-            is_caller_credential_failure,
-            is_caller_entra_credential_failure,
-        )
-
-        if not isinstance(deployment_id, str):
-            return False
-        hosted: Final = self._core._hosted  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        defaults: Final = {k: v for k, v in self._core._resolved.default_litellm_params.items() if v is not None}  # pyright: ignore[reportPrivateUsage]  # see above
-        deployment: Final = hosted._core_get_deployment(deployment_id)  # pyright: ignore[reportPrivateUsage]  # the host registry's id lookup
-        details: Final = {"litellm_params": sent}
-        return is_caller_credential_failure(deployment, defaults, details) or is_caller_entra_credential_failure(
-            deployment, defaults, details, getattr(error, "status_code", ""), error
-        )
 
     def _chain_to_hop_first(self, error: BaseException, level: int) -> None:
         """A retry's failure is raised while the hop's first failure is handled (the retry loop

@@ -8,7 +8,9 @@ Router cooldown handlers
 
 import asyncio
 import math
+import os
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -59,32 +61,60 @@ else:
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
 _DEPLOYMENT_SELECTION_FAILURE_ATTR: Final = "_litellm_deployment_selection_failure"
 _CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_VERTEX_CREDENTIAL_FIELDS: Final = frozenset(
-    {
-        "vertex_credentials",
-        "vertex_project",
-        "vertex_location",
-        "vertex_ai_credentials",
-        "vertex_ai_project",
-        "vertex_ai_location",
-    }
+
+
+@dataclass(frozen=True, slots=True)
+class _AnyFailure:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _OnlyStatuses:
+    statuses: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class _CallerField:
+    name: str
+    blamed_for: _AnyFailure | _OnlyStatuses
+    env_names: tuple[str, ...] = ()
+    configured_as: tuple[str, ...] = ()
+
+
+_ANY_FAILURE: Final = _AnyFailure()
+_NOT_FOUND: Final = _OnlyStatuses(frozenset({404}))
+_AUTH_REJECTED: Final = _OnlyStatuses(frozenset({401, 403}))
+_AWS_FIELDS: Final = (
+    *(_CallerField(name, _ANY_FAILURE) for name in sorted(AWS_CREDENTIAL_KWARGS_KEYS - {"aws_region_name"})),
+    _CallerField("aws_region_name", _NOT_FOUND, ("AWS_REGION_NAME", "AWS_REGION")),
 )
-_AZURE_CREDENTIAL_FIELDS: Final = frozenset({"azure_ad_token", "api_version"})
-_OPENAI_CREDENTIAL_FIELDS: Final = frozenset({"organization"})
-_CALLER_CREDENTIAL_FIELDS_BY_PROVIDER: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+_VERTEX_FIELDS: Final = (
+    _CallerField("vertex_credentials", _ANY_FAILURE, configured_as=("vertex_ai_credentials",)),
+    _CallerField("vertex_ai_credentials", _ANY_FAILURE, configured_as=("vertex_credentials",)),
+    _CallerField("vertex_project", _NOT_FOUND, ("VERTEXAI_PROJECT",), ("vertex_ai_project",)),
+    _CallerField("vertex_ai_project", _NOT_FOUND, ("VERTEXAI_PROJECT",), ("vertex_project",)),
+    _CallerField("vertex_location", _NOT_FOUND, ("VERTEXAI_LOCATION",), ("vertex_ai_location",)),
+    _CallerField("vertex_ai_location", _NOT_FOUND, ("VERTEXAI_LOCATION",), ("vertex_location",)),
+)
+_AZURE_FIELDS: Final = (
+    _CallerField("azure_ad_token", _ANY_FAILURE, ("AZURE_AD_TOKEN",)),
+    _CallerField("api_version", _NOT_FOUND, ("AZURE_API_VERSION",)),
+)
+_OPENAI_FIELDS: Final = (_CallerField("organization", _AUTH_REJECTED, ("OPENAI_ORGANIZATION",)),)
+_CALLER_FIELDS_BY_PROVIDER: Final[Mapping[str, tuple[_CallerField, ...]]] = MappingProxyType(
     {
-        "bedrock": AWS_CREDENTIAL_KWARGS_KEYS,
-        "bedrock_mantle": AWS_CREDENTIAL_KWARGS_KEYS,
-        "sagemaker": AWS_CREDENTIAL_KWARGS_KEYS,
-        "sagemaker_chat": AWS_CREDENTIAL_KWARGS_KEYS,
-        "sagemaker_nova": AWS_CREDENTIAL_KWARGS_KEYS,
-        "vertex_ai": _VERTEX_CREDENTIAL_FIELDS,
-        "vertex_ai_beta": _VERTEX_CREDENTIAL_FIELDS,
-        "azure": _AZURE_CREDENTIAL_FIELDS,
-        "azure_text": _AZURE_CREDENTIAL_FIELDS,
-        "azure_ai": _AZURE_CREDENTIAL_FIELDS,
-        "openai": _OPENAI_CREDENTIAL_FIELDS,
-        "text-completion-openai": _OPENAI_CREDENTIAL_FIELDS,
+        "bedrock": _AWS_FIELDS,
+        "bedrock_mantle": _AWS_FIELDS,
+        "sagemaker": _AWS_FIELDS,
+        "sagemaker_chat": _AWS_FIELDS,
+        "sagemaker_nova": _AWS_FIELDS,
+        "vertex_ai": _VERTEX_FIELDS,
+        "vertex_ai_beta": _VERTEX_FIELDS,
+        "azure": _AZURE_FIELDS,
+        "azure_text": _AZURE_FIELDS,
+        "azure_ai": _AZURE_FIELDS,
+        "openai": _OPENAI_FIELDS,
+        "text-completion-openai": _OPENAI_FIELDS,
     }
 )
 
@@ -927,19 +957,46 @@ def is_caller_credential_failure(
     deployment: Deployment | None,
     router_defaults: Mapping[str, object],
     model_call_details: Mapping[str, object],
+    exception_status: object,
 ) -> bool:
     if deployment is None:
         return False
     provider: Final = deployment.litellm_params.custom_llm_provider or inferred_provider(
         deployment.litellm_params.model
     )
-    fields: Final = _CALLER_CREDENTIAL_FIELDS_BY_PROVIDER.get(provider or "", frozenset[str]())
+    status: Final = cast_exception_status_to_int(exception_status)
     call_params: Final = _call_credential_values(model_call_details)
-    sent: Final = frozenset(key for key in fields if call_params.get(key) is not None)
+    sent: Final = tuple(
+        field
+        for field in _CALLER_FIELDS_BY_PROVIDER.get(provider or "", ())
+        if _blamed(field.blamed_for, status) and call_params.get(field.name) is not None
+    )
     if not sent:
         return False
     configured_by_precedence: Final = _configured_by_precedence(deployment, router_defaults)
-    return any(call_params.get(key) != _first_configured(configured_by_precedence, key) for key in sent)
+    return any(call_params.get(field.name) != _effective_value(configured_by_precedence, field) for field in sent)
+
+
+def _blamed(blamed_for: _AnyFailure | _OnlyStatuses, status: int) -> bool:
+    match blamed_for:
+        case _AnyFailure():
+            return True
+        case _OnlyStatuses(statuses=statuses):
+            return status in statuses
+
+
+def _effective_value(sources: tuple[Mapping[str, object], ...], field: _CallerField) -> object:
+    configured: Final = next(
+        (
+            value
+            for name in (field.name, *field.configured_as)
+            if (value := _first_configured(sources, name)) is not None
+        ),
+        None,
+    )
+    if configured is not None:
+        return configured
+    return next((value for name in field.env_names if (value := os.getenv(name))), None)
 
 
 def _call_credential_values(model_call_details: Mapping[str, object]) -> Mapping[str, object]:

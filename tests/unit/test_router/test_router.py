@@ -17,12 +17,13 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, I
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
-from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import openai
 import pytest
+import responses
 import respx
 from fastapi import HTTPException
 from opentelemetry import trace
@@ -15369,141 +15370,444 @@ async def test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deplo
         await stream_request(router)
 
 
-_SHARED_DEPLOYMENT_PARAMS: Final = MappingProxyType(
-    {
-        "bedrock": MappingProxyType(
-            {
-                "model": "bedrock/anthropic.claude-opus-5-5",
-                "aws_access_key_id": "configured-key-id",
-                "aws_secret_access_key": "configured-secret",
-                "aws_region_name": "us-east-1",
-            }
-        ),
-        "vertex_ai": MappingProxyType(
-            {
-                "model": "vertex_ai/gemini-4-neon",
-                "vertex_project": "configured-project",
-                "vertex_location": "us-central1",
-                "vertex_credentials": "configured-credentials",
-            }
-        ),
-        "azure": MappingProxyType(
-            {
-                "model": "azure/gpt-6.2-sol",
-                "api_base": "https://litellm-qa.openai.azure.com",
-                "api_version": "2025-04-01-preview",
-                "api_key": "configured-key",
-            }
-        ),
-        "openai": MappingProxyType(
-            {"model": "openai/gpt-6.2-sol", "api_key": "configured-key", "organization": "org-configured"}
-        ),
-    }
+_AWS_DEPLOYMENT: Final = MappingProxyType(
+    {"aws_access_key_id": "configured-key-id", "aws_secret_access_key": "configured-secret"}
 )
-
-_DEPLOYMENT_FAILURES: Final = (
-    pytest.param(litellm.AuthenticationError, id="401"),
-    pytest.param(litellm.NotFoundError, id="404"),
+_VERTEX_DEPLOYMENT: Final = MappingProxyType(
+    {"vertex_project": "configured-project", "vertex_location": "us-central1", "vertex_credentials": "configured"}
 )
+_AZURE_DEPLOYMENT: Final = MappingProxyType(
+    {"api_base": "https://litellm-qa.openai.azure.com", "api_version": "2025-04-01-preview", "api_key": "configured"}
+)
+_OPENAI_DEPLOYMENT: Final = MappingProxyType({"api_key": "configured-key", "organization": "org-configured"})
+
+_CallerFailure: TypeAlias = type[litellm.AuthenticationError | litellm.NotFoundError | litellm.RateLimitError]
 
 
-async def _fail_on_the_shared_deployment(
-    router: Router,
-    provider: str,
-    failure: type[litellm.AuthenticationError | litellm.NotFoundError],
-    caller_fields: Mapping[str, object],
-) -> None:
-    with pytest.raises(failure):
-        await router.acompletion(
-            model="shared-model",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response=failure(
-                message="The provider refused the request.",
-                llm_provider=provider,
-                model=str(_SHARED_DEPLOYMENT_PARAMS[provider]["model"]),
-            ),
-            **caller_fields,
-        )
-
-
-def _shared_router(provider: str, default_litellm_params: Mapping[str, object] | None = None) -> Router:
+def _shared_pair_router(
+    litellm_params: Mapping[str, object], default_litellm_params: Mapping[str, object] | None = None
+) -> Router:
     return Router(
         model_list=[
             {
                 "model_name": "shared-model",
-                "litellm_params": {**_SHARED_DEPLOYMENT_PARAMS[provider]},
-                "model_info": {"id": "shared-deployment"},
+                "litellm_params": {**litellm_params},
+                "model_info": {"id": deployment_id},
             }
+            for deployment_id in ("shared-a", "shared-b")
         ],
         default_litellm_params=None if default_litellm_params is None else {**default_litellm_params},
         num_retries=0,
     )
 
 
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-@pytest.mark.parametrize("failure", _DEPLOYMENT_FAILURES)
-@pytest.mark.parametrize(
-    ("provider", "caller_fields"),
-    [
-        pytest.param("bedrock", {"aws_access_key_id": "caller-key-id"}, id="bedrock_access_key"),
-        pytest.param("bedrock", {"aws_profile_name": "caller-profile"}, id="bedrock_profile"),
-        pytest.param("vertex_ai", {"vertex_credentials": "caller-credentials"}, id="vertex_credentials"),
-        pytest.param("azure", {"azure_ad_token": "caller-token"}, id="azure_ad_token"),
-        pytest.param("azure", {"api_version": "2024-10-21"}, id="azure_api_version"),
-        pytest.param("openai", {"organization": "org-caller"}, id="openai_organization"),
-    ],
-)
-async def test_router_failure_under_a_caller_credential_leaves_the_shared_deployment_routable(
-    provider, caller_fields, failure
-):
-    router: Final = _shared_router(provider)
-
-    await _fail_on_the_shared_deployment(router, provider, failure, caller_fields)
-
-    response: Final = await router.acompletion(
-        model="shared-model",
-        messages=[{"role": "user", "content": "hi"}],
-        mock_response="hi",
-    )
-
-    assert response._hidden_params["model_id"] == "shared-deployment"
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-@pytest.mark.parametrize("failure", _DEPLOYMENT_FAILURES)
-@pytest.mark.parametrize(
-    ("provider", "caller_fields", "default_litellm_params"),
-    [
-        pytest.param("bedrock", {}, None, id="bedrock_no_caller_field"),
-        pytest.param("openai", {}, None, id="openai_no_caller_field"),
-        pytest.param("bedrock", {"aws_access_key_id": "configured-key-id"}, None, id="bedrock_echoed_access_key"),
-        pytest.param("vertex_ai", {"vertex_project": "configured-project"}, None, id="vertex_echoed_project"),
-        pytest.param("azure", {"api_version": "2025-04-01-preview"}, None, id="azure_echoed_api_version"),
-        pytest.param(
-            "azure",
-            {"azure_ad_token": "default-token"},
-            {"azure_ad_token": "default-token"},
-            id="azure_echoed_router_default_token",
-        ),
-        pytest.param("openai", {"aws_region_name": "eu-west-1"}, None, id="openai_unread_aws_region"),
-        pytest.param("bedrock", {"organization": "org-caller"}, None, id="bedrock_unread_organization"),
-    ],
-)
-async def test_router_failure_under_the_deployment_credential_cools_down_the_shared_deployment(
-    provider, caller_fields, default_litellm_params, failure
-):
-    router: Final = _shared_router(provider, default_litellm_params)
-
-    await _fail_on_the_shared_deployment(router, provider, failure, caller_fields)
-
-    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+async def _shared_deployments_cooled_after(
+    router: Router, failure: _CallerFailure, caller_fields: Mapping[str, object]
+) -> bool:
+    with pytest.raises(failure):
         await router.acompletion(
             model="shared-model",
             messages=[{"role": "user", "content": "hi"}],
-            mock_response="hi",
+            mock_response=failure(message="The provider refused the request.", llm_provider="openai", model="m"),
+            **caller_fields,
         )
+    return bool(await router.health().cooldowns.async_get_active_cooldowns(["shared-a", "shared-b"], None))
 
-    assert excinfo.value.all_deployments_in_cooldown is True
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("litellm_params", "caller_fields", "failure"),
+    [
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_access_key_id": "caller-key-id"},
+            litellm.AuthenticationError,
+            id="bedrock",
+        ),
+        pytest.param(
+            {"model": "bedrock_mantle/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_profile_name": "caller-profile"},
+            litellm.AuthenticationError,
+            id="bedrock_mantle",
+        ),
+        pytest.param(
+            {"model": "sagemaker/configured-endpoint", **_AWS_DEPLOYMENT},
+            {"aws_session_token": "caller-session"},
+            litellm.AuthenticationError,
+            id="sagemaker",
+        ),
+        pytest.param(
+            {"model": "sagemaker_chat/configured-endpoint", **_AWS_DEPLOYMENT},
+            {"aws_role_name": "caller-role"},
+            litellm.AuthenticationError,
+            id="sagemaker_chat",
+        ),
+        pytest.param(
+            {"model": "sagemaker_nova/configured-endpoint", **_AWS_DEPLOYMENT},
+            {"aws_secret_access_key": "caller-secret"},
+            litellm.AuthenticationError,
+            id="sagemaker_nova",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_credentials": "caller-credentials"},
+            litellm.AuthenticationError,
+            id="vertex_ai",
+        ),
+        pytest.param(
+            {"model": "vertex_ai_beta/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_ai_credentials": "caller-credentials"},
+            litellm.AuthenticationError,
+            id="vertex_ai_beta",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="azure",
+        ),
+        pytest.param(
+            {"model": "azure_text/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="azure_text",
+        ),
+        pytest.param(
+            {"model": "azure_ai/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="azure_ai",
+        ),
+        pytest.param(
+            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.AuthenticationError,
+            id="openai",
+        ),
+        pytest.param(
+            {"model": "text-completion-openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.AuthenticationError,
+            id="text_completion_openai",
+        ),
+        pytest.param(
+            {"model": "gpt-6.2-sol", "custom_llm_provider": "azure", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="custom_llm_provider_over_the_model_name",
+        ),
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_access_key_id": "caller-key-id"},
+            litellm.RateLimitError,
+            id="aws_credential_on_a_rate_limit",
+        ),
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_region_name": "eu-west-1"},
+            litellm.NotFoundError,
+            id="aws_region_on_not_found",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_location": "europe-west4"},
+            litellm.NotFoundError,
+            id="vertex_location_on_not_found",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"api_version": "2023-03-15-preview"},
+            litellm.NotFoundError,
+            id="azure_api_version_on_not_found",
+        ),
+    ],
+)
+async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deployment_routable(
+    litellm_params, caller_fields, failure
+):
+    router: Final = _shared_pair_router(litellm_params)
+
+    assert await _shared_deployments_cooled_after(router, failure, caller_fields) is False
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("litellm_params", "caller_fields", "failure", "default_litellm_params", "environment"),
+    [
+        pytest.param(
+            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {},
+            litellm.AuthenticationError,
+            None,
+            {},
+            id="no_caller_field",
+        ),
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_access_key_id": "configured-key-id"},
+            litellm.AuthenticationError,
+            None,
+            {},
+            id="echoed_deployment_value",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "default-token"},
+            litellm.AuthenticationError,
+            {"azure_ad_token": "default-token"},
+            {},
+            id="echoed_router_default",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", "api_base": "https://litellm-qa.openai.azure.com", "api_key": "configured"},
+            {"api_version": "2025-04-01-preview"},
+            litellm.NotFoundError,
+            None,
+            {"AZURE_API_VERSION": "2025-04-01-preview"},
+            id="echoed_azure_api_version_environment",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "environment-token"},
+            litellm.AuthenticationError,
+            None,
+            {"AZURE_AD_TOKEN": "environment-token"},
+            id="echoed_azure_ad_token_environment",
+        ),
+        pytest.param(
+            {"model": "openai/gpt-6.2-sol", "api_key": "configured-key"},
+            {"organization": "org-environment"},
+            litellm.AuthenticationError,
+            None,
+            {"OPENAI_ORGANIZATION": "org-environment"},
+            id="echoed_openai_organization_environment",
+        ),
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_region_name": "eu-west-1"},
+            litellm.NotFoundError,
+            None,
+            {"AWS_REGION": "eu-west-1"},
+            id="echoed_aws_region_environment",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", "vertex_credentials": "configured"},
+            {"vertex_project": "environment-project", "vertex_location": "environment-location"},
+            litellm.NotFoundError,
+            None,
+            {"VERTEXAI_PROJECT": "environment-project", "VERTEXAI_LOCATION": "environment-location"},
+            id="echoed_vertex_environment",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", "vertex_project": "configured-project"},
+            {"vertex_ai_project": "configured-project"},
+            litellm.NotFoundError,
+            None,
+            {},
+            id="echoed_vertex_project_under_its_alias",
+        ),
+        pytest.param(
+            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {"aws_region_name": "eu-west-1"},
+            litellm.NotFoundError,
+            None,
+            {},
+            id="field_openai_does_not_read",
+        ),
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.AuthenticationError,
+            None,
+            {},
+            id="field_bedrock_does_not_read",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"api_version": "2023-03-15-preview"},
+            litellm.AuthenticationError,
+            None,
+            {},
+            id="azure_api_version_on_an_auth_failure",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"api_version": "2023-03-15-preview"},
+            litellm.RateLimitError,
+            None,
+            {},
+            id="azure_api_version_on_a_rate_limit",
+        ),
+        pytest.param(
+            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.NotFoundError,
+            None,
+            {},
+            id="openai_organization_on_not_found",
+        ),
+        pytest.param(
+            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.RateLimitError,
+            None,
+            {},
+            id="openai_organization_on_a_rate_limit",
+        ),
+    ],
+)
+async def test_router_failure_a_caller_field_cannot_cause_cools_down_the_shared_deployment(
+    litellm_params, caller_fields, failure, default_litellm_params, environment, monkeypatch
+):
+    for name in ("AZURE_API_VERSION", "AZURE_AD_TOKEN", "OPENAI_ORGANIZATION", "AWS_REGION", "AWS_REGION_NAME"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    router: Final = _shared_pair_router(litellm_params, default_litellm_params)
+
+    assert await _shared_deployments_cooled_after(router, failure, caller_fields) is True
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("caller_organization", "cooled"),
+    [pytest.param("org-credential", True, id="echoed"), pytest.param("org-caller", False, id="caller_own")],
+)
+async def test_router_caller_organization_is_compared_with_the_deployment_credential(
+    caller_organization, cooled, monkeypatch
+):
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="shared-openai",
+                credential_info={"custom_llm_provider": "openai"},
+                credential_values={"api_key": "configured-key", "organization": "org-credential"},
+            )
+        ],
+    )
+    router: Final = _shared_pair_router({"model": "openai/gpt-6.2-sol", "litellm_credential_name": "shared-openai"})
+
+    assert (
+        await _shared_deployments_cooled_after(
+            router, litellm.AuthenticationError, {"organization": caller_organization}
+        )
+        is cooled
+    )
+
+
+def _reject_the_caller_organization(request: httpx.Request) -> httpx.Response:
+    if request.headers.get("openai-organization") == "org-caller":
+        return httpx.Response(401, json={"error": {"message": "No such organization.", "code": "invalid_organization"}})
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-6.2-astra",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_fallback_rejecting_a_caller_field_stays_routable(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "openai/gpt-6.2-sol",
+                    "api_base": "https://primary.test/v1",
+                    **_OPENAI_DEPLOYMENT,
+                },
+                "model_info": {"id": "primary-deployment"},
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "openai/gpt-6.2-astra",
+                    "api_base": "https://fallback.test/v1",
+                    **_OPENAI_DEPLOYMENT,
+                },
+                "model_info": {"id": "fallback-deployment"},
+            },
+        ],
+        fallbacks=[{"primary-model": ["fallback-model"]}],
+        num_retries=0,
+    )
+    shared_logging: Final = LiteLLMLogging(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="caller-organization-fallback",
+        start_time=datetime.now(),
+        function_id="caller-organization-fallback",
+    )
+
+    with respx.mock:
+        respx.post(url__regex=r"https://(primary|fallback)\.test/v1/chat/completions").mock(
+            side_effect=_reject_the_caller_organization
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            await router.acompletion(
+                model="primary-model",
+                messages=[{"role": "user", "content": "hi"}],
+                organization="org-caller",
+                litellm_logging_obj=shared_logging,
+            )
+
+        response: Final = await router.acompletion(model="fallback-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert response._hidden_params["model_id"] == "fallback-deployment"
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_vertex_stream_failing_on_a_caller_project_leaves_the_shared_deployment_routable(monkeypatch):
+    from tests.integration._support.vertex import service_account_json
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-model",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-4-neon",
+                    "vertex_credentials": service_account_json("configured-project", "https://oauth2.test"),
+                    "vertex_project": "configured-project",
+                    "vertex_location": "us-central1",
+                },
+                "model_info": {"id": "vertex-deployment"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as token_endpoint, respx.mock:
+        token_endpoint.add(
+            responses.POST,
+            "https://oauth2.test/_oauth/token",
+            json={"access_token": "configured-token", "token_type": "Bearer", "expires_in": 3600},
+        )
+        stream_route: Final = respx.post(url__startswith="https://us-central1-aiplatform.googleapis.com").mock(
+            return_value=httpx.Response(404, json={"error": {"code": 404, "message": "Project not found"}})
+        )
+        with pytest.raises(litellm.NotFoundError):
+            await router.acompletion(
+                model="vertex-model",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                vertex_project="caller-project",
+            )
+        await asyncio.sleep(0.2)
+
+    assert "/projects/caller-project/" in str(stream_route.calls.last.request.url)
+    assert await router.health().cooldowns.async_get_active_cooldowns(["vertex-deployment"], None) == []
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
